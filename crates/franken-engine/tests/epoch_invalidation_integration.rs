@@ -19,39 +19,71 @@ use std::collections::BTreeSet;
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use frankenengine_engine::epoch_invalidation::{
     ChurnConfig, EpochBoundSpecialization, EpochInvalidationEngine, FallbackState,
-    InvalidationConfig, InvalidationError, InvalidationEvent, InvalidationEventType,
-    InvalidationReason, InvalidationReceipt, SpecializationInput, create_specialization,
+    INVALIDATION_RECEIPT_PRODUCER_ID, InvalidationConfig, InvalidationError, InvalidationEvent,
+    InvalidationEventType, InvalidationReason, InvalidationReceipt, SpecializationInput,
+    create_specialization,
+};
+use frankenengine_engine::evidence_ledger::{
+    EvidenceTrustRegistry, LabEvidenceAuthority, RuntimeEvidenceAuthority,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_schema::OptimizationClass;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::SigningKey;
 
 // ===========================================================================
 // Helpers
 // ===========================================================================
 
-fn test_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    for (i, b) in key.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(11).wrapping_add(5);
-    }
-    key
-}
-
 fn epoch(n: u64) -> SecurityEpoch {
     SecurityEpoch::from_raw(n)
 }
 
+fn lab_authority() -> LabEvidenceAuthority {
+    lab_authority_named("integration-default")
+}
+
+fn lab_authority_named(fixture_id: &str) -> LabEvidenceAuthority {
+    LabEvidenceAuthority::deterministic_fixture(
+        INVALIDATION_RECEIPT_PRODUCER_ID,
+        fixture_id,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("valid lab invalidation authority")
+}
+
+fn lab_trust_registry(current_epoch: SecurityEpoch) -> EvidenceTrustRegistry {
+    EvidenceTrustRegistry::from_lab_identities(
+        current_epoch,
+        [lab_authority().verification_identity()],
+    )
+    .expect("valid external lab invalidation trust")
+}
+
+fn runtime_authority(
+    seed: u8,
+    activation_epoch: u64,
+    rotation_sequence: u64,
+    previous_key_id: Option<String>,
+) -> RuntimeEvidenceAuthority {
+    RuntimeEvidenceAuthority::from_signing_key(
+        INVALIDATION_RECEIPT_PRODUCER_ID,
+        SigningKey::from_bytes([seed; 32]).expect("non-zero deterministic runtime test key"),
+        epoch(activation_epoch),
+        rotation_sequence,
+        previous_key_id,
+    )
+    .expect("valid deterministic runtime invalidation authority")
+}
+
 fn default_config() -> InvalidationConfig {
     InvalidationConfig {
-        signing_key: test_key(),
         churn: ChurnConfig::default(),
     }
 }
 
 fn churn_config(threshold: u64, window_ns: u64) -> InvalidationConfig {
     InvalidationConfig {
-        signing_key: test_key(),
         churn: ChurnConfig {
             threshold,
             window_ns,
@@ -61,7 +93,8 @@ fn churn_config(threshold: u64, window_ns: u64) -> InvalidationConfig {
 }
 
 fn new_engine() -> EpochInvalidationEngine {
-    EpochInvalidationEngine::new(epoch(100), default_config())
+    EpochInvalidationEngine::new_for_lab(epoch(100), default_config(), lab_authority())
+        .expect("valid lab invalidation engine")
 }
 
 fn proof_id(suffix: &str) -> EngineObjectId {
@@ -170,9 +203,65 @@ fn new_engine_starts_empty() {
 #[test]
 fn engine_with_custom_config() {
     let cfg = churn_config(5, 500_000);
-    let engine = EpochInvalidationEngine::new(epoch(42), cfg);
+    let engine = EpochInvalidationEngine::new_for_lab(epoch(42), cfg, lab_authority()).unwrap();
     assert_eq!(engine.current_epoch(), epoch(42));
     assert_eq!(engine.canary_multiplier(), 1_000_000);
+}
+
+#[test]
+fn runtime_construction_requires_explicit_valid_authority() {
+    let missing = EpochInvalidationEngine::new(epoch(100), default_config())
+        .expect_err("production construction must fail closed without authority");
+    assert!(matches!(
+        missing,
+        InvalidationError::ConfigurationError { .. }
+    ));
+
+    let future = runtime_authority(0x31, 101, 1, None);
+    let future_error =
+        EpochInvalidationEngine::new_with_runtime_authority(epoch(100), default_config(), future)
+            .expect_err("a key cannot sign before its activation epoch");
+    assert!(matches!(
+        future_error,
+        InvalidationError::ConfigurationError { .. }
+    ));
+
+    let wrong_producer = RuntimeEvidenceAuthority::from_signing_key(
+        "wrong-producer",
+        SigningKey::from_bytes([0x32; 32]).unwrap(),
+        epoch(100),
+        1,
+        None,
+    )
+    .unwrap();
+    let producer_error = EpochInvalidationEngine::new_with_runtime_authority(
+        epoch(100),
+        default_config(),
+        wrong_producer,
+    )
+    .expect_err("the authority must be scoped to the invalidation producer");
+    assert!(matches!(
+        producer_error,
+        InvalidationError::ConfigurationError { .. }
+    ));
+}
+
+#[test]
+fn runtime_authority_is_redacted_and_not_serialized() {
+    let engine = EpochInvalidationEngine::new_with_runtime_authority(
+        epoch(100),
+        default_config(),
+        runtime_authority(0x33, 100, 1, None),
+    )
+    .unwrap();
+
+    let debug = format!("{engine:?}");
+    assert!(debug.contains("[REDACTED]"));
+    assert!(!debug.contains("51, 51, 51, 51"));
+
+    let json = serde_json::to_string(&engine).unwrap();
+    assert!(!json.contains("receipt_signing_authority"));
+    assert!(!json.contains("signing_key"));
 }
 
 // ===========================================================================
@@ -298,7 +387,7 @@ fn advance_epoch_preserves_valid_specs() {
     engine
         .register_specialization(default_spec(), 1000)
         .unwrap(); // valid 90..=110
-    let count = engine.advance_epoch(epoch(105), 2000);
+    let count = engine.advance_epoch(epoch(105), 2000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.active_count(), 1);
     assert_eq!(engine.fallback_count(), 0);
@@ -310,7 +399,7 @@ fn advance_epoch_invalidates_expired_specs() {
     engine
         .register_specialization(default_spec(), 1000)
         .unwrap();
-    let count = engine.advance_epoch(epoch(111), 2000);
+    let count = engine.advance_epoch(epoch(111), 2000).unwrap();
     assert_eq!(count, 1);
     assert_eq!(engine.active_count(), 0);
     assert_eq!(engine.fallback_count(), 1);
@@ -320,7 +409,7 @@ fn advance_epoch_invalidates_expired_specs() {
 #[test]
 fn advance_epoch_updates_current_epoch() {
     let mut engine = new_engine();
-    engine.advance_epoch(epoch(200), 1000);
+    engine.advance_epoch(epoch(200), 1000).unwrap();
     assert_eq!(engine.current_epoch(), epoch(200));
 }
 
@@ -338,7 +427,7 @@ fn advance_epoch_mixed_validity() {
     engine.register_specialization(short, 1000).unwrap();
     engine.register_specialization(long, 1000).unwrap();
 
-    let count = engine.advance_epoch(epoch(110), 2000);
+    let count = engine.advance_epoch(epoch(110), 2000).unwrap();
     assert_eq!(count, 1);
     assert_eq!(engine.active_count(), 1);
     assert_eq!(engine.fallback_count(), 1);
@@ -357,7 +446,7 @@ fn advance_epoch_all_expire() {
         );
         engine.register_specialization(spec, 1000).unwrap();
     }
-    let count = engine.advance_epoch(epoch(101), 2000);
+    let count = engine.advance_epoch(epoch(101), 2000).unwrap();
     assert_eq!(count, 5);
     assert_eq!(engine.active_count(), 0);
     assert_eq!(engine.fallback_count(), 5);
@@ -376,7 +465,7 @@ fn advance_epoch_none_expire() {
         );
         engine.register_specialization(spec, 1000).unwrap();
     }
-    let count = engine.advance_epoch(epoch(150), 2000);
+    let count = engine.advance_epoch(epoch(150), 2000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.active_count(), 3);
 }
@@ -394,7 +483,7 @@ fn advance_epoch_deterministic_invalidation_order() {
         );
         engine.register_specialization(spec, 1000).unwrap();
     }
-    engine.advance_epoch(epoch(101), 2000);
+    engine.advance_epoch(epoch(101), 2000).unwrap();
 
     let receipt_spec_ids: Vec<_> = engine
         .receipts()
@@ -429,7 +518,7 @@ fn advance_epoch_skips_already_fallback_specs() {
     assert_eq!(engine.fallback_count(), 1);
 
     // Epoch advance should not re-invalidate the already-fallback spec.
-    let count = engine.advance_epoch(epoch(111), 2000);
+    let count = engine.advance_epoch(epoch(111), 2000).unwrap();
     assert_eq!(count, 0);
 }
 
@@ -441,12 +530,12 @@ fn advance_epoch_emits_bulk_event_only_when_invalidations_occur() {
         .unwrap();
 
     // No invalidation.
-    engine.advance_epoch(epoch(105), 2000);
+    engine.advance_epoch(epoch(105), 2000).unwrap();
     let tags = event_tags(&engine);
     assert!(!tags.contains(&"bulk-complete"));
 
     // Now invalidate.
-    engine.advance_epoch(epoch(111), 3000);
+    engine.advance_epoch(epoch(111), 3000).unwrap();
     let tags = event_tags(&engine);
     assert!(tags.contains(&"bulk-complete"));
 }
@@ -473,7 +562,9 @@ fn invalidate_specific_specialization() {
         .unwrap();
 
     assert_eq!(receipt.specialization_id, id);
-    assert!(!receipt.signature.is_empty());
+    receipt
+        .verify_signature_for_lab(&lab_trust_registry(receipt.new_epoch), receipt.new_epoch)
+        .expect("receipt must authenticate under external lab trust");
     assert_eq!(engine.active_count(), 0);
     assert_eq!(engine.fallback_count(), 1);
     assert_eq!(engine.total_invalidations(), 1);
@@ -603,7 +694,7 @@ fn invalidate_by_proof_hits_linked_specs() {
     engine.register_specialization(s1, 1000).unwrap();
     engine.register_specialization(s2, 1000).unwrap();
 
-    let count = engine.invalidate_by_proof(&shared_proof, 2000);
+    let count = engine.invalidate_by_proof(&shared_proof, 2000).unwrap();
     assert_eq!(count, 2);
     assert_eq!(engine.fallback_count(), 2);
     assert_eq!(engine.active_count(), 0);
@@ -616,7 +707,7 @@ fn invalidate_by_proof_misses_unlinked_specs() {
     engine.register_specialization(spec, 1000).unwrap();
 
     let unrelated = proof_id("unrelated-proof");
-    let count = engine.invalidate_by_proof(&unrelated, 2000);
+    let count = engine.invalidate_by_proof(&unrelated, 2000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.active_count(), 1);
 }
@@ -651,7 +742,7 @@ fn invalidate_by_proof_skips_already_fallback() {
         .unwrap();
 
     // invalidate_by_proof should skip already-fallback.
-    let count = engine.invalidate_by_proof(&shared_proof, 2000);
+    let count = engine.invalidate_by_proof(&shared_proof, 2000).unwrap();
     assert_eq!(count, 0);
 }
 
@@ -687,7 +778,7 @@ fn invalidate_by_policy_hits_matching_specs() {
     engine.register_specialization(s2, 1000).unwrap();
     engine.register_specialization(s3, 1000).unwrap();
 
-    let count = engine.invalidate_by_policy("policy-A", 2000);
+    let count = engine.invalidate_by_policy("policy-A", 2000).unwrap();
     assert_eq!(count, 2);
     assert_eq!(engine.active_count(), 1); // policy-B survives
 }
@@ -698,7 +789,9 @@ fn invalidate_by_policy_no_match() {
     engine
         .register_specialization(default_spec(), 1000)
         .unwrap();
-    let count = engine.invalidate_by_policy("nonexistent-policy", 2000);
+    let count = engine
+        .invalidate_by_policy("nonexistent-policy", 2000)
+        .unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.active_count(), 1);
 }
@@ -715,7 +808,7 @@ fn respecialization_full_cycle() {
     engine.register_specialization(spec, 1000).unwrap();
 
     // Invalidate via epoch advance.
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     assert_eq!(engine.fallback_count(), 1);
 
     // Begin re-specialization.
@@ -761,7 +854,7 @@ fn complete_respecialization_requires_respecializing_state() {
     engine.register_specialization(spec, 1000).unwrap();
 
     // Invalidate but don't begin re-specialization.
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
 
     let err = engine
         .complete_respecialization(&id, epoch(111), epoch(130), BTreeSet::new(), 3000)
@@ -776,7 +869,7 @@ fn complete_respecialization_rejects_inverted_epoch_range() {
     let id = spec.specialization_id.clone();
     engine.register_specialization(spec, 1000).unwrap();
 
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     engine.begin_respecialization(&id, 3000).unwrap();
 
     let err = engine
@@ -817,7 +910,7 @@ fn respecialized_spec_survives_new_epoch_within_range() {
     engine.register_specialization(spec, 1000).unwrap();
 
     // Invalidate, re-specialize.
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     engine.begin_respecialization(&id, 3000).unwrap();
     engine
         .complete_respecialization(
@@ -834,7 +927,7 @@ fn respecialized_spec_survives_new_epoch_within_range() {
         .unwrap();
 
     // Advance within new range.
-    let count = engine.advance_epoch(epoch(150), 5000);
+    let count = engine.advance_epoch(epoch(150), 5000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.active_count(), 1);
 }
@@ -846,7 +939,7 @@ fn respecialized_spec_invalidated_on_expire() {
     let id = spec.specialization_id.clone();
     engine.register_specialization(spec, 1000).unwrap();
 
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     engine.begin_respecialization(&id, 3000).unwrap();
     engine
         .complete_respecialization(
@@ -863,7 +956,7 @@ fn respecialized_spec_invalidated_on_expire() {
         .unwrap();
 
     // Advance past new valid_until.
-    let count = engine.advance_epoch(epoch(121), 5000);
+    let count = engine.advance_epoch(epoch(121), 5000).unwrap();
     assert_eq!(count, 1);
     assert_eq!(engine.fallback_count(), 1);
 }
@@ -874,7 +967,7 @@ fn begin_respecialization_emits_event() {
     let spec = default_spec();
     let id = spec.specialization_id.clone();
     engine.register_specialization(spec, 1000).unwrap();
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
 
     engine.begin_respecialization(&id, 3000).unwrap();
     let tags = event_tags(&engine);
@@ -888,7 +981,8 @@ fn begin_respecialization_emits_event() {
 #[test]
 fn churn_activates_on_rapid_invalidations() {
     let cfg = churn_config(3, 10_000);
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     for i in 0..3 {
         let spec = make_spec(
@@ -921,7 +1015,8 @@ fn churn_activates_on_rapid_invalidations() {
 #[test]
 fn churn_deactivates_after_window_expires() {
     let cfg = churn_config(2, 1000);
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     // Two rapid invalidations.
     for i in 0..2 {
@@ -969,7 +1064,8 @@ fn churn_deactivates_after_window_expires() {
 #[test]
 fn churn_events_emitted() {
     let cfg = churn_config(2, 10_000);
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     for i in 0..2 {
         let spec = make_spec(
@@ -997,7 +1093,8 @@ fn churn_events_emitted() {
 #[test]
 fn churn_deactivation_emits_event() {
     let cfg = churn_config(2, 1000);
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     // Two rapid invalidations to activate churn (threshold=2).
     for i in 0..2 {
@@ -1050,7 +1147,8 @@ fn canary_multiplier_returns_extended_when_conservative() {
     cfg.churn.threshold = 1;
     cfg.churn.window_ns = 1_000_000;
     cfg.churn.extended_canary_multiplier = 3_000_000;
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     let spec = make_spec(OptimizationClass::TraceSpecialization, 90, 110, "p", "cm");
     let id = spec.specialization_id.clone();
@@ -1070,7 +1168,8 @@ fn canary_multiplier_returns_extended_when_conservative() {
 #[test]
 fn bulk_policy_invalidation_triggers_churn() {
     let cfg = churn_config(2, 10_000);
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     for i in 0..3 {
         let spec = make_spec(
@@ -1083,14 +1182,15 @@ fn bulk_policy_invalidation_triggers_churn() {
         engine.register_specialization(spec, 1000).unwrap();
     }
 
-    engine.invalidate_by_policy("hot-policy", 5000);
+    engine.invalidate_by_policy("hot-policy", 5000).unwrap();
     assert!(engine.is_conservative_mode());
 }
 
 #[test]
 fn epoch_advance_bulk_can_trigger_churn() {
     let cfg = churn_config(3, 50_000);
-    let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+    let mut engine =
+        EpochInvalidationEngine::new_for_lab(epoch(100), cfg, lab_authority()).unwrap();
 
     for i in 0..4 {
         let spec = make_spec(
@@ -1103,7 +1203,7 @@ fn epoch_advance_bulk_can_trigger_churn() {
         engine.register_specialization(spec, 500).unwrap();
     }
 
-    let count = engine.advance_epoch(epoch(101), 10_000);
+    let count = engine.advance_epoch(epoch(101), 10_000).unwrap();
     assert_eq!(count, 4);
     assert!(engine.is_conservative_mode());
 }
@@ -1135,11 +1235,226 @@ fn receipt_has_correct_fields() {
     assert_eq!(receipt.rollback_token_hash, expected_rollback);
     assert_eq!(receipt.baseline_restoration_hash, expected_baseline);
     assert_eq!(receipt.invalidated_at_ns, 2000);
-    assert!(!receipt.signature.is_empty());
+    assert_eq!(receipt.invalidation_sequence, 1);
+    receipt
+        .verify_signature_for_lab(&lab_trust_registry(receipt.new_epoch), receipt.new_epoch)
+        .expect("receipt must authenticate under external lab trust");
     assert!(matches!(
         receipt.reason,
         InvalidationReason::PolicyRotation { ref policy_id } if policy_id == "policy-X"
     ));
+}
+
+#[test]
+fn runtime_receipt_requires_external_trust_and_binds_every_field() {
+    let authority = runtime_authority(0x41, 100, 1, None);
+    let trusted_identity = authority.verification_identity();
+    let mut engine = EpochInvalidationEngine::new_with_runtime_authority(
+        epoch(100),
+        default_config(),
+        authority,
+    )
+    .unwrap();
+    let spec = default_spec();
+    let id = spec.specialization_id.clone();
+    engine.register_specialization(spec, 1000).unwrap();
+    let receipt = engine
+        .invalidate_specialization(
+            &id,
+            InvalidationReason::OperatorInvalidation {
+                reason: "runtime-security".into(),
+            },
+            2000,
+        )
+        .unwrap();
+    let registry =
+        EvidenceTrustRegistry::from_runtime_identities(epoch(100), [trusted_identity]).unwrap();
+
+    assert_eq!(
+        receipt.signature.producer_id,
+        INVALIDATION_RECEIPT_PRODUCER_ID
+    );
+    assert_eq!(receipt.signature.signed_epoch, epoch(100));
+    assert_eq!(
+        receipt.signature.key_provenance.activation_epoch,
+        epoch(100)
+    );
+    assert_eq!(receipt.signature.key_provenance.rotation_sequence, 1);
+    assert_eq!(receipt.invalidation_sequence, 1);
+    assert!(receipt.signature.key_provenance.previous_key_id.is_none());
+    receipt
+        .verify_runtime_signature(&registry, epoch(100))
+        .expect("externally trusted runtime receipt must verify");
+
+    let mut tampered = receipt.clone();
+    tampered.baseline_restoration_hash = ContentHash::compute(b"tampered-baseline");
+    assert!(matches!(
+        tampered.verify_runtime_signature(&registry, epoch(100)),
+        Err(InvalidationError::ReceiptVerificationFailed { .. })
+    ));
+    let mut sequence_tampered = receipt.clone();
+    sequence_tampered.invalidation_sequence += 1;
+    assert!(matches!(
+        sequence_tampered.verify_runtime_signature(&registry, epoch(100)),
+        Err(InvalidationError::ReceiptVerificationFailed { .. })
+    ));
+    assert!(matches!(
+        receipt.verify_runtime_signature(&registry, epoch(101)),
+        Err(InvalidationError::ReceiptVerificationFailed { .. })
+    ));
+}
+
+#[test]
+fn historical_zero_key_bytes_cannot_self_authorize_a_receipt() {
+    assert!(
+        SigningKey::from_bytes([0u8; 32]).is_err(),
+        "the historical all-zero key is not a valid runtime signing key"
+    );
+
+    let trusted = runtime_authority(0x42, 100, 1, None);
+    let trusted_identity = trusted.verification_identity();
+    let mut engine =
+        EpochInvalidationEngine::new_with_runtime_authority(epoch(100), default_config(), trusted)
+            .unwrap();
+    let spec = default_spec();
+    let id = spec.specialization_id.clone();
+    engine.register_specialization(spec, 1000).unwrap();
+    let receipt = engine
+        .invalidate_specialization(
+            &id,
+            InvalidationReason::OperatorInvalidation {
+                reason: "trusted".into(),
+            },
+            2000,
+        )
+        .unwrap();
+    let registry =
+        EvidenceTrustRegistry::from_runtime_identities(epoch(100), [trusted_identity]).unwrap();
+
+    // Even transforming the repository's historical public zero bytes into a
+    // structurally valid Ed25519 seed does not make that claimant a trust root.
+    let known_seed = *ContentHash::compute(&[0u8; 32]).as_bytes();
+    let attacker = RuntimeEvidenceAuthority::from_signing_key(
+        INVALIDATION_RECEIPT_PRODUCER_ID,
+        SigningKey::from_bytes(known_seed).unwrap(),
+        epoch(100),
+        1,
+        None,
+    )
+    .unwrap();
+    let mut forged = receipt;
+    forged.reason = InvalidationReason::OperatorInvalidation {
+        reason: "forged-with-known-zero-key-material".into(),
+    };
+    forged.signature = attacker
+        .sign_detached(&forged.signing_preimage(), forged.new_epoch)
+        .unwrap();
+
+    assert!(matches!(
+        forged.verify_runtime_signature(&registry, epoch(100)),
+        Err(InvalidationError::ReceiptVerificationFailed { .. })
+    ));
+}
+
+#[test]
+fn runtime_key_rotation_accepts_history_and_retires_stale_signers() {
+    let root = runtime_authority(0x51, 100, 1, None);
+    let successor = runtime_authority(0x52, 111, 2, Some(root.key_provenance().key_id.clone()));
+    let registry = EvidenceTrustRegistry::from_runtime_identities(
+        epoch(111),
+        [
+            root.verification_identity(),
+            successor.verification_identity(),
+        ],
+    )
+    .unwrap();
+
+    let issue_receipt = |authority, signing_epoch: u64, reason: &str| {
+        let mut engine = EpochInvalidationEngine::new_with_runtime_authority(
+            epoch(signing_epoch),
+            default_config(),
+            authority,
+        )
+        .unwrap();
+        let spec = default_spec();
+        let id = spec.specialization_id.clone();
+        engine.register_specialization(spec, 1000).unwrap();
+        engine
+            .invalidate_specialization(
+                &id,
+                InvalidationReason::OperatorInvalidation {
+                    reason: reason.into(),
+                },
+                2000,
+            )
+            .unwrap()
+    };
+
+    let historical = issue_receipt(root.clone(), 100, "before-rotation");
+    historical
+        .verify_runtime_signature(&registry, epoch(100))
+        .expect("pre-activation root receipt remains historically valid");
+
+    let mut boundary_engine = EpochInvalidationEngine::new_with_runtime_authority(
+        epoch(100),
+        default_config(),
+        root.clone(),
+    )
+    .unwrap();
+    boundary_engine
+        .register_specialization(default_spec(), 1000)
+        .unwrap();
+    assert!(matches!(
+        boundary_engine.attach_runtime_receipt_authority(successor.clone()),
+        Err(InvalidationError::ConfigurationError { .. })
+    ));
+    assert_eq!(
+        boundary_engine
+            .advance_epoch_with_runtime_authority(epoch(111), 2000, successor)
+            .unwrap(),
+        1
+    );
+    let rotated = &boundary_engine.receipts()[0];
+    rotated
+        .verify_runtime_signature(&registry, epoch(111))
+        .expect("boundary receipt must use the successor at its activation epoch");
+    assert_eq!(rotated.signature.key_provenance.rotation_sequence, 2);
+    assert!(rotated.signature.key_provenance.previous_key_id.is_some());
+
+    let stale = issue_receipt(root, 111, "stale-after-rotation");
+    assert!(matches!(
+        stale.verify_runtime_signature(&registry, epoch(111)),
+        Err(InvalidationError::ReceiptVerificationFailed { .. })
+    ));
+}
+
+#[test]
+fn deserialized_engine_fails_atomically_until_authority_is_reattached() {
+    let mut engine = new_engine();
+    engine
+        .register_specialization(default_spec(), 1000)
+        .unwrap();
+    let json = serde_json::to_string(&engine).unwrap();
+    let mut restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
+    let events_before = restored.events().len();
+
+    let error = restored.advance_epoch(epoch(111), 2000).unwrap_err();
+
+    assert!(matches!(
+        error,
+        InvalidationError::ReceiptSigningFailed { .. }
+    ));
+    assert_eq!(restored.current_epoch(), epoch(100));
+    assert_eq!(restored.active_count(), 1);
+    assert_eq!(restored.fallback_count(), 0);
+    assert_eq!(restored.total_invalidations(), 0);
+    assert!(restored.receipts().is_empty());
+    assert_eq!(restored.events().len(), events_before);
+
+    restored
+        .attach_lab_receipt_authority(lab_authority())
+        .unwrap();
+    assert_eq!(restored.advance_epoch(epoch(111), 3000).unwrap(), 1);
 }
 
 #[test]
@@ -1155,8 +1470,43 @@ fn receipts_accumulate() {
         );
         engine.register_specialization(spec, 1000).unwrap();
     }
-    engine.advance_epoch(epoch(101), 2000);
+    engine.advance_epoch(epoch(101), 2000).unwrap();
     assert_eq!(engine.receipts().len(), 3);
+    assert_eq!(
+        engine
+            .receipts()
+            .iter()
+            .map(|receipt| receipt.invalidation_sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
+#[test]
+fn repeated_identical_invalidation_inputs_still_have_unique_receipt_ids() {
+    let mut engine = new_engine();
+    let mut spec = default_spec();
+    spec.activated_epoch = epoch(100);
+    let id = spec.specialization_id.clone();
+    let proofs = spec.source_proof_ids.clone();
+    engine.register_specialization(spec, 1000).unwrap();
+    let reason = InvalidationReason::OperatorInvalidation {
+        reason: "same-inputs".into(),
+    };
+
+    let first = engine
+        .invalidate_specialization(&id, reason.clone(), 2000)
+        .unwrap();
+    engine.begin_respecialization(&id, 2000).unwrap();
+    engine
+        .complete_respecialization(&id, epoch(90), epoch(110), proofs, 2000)
+        .unwrap();
+    let second = engine.invalidate_specialization(&id, reason, 2000).unwrap();
+
+    assert_eq!(first.invalidation_sequence, 1);
+    assert_eq!(second.invalidation_sequence, 2);
+    assert_ne!(first.receipt_id, second.receipt_id);
+    assert_ne!(first.signature, second.signature);
 }
 
 #[test]
@@ -1186,15 +1536,9 @@ fn receipt_signature_is_deterministic() {
 #[test]
 fn different_signing_keys_produce_different_signatures() {
     let make_receipt = |key_seed: u8| {
-        let mut key = [0u8; 32];
-        for (i, b) in key.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_add(key_seed);
-        }
-        let cfg = InvalidationConfig {
-            signing_key: key,
-            churn: ChurnConfig::default(),
-        };
-        let mut engine = EpochInvalidationEngine::new(epoch(100), cfg);
+        let authority = lab_authority_named(&format!("signature-key-{key_seed}"));
+        let mut engine =
+            EpochInvalidationEngine::new_for_lab(epoch(100), default_config(), authority).unwrap();
         let spec = default_spec();
         let id = spec.specialization_id.clone();
         engine.register_specialization(spec, 1000).unwrap();
@@ -1223,7 +1567,7 @@ fn events_have_monotonic_sequence_numbers() {
     let mut engine = new_engine();
     let spec = default_spec();
     engine.register_specialization(spec, 1000).unwrap();
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
 
     for (i, event) in engine.events().iter().enumerate() {
         assert_eq!(event.seq, i as u64);
@@ -1236,7 +1580,7 @@ fn epoch_transition_event_sequence() {
     engine
         .register_specialization(default_spec(), 1000)
         .unwrap();
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
 
     let tags = event_tags(&engine);
     assert_eq!(tags[0], "registered");
@@ -1258,7 +1602,7 @@ fn events_carry_correct_epoch() {
     assert_eq!(engine.events()[0].epoch, epoch(100));
 
     // Advance to 111.
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
 
     // All subsequent events at epoch 111.
     for event in &engine.events()[1..] {
@@ -1274,7 +1618,7 @@ fn events_carry_correct_timestamps() {
         .unwrap();
     assert_eq!(engine.events()[0].timestamp_ns, 1000);
 
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     for event in &engine.events()[1..] {
         assert_eq!(event.timestamp_ns, 2000);
     }
@@ -1352,7 +1696,7 @@ fn specializations_by_state() {
     engine.register_specialization(short, 1000).unwrap();
     engine.register_specialization(long, 1000).unwrap();
 
-    engine.advance_epoch(epoch(105), 2000);
+    engine.advance_epoch(epoch(105), 2000).unwrap();
 
     assert_eq!(
         engine.specializations_by_state(FallbackState::Active).len(),
@@ -1437,6 +1781,20 @@ fn fallback_state_display() {
 #[test]
 fn invalidation_error_display_all_variants() {
     let errors = [
+        InvalidationError::ConfigurationError {
+            reason: "configuration".into(),
+        },
+        InvalidationError::ReceiptSigningFailed {
+            reason: "signing".into(),
+        },
+        InvalidationError::ReceiptVerificationFailed {
+            reason: "verification".into(),
+        },
+        InvalidationError::EpochRegression {
+            current: epoch(10),
+            requested: epoch(9),
+        },
+        InvalidationError::InvalidationCounterExhausted,
         InvalidationError::SpecializationNotFound {
             id: proof_id("test"),
         },
@@ -1454,6 +1812,11 @@ fn invalidation_error_display_all_variants() {
         },
         InvalidationError::DuplicateSpecialization {
             id: proof_id("test"),
+        },
+        InvalidationError::InvalidState {
+            id: proof_id("test"),
+            expected: "active".into(),
+            actual: "fallback".into(),
         },
     ];
 
@@ -1527,7 +1890,7 @@ fn engine_serde_roundtrip() {
         );
         engine.register_specialization(spec, 1000).unwrap();
     }
-    engine.advance_epoch(epoch(101), 2000);
+    engine.advance_epoch(epoch(101), 2000).unwrap();
 
     let json = serde_json::to_string(&engine).unwrap();
     let restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
@@ -1594,6 +1957,20 @@ fn fallback_state_serde_roundtrip() {
 #[test]
 fn invalidation_error_serde_roundtrip() {
     let errors = [
+        InvalidationError::ConfigurationError {
+            reason: "configuration".into(),
+        },
+        InvalidationError::ReceiptSigningFailed {
+            reason: "signing".into(),
+        },
+        InvalidationError::ReceiptVerificationFailed {
+            reason: "verification".into(),
+        },
+        InvalidationError::EpochRegression {
+            current: epoch(10),
+            requested: epoch(9),
+        },
+        InvalidationError::InvalidationCounterExhausted,
         InvalidationError::SpecializationNotFound {
             id: proof_id("test"),
         },
@@ -1611,6 +1988,11 @@ fn invalidation_error_serde_roundtrip() {
         },
         InvalidationError::DuplicateSpecialization {
             id: proof_id("test"),
+        },
+        InvalidationError::InvalidState {
+            id: proof_id("test"),
+            expected: "active".into(),
+            actual: "fallback".into(),
         },
     ];
 
@@ -1631,7 +2013,7 @@ fn fallback_state_survives_serde_crash_restart() {
     let spec = default_spec();
     let id = spec.specialization_id.clone();
     engine.register_specialization(spec, 1000).unwrap();
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
 
     let json = serde_json::to_string(&engine).unwrap();
     let restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
@@ -1648,7 +2030,7 @@ fn respecializing_state_survives_serde() {
     let spec = default_spec();
     let id = spec.specialization_id.clone();
     engine.register_specialization(spec, 1000).unwrap();
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     engine.begin_respecialization(&id, 3000).unwrap();
 
     let json = serde_json::to_string(&engine).unwrap();
@@ -1749,7 +2131,7 @@ fn total_invalidations_increments_correctly() {
         );
         engine.register_specialization(spec, 1000).unwrap();
     }
-    engine.advance_epoch(epoch(101), 2000);
+    engine.advance_epoch(epoch(101), 2000).unwrap();
     assert_eq!(engine.total_invalidations(), 5);
 }
 
@@ -1768,7 +2150,7 @@ fn active_and_fallback_counts_consistent() {
         engine.register_specialization(spec, 1000).unwrap();
     }
 
-    engine.advance_epoch(epoch(110), 2000);
+    engine.advance_epoch(epoch(110), 2000).unwrap();
     assert_eq!(engine.active_count(), 2);
     assert_eq!(engine.fallback_count(), 2);
     assert_eq!(engine.specializations().len(), 4);
@@ -1781,7 +2163,7 @@ fn active_and_fallback_counts_consistent() {
 #[test]
 fn advance_epoch_with_no_specializations() {
     let mut engine = new_engine();
-    let count = engine.advance_epoch(epoch(200), 1000);
+    let count = engine.advance_epoch(epoch(200), 1000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.current_epoch(), epoch(200));
 }
@@ -1792,7 +2174,7 @@ fn advance_epoch_to_same_epoch() {
     engine
         .register_specialization(default_spec(), 1000)
         .unwrap();
-    let count = engine.advance_epoch(epoch(100), 2000);
+    let count = engine.advance_epoch(epoch(100), 2000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(engine.active_count(), 1);
 }
@@ -1803,10 +2185,21 @@ fn advance_epoch_to_lower_epoch() {
     engine
         .register_specialization(default_spec(), 1000)
         .unwrap();
-    let count = engine.advance_epoch(epoch(50), 2000);
-    // spec valid 90..=110, epoch 50 is below valid_from so is_valid_at returns false.
-    assert_eq!(count, 1);
-    assert_eq!(engine.current_epoch(), epoch(50));
+    let before_events = engine.events().len();
+
+    let error = engine.advance_epoch(epoch(50), 2000).unwrap_err();
+
+    assert_eq!(
+        error,
+        InvalidationError::EpochRegression {
+            current: epoch(100),
+            requested: epoch(50),
+        }
+    );
+    assert_eq!(engine.current_epoch(), epoch(100));
+    assert_eq!(engine.active_count(), 1);
+    assert!(engine.receipts().is_empty());
+    assert_eq!(engine.events().len(), before_events);
 }
 
 #[test]
@@ -1822,27 +2215,27 @@ fn multiple_epoch_advances() {
     engine.register_specialization(spec, 1000).unwrap();
 
     for e in [110, 120, 130, 140, 150] {
-        let count = engine.advance_epoch(epoch(e), 1000 + e);
+        let count = engine.advance_epoch(epoch(e), 1000 + e).unwrap();
         assert_eq!(count, 0);
     }
     assert_eq!(engine.active_count(), 1);
 
     // Now expire.
-    let count = engine.advance_epoch(epoch(201), 2000);
+    let count = engine.advance_epoch(epoch(201), 2000).unwrap();
     assert_eq!(count, 1);
 }
 
 #[test]
 fn invalidate_by_proof_empty_engine() {
     let mut engine = new_engine();
-    let count = engine.invalidate_by_proof(&proof_id("any"), 1000);
+    let count = engine.invalidate_by_proof(&proof_id("any"), 1000).unwrap();
     assert_eq!(count, 0);
 }
 
 #[test]
 fn invalidate_by_policy_empty_engine() {
     let mut engine = new_engine();
-    let count = engine.invalidate_by_policy("any", 1000);
+    let count = engine.invalidate_by_policy("any", 1000).unwrap();
     assert_eq!(count, 0);
 }
 
@@ -1865,7 +2258,7 @@ fn full_lifecycle_register_invalidate_respec_reinvalidate() {
     assert_eq!(engine.active_count(), 1);
 
     // Invalidate via epoch.
-    engine.advance_epoch(epoch(111), 2000);
+    engine.advance_epoch(epoch(111), 2000).unwrap();
     assert_eq!(engine.fallback_count(), 1);
     assert_eq!(engine.total_invalidations(), 1);
 
@@ -1938,12 +2331,12 @@ fn mixed_invalidation_methods() {
     assert_eq!(engine.active_count(), 3);
 
     // Invalidate by proof — hits s1, s2.
-    let count = engine.invalidate_by_proof(&shared_proof, 2000);
+    let count = engine.invalidate_by_proof(&shared_proof, 2000).unwrap();
     assert_eq!(count, 2);
     assert_eq!(engine.active_count(), 1);
 
     // Invalidate by policy — s3 is still active on policy-A.
-    let count = engine.invalidate_by_policy("policy-A", 3000);
+    let count = engine.invalidate_by_policy("policy-A", 3000).unwrap();
     assert_eq!(count, 1);
     assert_eq!(engine.active_count(), 0);
     assert_eq!(engine.total_invalidations(), 3);
@@ -1967,7 +2360,7 @@ fn many_specs_stress_test() {
     // Advance to epoch 110 — specs with valid_until < 110 get invalidated.
     // valid_until = 100 + i%20. Expired when valid_until < 110 means i%20 < 10.
     // That's i%20 in 0..9 → 50 specs.
-    let count = engine.advance_epoch(epoch(110), 2000);
+    let count = engine.advance_epoch(epoch(110), 2000).unwrap();
     assert_eq!(count, 50);
     assert_eq!(engine.active_count(), 50);
     assert_eq!(engine.fallback_count(), 50);

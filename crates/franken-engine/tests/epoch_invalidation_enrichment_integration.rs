@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use frankenengine_engine::epoch_invalidation::*;
+use frankenengine_engine::evidence_ledger::{EvidenceTrustRegistry, LabEvidenceAuthority};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_schema::OptimizationClass;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -21,23 +22,32 @@ fn epoch(n: u64) -> SecurityEpoch {
     SecurityEpoch::from_raw(n)
 }
 
-fn signing_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    for (i, b) in key.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(7).wrapping_add(3);
-    }
-    key
-}
-
 fn cfg() -> InvalidationConfig {
     InvalidationConfig {
-        signing_key: signing_key(),
         churn: ChurnConfig::default(),
     }
 }
 
+fn lab_authority() -> LabEvidenceAuthority {
+    LabEvidenceAuthority::deterministic_fixture(
+        INVALIDATION_RECEIPT_PRODUCER_ID,
+        "enrichment-default",
+        SecurityEpoch::GENESIS,
+    )
+    .expect("valid lab invalidation authority")
+}
+
+fn lab_trust_registry(current_epoch: SecurityEpoch) -> EvidenceTrustRegistry {
+    EvidenceTrustRegistry::from_lab_identities(
+        current_epoch,
+        [lab_authority().verification_identity()],
+    )
+    .expect("valid external lab invalidation trust")
+}
+
 fn engine_at(e: u64) -> EpochInvalidationEngine {
-    EpochInvalidationEngine::new(epoch(e), cfg())
+    EpochInvalidationEngine::new_for_lab(epoch(e), cfg(), lab_authority())
+        .expect("valid lab invalidation engine")
 }
 
 fn proof_id(suffix: &str) -> EngineObjectId {
@@ -246,6 +256,20 @@ fn enrichment_specialization_starts_active() {
 #[test]
 fn enrichment_invalidation_error_display_unique() {
     let errors: Vec<InvalidationError> = vec![
+        InvalidationError::ConfigurationError {
+            reason: "configuration".into(),
+        },
+        InvalidationError::ReceiptSigningFailed {
+            reason: "signing".into(),
+        },
+        InvalidationError::ReceiptVerificationFailed {
+            reason: "verification".into(),
+        },
+        InvalidationError::EpochRegression {
+            current: epoch(10),
+            requested: epoch(9),
+        },
+        InvalidationError::InvalidationCounterExhausted,
         InvalidationError::SpecializationNotFound { id: proof_id("x") },
         InvalidationError::AlreadyInFallback { id: proof_id("x") },
         InvalidationError::InvalidEpochRange {
@@ -277,6 +301,20 @@ fn enrichment_invalidation_error_is_std_error() {
 #[test]
 fn enrichment_invalidation_error_serde_all_variants() {
     let errors: Vec<InvalidationError> = vec![
+        InvalidationError::ConfigurationError {
+            reason: "configuration".into(),
+        },
+        InvalidationError::ReceiptSigningFailed {
+            reason: "signing".into(),
+        },
+        InvalidationError::ReceiptVerificationFailed {
+            reason: "verification".into(),
+        },
+        InvalidationError::EpochRegression {
+            current: epoch(10),
+            requested: epoch(9),
+        },
+        InvalidationError::InvalidationCounterExhausted,
         InvalidationError::SpecializationNotFound { id: proof_id("a") },
         InvalidationError::AlreadyInFallback { id: proof_id("b") },
         InvalidationError::InvalidEpochRange {
@@ -392,7 +430,7 @@ fn enrichment_register_emits_event() {
 #[test]
 fn enrichment_advance_epoch_no_specs_zero_invalidations() {
     let mut e = engine_at(100);
-    let count = e.advance_epoch(epoch(200), 1000);
+    let count = e.advance_epoch(epoch(200), 1000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(e.current_epoch(), epoch(200));
 }
@@ -400,7 +438,7 @@ fn enrichment_advance_epoch_no_specs_zero_invalidations() {
 #[test]
 fn enrichment_advance_epoch_updates_current_epoch() {
     let mut e = engine_at(100);
-    e.advance_epoch(epoch(150), 1000);
+    e.advance_epoch(epoch(150), 1000).unwrap();
     assert_eq!(e.current_epoch(), epoch(150));
 }
 
@@ -420,7 +458,7 @@ fn enrichment_advance_epoch_all_expired() {
         )
         .unwrap();
     }
-    let count = e.advance_epoch(epoch(101), 2000);
+    let count = e.advance_epoch(epoch(101), 2000).unwrap();
     assert_eq!(count, 4);
     assert_eq!(e.active_count(), 0);
     assert_eq!(e.fallback_count(), 4);
@@ -430,10 +468,11 @@ fn enrichment_advance_epoch_all_expired() {
 fn enrichment_advance_epoch_generates_receipts() {
     let mut e = engine_at(100);
     e.register_specialization(default_spec(), 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
     assert_eq!(e.receipts().len(), 1);
     let r = &e.receipts()[0];
-    assert!(!r.signature.is_empty());
+    r.verify_signature_for_lab(&lab_trust_registry(r.new_epoch), r.new_epoch)
+        .expect("receipt must authenticate under external lab trust");
     assert_eq!(r.new_epoch, epoch(111));
 }
 
@@ -467,7 +506,7 @@ fn enrichment_invalidate_already_fallback_errors() {
     let s = default_spec();
     let sid = s.specialization_id.clone();
     e.register_specialization(s, 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
 
     let err = e
         .invalidate_specialization(
@@ -517,7 +556,7 @@ fn enrichment_invalidate_by_proof_targets_matching() {
     )
     .unwrap();
 
-    let count = e.invalidate_by_proof(&pid, 2000);
+    let count = e.invalidate_by_proof(&pid, 2000).unwrap();
     assert_eq!(count, 1);
     assert_eq!(e.active_count(), 1);
 }
@@ -526,7 +565,9 @@ fn enrichment_invalidate_by_proof_targets_matching() {
 fn enrichment_invalidate_by_proof_no_match() {
     let mut e = engine_at(100);
     e.register_specialization(default_spec(), 1000).unwrap();
-    let count = e.invalidate_by_proof(&proof_id("nonexistent"), 2000);
+    let count = e
+        .invalidate_by_proof(&proof_id("nonexistent"), 2000)
+        .unwrap();
     assert_eq!(count, 0);
     assert_eq!(e.active_count(), 1);
 }
@@ -564,7 +605,7 @@ fn enrichment_invalidate_by_policy_targets_matching() {
     )
     .unwrap();
 
-    let count = e.invalidate_by_policy("pol-A", 2000);
+    let count = e.invalidate_by_policy("pol-A", 2000).unwrap();
     assert_eq!(count, 2);
     assert_eq!(e.active_count(), 1);
 }
@@ -573,7 +614,7 @@ fn enrichment_invalidate_by_policy_targets_matching() {
 fn enrichment_invalidate_by_policy_no_match() {
     let mut e = engine_at(100);
     e.register_specialization(default_spec(), 1000).unwrap();
-    let count = e.invalidate_by_policy("nonexistent", 2000);
+    let count = e.invalidate_by_policy("nonexistent", 2000).unwrap();
     assert_eq!(count, 0);
 }
 
@@ -587,7 +628,7 @@ fn enrichment_respecialization_full_lifecycle() {
     e.register_specialization(s, 1000).unwrap();
 
     // Invalidate
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
     assert_eq!(
         e.get_specialization(&sid).unwrap().state,
         FallbackState::BaselineFallback
@@ -632,7 +673,7 @@ fn enrichment_complete_respecialization_requires_respecializing_state() {
     let s = default_spec();
     let sid = s.specialization_id.clone();
     e.register_specialization(s, 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
 
     let err = e
         .complete_respecialization(&sid, epoch(111), epoch(130), BTreeSet::new(), 3000)
@@ -646,7 +687,7 @@ fn enrichment_complete_respecialization_invalid_epoch_range() {
     let s = default_spec();
     let sid = s.specialization_id.clone();
     e.register_specialization(s, 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
     e.begin_respecialization(&sid, 3000).unwrap();
 
     let err = e
@@ -662,7 +703,7 @@ fn enrichment_churn_dampening_activates_at_threshold() {
     let mut c = cfg();
     c.churn.threshold = 2;
     c.churn.window_ns = 10_000;
-    let mut e = EpochInvalidationEngine::new(epoch(100), c);
+    let mut e = EpochInvalidationEngine::new_for_lab(epoch(100), c, lab_authority()).unwrap();
 
     for i in 0..2 {
         let s = spec(
@@ -691,7 +732,7 @@ fn enrichment_churn_canary_multiplier_when_active() {
     let mut c = cfg();
     c.churn.threshold = 1;
     c.churn.extended_canary_multiplier = 3_000_000;
-    let mut e = EpochInvalidationEngine::new(epoch(100), c);
+    let mut e = EpochInvalidationEngine::new_for_lab(epoch(100), c, lab_authority()).unwrap();
 
     let s = default_spec();
     let sid = s.specialization_id.clone();
@@ -711,7 +752,7 @@ fn enrichment_churn_deactivates_when_window_expires() {
     let mut c = cfg();
     c.churn.threshold = 2;
     c.churn.window_ns = 500;
-    let mut e = EpochInvalidationEngine::new(epoch(100), c);
+    let mut e = EpochInvalidationEngine::new_for_lab(epoch(100), c, lab_authority()).unwrap();
 
     // Two rapid invalidations within window to activate conservative mode
     let s1 = spec(OptimizationClass::TraceSpecialization, 90, 110, "p", "cd1");
@@ -796,7 +837,7 @@ fn enrichment_specializations_by_state_filters() {
     e.register_specialization(s1, 1000).unwrap();
     e.register_specialization(s2, 1000).unwrap();
 
-    e.advance_epoch(epoch(105), 2000);
+    e.advance_epoch(epoch(105), 2000).unwrap();
 
     assert_eq!(e.specializations_by_state(FallbackState::Active).len(), 1);
     assert_eq!(
@@ -821,7 +862,7 @@ fn enrichment_receipt_contains_correct_hashes() {
     let expected_bl = s.baseline_ir_hash;
     e.register_specialization(s, 1000).unwrap();
 
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
     let r = &e.receipts()[0];
     assert_eq!(r.rollback_token_hash, expected_rb);
     assert_eq!(r.baseline_restoration_hash, expected_bl);
@@ -855,7 +896,7 @@ fn enrichment_receipt_serde_roundtrip() {
 fn enrichment_events_monotonic_seq() {
     let mut e = engine_at(100);
     e.register_specialization(default_spec(), 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
 
     for (i, ev) in e.events().iter().enumerate() {
         assert_eq!(ev.seq, i as u64);
@@ -871,7 +912,7 @@ fn enrichment_events_epoch_matches_current() {
         assert_eq!(ev.epoch, epoch(100));
     }
 
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
     // Events after advance are at epoch 111
     for ev in e.events().iter().skip(1) {
         assert_eq!(ev.epoch, epoch(111));
@@ -936,7 +977,7 @@ fn enrichment_engine_serde_roundtrip_with_state() {
     let s = default_spec();
     let sid = s.specialization_id.clone();
     e.register_specialization(s, 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
     e.begin_respecialization(&sid, 3000).unwrap();
 
     let json = serde_json::to_string(&e).unwrap();
@@ -1037,7 +1078,7 @@ fn enrichment_total_invalidations_increments() {
         )
         .unwrap();
     }
-    e.advance_epoch(epoch(101), 2000);
+    e.advance_epoch(epoch(101), 2000).unwrap();
     assert_eq!(e.total_invalidations(), 5);
 }
 
@@ -1059,7 +1100,7 @@ fn enrichment_bulk_invalidation_receipt_order_deterministic() {
         )
         .unwrap();
     }
-    e.advance_epoch(epoch(101), 2000);
+    e.advance_epoch(epoch(101), 2000).unwrap();
 
     let ids: Vec<_> = e
         .receipts()
@@ -1079,7 +1120,7 @@ fn enrichment_fallback_persists_across_serde() {
     let s = default_spec();
     let sid = s.specialization_id.clone();
     e.register_specialization(s, 1000).unwrap();
-    e.advance_epoch(epoch(111), 2000);
+    e.advance_epoch(epoch(111), 2000).unwrap();
 
     let json = serde_json::to_string(&e).unwrap();
     let restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
@@ -1127,7 +1168,7 @@ fn enrichment_reason_display_capability_revocation_format() {
 fn enrichment_epoch_advance_same_epoch_no_invalidation() {
     let mut e = engine_at(100);
     e.register_specialization(default_spec(), 1000).unwrap();
-    let count = e.advance_epoch(epoch(100), 2000);
+    let count = e.advance_epoch(epoch(100), 2000).unwrap();
     assert_eq!(count, 0);
     assert_eq!(e.active_count(), 1);
 }

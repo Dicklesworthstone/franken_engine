@@ -15,6 +15,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
+use crate::evidence_ledger::{
+    EvidenceSignatureEnvelope, EvidenceSigningAuthority, EvidenceTrustRegistry,
+    LabEvidenceAuthority, RuntimeEvidenceAuthority,
+};
 use crate::hash_tiers::ContentHash;
 use crate::proof_schema::OptimizationClass;
 use crate::security_epoch::SecurityEpoch;
@@ -24,13 +28,28 @@ use crate::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 const SPECIALIZATION_SCHEMA_DEF: &[u8] = b"EpochBoundSpecialization.v1";
-const INVALIDATION_RECEIPT_SCHEMA_DEF: &[u8] = b"InvalidationReceipt.v1";
+
+/// Schema bound into every epoch-invalidation receipt signature.
+pub const INVALIDATION_RECEIPT_SCHEMA_VERSION: &str =
+    "franken-engine.epoch-invalidation-receipt.v2";
+/// Canonical component identifier bound into receipt signatures.
+pub const INVALIDATION_RECEIPT_COMPONENT: &str = "epoch_invalidation";
+/// Canonical runtime producer registered for invalidation receipts.
+pub const INVALIDATION_RECEIPT_PRODUCER_ID: &str = "franken-engine.epoch-invalidation";
+/// Domain separator preventing signatures from authenticating another artifact kind.
+pub const INVALIDATION_RECEIPT_SIGNATURE_DOMAIN: &str =
+    "franken-engine.epoch-invalidation.receipt-signature.v2";
 
 /// Zone for all epoch-invalidation objects.
 const EPOCH_INVALIDATION_ZONE: &str = "epoch-invalidation";
 
 fn usize_to_u64_saturating(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&usize_to_u64_saturating(bytes.len()).to_le_bytes());
+    buf.extend_from_slice(bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +93,41 @@ impl fmt::Display for InvalidationReason {
             Self::ProofUpdate { proof_id } => write!(f, "proof-update ({proof_id})"),
             Self::OperatorInvalidation { reason } => {
                 write!(f, "operator-invalidation ({reason})")
+            }
+        }
+    }
+}
+
+impl InvalidationReason {
+    fn append_signing_preimage(&self, buf: &mut Vec<u8>) {
+        match self {
+            Self::EpochTransition {
+                old_epoch,
+                new_epoch,
+            } => {
+                buf.push(0);
+                buf.extend_from_slice(&old_epoch.as_u64().to_le_bytes());
+                buf.extend_from_slice(&new_epoch.as_u64().to_le_bytes());
+            }
+            Self::PolicyRotation { policy_id } => {
+                buf.push(1);
+                append_len_prefixed(buf, policy_id.as_bytes());
+            }
+            Self::KeyRotation { key_id } => {
+                buf.push(2);
+                append_len_prefixed(buf, key_id.as_bytes());
+            }
+            Self::CapabilityRevocation { capability_id } => {
+                buf.push(3);
+                append_len_prefixed(buf, capability_id.as_bytes());
+            }
+            Self::ProofUpdate { proof_id } => {
+                buf.push(4);
+                append_len_prefixed(buf, proof_id.as_bytes());
+            }
+            Self::OperatorInvalidation { reason } => {
+                buf.push(5);
+                append_len_prefixed(buf, reason.as_bytes());
             }
         }
     }
@@ -162,9 +216,12 @@ impl EpochBoundSpecialization {
 
 /// Signed record of a specialization invalidation for audit/replay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvalidationReceipt {
     /// Unique receipt identity.
     pub receipt_id: EngineObjectId,
+    /// Monotonic one-based invalidation sequence within this engine state.
+    pub invalidation_sequence: u64,
     /// ID of the invalidated specialization.
     pub specialization_id: EngineObjectId,
     /// Why it was invalidated.
@@ -179,8 +236,138 @@ pub struct InvalidationReceipt {
     pub baseline_restoration_hash: ContentHash,
     /// Timestamp of invalidation (nanoseconds).
     pub invalidated_at_ns: u64,
-    /// Signature over the receipt.
-    pub signature: Vec<u8>,
+    /// Runtime- or lab-provenance-bound detached signature over the receipt.
+    pub signature: EvidenceSignatureEnvelope,
+}
+
+impl InvalidationReceipt {
+    /// Compute the injective, domain-separated signing preimage for this receipt.
+    pub fn signing_preimage(&self) -> Vec<u8> {
+        InvalidationReceiptFields::from_receipt(self).signing_preimage(&self.receipt_id)
+    }
+
+    /// Verify a production receipt against externally authenticated runtime trust.
+    pub fn verify_runtime_signature(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+        expected_epoch: SecurityEpoch,
+    ) -> Result<(), InvalidationError> {
+        trust_registry.ensure_runtime_scope().map_err(|error| {
+            InvalidationError::ReceiptVerificationFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        self.verify_signature_with_registry(trust_registry, expected_epoch)
+    }
+
+    /// Verify an explicitly lab-scoped deterministic receipt.
+    pub fn verify_signature_for_lab(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+        expected_epoch: SecurityEpoch,
+    ) -> Result<(), InvalidationError> {
+        trust_registry.ensure_lab_scope().map_err(|error| {
+            InvalidationError::ReceiptVerificationFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        self.verify_signature_with_registry(trust_registry, expected_epoch)
+    }
+
+    fn verify_signature_with_registry(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+        expected_epoch: SecurityEpoch,
+    ) -> Result<(), InvalidationError> {
+        if self.new_epoch != expected_epoch {
+            return Err(InvalidationError::ReceiptVerificationFailed {
+                reason: format!(
+                    "invalidation receipt epoch mismatch: expected {}, got {}",
+                    expected_epoch.as_u64(),
+                    self.new_epoch.as_u64()
+                ),
+            });
+        }
+        if self.signature.producer_id != INVALIDATION_RECEIPT_PRODUCER_ID {
+            return Err(InvalidationError::ReceiptVerificationFailed {
+                reason: format!(
+                    "invalidation receipt producer mismatch: expected {INVALIDATION_RECEIPT_PRODUCER_ID}, got {}",
+                    self.signature.producer_id
+                ),
+            });
+        }
+        trust_registry
+            .verify_detached(&self.signature, &self.signing_preimage(), self.new_epoch)
+            .map_err(|error| InvalidationError::ReceiptVerificationFailed {
+                reason: error.to_string(),
+            })
+    }
+}
+
+struct InvalidationReceiptFields<'a> {
+    invalidation_sequence: u64,
+    specialization_id: &'a EngineObjectId,
+    reason: &'a InvalidationReason,
+    old_epoch: SecurityEpoch,
+    new_epoch: SecurityEpoch,
+    rollback_token_hash: ContentHash,
+    baseline_restoration_hash: ContentHash,
+    invalidated_at_ns: u64,
+}
+
+impl<'a> InvalidationReceiptFields<'a> {
+    fn from_receipt(receipt: &'a InvalidationReceipt) -> Self {
+        Self {
+            invalidation_sequence: receipt.invalidation_sequence,
+            specialization_id: &receipt.specialization_id,
+            reason: &receipt.reason,
+            old_epoch: receipt.old_epoch,
+            new_epoch: receipt.new_epoch,
+            rollback_token_hash: receipt.rollback_token_hash,
+            baseline_restoration_hash: receipt.baseline_restoration_hash,
+            invalidated_at_ns: receipt.invalidated_at_ns,
+        }
+    }
+
+    fn append_canonical_body(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.invalidation_sequence.to_le_bytes());
+        append_len_prefixed(buf, self.specialization_id.as_bytes());
+        self.reason.append_signing_preimage(buf);
+        buf.extend_from_slice(&self.old_epoch.as_u64().to_le_bytes());
+        buf.extend_from_slice(&self.new_epoch.as_u64().to_le_bytes());
+        buf.extend_from_slice(self.rollback_token_hash.as_bytes());
+        buf.extend_from_slice(self.baseline_restoration_hash.as_bytes());
+        buf.extend_from_slice(&self.invalidated_at_ns.to_le_bytes());
+    }
+
+    fn derive_receipt_id(&self) -> Result<EngineObjectId, InvalidationError> {
+        let schema_id = SchemaId::from_definition(INVALIDATION_RECEIPT_SCHEMA_VERSION.as_bytes());
+        let mut canonical = Vec::new();
+        self.append_canonical_body(&mut canonical);
+        engine_object_id::derive_id(
+            ObjectDomain::EvidenceRecord,
+            EPOCH_INVALIDATION_ZONE,
+            &schema_id,
+            &canonical,
+        )
+        .map_err(|error| InvalidationError::IdDerivation(error.to_string()))
+    }
+
+    fn signing_preimage(&self, receipt_id: &EngineObjectId) -> Vec<u8> {
+        let mut preimage = Vec::new();
+        append_len_prefixed(
+            &mut preimage,
+            INVALIDATION_RECEIPT_SCHEMA_VERSION.as_bytes(),
+        );
+        append_len_prefixed(&mut preimage, INVALIDATION_RECEIPT_COMPONENT.as_bytes());
+        append_len_prefixed(
+            &mut preimage,
+            INVALIDATION_RECEIPT_SIGNATURE_DOMAIN.as_bytes(),
+        );
+        append_len_prefixed(&mut preimage, receipt_id.as_bytes());
+        self.append_canonical_body(&mut preimage);
+        preimage
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +432,19 @@ pub enum InvalidationEventType {
 /// Errors from the epoch-invalidation subsystem.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InvalidationError {
+    /// Engine configuration cannot safely produce authenticated receipts.
+    ConfigurationError { reason: String },
+    /// Receipt authority failed to sign a prepared invalidation.
+    ReceiptSigningFailed { reason: String },
+    /// Receipt did not authenticate against externally supplied trust.
+    ReceiptVerificationFailed { reason: String },
+    /// Security epochs are monotonic and cannot move backward.
+    EpochRegression {
+        current: SecurityEpoch,
+        requested: SecurityEpoch,
+    },
+    /// The total invalidation counter cannot represent another committed batch.
+    InvalidationCounterExhausted,
     /// Specialization not found in registry.
     SpecializationNotFound { id: EngineObjectId },
     /// Specialization is already in fallback state.
@@ -274,6 +474,22 @@ pub enum InvalidationError {
 impl fmt::Display for InvalidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConfigurationError { reason } => {
+                write!(f, "epoch invalidation configuration error: {reason}")
+            }
+            Self::ReceiptSigningFailed { reason } => {
+                write!(f, "invalidation receipt signing failed: {reason}")
+            }
+            Self::ReceiptVerificationFailed { reason } => {
+                write!(f, "invalidation receipt verification failed: {reason}")
+            }
+            Self::EpochRegression { current, requested } => write!(
+                f,
+                "security epoch cannot regress from {current} to {requested}"
+            ),
+            Self::InvalidationCounterExhausted => {
+                f.write_str("total invalidation counter exhausted")
+            }
             Self::SpecializationNotFound { id } => {
                 write!(f, "specialization not found: {id}")
             }
@@ -342,10 +558,9 @@ impl Default for ChurnConfig {
 // ---------------------------------------------------------------------------
 
 /// Configuration for the epoch invalidation engine.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvalidationConfig {
-    /// Signing key for invalidation receipts.
-    pub signing_key: [u8; 32],
     /// Churn dampening configuration.
     pub churn: ChurnConfig,
 }
@@ -381,12 +596,58 @@ pub struct EpochInvalidationEngine {
     churn_deactivated_at_ns: Option<u64>,
     /// Total invalidations performed.
     total_invalidations: u64,
+    /// Non-serializable signing capability supplied by the composition root.
+    #[serde(skip)]
+    receipt_signing_authority: Option<EvidenceSigningAuthority>,
 }
 
 impl EpochInvalidationEngine {
-    /// Create a new invalidation engine.
-    pub fn new(epoch: SecurityEpoch, config: InvalidationConfig) -> Self {
-        Self {
+    /// Create an engine without receipt authority.
+    ///
+    /// Epoch invalidation is an authenticated production surface, so this
+    /// constructor fails closed. Use [`Self::new_with_runtime_authority`] in a
+    /// product composition root or [`Self::new_for_lab`] for deterministic
+    /// fixtures.
+    pub fn new(
+        epoch: SecurityEpoch,
+        config: InvalidationConfig,
+    ) -> Result<Self, InvalidationError> {
+        Self::new_with_authority(epoch, config, None)
+    }
+
+    /// Create a production engine with runtime-owned receipt authority.
+    pub fn new_with_runtime_authority(
+        epoch: SecurityEpoch,
+        config: InvalidationConfig,
+        authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, InvalidationError> {
+        Self::new_with_authority(
+            epoch,
+            config,
+            Some(EvidenceSigningAuthority::Runtime(authority)),
+        )
+    }
+
+    /// Create an explicitly lab-scoped engine with deterministic authority.
+    pub fn new_for_lab(
+        epoch: SecurityEpoch,
+        config: InvalidationConfig,
+        authority: LabEvidenceAuthority,
+    ) -> Result<Self, InvalidationError> {
+        Self::new_with_authority(
+            epoch,
+            config,
+            Some(EvidenceSigningAuthority::Lab(authority)),
+        )
+    }
+
+    fn new_with_authority(
+        epoch: SecurityEpoch,
+        config: InvalidationConfig,
+        receipt_signing_authority: Option<EvidenceSigningAuthority>,
+    ) -> Result<Self, InvalidationError> {
+        Self::validate_authority(receipt_signing_authority.as_ref(), epoch)?;
+        Ok(Self {
             current_epoch: epoch,
             config,
             specializations: Vec::new(),
@@ -397,7 +658,125 @@ impl EpochInvalidationEngine {
             conservative_mode: false,
             churn_deactivated_at_ns: None,
             total_invalidations: 0,
+            receipt_signing_authority,
+        })
+    }
+
+    fn validate_authority(
+        authority: Option<&EvidenceSigningAuthority>,
+        signing_epoch: SecurityEpoch,
+    ) -> Result<(), InvalidationError> {
+        let authority = authority.ok_or_else(|| InvalidationError::ConfigurationError {
+            reason: "invalidation receipt signing requires runtime-owned authority or an explicitly lab-scoped fixture authority".to_string(),
+        })?;
+        let identity = authority.verification_identity();
+        if identity.producer_id != INVALIDATION_RECEIPT_PRODUCER_ID {
+            return Err(InvalidationError::ConfigurationError {
+                reason: format!(
+                    "invalidation receipt authority producer must be {INVALIDATION_RECEIPT_PRODUCER_ID}, got {}",
+                    identity.producer_id
+                ),
+            });
         }
+        if identity.key_provenance.activation_epoch > signing_epoch {
+            return Err(InvalidationError::ConfigurationError {
+                reason: format!(
+                    "invalidation receipt key {} activates at epoch {}, after signing epoch {}",
+                    identity.key_provenance.key_id,
+                    identity.key_provenance.activation_epoch.as_u64(),
+                    signing_epoch.as_u64()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_authority_transition(
+        current: Option<&EvidenceSigningAuthority>,
+        replacement: &EvidenceSigningAuthority,
+    ) -> Result<(), InvalidationError> {
+        let Some(current) = current else {
+            return Ok(());
+        };
+        if current == replacement {
+            return Ok(());
+        }
+
+        let current_identity = current.verification_identity();
+        let replacement_identity = replacement.verification_identity();
+        if current_identity.key_provenance.authority_class
+            != replacement_identity.key_provenance.authority_class
+        {
+            return Err(InvalidationError::ConfigurationError {
+                reason: "invalidation receipt authority class cannot change on a live engine"
+                    .to_string(),
+            });
+        }
+        let expected_sequence = current_identity
+            .key_provenance
+            .rotation_sequence
+            .checked_add(1)
+            .ok_or_else(|| InvalidationError::ConfigurationError {
+                reason: "invalidation receipt authority rotation sequence is exhausted".to_string(),
+            })?;
+        if replacement_identity.key_provenance.rotation_sequence != expected_sequence {
+            return Err(InvalidationError::ConfigurationError {
+                reason: format!(
+                    "invalidation receipt authority rotation must advance from sequence {} to {}, got {}",
+                    current_identity.key_provenance.rotation_sequence,
+                    expected_sequence,
+                    replacement_identity.key_provenance.rotation_sequence
+                ),
+            });
+        }
+        if replacement_identity
+            .key_provenance
+            .previous_key_id
+            .as_deref()
+            != Some(current_identity.key_provenance.key_id.as_str())
+        {
+            return Err(InvalidationError::ConfigurationError {
+                reason: format!(
+                    "invalidation receipt authority rotation must name predecessor {}",
+                    current_identity.key_provenance.key_id
+                ),
+            });
+        }
+        if replacement_identity.key_provenance.activation_epoch
+            <= current_identity.key_provenance.activation_epoch
+        {
+            return Err(InvalidationError::ConfigurationError {
+                reason: format!(
+                    "invalidation receipt authority rotation epoch must advance beyond {}",
+                    current_identity.key_provenance.activation_epoch.as_u64()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Reattach runtime authority after deserializing engine state.
+    pub fn attach_runtime_receipt_authority(
+        &mut self,
+        authority: RuntimeEvidenceAuthority,
+    ) -> Result<(), InvalidationError> {
+        let authority = EvidenceSigningAuthority::Runtime(authority);
+        Self::validate_authority(Some(&authority), self.current_epoch)?;
+        Self::validate_authority_transition(self.receipt_signing_authority.as_ref(), &authority)?;
+        self.receipt_signing_authority = Some(authority);
+        Ok(())
+    }
+
+    /// Reattach explicitly lab-scoped authority after deserializing fixture state.
+    pub fn attach_lab_receipt_authority(
+        &mut self,
+        authority: LabEvidenceAuthority,
+    ) -> Result<(), InvalidationError> {
+        let authority = EvidenceSigningAuthority::Lab(authority);
+        Self::validate_authority(Some(&authority), self.current_epoch)?;
+        Self::validate_authority_transition(self.receipt_signing_authority.as_ref(), &authority)?;
+        self.receipt_signing_authority = Some(authority);
+        Ok(())
     }
 
     /// Get the current epoch.
@@ -503,17 +882,18 @@ impl EpochInvalidationEngine {
     /// by specialization_id before processing.
     ///
     /// Returns the count of invalidated specializations.
-    pub fn advance_epoch(&mut self, new_epoch: SecurityEpoch, current_ns: u64) -> u64 {
+    pub fn advance_epoch(
+        &mut self,
+        new_epoch: SecurityEpoch,
+        current_ns: u64,
+    ) -> Result<u64, InvalidationError> {
         let old_epoch = self.current_epoch;
-        self.current_epoch = new_epoch;
-
-        self.emit_event(
-            current_ns,
-            InvalidationEventType::EpochTransitionTriggered {
-                old_epoch,
-                new_epoch,
-            },
-        );
+        if new_epoch < old_epoch {
+            return Err(InvalidationError::EpochRegression {
+                current: old_epoch,
+                requested: new_epoch,
+            });
+        }
 
         // Collect IDs to invalidate, sorted for determinism.
         let mut to_invalidate: Vec<EngineObjectId> = self
@@ -528,7 +908,22 @@ impl EpochInvalidationEngine {
             old_epoch,
             new_epoch,
         };
-        let count = self.invalidate_batch(&to_invalidate, &reason, current_ns);
+        let prepared =
+            self.prepare_invalidation_batch(&to_invalidate, &reason, current_ns, new_epoch)?;
+        let count = usize_to_u64_saturating(prepared.len());
+
+        // No fallible receipt work remains after the epoch transition becomes
+        // visible, so a detached/misconfigured authority cannot leave a
+        // partially invalidated epoch.
+        self.current_epoch = new_epoch;
+        self.emit_event(
+            current_ns,
+            InvalidationEventType::EpochTransitionTriggered {
+                old_epoch,
+                new_epoch,
+            },
+        );
+        self.commit_prepared_invalidations(prepared, current_ns);
 
         if count > 0 {
             self.emit_event(
@@ -540,7 +935,35 @@ impl EpochInvalidationEngine {
             );
         }
 
-        count
+        Ok(count)
+    }
+
+    /// Atomically advance an epoch boundary with the runtime authority that is
+    /// active at the destination epoch.
+    ///
+    /// This is the production rotation path: a successor cannot be attached by
+    /// [`Self::attach_runtime_receipt_authority`] before its activation epoch,
+    /// while attaching it after [`Self::advance_epoch`] would sign boundary
+    /// receipts with the retired predecessor. If receipt preparation fails,
+    /// the prior authority and epoch remain unchanged.
+    pub fn advance_epoch_with_runtime_authority(
+        &mut self,
+        new_epoch: SecurityEpoch,
+        current_ns: u64,
+        authority: RuntimeEvidenceAuthority,
+    ) -> Result<u64, InvalidationError> {
+        let replacement = EvidenceSigningAuthority::Runtime(authority);
+        Self::validate_authority(Some(&replacement), new_epoch)?;
+        Self::validate_authority_transition(self.receipt_signing_authority.as_ref(), &replacement)?;
+
+        let previous = self.receipt_signing_authority.replace(replacement);
+        match self.advance_epoch(new_epoch, current_ns) {
+            Ok(count) => Ok(count),
+            Err(error) => {
+                self.receipt_signing_authority = previous;
+                Err(error)
+            }
+        }
     }
 
     /// Invalidate a specific specialization by ID.
@@ -566,13 +989,25 @@ impl EpochInvalidationEngine {
             });
         }
 
-        let receipt = self.do_invalidate(spec_id, &reason, current_ns)?;
-        self.track_invalidation(current_ns);
+        self.preflight_invalidation_count(1)?;
+        let invalidation_sequence = self.invalidation_sequence_for_offset(0)?;
+        let receipt = self.prepare_invalidation(
+            spec_id,
+            &reason,
+            current_ns,
+            self.current_epoch,
+            invalidation_sequence,
+        )?;
+        self.commit_prepared_invalidations(vec![receipt.clone()], current_ns);
         Ok(receipt)
     }
 
     /// Invalidate all specializations linked to a specific proof ID.
-    pub fn invalidate_by_proof(&mut self, proof_id: &EngineObjectId, current_ns: u64) -> u64 {
+    pub fn invalidate_by_proof(
+        &mut self,
+        proof_id: &EngineObjectId,
+        current_ns: u64,
+    ) -> Result<u64, InvalidationError> {
         let mut to_invalidate: Vec<EngineObjectId> = self
             .specializations
             .iter()
@@ -588,7 +1023,11 @@ impl EpochInvalidationEngine {
     }
 
     /// Invalidate all specializations linked to a specific policy ID.
-    pub fn invalidate_by_policy(&mut self, policy_id: &str, current_ns: u64) -> u64 {
+    pub fn invalidate_by_policy(
+        &mut self,
+        policy_id: &str,
+        current_ns: u64,
+    ) -> Result<u64, InvalidationError> {
         let mut to_invalidate: Vec<EngineObjectId> = self
             .specializations
             .iter()
@@ -733,25 +1172,65 @@ impl EpochInvalidationEngine {
         ids: &[EngineObjectId],
         reason: &InvalidationReason,
         current_ns: u64,
-    ) -> u64 {
-        let mut count = 0u64;
-        for spec_id in ids {
-            if self.do_invalidate(spec_id, reason, current_ns).is_ok() {
-                count = count.saturating_add(1);
-                self.track_invalidation(current_ns);
-            }
-        }
-        count
+    ) -> Result<u64, InvalidationError> {
+        let prepared =
+            self.prepare_invalidation_batch(ids, reason, current_ns, self.current_epoch)?;
+        let count = usize_to_u64_saturating(prepared.len());
+        self.commit_prepared_invalidations(prepared, current_ns);
+        Ok(count)
     }
 
-    /// Perform a single invalidation: transition state, emit receipt, log events.
-    fn do_invalidate(
-        &mut self,
+    fn prepare_invalidation_batch(
+        &self,
+        ids: &[EngineObjectId],
+        reason: &InvalidationReason,
+        current_ns: u64,
+        signing_epoch: SecurityEpoch,
+    ) -> Result<Vec<InvalidationReceipt>, InvalidationError> {
+        self.preflight_invalidation_count(usize_to_u64_saturating(ids.len()))?;
+        ids.iter()
+            .enumerate()
+            .map(|(offset, spec_id)| {
+                let invalidation_sequence = self.invalidation_sequence_for_offset(offset)?;
+                self.prepare_invalidation(
+                    spec_id,
+                    reason,
+                    current_ns,
+                    signing_epoch,
+                    invalidation_sequence,
+                )
+            })
+            .collect()
+    }
+
+    fn invalidation_sequence_for_offset(
+        &self,
+        zero_based_offset: usize,
+    ) -> Result<u64, InvalidationError> {
+        let offset = u64::try_from(zero_based_offset)
+            .map_err(|_| InvalidationError::InvalidationCounterExhausted)?;
+        self.total_invalidations
+            .checked_add(offset)
+            .and_then(|sequence| sequence.checked_add(1))
+            .ok_or(InvalidationError::InvalidationCounterExhausted)
+    }
+
+    fn preflight_invalidation_count(&self, count: u64) -> Result<(), InvalidationError> {
+        self.total_invalidations
+            .checked_add(count)
+            .ok_or(InvalidationError::InvalidationCounterExhausted)
+            .map(|_| ())
+    }
+
+    /// Prepare and sign one invalidation without mutating engine state.
+    fn prepare_invalidation(
+        &self,
         spec_id: &EngineObjectId,
         reason: &InvalidationReason,
         current_ns: u64,
+        signing_epoch: SecurityEpoch,
+        invalidation_sequence: u64,
     ) -> Result<InvalidationReceipt, InvalidationError> {
-        // Find the spec and extract fields we need for the receipt.
         let spec = self
             .specializations
             .iter()
@@ -762,68 +1241,92 @@ impl EpochInvalidationEngine {
         let epoch_before_invalidation = spec.activated_epoch;
         let rollback_hash = spec.rollback_token_hash;
         let baseline_hash = spec.baseline_ir_hash;
-
-        // Transition state.
-        let spec_mut = self
-            .specializations
-            .iter_mut()
-            .find(|s| &s.specialization_id == spec_id)
-            .expect("operation should succeed for valid inputs");
-        spec_mut.state = FallbackState::BaselineFallback;
-
-        // Build receipt.
-        let receipt_id = self.derive_receipt_id(spec_id, current_ns)?;
-        let sig_input = {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(receipt_id.as_bytes());
-            buf.extend_from_slice(spec_id.as_bytes());
-            buf.extend_from_slice(format!("{reason:?}").as_bytes());
-            buf.extend_from_slice(&epoch_before_invalidation.as_u64().to_be_bytes());
-            buf.extend_from_slice(&self.current_epoch.as_u64().to_be_bytes());
-            buf.extend_from_slice(rollback_hash.as_bytes());
-            buf.extend_from_slice(baseline_hash.as_bytes());
-            buf.extend_from_slice(&current_ns.to_be_bytes());
-            buf
+        let fields = InvalidationReceiptFields {
+            invalidation_sequence,
+            specialization_id: spec_id,
+            reason,
+            old_epoch: epoch_before_invalidation,
+            new_epoch: signing_epoch,
+            rollback_token_hash: rollback_hash,
+            baseline_restoration_hash: baseline_hash,
+            invalidated_at_ns: current_ns,
         };
-        let signature = self.compute_signature(&sig_input);
+        let receipt_id = fields.derive_receipt_id()?;
+        let signing_preimage = fields.signing_preimage(&receipt_id);
+        let authority = self.receipt_signing_authority.as_ref().ok_or_else(|| {
+            InvalidationError::ReceiptSigningFailed {
+                reason: "engine has no attached invalidation receipt authority".to_string(),
+            }
+        })?;
+        Self::validate_authority(Some(authority), signing_epoch).map_err(|error| {
+            InvalidationError::ReceiptSigningFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        let signature = authority
+            .sign_detached(&signing_preimage, signing_epoch)
+            .map_err(|error| InvalidationError::ReceiptSigningFailed {
+                reason: error.to_string(),
+            })?;
 
-        let receipt = InvalidationReceipt {
-            receipt_id: receipt_id.clone(),
+        Ok(InvalidationReceipt {
+            receipt_id,
+            invalidation_sequence,
             specialization_id: spec_id.clone(),
             reason: reason.clone(),
             old_epoch: epoch_before_invalidation,
-            new_epoch: self.current_epoch,
+            new_epoch: signing_epoch,
             rollback_token_hash: rollback_hash,
             baseline_restoration_hash: baseline_hash,
             invalidated_at_ns: current_ns,
             signature,
-        };
+        })
+    }
 
-        self.receipts.push(receipt.clone());
-        self.total_invalidations = self.total_invalidations.saturating_add(1);
+    /// Commit a fully prepared batch. All fallible ID/signature/count work is
+    /// complete before this method is entered.
+    fn commit_prepared_invalidations(
+        &mut self,
+        prepared: Vec<InvalidationReceipt>,
+        current_ns: u64,
+    ) {
+        let count = usize_to_u64_saturating(prepared.len());
+        self.total_invalidations = self
+            .total_invalidations
+            .checked_add(count)
+            .expect("invalidation count was preflighted before commit");
 
-        self.emit_event(
-            current_ns,
-            InvalidationEventType::SpecializationInvalidated {
-                specialization_id: spec_id.clone(),
-                reason: reason.clone(),
-            },
-        );
-        self.emit_event(
-            current_ns,
-            InvalidationEventType::BaselineFallbackCompleted {
-                specialization_id: spec_id.clone(),
-            },
-        );
-        self.emit_event(
-            current_ns,
-            InvalidationEventType::InvalidationReceiptEmitted {
-                receipt_id,
-                specialization_id: spec_id.clone(),
-            },
-        );
+        for receipt in prepared {
+            let spec = self
+                .specializations
+                .iter_mut()
+                .find(|spec| spec.specialization_id == receipt.specialization_id)
+                .expect("prepared invalidation references an existing specialization");
+            spec.state = FallbackState::BaselineFallback;
 
-        Ok(receipt)
+            self.emit_event(
+                current_ns,
+                InvalidationEventType::SpecializationInvalidated {
+                    specialization_id: receipt.specialization_id.clone(),
+                    reason: receipt.reason.clone(),
+                },
+            );
+            self.emit_event(
+                current_ns,
+                InvalidationEventType::BaselineFallbackCompleted {
+                    specialization_id: receipt.specialization_id.clone(),
+                },
+            );
+            self.emit_event(
+                current_ns,
+                InvalidationEventType::InvalidationReceiptEmitted {
+                    receipt_id: receipt.receipt_id.clone(),
+                    specialization_id: receipt.specialization_id.clone(),
+                },
+            );
+            self.receipts.push(receipt);
+            self.track_invalidation(current_ns);
+        }
     }
 
     fn track_invalidation(&mut self, current_ns: u64) {
@@ -854,31 +1357,6 @@ impl EpochInvalidationEngine {
             self.churn_deactivated_at_ns = Some(current_ns);
             self.emit_event(current_ns, InvalidationEventType::ChurnDampeningDeactivated);
         }
-    }
-
-    fn derive_receipt_id(
-        &self,
-        spec_id: &EngineObjectId,
-        current_ns: u64,
-    ) -> Result<EngineObjectId, InvalidationError> {
-        let schema_id = SchemaId::from_definition(INVALIDATION_RECEIPT_SCHEMA_DEF);
-        let mut canonical = spec_id.as_bytes().to_vec();
-        canonical.extend_from_slice(&current_ns.to_be_bytes());
-        canonical.extend_from_slice(&self.current_epoch.as_u64().to_be_bytes());
-        engine_object_id::derive_id(
-            ObjectDomain::EvidenceRecord,
-            EPOCH_INVALIDATION_ZONE,
-            &schema_id,
-            &canonical,
-        )
-        .map_err(|e| InvalidationError::IdDerivation(e.to_string()))
-    }
-
-    fn compute_signature(&self, data: &[u8]) -> Vec<u8> {
-        let mut input = Vec::with_capacity(32 + data.len());
-        input.extend_from_slice(&self.config.signing_key);
-        input.extend_from_slice(data);
-        ContentHash::compute(&input).as_bytes().to_vec()
     }
 
     fn emit_event(&mut self, timestamp_ns: u64, event_type: InvalidationEventType) {
@@ -957,31 +1435,58 @@ pub fn create_specialization(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_key() -> [u8; 32] {
-        let mut key = [0u8; 32];
-        for (i, b) in key.iter_mut().enumerate() {
-            *b = u8::try_from(i)
-                .unwrap_or(u8::MAX)
-                .wrapping_mul(11)
-                .wrapping_add(5);
-        }
-        key
-    }
+    use crate::signature_preimage::SigningKey;
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(100)
     }
 
+    fn test_authority() -> LabEvidenceAuthority {
+        test_authority_named("default")
+    }
+
+    fn test_authority_named(fixture_id: &str) -> LabEvidenceAuthority {
+        LabEvidenceAuthority::deterministic_fixture(
+            INVALIDATION_RECEIPT_PRODUCER_ID,
+            fixture_id,
+            SecurityEpoch::GENESIS,
+        )
+        .expect("valid lab invalidation authority")
+    }
+
+    fn test_trust_registry(current_epoch: SecurityEpoch) -> EvidenceTrustRegistry {
+        EvidenceTrustRegistry::from_lab_identities(
+            current_epoch,
+            [test_authority().verification_identity()],
+        )
+        .expect("valid lab invalidation trust registry")
+    }
+
+    fn test_runtime_authority(
+        seed: u8,
+        activation_epoch: SecurityEpoch,
+        rotation_sequence: u64,
+        previous_key_id: Option<String>,
+    ) -> RuntimeEvidenceAuthority {
+        RuntimeEvidenceAuthority::from_signing_key(
+            INVALIDATION_RECEIPT_PRODUCER_ID,
+            SigningKey::from_bytes([seed; 32]).expect("non-zero runtime test key"),
+            activation_epoch,
+            rotation_sequence,
+            previous_key_id,
+        )
+        .expect("valid runtime invalidation authority")
+    }
+
     fn test_config() -> InvalidationConfig {
         InvalidationConfig {
-            signing_key: test_key(),
             churn: ChurnConfig::default(),
         }
     }
 
     fn test_engine() -> EpochInvalidationEngine {
-        EpochInvalidationEngine::new(test_epoch(), test_config())
+        EpochInvalidationEngine::new_for_lab(test_epoch(), test_config(), test_authority())
+            .expect("valid lab invalidation engine")
     }
 
     fn make_proof_id(suffix: &str) -> EngineObjectId {
@@ -1106,7 +1611,9 @@ mod tests {
         assert_eq!(engine.fallback_count(), 0);
 
         // Advance past valid_until.
-        let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        let invalidated = engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(invalidated, 1);
         assert_eq!(engine.active_count(), 0);
         assert_eq!(engine.fallback_count(), 1);
@@ -1121,7 +1628,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Stay within validity window.
-        let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
+        let invalidated = engine
+            .advance_epoch(SecurityEpoch::from_raw(105), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(invalidated, 0);
         assert_eq!(engine.active_count(), 1);
     }
@@ -1151,7 +1660,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Epoch 110: s1 expires (valid_until=105), s2 survives (valid_until=120).
-        let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(110), 2000);
+        let invalidated = engine
+            .advance_epoch(SecurityEpoch::from_raw(110), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(invalidated, 1);
         assert_eq!(engine.active_count(), 1);
         assert_eq!(engine.fallback_count(), 1);
@@ -1174,7 +1685,9 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
         }
 
-        let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
+        let invalidated = engine
+            .advance_epoch(SecurityEpoch::from_raw(101), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(invalidated, 5);
 
         // All receipts should have deterministic ordering.
@@ -1210,7 +1723,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         assert_eq!(receipt.specialization_id, spec_id);
-        assert!(!receipt.signature.is_empty());
+        receipt
+            .verify_signature_for_lab(&test_trust_registry(receipt.new_epoch), receipt.new_epoch)
+            .expect("receipt should authenticate under external lab trust");
         assert_eq!(engine.active_count(), 0);
         assert_eq!(engine.fallback_count(), 1);
     }
@@ -1290,7 +1805,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let count = engine.invalidate_by_proof(&proof_id, 2000);
+        let count = engine
+            .invalidate_by_proof(&proof_id, 2000)
+            .expect("proof invalidation should succeed");
         assert_eq!(count, 1);
         assert_eq!(engine.fallback_count(), 1);
     }
@@ -1331,7 +1848,9 @@ mod tests {
             .register_specialization(s3, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let count = engine.invalidate_by_policy("policy-A", 2000);
+        let count = engine
+            .invalidate_by_policy("policy-A", 2000)
+            .expect("policy invalidation should succeed");
         assert_eq!(count, 2);
         assert_eq!(engine.active_count(), 1); // policy-B survives
     }
@@ -1348,7 +1867,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Invalidate.
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(engine.fallback_count(), 1);
 
         // Begin re-specialization.
@@ -1408,7 +1929,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Invalidate but don't begin re-specialization.
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
 
         let err = engine
             .complete_respecialization(
@@ -1429,7 +1952,9 @@ mod tests {
         let mut config = test_config();
         config.churn.threshold = 3;
         config.churn.window_ns = 10_000;
-        let mut engine = EpochInvalidationEngine::new(test_epoch(), config);
+        let mut engine =
+            EpochInvalidationEngine::new_for_lab(test_epoch(), config, test_authority())
+                .expect("valid lab invalidation engine");
 
         for i in 0..3 {
             let spec = make_spec(
@@ -1464,7 +1989,9 @@ mod tests {
         let mut config = test_config();
         config.churn.threshold = 2;
         config.churn.window_ns = 1000;
-        let mut engine = EpochInvalidationEngine::new(test_epoch(), config);
+        let mut engine =
+            EpochInvalidationEngine::new_for_lab(test_epoch(), config, test_authority())
+                .expect("valid lab invalidation engine");
 
         // Two rapid invalidations.
         let s1 = make_spec(
@@ -1549,11 +2076,18 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
 
         let receipts = engine.receipts();
         assert_eq!(receipts.len(), 1);
-        assert!(!receipts[0].signature.is_empty());
+        receipts[0]
+            .verify_signature_for_lab(
+                &test_trust_registry(receipts[0].new_epoch),
+                receipts[0].new_epoch,
+            )
+            .expect("receipt should authenticate under external lab trust");
         assert_eq!(receipts[0].specialization_id, spec_id);
         assert_eq!(receipts[0].old_epoch, SecurityEpoch::from_raw(90));
         assert_eq!(receipts[0].new_epoch, SecurityEpoch::from_raw(111));
@@ -1569,7 +2103,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
 
         let receipt = &engine.receipts()[0];
         assert_eq!(receipt.rollback_token_hash, expected_rollback);
@@ -1585,7 +2121,9 @@ mod tests {
         engine
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
 
         for (i, event) in engine.events().iter().enumerate() {
             assert_eq!(event.seq, usize_to_u64_saturating(i));
@@ -1599,7 +2137,9 @@ mod tests {
         engine
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
 
         let event_types: Vec<_> = engine
             .events()
@@ -1682,7 +2222,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Invalidate s1 via epoch advance.
-        engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(105), 2000)
+            .expect("epoch advance should succeed");
 
         let active = engine.specializations_by_state(FallbackState::Active);
         assert_eq!(active.len(), 1);
@@ -1853,12 +2395,14 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
         }
 
-        engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(101), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(engine.total_invalidations(), 3);
     }
 
     #[test]
-    fn total_invalidations_saturates_for_restored_max_counter() {
+    fn total_invalidations_exhaustion_fails_atomically() {
         let mut engine = test_engine();
         let spec = make_spec(
             OptimizationClass::TraceSpecialization,
@@ -1873,7 +2417,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         engine.total_invalidations = u64::MAX;
-        engine
+        let events_before = engine.events().len();
+        let error = engine
             .invalidate_specialization(
                 &spec_id,
                 InvalidationReason::OperatorInvalidation {
@@ -1881,9 +2426,53 @@ mod tests {
                 },
                 2000,
             )
-            .expect("valid invalidation should succeed");
+            .expect_err("an exhausted counter must fail closed");
 
+        assert_eq!(error, InvalidationError::InvalidationCounterExhausted);
         assert_eq!(engine.total_invalidations(), u64::MAX);
+        assert_eq!(engine.active_count(), 1);
+        assert_eq!(engine.fallback_count(), 0);
+        assert!(engine.receipts().is_empty());
+        assert_eq!(engine.events().len(), events_before);
+    }
+
+    #[test]
+    fn failed_epoch_rotation_restores_predecessor_authority_and_state() {
+        let root = test_runtime_authority(0x61, test_epoch(), 1, None);
+        let root_identity = root.verification_identity();
+        let successor_epoch = SecurityEpoch::from_raw(111);
+        let successor = test_runtime_authority(
+            0x62,
+            successor_epoch,
+            2,
+            Some(root.key_provenance().key_id.clone()),
+        );
+        let mut engine =
+            EpochInvalidationEngine::new_with_runtime_authority(test_epoch(), test_config(), root)
+                .expect("runtime invalidation engine should be valid");
+        engine
+            .register_specialization(make_default_spec(), 1000)
+            .expect("specialization should register");
+        engine.total_invalidations = u64::MAX;
+        let events_before = engine.events().len();
+
+        let error = engine
+            .advance_epoch_with_runtime_authority(successor_epoch, 2000, successor)
+            .expect_err("counter exhaustion must abort the epoch and key rotation");
+
+        assert_eq!(error, InvalidationError::InvalidationCounterExhausted);
+        assert_eq!(engine.current_epoch(), test_epoch());
+        assert_eq!(engine.active_count(), 1);
+        assert!(engine.receipts().is_empty());
+        assert_eq!(engine.events().len(), events_before);
+        assert_eq!(
+            engine
+                .receipt_signing_authority
+                .as_ref()
+                .expect("predecessor authority must be restored")
+                .verification_identity(),
+            root_identity
+        );
     }
 
     // --- Persistent fallback on crash ---
@@ -1897,7 +2486,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
 
         // Simulate crash/restart via serde roundtrip.
         let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
@@ -1992,6 +2583,20 @@ mod tests {
     #[test]
     fn invalidation_error_serde_all_variants() {
         let variants: Vec<InvalidationError> = vec![
+            InvalidationError::ConfigurationError {
+                reason: "configuration".into(),
+            },
+            InvalidationError::ReceiptSigningFailed {
+                reason: "signing".into(),
+            },
+            InvalidationError::ReceiptVerificationFailed {
+                reason: "verification".into(),
+            },
+            InvalidationError::EpochRegression {
+                current: SecurityEpoch::from_raw(10),
+                requested: SecurityEpoch::from_raw(9),
+            },
+            InvalidationError::InvalidationCounterExhausted,
             InvalidationError::SpecializationNotFound {
                 id: make_proof_id("e1"),
             },
@@ -2180,7 +2785,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         let unrelated = make_proof_id("unrelated-proof");
-        let count = engine.invalidate_by_proof(&unrelated, 2000);
+        let count = engine
+            .invalidate_by_proof(&unrelated, 2000)
+            .expect("empty proof invalidation should succeed");
         assert_eq!(count, 0);
         assert_eq!(engine.active_count(), 1);
     }
@@ -2193,7 +2800,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let count = engine.invalidate_by_policy("policy-nonexistent", 2000);
+        let count = engine
+            .invalidate_by_policy("policy-nonexistent", 2000)
+            .expect("empty policy invalidation should succeed");
         assert_eq!(count, 0);
         assert_eq!(engine.active_count(), 1);
     }
@@ -2242,7 +2851,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Invalidate then begin re-specialization.
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
         engine
             .begin_respecialization(&spec_id, 3000)
             .expect("operation should succeed for valid inputs");
@@ -2268,14 +2879,18 @@ mod tests {
     fn advance_epoch_updates_current_epoch() {
         let mut engine = test_engine();
         assert_eq!(engine.current_epoch(), SecurityEpoch::from_raw(100));
-        engine.advance_epoch(SecurityEpoch::from_raw(200), 1000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(200), 1000)
+            .expect("epoch advance should succeed");
         assert_eq!(engine.current_epoch(), SecurityEpoch::from_raw(200));
     }
 
     #[test]
     fn advance_epoch_empty_engine_returns_zero() {
         let mut engine = test_engine();
-        let count = engine.advance_epoch(SecurityEpoch::from_raw(200), 1000);
+        let count = engine
+            .advance_epoch(SecurityEpoch::from_raw(200), 1000)
+            .expect("epoch advance should succeed");
         assert_eq!(count, 0);
         // Still emits the transition event.
         assert_eq!(engine.events().len(), 1);
@@ -2398,7 +3013,9 @@ mod tests {
         let mut config = test_config();
         config.churn.threshold = 2;
         config.churn.window_ns = 100_000;
-        let mut engine = EpochInvalidationEngine::new(test_epoch(), config);
+        let mut engine =
+            EpochInvalidationEngine::new_for_lab(test_epoch(), config, test_authority())
+                .expect("valid lab invalidation engine");
 
         for i in 0..2 {
             let spec = make_spec(
@@ -2437,7 +3054,9 @@ mod tests {
         let mut config = test_config();
         config.churn.threshold = 2;
         config.churn.window_ns = 1000;
-        let mut engine = EpochInvalidationEngine::new(test_epoch(), config);
+        let mut engine =
+            EpochInvalidationEngine::new_for_lab(test_epoch(), config, test_authority())
+                .expect("valid lab invalidation engine");
 
         // Two rapid invalidations to trigger conservative mode.
         for i in 0..2 {
@@ -2525,7 +3144,9 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
         }
 
-        let count = engine.invalidate_by_proof(&shared_proof, 2000);
+        let count = engine
+            .invalidate_by_proof(&shared_proof, 2000)
+            .expect("proof invalidation should succeed");
         assert_eq!(count, 3);
         assert_eq!(engine.fallback_count(), 3);
 
@@ -2560,7 +3181,9 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
         }
 
-        let count = engine.invalidate_by_policy("shared-policy", 2000);
+        let count = engine
+            .invalidate_by_policy("shared-policy", 2000)
+            .expect("policy invalidation should succeed");
         assert_eq!(count, 3);
 
         let receipt_spec_ids: Vec<_> = engine
@@ -2597,7 +3220,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
         engine
             .begin_respecialization(&spec_id, 3000)
             .expect("operation should succeed for valid inputs");
@@ -2635,13 +3260,18 @@ mod tests {
 
     #[test]
     fn receipt_signature_differs_with_different_key() {
-        let mut config1 = test_config();
-        config1.signing_key = [1u8; 32];
-        let mut config2 = test_config();
-        config2.signing_key = [2u8; 32];
-
-        let mut e1 = EpochInvalidationEngine::new(test_epoch(), config1);
-        let mut e2 = EpochInvalidationEngine::new(test_epoch(), config2);
+        let mut e1 = EpochInvalidationEngine::new_for_lab(
+            test_epoch(),
+            test_config(),
+            test_authority_named("key-one"),
+        )
+        .expect("valid first lab engine");
+        let mut e2 = EpochInvalidationEngine::new_for_lab(
+            test_epoch(),
+            test_config(),
+            test_authority_named("key-two"),
+        )
+        .expect("valid second lab engine");
 
         let spec1 = make_default_spec();
         let spec2 = make_default_spec();
@@ -2669,6 +3299,20 @@ mod tests {
     fn invalidation_error_std_error() {
         let id = make_proof_id("err-test");
         let variants: Vec<Box<dyn std::error::Error>> = vec![
+            Box::new(InvalidationError::ConfigurationError {
+                reason: "configuration".into(),
+            }),
+            Box::new(InvalidationError::ReceiptSigningFailed {
+                reason: "signing".into(),
+            }),
+            Box::new(InvalidationError::ReceiptVerificationFailed {
+                reason: "verification".into(),
+            }),
+            Box::new(InvalidationError::EpochRegression {
+                current: SecurityEpoch::from_raw(10),
+                requested: SecurityEpoch::from_raw(9),
+            }),
+            Box::new(InvalidationError::InvalidationCounterExhausted),
             Box::new(InvalidationError::SpecializationNotFound { id: id.clone() }),
             Box::new(InvalidationError::AlreadyInFallback { id: id.clone() }),
             Box::new(InvalidationError::InvalidEpochRange {
@@ -2680,13 +3324,18 @@ mod tests {
                 invalidation_count: 100,
                 window_ns: 60_000_000_000,
             }),
-            Box::new(InvalidationError::DuplicateSpecialization { id }),
+            Box::new(InvalidationError::DuplicateSpecialization { id: id.clone() }),
+            Box::new(InvalidationError::InvalidState {
+                id,
+                expected: "active".into(),
+                actual: "fallback".into(),
+            }),
         ];
         let mut displays = std::collections::BTreeSet::new();
         for v in &variants {
             displays.insert(format!("{v}"));
         }
-        assert_eq!(displays.len(), 6);
+        assert_eq!(displays.len(), 12);
     }
 
     // -- Enrichment: PearlTower 2026-02-26 --
@@ -2902,12 +3551,16 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // First advance: s1 expires (valid_until=105), s2 survives.
-        let inv1 = engine.advance_epoch(SecurityEpoch::from_raw(110), 2000);
+        let inv1 = engine
+            .advance_epoch(SecurityEpoch::from_raw(110), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(inv1, 1);
         assert_eq!(engine.active_count(), 1);
 
         // Second advance: s2 expires (valid_until=115).
-        let inv2 = engine.advance_epoch(SecurityEpoch::from_raw(120), 3000);
+        let inv2 = engine
+            .advance_epoch(SecurityEpoch::from_raw(120), 3000)
+            .expect("epoch advance should succeed");
         assert_eq!(inv2, 1);
         assert_eq!(engine.active_count(), 0);
         assert_eq!(engine.fallback_count(), 2);
@@ -2968,7 +3621,9 @@ mod tests {
         assert_eq!(engine.fallback_count(), 1);
 
         // invalidate_by_proof should only hit s2 (the still-active one).
-        let count = engine.invalidate_by_proof(&shared_proof, 2000);
+        let count = engine
+            .invalidate_by_proof(&shared_proof, 2000)
+            .expect("proof invalidation should succeed");
         assert_eq!(count, 1);
         assert_eq!(engine.fallback_count(), 2);
         assert_eq!(engine.active_count(), 0);
@@ -2983,7 +3638,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
 
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
         engine
             .begin_respecialization(&spec_id, 3000)
             .expect("operation should succeed for valid inputs");
@@ -3008,7 +3665,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Invalidate then begin re-specialization.
-        engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(111), 2000)
+            .expect("epoch advance should succeed");
         engine
             .begin_respecialization(&spec_id, 3000)
             .expect("operation should succeed for valid inputs");
@@ -3056,7 +3715,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Advance within validity — 0 invalidated.
-        let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
+        let count = engine
+            .advance_epoch(SecurityEpoch::from_raw(105), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(count, 0);
 
         // Should NOT have a BulkInvalidationCompleted event.
@@ -3088,7 +3749,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // Cycle 1: invalidate -> respec.
-        engine.advance_epoch(SecurityEpoch::from_raw(106), 2000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(106), 2000)
+            .expect("epoch advance should succeed");
         engine
             .begin_respecialization(&spec_id, 3000)
             .expect("operation should succeed for valid inputs");
@@ -3110,7 +3773,9 @@ mod tests {
         );
 
         // Cycle 2: invalidate again -> respec again.
-        engine.advance_epoch(SecurityEpoch::from_raw(120), 5000);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(120), 5000)
+            .expect("epoch advance should succeed");
         assert_eq!(
             engine
                 .get_specialization(&spec_id)
@@ -3142,13 +3807,8 @@ mod tests {
 
     #[test]
     fn receipt_id_varies_with_timestamp() {
-        let mut config1 = test_config();
-        config1.signing_key = [7u8; 32];
-        let config2 = config1.clone();
-        let _ = &config2; // same config
-
-        let mut e1 = EpochInvalidationEngine::new(test_epoch(), config1);
-        let mut e2 = EpochInvalidationEngine::new(test_epoch(), config2);
+        let mut e1 = test_engine();
+        let mut e2 = test_engine();
 
         let spec1 = make_default_spec();
         let spec2 = make_default_spec();
@@ -3210,7 +3870,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // invalidate_by_policy should only hit s2.
-        let count = engine.invalidate_by_policy("pol-shared", 2000);
+        let count = engine
+            .invalidate_by_policy("pol-shared", 2000)
+            .expect("policy invalidation should succeed");
         assert_eq!(count, 1);
         assert_eq!(engine.fallback_count(), 2);
         assert_eq!(engine.active_count(), 0);
@@ -3330,9 +3992,13 @@ mod tests {
     }
 
     #[test]
-    fn invalidation_config_default_signing_key_is_zero() {
-        let cfg = InvalidationConfig::default();
-        assert_eq!(cfg.signing_key, [0u8; 32]);
+    fn invalidation_config_rejects_legacy_signing_key() {
+        let json = serde_json::json!({
+            "signing_key": vec![0u8; 32],
+            "churn": ChurnConfig::default(),
+        });
+        let error = serde_json::from_value::<InvalidationConfig>(json).unwrap_err();
+        assert!(error.to_string().contains("unknown field `signing_key`"));
     }
 
     #[test]
@@ -3420,7 +4086,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         // s1 is ReSpecializing, s2 is Active.
         // Advance epoch past 100 — should only invalidate s2.
-        let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
+        let count = engine
+            .advance_epoch(SecurityEpoch::from_raw(105), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(count, 1);
         // s2 should be BaselineFallback.
         let s2_state = engine
@@ -3493,7 +4161,9 @@ mod tests {
         engine
             .register_specialization(s2, 200)
             .expect("operation should succeed for valid inputs");
-        engine.advance_epoch(SecurityEpoch::from_raw(115), 300);
+        engine
+            .advance_epoch(SecurityEpoch::from_raw(115), 300)
+            .expect("epoch advance should succeed");
         let seqs: Vec<u64> = engine.events().iter().map(|e| e.seq).collect();
         for window in seqs.windows(2) {
             assert!(
@@ -3565,7 +4235,7 @@ mod tests {
     #[test]
     fn schema_constants_non_empty() {
         assert!(!SPECIALIZATION_SCHEMA_DEF.is_empty());
-        assert!(!INVALIDATION_RECEIPT_SCHEMA_DEF.is_empty());
+        assert!(!INVALIDATION_RECEIPT_SCHEMA_VERSION.is_empty());
         assert!(!EPOCH_INVALIDATION_ZONE.is_empty());
     }
 
@@ -3657,7 +4327,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
         // Invalidation by proof_a should hit the spec.
-        let count = engine.invalidate_by_proof(&proof_a, 2000);
+        let count = engine
+            .invalidate_by_proof(&proof_a, 2000)
+            .expect("proof invalidation should succeed");
         assert_eq!(count, 1);
         assert_eq!(engine.fallback_count(), 1);
     }
@@ -3722,7 +4394,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("operation should succeed for valid inputs");
         let events_before = engine.events().len();
-        let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
+        let count = engine
+            .advance_epoch(SecurityEpoch::from_raw(105), 2000)
+            .expect("epoch advance should succeed");
         assert_eq!(count, 0);
         // Should emit EpochTransitionTriggered but NOT BulkInvalidationCompleted.
         let new_events: Vec<_> = engine.events()[events_before..].to_vec();
@@ -3767,6 +4441,20 @@ mod tests {
     #[test]
     fn invalidation_error_is_std_error_for_all_variants() {
         let errors: Vec<InvalidationError> = vec![
+            InvalidationError::ConfigurationError {
+                reason: "configuration".into(),
+            },
+            InvalidationError::ReceiptSigningFailed {
+                reason: "signing".into(),
+            },
+            InvalidationError::ReceiptVerificationFailed {
+                reason: "verification".into(),
+            },
+            InvalidationError::EpochRegression {
+                current: SecurityEpoch::from_raw(10),
+                requested: SecurityEpoch::from_raw(9),
+            },
+            InvalidationError::InvalidationCounterExhausted,
             InvalidationError::SpecializationNotFound {
                 id: make_proof_id("e1"),
             },
@@ -3894,12 +4582,8 @@ mod tests {
     }
 
     #[test]
-    fn invalidation_config_custom_key_serde() {
-        let mut key = [0u8; 32];
-        key[0] = 0xFF;
-        key[31] = 0xAB;
+    fn invalidation_config_serde_excludes_key_material() {
         let cfg = InvalidationConfig {
-            signing_key: key,
             churn: ChurnConfig {
                 threshold: 3,
                 window_ns: 10_000,
@@ -3908,9 +4592,9 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
+        assert!(!json.contains("signing_key"));
         let deser: InvalidationConfig =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        assert_eq!(deser.signing_key, key);
         assert_eq!(deser.churn.threshold, 3);
     }
 }

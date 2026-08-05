@@ -6,7 +6,7 @@
 //! 1. **Parse** source via `CanonicalEs2020Parser`
 //! 2. **Lower** IR0 → IR3 via `lowering_pipeline`
 //! 3. **Execute** IR3 via `LaneRouter`
-//! 4. **Assess risk** via `BayesianPosteriorUpdater`
+//! 4. **Assess risk** via a per-extension `BayesianPosteriorUpdater`
 //! 5. **Decide action** via `ExpectedLossSelector`
 //! 6. **Record evidence** via `EvidenceLedger`
 //! 7. **Execute containment** via `ContainmentExecutor`
@@ -24,9 +24,7 @@ use crate::baseline_interpreter::{
     ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig, InterpreterError,
     InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
 };
-use crate::bayesian_posterior::{
-    BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
-};
+use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
 use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
@@ -924,7 +922,7 @@ pub struct ExecutionOrchestrator {
     adaptive_router: RegretBoundedRouter,
     stopping_policies: BTreeMap<String, EscalationPolicy>,
     last_cumulative_llr_by_extension: BTreeMap<String, i64>,
-    posterior_updater: BayesianPosteriorUpdater,
+    posterior_updaters: UpdaterStore,
     loss_selector: ExpectedLossSelector,
     ledger: InMemoryLedger,
     evidence_chain_instance_id: String,
@@ -1182,7 +1180,6 @@ impl ExecutionOrchestrator {
         };
         ledger.bind_evidence_chain(evidence_ledger_id)?;
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
-        let prior = Posterior::default_prior();
         let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
         let adaptive_router = RegretBoundedRouter::new(
             vec![
@@ -1203,7 +1200,7 @@ impl ExecutionOrchestrator {
             adaptive_router,
             stopping_policies: BTreeMap::new(),
             last_cumulative_llr_by_extension: BTreeMap::new(),
-            posterior_updater: BayesianPosteriorUpdater::new(prior, "orchestrator"),
+            posterior_updaters: UpdaterStore::new(),
             loss_selector: ExpectedLossSelector::new(loss_matrix),
             ledger,
             evidence_chain_instance_id,
@@ -1699,7 +1696,10 @@ impl ExecutionOrchestrator {
                 evidence_capability_summary,
                 self.config.epoch,
             );
-            let update_result = self.posterior_updater.update(&evidence);
+            let update_result = self
+                .posterior_updaters
+                .get_or_create(&package.extension_id)
+                .update(&evidence);
             let posterior = update_result.posterior.clone();
             let risk_state = posterior.map_estimate();
 
@@ -3979,6 +3979,27 @@ mod tests {
         }
     }
 
+    fn broad_risk_package(extension_id: &str) -> ExtensionPackage {
+        let mut package = package_with_id(extension_id);
+        package.capabilities = [
+            "vm_dispatch",
+            "heap_allocate",
+            "gc_invoke",
+            "ir_lowering",
+            "policy_read",
+            "policy_write",
+            "evidence_emit",
+            "decision_invoke",
+            "network_egress",
+            "lease_management",
+            "idempotency_derive",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        package
+    }
+
     fn package_with_metadata(
         extension_id: &str,
         source: &str,
@@ -4602,6 +4623,82 @@ mod tests {
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert_eq!(reward, 400_000);
+    }
+
+    #[test]
+    fn bayesian_posterior_state_isolated_per_extension() {
+        let broad = broad_risk_package("ext-broad");
+        let target = package_with_id("ext-target");
+        let mut interleaved = ExecutionOrchestrator::with_defaults();
+        let broad_result = interleaved.execute(&broad).expect("execute broad");
+        let target_after_broad = interleaved.execute(&target).expect("execute target");
+
+        let mut fresh = ExecutionOrchestrator::with_defaults();
+        let fresh_target = fresh.execute(&target).expect("execute fresh target");
+
+        assert_ne!(broad_result.posterior, fresh_target.posterior);
+        assert_eq!(target_after_broad.posterior, fresh_target.posterior);
+        assert_eq!(
+            target_after_broad.optimal_stopping_certificate,
+            fresh_target.optimal_stopping_certificate
+        );
+        assert_eq!(interleaved.posterior_updaters.len(), 2);
+
+        let broad_updater = interleaved
+            .posterior_updaters
+            .get(&broad.extension_id)
+            .expect("broad updater");
+        let target_updater = interleaved
+            .posterior_updaters
+            .get(&target.extension_id)
+            .expect("target updater");
+        let fresh_target_updater = fresh
+            .posterior_updaters
+            .get(&target.extension_id)
+            .expect("fresh target updater");
+        assert_eq!(broad_updater.update_count(), 1);
+        assert_eq!(target_updater.update_count(), 1);
+        assert_eq!(
+            target_updater.log_likelihood_ratio(),
+            fresh_target_updater.log_likelihood_ratio()
+        );
+        assert_eq!(
+            target_updater.evidence_hashes(),
+            fresh_target_updater.evidence_hashes()
+        );
+        assert_eq!(
+            interleaved.stopping_policies.get(&target.extension_id),
+            fresh.stopping_policies.get(&target.extension_id)
+        );
+
+        let repeated_target = interleaved
+            .execute(&target)
+            .expect("execute repeated target");
+        assert_eq!(repeated_target.posterior, target_after_broad.posterior);
+        assert_eq!(
+            repeated_target
+                .optimal_stopping_certificate
+                .as_ref()
+                .map(|certificate| certificate.observations_before_stop),
+            Some(2)
+        );
+        assert_eq!(
+            interleaved
+                .posterior_updaters
+                .get(&target.extension_id)
+                .expect("repeated target updater")
+                .update_count(),
+            2
+        );
+        assert_eq!(
+            interleaved
+                .posterior_updaters
+                .get(&target.extension_id)
+                .expect("repeated target updater")
+                .evidence_hashes()
+                .len(),
+            2
+        );
     }
 
     #[test]

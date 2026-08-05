@@ -1447,6 +1447,51 @@ fn canonical_capability_count_prevents_alias_duplicate_and_unknown_risk_inflatio
 }
 
 #[test]
+fn posterior_and_stopping_state_are_isolated_per_extension() {
+    let broad = package_with_caps(
+        "ext-broad-risk",
+        "42",
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "gc_invoke",
+            "ir_lowering",
+            "policy_read",
+            "policy_write",
+            "evidence_emit",
+            "decision_invoke",
+            "network_egress",
+            "lease_management",
+            "idempotency_derive",
+        ],
+    );
+    let target = simple_package("ext-isolated-target", "42");
+    let mut interleaved = default_orch();
+    let broad_result = interleaved.execute(&broad).unwrap();
+    let target_after_broad = interleaved.execute(&target).unwrap();
+
+    let mut fresh = default_orch();
+    let fresh_target = fresh.execute(&target).unwrap();
+
+    assert_ne!(broad_result.posterior, fresh_target.posterior);
+    assert_eq!(target_after_broad.posterior, fresh_target.posterior);
+    assert_eq!(
+        target_after_broad.optimal_stopping_certificate,
+        fresh_target.optimal_stopping_certificate
+    );
+
+    let repeated_target = interleaved.execute(&target).unwrap();
+    assert_eq!(repeated_target.posterior, target_after_broad.posterior);
+    assert_eq!(
+        repeated_target
+            .optimal_stopping_certificate
+            .as_ref()
+            .map(|certificate| certificate.observations_before_stop),
+        Some(2)
+    );
+}
+
+#[test]
 fn zero_capabilities_recorded_correctly() {
     let pkg = simple_package("ext-no-cap", "42");
     let mut orch = default_orch();

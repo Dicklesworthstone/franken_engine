@@ -8912,12 +8912,15 @@ pub struct InterpreterCore {
     /// participating in live pump scans.
     readable_terminal_states: BTreeMap<ObjectId, ReadableTerminalState>,
     /// Scheduled pure-compute stream pumps keyed by their `IoCompletion`
-    /// registration sequence. At most one pump is queued per readable object.
+    /// registration sequence. At most one pump is queued per readable object;
+    /// each entry carries the ordinary conservative map-entry charge.
     pending_readable_from_pumps: BTreeMap<u64, ObjectId>,
     /// Exact event-loop bytes precharged across a guest callback before its
     /// successor Readable pump receives a registration sequence. This keeps
     /// callback-created timers/I/O ahead of the successor pump without letting
     /// callback allocations consume the pump's already-promised headroom.
+    /// The reservation's EventLoop headroom and its map entry are charged
+    /// independently so conversion can transfer both without a gap.
     readable_pump_reservations: BTreeMap<ObjectId, ReadablePumpReservation>,
     /// At most one bounded pipe destination per live Readable. Internal
     /// listener builtins authenticate against this table before forwarding.
@@ -17077,11 +17080,8 @@ impl InterpreterCore {
         let retained_bytes = self
             .readable_from_streams_memory_bytes()
             .saturating_add(self.readable_terminal_states_memory_bytes())
-            .saturating_add(Self::saturating_sum(
-                self.readable_pump_reservations
-                    .values()
-                    .map(|reservation| reservation.bytes),
-            ));
+            .saturating_add(self.pending_readable_pumps_memory_bytes())
+            .saturating_add(self.readable_pump_reservations_memory_bytes());
         let targets: BTreeSet<ObjectId> = self
             .readable_from_streams
             .keys()
@@ -21227,7 +21227,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let state_bytes = Self::estimate_readable_from_state_bytes(&state);
         let pump_bytes = if schedule_pump {
-            self.readable_pump_registration_bytes()
+            self.readable_pump_retained_bytes()
         } else {
             0
         };
@@ -21296,6 +21296,39 @@ impl InterpreterCore {
             .saturating_sub(self.event_loop.estimated_memory_bytes())
     }
 
+    fn readable_pump_retained_bytes(&self) -> u64 {
+        self.readable_pump_registration_bytes()
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+    }
+
+    fn estimate_readable_pump_reservation_bytes(reservation: &ReadablePumpReservation) -> u64 {
+        reservation
+            .bytes
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+    }
+
+    fn pending_readable_pumps_memory_bytes(&self) -> u64 {
+        u64::try_from(self.pending_readable_from_pumps.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+    }
+
+    fn readable_pump_reservations_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.readable_pump_reservations
+                .values()
+                .map(Self::estimate_readable_pump_reservation_bytes),
+        )
+    }
+
+    fn remove_pending_readable_pump(&mut self, registration: u64) -> Option<ObjectId> {
+        let object_id = self.pending_readable_from_pumps.remove(&registration)?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        Some(object_id)
+    }
+
     fn has_pending_readable_pump(&self, object_id: ObjectId) -> bool {
         self.pending_readable_from_pumps
             .values()
@@ -21330,11 +21363,20 @@ impl InterpreterCore {
         let seq = self
             .event_loop
             .schedule_io_completion(crate::closure_model::ClosureHandle(0), Label::Public);
-        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+        let next_component_bytes = self
+            .promise_runtime_memory_bytes()
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_promise_bytes, next_component_bytes)
+        {
             self.event_loop.rollback_last_scheduled(seq);
             return Err(error);
         }
-        self.pending_readable_from_pumps.insert(seq, object_id);
+        let previous = self.pending_readable_from_pumps.insert(seq, object_id);
+        debug_assert!(
+            previous.is_none(),
+            "EventLoop registration sequences are unique"
+        );
         Ok(true)
     }
 
@@ -21349,14 +21391,18 @@ impl InterpreterCore {
             return Ok(false);
         }
         let reserved_bytes = self.readable_pump_registration_bytes();
-        self.apply_memory_component_delta(0, reserved_bytes)?;
-        self.readable_pump_reservations.insert(
-            object_id,
-            ReadablePumpReservation {
-                bytes: reserved_bytes,
-                requested: false,
-            },
-        );
+        let reservation = ReadablePumpReservation {
+            bytes: reserved_bytes,
+            requested: false,
+        };
+        self.apply_memory_component_delta(
+            0,
+            Self::estimate_readable_pump_reservation_bytes(&reservation),
+        )?;
+        let previous = self
+            .readable_pump_reservations
+            .insert(object_id, reservation);
+        debug_assert!(previous.is_none(), "duplicate reservations are suppressed");
         Ok(true)
     }
 
@@ -21364,7 +21410,7 @@ impl InterpreterCore {
         if let Some(reservation) = self.readable_pump_reservations.remove(&object_id) {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
-                .saturating_sub(reservation.bytes);
+                .saturating_sub(Self::estimate_readable_pump_reservation_bytes(&reservation));
         }
     }
 
@@ -21470,9 +21516,10 @@ impl InterpreterCore {
             return self.schedule_readable_from_pump(object_id);
         };
         let reserved_bytes = reservation.bytes;
+        let reserved_total = Self::estimate_readable_pump_reservation_bytes(&reservation);
         if !self.readable_from_streams.contains_key(&object_id) {
             self.estimated_memory_bytes =
-                self.estimated_memory_bytes.saturating_sub(reserved_bytes);
+                self.estimated_memory_bytes.saturating_sub(reserved_total);
             return Ok(false);
         }
 
@@ -21483,14 +21530,20 @@ impl InterpreterCore {
         let actual_bytes = self
             .promise_runtime_memory_bytes()
             .saturating_sub(previous_promise_bytes);
-        if let Err(error) = self.apply_memory_component_delta(reserved_bytes, actual_bytes) {
+        let actual_total = actual_bytes.saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        if let Err(error) = self.apply_memory_component_delta(reserved_total, actual_total) {
             self.event_loop.rollback_last_scheduled(seq);
             self.readable_pump_reservations
                 .insert(object_id, reservation);
             return Err(error);
         }
         debug_assert_eq!(reserved_bytes, actual_bytes);
-        self.pending_readable_from_pumps.insert(seq, object_id);
+        debug_assert_eq!(reserved_total, actual_total);
+        let previous = self.pending_readable_from_pumps.insert(seq, object_id);
+        debug_assert!(
+            previous.is_none(),
+            "EventLoop registration sequences are unique"
+        );
         Ok(true)
     }
 
@@ -21531,7 +21584,7 @@ impl InterpreterCore {
             .iter()
             .find_map(|(registration, pending)| (*pending == object_id).then_some(*registration))
         {
-            self.pending_readable_from_pumps.remove(&registration);
+            self.remove_pending_readable_pump(registration);
             let previous_promise_bytes = self.promise_runtime_memory_bytes();
             let _ = self.event_loop.cancel_registration(registration);
             let released_promise_bytes =
@@ -21833,7 +21886,7 @@ impl InterpreterCore {
         {
             0
         } else {
-            self.readable_pump_registration_bytes()
+            self.readable_pump_retained_bytes()
         };
         let pipe_listener_value_bytes = Self::estimate_string_bytes("");
         let data_record_bytes = MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES
@@ -22871,7 +22924,7 @@ impl InterpreterCore {
         {
             0
         } else {
-            self.readable_pump_registration_bytes()
+            self.readable_pump_retained_bytes()
         };
         // `previous` remains owned for rollback until scheduling succeeds, so
         // the real transaction peak is old state + projection + successor.
@@ -24298,7 +24351,7 @@ impl InterpreterCore {
         {
             0
         } else {
-            self.readable_pump_registration_bytes()
+            self.readable_pump_retained_bytes()
         };
         Some((previous_bytes, destroyed_state_bytes, pump_bytes))
     }
@@ -24421,7 +24474,7 @@ impl InterpreterCore {
         {
             0
         } else {
-            self.readable_pump_registration_bytes()
+            self.readable_pump_retained_bytes()
         };
         let mut projected_empty_array = HeapObject::new();
         projected_empty_array.is_array = true;
@@ -24643,7 +24696,7 @@ impl InterpreterCore {
         {
             0
         } else {
-            self.readable_pump_registration_bytes()
+            self.readable_pump_retained_bytes()
         };
         self.preflight_inline_method_call_with_argument_label_and_temporary(
             Some(module),
@@ -44758,9 +44811,8 @@ impl InterpreterCore {
                 // bd-fw7zd: finite `Readable.from` pumps share the deterministic
                 // I/O-completion lane but carry their state in an engine-owned
                 // table, so the sentinel handler is never invoked as a closure.
-                if let Some(object_id) = self
-                    .pending_readable_from_pumps
-                    .remove(&macrotask.registration_seq)
+                if let Some(object_id) =
+                    self.remove_pending_readable_pump(macrotask.registration_seq)
                 {
                     return self.drive_readable_from_pump(object_id, module);
                 }
@@ -66273,11 +66325,8 @@ impl InterpreterCore {
             .saturating_add(self.stream_pipelines_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(self.readable_terminal_states_memory_bytes())
-            .saturating_add(Self::saturating_sum(
-                self.readable_pump_reservations
-                    .values()
-                    .map(|reservation| reservation.bytes),
-            ))
+            .saturating_add(self.pending_readable_pumps_memory_bytes())
+            .saturating_add(self.readable_pump_reservations_memory_bytes())
             .saturating_add(self.readable_pipe_links_memory_bytes())
             .saturating_add(self.loopback_servers_memory_bytes())
             .saturating_add(self.loopback_sockets_memory_bytes())
@@ -76820,7 +76869,7 @@ mod async_runtime_tests_current {
     }
 
     #[test]
-    fn readable_pump_registration_is_atomic_and_exact_bd_6vh2s() {
+    fn readable_pump_registration_is_atomic_and_exact_bd_6vh2s_bd_rgx1b() {
         let mut core = test_interpreter();
         let Value::Object(readable) = core
             .construct_stream_readable(RegRange { start: 0, count: 0 })
@@ -76831,7 +76880,12 @@ mod async_runtime_tests_current {
         assert!(core.pending_readable_from_pumps.is_empty());
         let baseline_bytes = core.estimated_memory_bytes();
         let baseline_event_loop_bytes = core.event_loop.estimated_memory_bytes();
-        let pump_bytes = core.readable_pump_registration_bytes();
+        let registration_bytes = core.readable_pump_registration_bytes();
+        let pump_bytes = core.readable_pump_retained_bytes();
+        assert_eq!(
+            pump_bytes,
+            registration_bytes.saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+        );
 
         core.config.max_total_memory_bytes =
             baseline_bytes.saturating_add(pump_bytes).saturating_sub(1);
@@ -76860,6 +76914,14 @@ mod async_runtime_tests_current {
         );
         let scheduled_bytes = core.estimated_memory_bytes();
         assert_eq!(scheduled_bytes, baseline_bytes.saturating_add(pump_bytes));
+        assert_eq!(
+            core.event_loop.estimated_memory_bytes(),
+            baseline_event_loop_bytes.saturating_add(registration_bytes)
+        );
+        assert_eq!(
+            core.pending_readable_pumps_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+        );
         assert_eq!(scheduled_bytes, core.recompute_estimated_memory_bytes());
         assert!(
             !core
@@ -76867,6 +76929,112 @@ mod async_runtime_tests_current {
                 .expect("duplicate suppression is infallible")
         );
         assert_eq!(core.estimated_memory_bytes(), scheduled_bytes);
+    }
+
+    #[test]
+    fn readable_pump_side_table_charges_scale_per_entry_bd_rgx1b() {
+        let mut pending = test_interpreter();
+        let Value::Object(first_pending) = pending
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("first unscheduled generic Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        let Value::Object(second_pending) = pending
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("second unscheduled generic Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        let pending_baseline = pending.estimated_memory_bytes();
+        let event_loop_baseline = pending.event_loop.estimated_memory_bytes();
+        let registration_bytes = pending.readable_pump_registration_bytes();
+        let retained_bytes = pending.readable_pump_retained_bytes();
+
+        assert!(
+            pending
+                .schedule_readable_from_pump(first_pending)
+                .expect("first pending pump")
+        );
+        assert!(
+            pending
+                .schedule_readable_from_pump(second_pending)
+                .expect("second pending pump")
+        );
+        assert_eq!(pending.pending_readable_from_pumps.len(), 2);
+        assert_eq!(
+            pending.pending_readable_pumps_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_mul(2)
+        );
+        assert_eq!(
+            pending.event_loop.estimated_memory_bytes(),
+            event_loop_baseline.saturating_add(registration_bytes.saturating_mul(2))
+        );
+        assert_eq!(
+            pending.estimated_memory_bytes(),
+            pending_baseline.saturating_add(retained_bytes.saturating_mul(2))
+        );
+        assert_eq!(
+            pending.estimated_memory_bytes(),
+            pending.recompute_estimated_memory_bytes()
+        );
+
+        let mut reservations = test_interpreter();
+        let Value::Object(first_reserved) = reservations
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("first reservation Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        let Value::Object(second_reserved) = reservations
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("second reservation Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        let reservation_baseline = reservations.estimated_memory_bytes();
+        let reservation_bytes = reservations.readable_pump_retained_bytes();
+
+        assert!(
+            reservations
+                .reserve_readable_pump(first_reserved)
+                .expect("first pump reservation")
+        );
+        assert!(
+            reservations
+                .reserve_readable_pump(second_reserved)
+                .expect("second pump reservation")
+        );
+        assert_eq!(reservations.readable_pump_reservations.len(), 2);
+        assert_eq!(
+            reservations.readable_pump_reservations_memory_bytes(),
+            reservation_bytes.saturating_mul(2)
+        );
+        assert_eq!(
+            reservations.estimated_memory_bytes(),
+            reservation_baseline.saturating_add(reservation_bytes.saturating_mul(2))
+        );
+        assert_eq!(
+            reservations.estimated_memory_bytes(),
+            reservations.recompute_estimated_memory_bytes()
+        );
+
+        reservations.release_readable_pump_reservation(first_reserved);
+        assert_eq!(
+            reservations.readable_pump_reservations_memory_bytes(),
+            reservation_bytes
+        );
+        assert_eq!(
+            reservations.estimated_memory_bytes(),
+            reservation_baseline.saturating_add(reservation_bytes)
+        );
+        reservations.release_readable_pump_reservation(second_reserved);
+        assert!(reservations.readable_pump_reservations.is_empty());
+        assert_eq!(reservations.estimated_memory_bytes(), reservation_baseline);
+        assert_eq!(
+            reservations.estimated_memory_bytes(),
+            reservations.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -77275,7 +77443,7 @@ mod async_runtime_tests_current {
     }
 
     #[test]
-    fn readable_pump_reservation_converts_without_reordering_charge_bd_6vh2s() {
+    fn readable_pump_reservation_converts_without_reordering_charge_bd_6vh2s_bd_rgx1b() {
         let mut core = test_interpreter();
         let Value::Object(readable) = core
             .construct_stream_readable(RegRange { start: 0, count: 0 })
@@ -77284,7 +77452,8 @@ mod async_runtime_tests_current {
             panic!("Readable constructor must return an object");
         };
         let baseline_bytes = core.estimated_memory_bytes();
-        let pump_bytes = core.readable_pump_registration_bytes();
+        let registration_bytes = core.readable_pump_registration_bytes();
+        let pump_bytes = core.readable_pump_retained_bytes();
 
         core.config.max_total_memory_bytes =
             baseline_bytes.saturating_add(pump_bytes).saturating_sub(1);
@@ -77307,8 +77476,9 @@ mod async_runtime_tests_current {
             core.readable_pump_reservations
                 .get(&readable)
                 .map(|reservation| reservation.bytes),
-            Some(pump_bytes)
+            Some(registration_bytes)
         );
+        assert_eq!(core.readable_pump_reservations_memory_bytes(), pump_bytes);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -77336,6 +77506,10 @@ mod async_runtime_tests_current {
         );
         assert!(core.readable_pump_reservations.is_empty());
         assert_eq!(core.pending_readable_from_pumps.len(), 1);
+        assert_eq!(
+            core.pending_readable_pumps_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+        );
         let pump_sequence = *core
             .pending_readable_from_pumps
             .keys()
@@ -77684,7 +77858,7 @@ mod async_runtime_tests_current {
             core.recompute_estimated_memory_bytes()
         );
 
-        let pump_bytes = core.readable_pump_registration_bytes();
+        let pump_bytes = core.readable_pump_retained_bytes();
         let exact_bytes = baseline_bytes
             .saturating_add(state_bytes)
             .saturating_add(object_bytes)

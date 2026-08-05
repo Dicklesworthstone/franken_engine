@@ -36,6 +36,14 @@ const DEFAULT_PRIOR_ANOMALOUS: i64 = 40_000;
 const DEFAULT_PRIOR_MALICIOUS: i64 = 10_000;
 const DEFAULT_PRIOR_UNKNOWN: i64 = 100_000;
 
+/// Canonical capability breadth is an attack-surface signal, not proof of
+/// malicious behavior. These boundaries make the field meaningful without
+/// letting breadth alone dominate the strongest behavioral anomaly branches.
+const ELEVATED_CAPABILITY_BREADTH_FLOOR: u32 = 6;
+const HIGH_CAPABILITY_BREADTH_FLOOR: u32 = 11;
+
+const EVIDENCE_HASH_DOMAIN: &[u8] = b"franken-engine.bayesian-posterior.evidence.v1";
+
 // ---------------------------------------------------------------------------
 // RiskState — the state space
 // ---------------------------------------------------------------------------
@@ -259,7 +267,8 @@ pub struct Evidence {
     pub extension_id: String,
     /// Hostcall rate in calls per second (millionths: 1_000_000 = 1.0 calls/s).
     pub hostcall_rate_millionths: i64,
-    /// Number of distinct capability types used (0-16).
+    /// Number of distinct recognized declared [`crate::capability::RuntimeCapability`]
+    /// identities. Aliases and duplicates collapse; unknown tags do not count.
     pub distinct_capabilities: u32,
     /// Resource consumption score (millionths: higher = more consumption).
     pub resource_score_millionths: i64,
@@ -341,6 +350,20 @@ impl LikelihoodModel {
             l_benign = l_benign * 500_000 / MILLION; // 0.5
             l_anomalous = l_anomalous * 1_500_000 / MILLION; // 1.5
             l_malicious = l_malicious * 1_500_000 / MILLION; // 1.5
+        }
+
+        // --- Canonical capability-breadth signal ---
+        // Breadth expands the extension's attack surface, but unlike observed
+        // abuse it is not independently suspicious. Keep these multipliers
+        // below the strongest behavioral likelihood ratios above and below.
+        if evidence.distinct_capabilities >= HIGH_CAPABILITY_BREADTH_FLOOR {
+            l_benign = l_benign * 500_000 / MILLION; // 0.5
+            l_anomalous = l_anomalous * 1_400_000 / MILLION; // 1.4
+            l_malicious = l_malicious * 1_600_000 / MILLION; // 1.6
+        } else if evidence.distinct_capabilities >= ELEVATED_CAPABILITY_BREADTH_FLOOR {
+            l_benign = l_benign * 800_000 / MILLION; // 0.8
+            l_anomalous = l_anomalous * 1_200_000 / MILLION; // 1.2
+            l_malicious = l_malicious * 1_100_000 / MILLION; // 1.1
         }
 
         // --- Timing anomaly signal ---
@@ -519,6 +542,26 @@ pub struct BayesianPosteriorUpdater {
     epoch: SecurityEpoch,
 }
 
+fn evidence_content_hash(evidence: &Evidence) -> ContentHash {
+    let extension_id_len = u64::try_from(evidence.extension_id.len()).unwrap_or(u64::MAX);
+    let mut bytes = Vec::with_capacity(
+        EVIDENCE_HASH_DOMAIN
+            .len()
+            .saturating_add(52)
+            .saturating_add(evidence.extension_id.len()),
+    );
+    bytes.extend_from_slice(EVIDENCE_HASH_DOMAIN);
+    bytes.extend_from_slice(&extension_id_len.to_be_bytes());
+    bytes.extend_from_slice(evidence.extension_id.as_bytes());
+    bytes.extend_from_slice(&evidence.hostcall_rate_millionths.to_be_bytes());
+    bytes.extend_from_slice(&evidence.distinct_capabilities.to_be_bytes());
+    bytes.extend_from_slice(&evidence.resource_score_millionths.to_be_bytes());
+    bytes.extend_from_slice(&evidence.timing_anomaly_millionths.to_be_bytes());
+    bytes.extend_from_slice(&evidence.denial_rate_millionths.to_be_bytes());
+    bytes.extend_from_slice(&evidence.epoch.as_u64().to_be_bytes());
+    ContentHash::compute(&bytes)
+}
+
 impl BayesianPosteriorUpdater {
     /// Create a new updater with the given prior and extension ID.
     pub fn new(prior: Posterior, extension_id: impl Into<String>) -> Self {
@@ -593,17 +636,8 @@ impl BayesianPosteriorUpdater {
         self.change_detector
             .update(predictive_continuation, predictive_new);
 
-        // Track evidence hash.
-        let evidence_bytes = format!(
-            "{}:{}:{}:{}:{}",
-            evidence.extension_id,
-            evidence.hostcall_rate_millionths,
-            evidence.denial_rate_millionths,
-            evidence.timing_anomaly_millionths,
-            evidence.resource_score_millionths,
-        );
-        self.evidence_hashes
-            .push(ContentHash::compute(evidence_bytes.as_bytes()));
+        // Bind every evidence field consumed by or identifying this update.
+        self.evidence_hashes.push(evidence_content_hash(evidence));
 
         self.update_count = self.update_count.saturating_add(1);
 
@@ -947,6 +981,34 @@ mod tests {
         for ll in &l {
             assert!(*ll >= FLOOR_MASS, "likelihood must be >= floor: {ll}");
         }
+    }
+
+    #[test]
+    fn likelihood_uses_canonical_capability_breadth_as_weak_signal() {
+        let model = LikelihoodModel::default();
+        let mut evidence = benign_evidence();
+        evidence.hostcall_rate_millionths = 0;
+        evidence.resource_score_millionths = 0;
+        evidence.timing_anomaly_millionths = 0;
+        evidence.denial_rate_millionths = 0;
+
+        evidence.distinct_capabilities = ELEVATED_CAPABILITY_BREADTH_FLOOR - 1;
+        assert_eq!(
+            model.compute_likelihoods(&evidence),
+            [MILLION, MILLION, MILLION, MILLION]
+        );
+
+        evidence.distinct_capabilities = ELEVATED_CAPABILITY_BREADTH_FLOOR;
+        assert_eq!(
+            model.compute_likelihoods(&evidence),
+            [800_000, 1_200_000, 1_100_000, MILLION]
+        );
+
+        evidence.distinct_capabilities = HIGH_CAPABILITY_BREADTH_FLOOR;
+        assert_eq!(
+            model.compute_likelihoods(&evidence),
+            [500_000, 1_400_000, 1_600_000, MILLION]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1973,6 +2035,54 @@ mod tests {
         u1.update(&benign_evidence());
         u2.update(&benign_evidence());
         assert_eq!(u1.evidence_hashes()[0], u2.evidence_hashes()[0]);
+    }
+
+    #[test]
+    fn evidence_hash_binds_every_evidence_field() {
+        let evidence = benign_evidence();
+        let baseline = evidence_content_hash(&evidence);
+
+        let variants = [
+            {
+                let mut changed = evidence.clone();
+                changed.extension_id.push_str("-changed");
+                changed
+            },
+            {
+                let mut changed = evidence.clone();
+                changed.hostcall_rate_millionths += 1;
+                changed
+            },
+            {
+                let mut changed = evidence.clone();
+                changed.distinct_capabilities += 1;
+                changed
+            },
+            {
+                let mut changed = evidence.clone();
+                changed.resource_score_millionths += 1;
+                changed
+            },
+            {
+                let mut changed = evidence.clone();
+                changed.timing_anomaly_millionths += 1;
+                changed
+            },
+            {
+                let mut changed = evidence.clone();
+                changed.denial_rate_millionths += 1;
+                changed
+            },
+            {
+                let mut changed = evidence;
+                changed.epoch = SecurityEpoch::from_raw(changed.epoch.as_u64() + 1);
+                changed
+            },
+        ];
+
+        for changed in variants {
+            assert_ne!(baseline, evidence_content_hash(&changed));
+        }
     }
 
     #[test]

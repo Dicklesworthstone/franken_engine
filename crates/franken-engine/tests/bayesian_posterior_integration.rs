@@ -380,6 +380,34 @@ fn likelihood_model_deterministic_same_evidence_same_output() {
     assert_eq!(l1, l2);
 }
 
+#[test]
+fn likelihood_model_uses_canonical_capability_breadth_as_weak_signal() {
+    let model = LikelihoodModel::default();
+    let mut evidence = benign_evidence();
+    evidence.hostcall_rate_millionths = 0;
+    evidence.resource_score_millionths = 0;
+    evidence.timing_anomaly_millionths = 0;
+    evidence.denial_rate_millionths = 0;
+
+    evidence.distinct_capabilities = 5;
+    assert_eq!(
+        model.compute_likelihoods(&evidence),
+        [MILLION, MILLION, MILLION, MILLION]
+    );
+
+    evidence.distinct_capabilities = 6;
+    assert_eq!(
+        model.compute_likelihoods(&evidence),
+        [800_000, 1_200_000, 1_100_000, MILLION]
+    );
+
+    evidence.distinct_capabilities = 11;
+    assert_eq!(
+        model.compute_likelihoods(&evidence),
+        [500_000, 1_400_000, 1_600_000, MILLION]
+    );
+}
+
 // ============================================================================
 // 5. ChangePointDetector tests
 // ============================================================================
@@ -547,6 +575,26 @@ fn updater_evidence_hashes_tracked() {
     updater.update(&malicious_evidence());
     updater.update(&anomalous_evidence());
     assert_eq!(updater.evidence_hashes().len(), 3);
+}
+
+#[test]
+fn updater_evidence_hash_binds_capability_count_and_epoch() {
+    let baseline_evidence = benign_evidence();
+    let mut changed_count = baseline_evidence.clone();
+    changed_count.distinct_capabilities += 1;
+    let mut changed_epoch = baseline_evidence.clone();
+    changed_epoch.epoch = SecurityEpoch::from_raw(1);
+
+    let evidence_hash = |evidence: &Evidence| {
+        let mut updater =
+            BayesianPosteriorUpdater::new(Posterior::default_prior(), "hash-regression");
+        updater.update(evidence);
+        updater.evidence_hashes()[0]
+    };
+
+    let baseline_hash = evidence_hash(&baseline_evidence);
+    assert_ne!(baseline_hash, evidence_hash(&changed_count));
+    assert_ne!(baseline_hash, evidence_hash(&changed_epoch));
 }
 
 #[test]

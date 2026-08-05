@@ -1396,6 +1396,54 @@ fn capabilities_count_recorded_in_evidence_metadata() {
     let entry = &result.evidence_entries[0];
     let count = entry.metadata.get("capabilities_count").unwrap();
     assert_eq!(count, "3");
+    assert_eq!(
+        entry
+            .metadata
+            .get("canonical_capabilities_count")
+            .map(String::as_str),
+        Some("2")
+    );
+}
+
+#[test]
+fn canonical_capability_count_prevents_alias_duplicate_and_unknown_risk_inflation() {
+    let canonical = package_with_caps("ext-cap-risk", "42", &["fs_read", "network_egress"]);
+    let noisy = package_with_caps(
+        "ext-cap-risk",
+        "42",
+        &[
+            "fs_read",
+            "fs",
+            "fs:read",
+            "network_egress",
+            "net",
+            "unknown",
+            "unknown",
+        ],
+    );
+
+    let canonical_result = default_orch().execute(&canonical).unwrap();
+    let noisy_result = default_orch().execute(&noisy).unwrap();
+    let canonical_metadata = &canonical_result.evidence_entries[0].metadata;
+    let noisy_metadata = &noisy_result.evidence_entries[0].metadata;
+
+    assert_eq!(
+        canonical_metadata
+            .get("canonical_capabilities_count")
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        noisy_metadata
+            .get("canonical_capabilities_count")
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        noisy_metadata.get("capabilities_count").map(String::as_str),
+        Some("7")
+    );
+    assert_eq!(canonical_result.posterior, noisy_result.posterior);
 }
 
 #[test]

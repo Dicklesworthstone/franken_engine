@@ -97,7 +97,7 @@ const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
 #[allow(dead_code)]
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
-const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v3";
+const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v4";
 const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
 
 // ---------------------------------------------------------------------------
@@ -371,6 +371,7 @@ struct EvidenceRecordInput<'a> {
 #[derive(Debug, Clone, Copy)]
 struct EvidenceCapabilitySummary {
     total: u64,
+    canonical_distinct: u32,
     multiset_hash: ContentHash,
 }
 
@@ -942,7 +943,12 @@ impl ExecutionOrchestrator {
             let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
 
             // Step 7: Assess risk.
-            let evidence = Self::build_evidence(package, &exec_result, self.config.epoch);
+            let evidence = Self::build_evidence(
+                package,
+                &exec_result,
+                evidence_capability_summary,
+                self.config.epoch,
+            );
             let update_result = self.posterior_updater.update(&evidence);
             let posterior = update_result.posterior.clone();
             let risk_state = posterior.map_estimate();
@@ -1545,7 +1551,7 @@ impl ExecutionOrchestrator {
             adaptive_router_summary,
             optimal_stopping_certificate,
             guardplane_report,
-            capability_summary: _,
+            capability_summary,
         } = input;
         let guardplane_summary = guardplane_report.map(|report| &report.summary);
         let mut builder = EvidenceEntryBuilder::new_with_authority(
@@ -1606,7 +1612,11 @@ impl ExecutionOrchestrator {
         builder = builder.meta("extension_version".to_string(), package.version.clone());
         builder = builder.meta(
             "capabilities_count".to_string(),
-            package.capabilities.len().to_string(),
+            capability_summary.total.to_string(),
+        );
+        builder = builder.meta(
+            "canonical_capabilities_count".to_string(),
+            capability_summary.canonical_distinct.to_string(),
         );
         builder = builder.meta(
             "execution_completion_label".to_string(),
@@ -2417,6 +2427,7 @@ impl ExecutionOrchestrator {
         bytes.extend_from_slice(Self::completion_label_hash(&exec.completion_label).as_bytes());
         bytes.extend_from_slice(&Self::usize_to_u64(exec.hostcall_decisions.len()).to_be_bytes());
         bytes.extend_from_slice(&capability_summary.total.to_be_bytes());
+        bytes.extend_from_slice(&capability_summary.canonical_distinct.to_be_bytes());
         bytes.extend_from_slice(capability_summary.multiset_hash.as_bytes());
         bytes.extend_from_slice(&allowed_hostcalls.to_be_bytes());
         bytes.extend_from_slice(&denied_hostcalls.to_be_bytes());
@@ -2461,6 +2472,11 @@ impl ExecutionOrchestrator {
     }
 
     fn capability_multiset_summary(capabilities: &[String]) -> EvidenceCapabilitySummary {
+        let canonical_distinct = capabilities
+            .iter()
+            .filter_map(|capability| RuntimeCapability::from_tag_str(capability))
+            .collect::<BTreeSet<_>>()
+            .len();
         let mut sorted: Vec<&str> = capabilities.iter().map(String::as_str).collect();
         sorted.sort_unstable();
         let leaves = sorted
@@ -2469,6 +2485,7 @@ impl ExecutionOrchestrator {
         let capability_count = Self::usize_to_u64(capabilities.len());
         EvidenceCapabilitySummary {
             total: capability_count,
+            canonical_distinct: u32::try_from(canonical_distinct).unwrap_or(u32::MAX),
             multiset_hash: Self::fold_content_hashes(b"evidence-capability-multiset-v2", leaves),
         }
     }
@@ -2649,6 +2666,7 @@ impl ExecutionOrchestrator {
     fn build_evidence(
         package: &ExtensionPackage,
         exec: &ExecutionResult,
+        capability_summary: EvidenceCapabilitySummary,
         epoch: SecurityEpoch,
     ) -> Evidence {
         let hostcall_count = exec.hostcall_decisions.len() as u64;
@@ -2656,8 +2674,6 @@ impl ExecutionOrchestrator {
             .saturating_mul(1_000_000)
             .checked_div(exec.instructions_executed)
             .unwrap_or(0);
-
-        let distinct_capabilities = package.capabilities.len() as u32;
 
         let resource_score_millionths =
             (exec.instructions_executed.saturating_mul(5)).min(1_000_000);
@@ -2675,7 +2691,7 @@ impl ExecutionOrchestrator {
         Evidence {
             extension_id: package.extension_id.clone(),
             hostcall_rate_millionths: i64::try_from(hostcall_rate_millionths).unwrap_or(i64::MAX),
-            distinct_capabilities,
+            distinct_capabilities: capability_summary.canonical_distinct,
             resource_score_millionths: i64::try_from(resource_score_millionths).unwrap_or(i64::MAX),
             timing_anomaly_millionths: 0,
             denial_rate_millionths: i64::try_from(denial_rate_millionths).unwrap_or(i64::MAX),
@@ -4290,6 +4306,13 @@ mod tests {
         let entry = &result.evidence_entries[0];
         let cap_count = entry.metadata.get("capabilities_count").unwrap();
         assert_eq!(cap_count, "2");
+        assert_eq!(
+            entry
+                .metadata
+                .get("canonical_capabilities_count")
+                .map(String::as_str),
+            Some("2")
+        );
     }
 
     // -- action_to_saga_type coverage (via different risk scenarios) -----------
@@ -4828,30 +4851,47 @@ mod tests {
     // -- Enrichment: stable_symbol determinism --
 
     #[test]
-    fn capability_multiset_summary_is_order_invariant_and_content_sensitive() {
-        let original = vec!["alpha".to_string(), "beta".to_string()];
-        let reordered = vec!["beta".to_string(), "alpha".to_string()];
-        let duplicated = vec!["alpha".to_string(), "beta".to_string(), "beta".to_string()];
-        let changed = vec!["alpha".to_string(), "gamma".to_string()];
+    fn capability_multiset_summary_canonicalizes_risk_count_but_commits_raw_tags() {
+        let original = vec![
+            "fs_read".to_string(),
+            "fs".to_string(),
+            "fs:read".to_string(),
+            "net".to_string(),
+            "network_egress".to_string(),
+            "unknown".to_string(),
+            "unknown".to_string(),
+        ];
+        let mut reordered = original.clone();
+        reordered.reverse();
+        let mut fewer_unknowns = original.clone();
+        fewer_unknowns.pop();
+        let mut added_recognized = original.clone();
+        added_recognized.push("fs_write".to_string());
 
         let original_summary = ExecutionOrchestrator::capability_multiset_summary(&original);
         let reordered_summary = ExecutionOrchestrator::capability_multiset_summary(&reordered);
-        let duplicated_summary = ExecutionOrchestrator::capability_multiset_summary(&duplicated);
-        let changed_summary = ExecutionOrchestrator::capability_multiset_summary(&changed);
+        let fewer_unknowns_summary =
+            ExecutionOrchestrator::capability_multiset_summary(&fewer_unknowns);
+        let added_recognized_summary =
+            ExecutionOrchestrator::capability_multiset_summary(&added_recognized);
 
-        assert_eq!(original_summary.total, 2);
+        assert_eq!(original_summary.total, 7);
+        assert_eq!(original_summary.canonical_distinct, 2);
         assert_eq!(
             original_summary.multiset_hash,
             reordered_summary.multiset_hash
         );
-        assert_ne!(original_summary.total, duplicated_summary.total);
+        assert_eq!(reordered_summary.canonical_distinct, 2);
+        assert_eq!(fewer_unknowns_summary.canonical_distinct, 2);
+        assert_ne!(original_summary.total, fewer_unknowns_summary.total);
         assert_ne!(
             original_summary.multiset_hash,
-            duplicated_summary.multiset_hash
+            fewer_unknowns_summary.multiset_hash
         );
+        assert_eq!(added_recognized_summary.canonical_distinct, 3);
         assert_ne!(
             original_summary.multiset_hash,
-            changed_summary.multiset_hash
+            added_recognized_summary.multiset_hash
         );
     }
 
@@ -4913,7 +4953,14 @@ mod tests {
             events: Vec::new(),
             console_output: Vec::new(),
         };
-        let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
+        let capability_summary =
+            ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
+        let ev = ExecutionOrchestrator::build_evidence(
+            &pkg,
+            &exec,
+            capability_summary,
+            SecurityEpoch::from_raw(1),
+        );
         assert_eq!(ev.extension_id, "test-ext-1");
         assert_eq!(ev.hostcall_rate_millionths, 0);
         assert_eq!(ev.denial_rate_millionths, 0);
@@ -4933,7 +4980,14 @@ mod tests {
             events: Vec::new(),
             console_output: Vec::new(),
         };
-        let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
+        let capability_summary =
+            ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
+        let ev = ExecutionOrchestrator::build_evidence(
+            &pkg,
+            &exec,
+            capability_summary,
+            SecurityEpoch::from_raw(1),
+        );
         assert_eq!(ev.resource_score_millionths, 1_000_000);
     }
 
@@ -4943,7 +4997,15 @@ mod tests {
             extension_id: "ext-caps".to_string(),
             source: "42".to_string(),
             source_file: None,
-            capabilities: vec!["fs".to_string(), "net".to_string(), "crypto".to_string()],
+            capabilities: vec![
+                "fs_read".to_string(),
+                "fs".to_string(),
+                "fs:read".to_string(),
+                "net".to_string(),
+                "network_egress".to_string(),
+                "unknown".to_string(),
+                "unknown".to_string(),
+            ],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
         };
@@ -4957,8 +5019,15 @@ mod tests {
             events: Vec::new(),
             console_output: Vec::new(),
         };
-        let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(2));
-        assert_eq!(ev.distinct_capabilities, 3);
+        let capability_summary =
+            ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
+        let ev = ExecutionOrchestrator::build_evidence(
+            &pkg,
+            &exec,
+            capability_summary,
+            SecurityEpoch::from_raw(2),
+        );
+        assert_eq!(ev.distinct_capabilities, 2);
         assert_eq!(ev.epoch, SecurityEpoch::from_raw(2));
     }
 
@@ -5163,7 +5232,14 @@ mod tests {
             events: Vec::new(),
             console_output: Vec::new(),
         };
-        let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
+        let capability_summary =
+            ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
+        let ev = ExecutionOrchestrator::build_evidence(
+            &pkg,
+            &exec,
+            capability_summary,
+            SecurityEpoch::from_raw(1),
+        );
         // Division by zero for hostcall_rate should be handled (returns 0).
         assert_eq!(ev.hostcall_rate_millionths, 0);
         assert_eq!(ev.resource_score_millionths, 0);
@@ -5382,7 +5458,9 @@ mod tests {
         };
         for raw_epoch in [1u64, 100, u64::MAX] {
             let epoch = SecurityEpoch::from_raw(raw_epoch);
-            let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, epoch);
+            let capability_summary =
+                ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
+            let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, capability_summary, epoch);
             assert_eq!(ev.epoch, epoch);
         }
     }

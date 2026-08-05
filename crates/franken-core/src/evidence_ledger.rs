@@ -59,6 +59,7 @@ pub fn current_schema_version() -> SchemaVersion {
 
 const EVIDENCE_KEY_ID_DOMAIN: &[u8] = b"franken-engine.evidence-signing-key.v1";
 const LAB_EVIDENCE_KEY_DOMAIN: &[u8] = b"franken-engine.lab-evidence-key.v1";
+const DETACHED_EVIDENCE_SIGNATURE_DOMAIN: &str = "franken-engine.detached-evidence-signature.v1";
 const TEST_EVIDENCE_PRODUCER_ID: &str = "franken-core.evidence-ledger.builder";
 const TEST_EVIDENCE_FIXTURE_ID: &str = "default-core-evidence-entry-fixture-v2";
 
@@ -460,6 +461,23 @@ impl EvidenceSigningIdentity {
             }
         })
     }
+
+    fn sign_detached(
+        &self,
+        payload: &[u8],
+        signed_epoch: SecurityEpoch,
+    ) -> Result<EvidenceSignatureEnvelope, LedgerError> {
+        self.validate_for_entry_epoch(signed_epoch)?;
+        let mut envelope = EvidenceSignatureEnvelope {
+            producer_id: self.producer_id.clone(),
+            key_provenance: self.key_provenance.clone(),
+            signed_epoch,
+            verification_key: self.signing_key.verification_key(),
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        envelope.signature = self.sign_preimage(&envelope.detached_signature_preimage(payload)?)?;
+        Ok(envelope)
+    }
 }
 
 /// Runtime signing capability supplied by a product composition root.
@@ -510,6 +528,14 @@ impl RuntimeEvidenceAuthority {
     pub fn verification_identity(&self) -> EvidenceVerificationIdentity {
         self.0.verification_identity()
     }
+
+    pub fn sign_detached(
+        &self,
+        payload: &[u8],
+        signed_epoch: SecurityEpoch,
+    ) -> Result<EvidenceSignatureEnvelope, LedgerError> {
+        self.0.sign_detached(payload, signed_epoch)
+    }
 }
 
 /// Deterministic signing capability for explicitly labelled lab artifacts.
@@ -540,6 +566,14 @@ impl LabEvidenceAuthority {
     pub fn verification_identity(&self) -> EvidenceVerificationIdentity {
         self.0.verification_identity()
     }
+
+    pub fn sign_detached(
+        &self,
+        payload: &[u8],
+        signed_epoch: SecurityEpoch,
+    ) -> Result<EvidenceSignatureEnvelope, LedgerError> {
+        self.0.sign_detached(payload, signed_epoch)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -558,6 +592,14 @@ impl EvidenceSigningAuthority {
 
     pub(crate) fn verification_identity(&self) -> EvidenceVerificationIdentity {
         self.signing_identity().verification_identity()
+    }
+
+    pub(crate) fn sign_detached(
+        &self,
+        payload: &[u8],
+        signed_epoch: SecurityEpoch,
+    ) -> Result<EvidenceSignatureEnvelope, LedgerError> {
+        self.signing_identity().sign_detached(payload, signed_epoch)
     }
 }
 
@@ -601,6 +643,56 @@ impl EvidenceSignatureEnvelope {
             });
         }
         Ok(())
+    }
+
+    fn detached_signature_preimage(&self, payload: &[u8]) -> Result<Vec<u8>, LedgerError> {
+        let mut unsigned_envelope = self.clone();
+        unsigned_envelope.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        serde_json::to_vec(&(
+            DETACHED_EVIDENCE_SIGNATURE_DOMAIN,
+            payload,
+            unsigned_envelope,
+        ))
+        .map_err(|error| LedgerError::SchemaValidationFailed {
+            reason: format!("detached evidence signature serialization failed: {error}"),
+        })
+    }
+
+    /// Verify a detached payload against an externally trusted identity.
+    pub fn verify_detached(
+        &self,
+        payload: &[u8],
+        trusted_identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), LedgerError> {
+        trusted_identity.validate()?;
+        self.validate_public_provenance()?;
+        let claimed_identity = EvidenceVerificationIdentity {
+            producer_id: self.producer_id.clone(),
+            key_provenance: self.key_provenance.clone(),
+            verification_key: self.verification_key.clone(),
+        };
+        if &claimed_identity != trusted_identity {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "detached evidence signer is not the trusted runtime identity: claimed {}/{}, trusted {}/{}",
+                    claimed_identity.producer_id,
+                    claimed_identity.key_provenance.key_id,
+                    trusted_identity.producer_id,
+                    trusted_identity.key_provenance.key_id
+                ),
+            });
+        }
+        verify_signature(
+            &self.verification_key,
+            &self.detached_signature_preimage(payload)?,
+            &self.signature,
+        )
+        .map_err(|_| LedgerError::SchemaValidationFailed {
+            reason: format!(
+                "invalid detached evidence signature from producer: {}",
+                self.producer_id
+            ),
+        })
     }
 }
 
@@ -1203,6 +1295,15 @@ pub struct InMemoryLedger {
     authorized_producers: BTreeMap<(String, String), EvidenceVerificationIdentity>,
 }
 
+/// Public-key trust registry for detached runtime evidence.
+///
+/// It stores only externally authenticated public identities and reuses the
+/// ledger's activation, rotation, and retirement policy.
+#[derive(Debug)]
+pub struct EvidenceTrustRegistry {
+    registry: InMemoryLedger,
+}
+
 impl InMemoryLedger {
     fn empty_for_epoch(current_epoch: Option<SecurityEpoch>, allow_lab_authority: bool) -> Self {
         Self {
@@ -1390,6 +1491,84 @@ impl InMemoryLedger {
         Ok(())
     }
 
+    fn trusted_identity_for_envelope(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+    ) -> Result<&EvidenceVerificationIdentity, LedgerError> {
+        envelope.validate_public_provenance()?;
+        let trusted_identity = self
+            .authorized_producers
+            .get(&(
+                envelope.producer_id.clone(),
+                envelope.key_provenance.key_id.clone(),
+            ))
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "unauthorized evidence producer/key: {}/{}",
+                    envelope.producer_id, envelope.key_provenance.key_id
+                ),
+            })?;
+        if trusted_identity.key_provenance != envelope.key_provenance
+            || trusted_identity.verification_key != envelope.verification_key
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "producer key provenance mismatch: {}/{}",
+                    envelope.producer_id, envelope.key_provenance.key_id
+                ),
+            });
+        }
+        if let Some(current_epoch) = self.current_epoch
+            && envelope.signed_epoch.as_u64() > current_epoch.as_u64()
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence signature epoch {} is after registry epoch {}",
+                    envelope.signed_epoch.as_u64(),
+                    current_epoch.as_u64()
+                ),
+            });
+        }
+        if let Some(successor) =
+            self.authorized_producers
+                .iter()
+                .find_map(|((registered_producer, _), candidate)| {
+                    (registered_producer == &envelope.producer_id
+                        && candidate.key_provenance.previous_key_id.as_deref()
+                            == Some(envelope.key_provenance.key_id.as_str()))
+                    .then_some(&candidate.key_provenance)
+                })
+            && envelope.signed_epoch.as_u64() >= successor.activation_epoch.as_u64()
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence key {} retired at successor activation epoch {}",
+                    envelope.key_provenance.key_id,
+                    successor.activation_epoch.as_u64()
+                ),
+            });
+        }
+        Ok(trusted_identity)
+    }
+
+    fn verify_registered_detached(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+        payload: &[u8],
+        expected_signed_epoch: SecurityEpoch,
+    ) -> Result<(), LedgerError> {
+        if envelope.signed_epoch != expected_signed_epoch {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "detached evidence signature epoch mismatch: envelope {}, artifact {}",
+                    envelope.signed_epoch.as_u64(),
+                    expected_signed_epoch.as_u64()
+                ),
+            });
+        }
+        envelope.verify_detached(payload, self.trusted_identity_for_envelope(envelope)?)
+    }
+
     fn validate_entry(&self, entry: &EvidenceEntry) -> Result<(), LedgerError> {
         if let Some(current_epoch) = self.current_epoch
             && entry.epoch_id != current_epoch
@@ -1471,6 +1650,96 @@ impl InMemoryLedger {
             .iter()
             .filter(|e| e.epoch_id == epoch)
             .collect()
+    }
+}
+
+impl EvidenceTrustRegistry {
+    pub fn new_runtime(current_epoch: SecurityEpoch) -> Self {
+        Self {
+            registry: InMemoryLedger::empty_for_epoch(Some(current_epoch), false),
+        }
+    }
+
+    pub fn new_lab(current_epoch: SecurityEpoch) -> Self {
+        Self {
+            registry: InMemoryLedger::empty_for_epoch(Some(current_epoch), true),
+        }
+    }
+
+    pub(crate) fn ensure_runtime_scope(&self) -> Result<(), LedgerError> {
+        if self.registry.allow_lab_authority {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "lab evidence trust registry cannot authorize a production runtime"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_lab_scope(&self) -> Result<(), LedgerError> {
+        if !self.registry.allow_lab_authority {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "runtime evidence trust registry cannot be presented as a lab fixture"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn from_runtime_identities(
+        current_epoch: SecurityEpoch,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<Self, LedgerError> {
+        let mut registry = Self::new_runtime(current_epoch);
+        registry.authorize_identities(identities)?;
+        Ok(registry)
+    }
+
+    pub fn from_lab_identities(
+        current_epoch: SecurityEpoch,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<Self, LedgerError> {
+        let mut registry = Self::new_lab(current_epoch);
+        registry.authorize_identities(identities)?;
+        Ok(registry)
+    }
+
+    fn authorize_identities(
+        &mut self,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<(), LedgerError> {
+        let mut identities: Vec<_> = identities.into_iter().collect();
+        identities.sort_by(|left, right| {
+            left.producer_id
+                .cmp(&right.producer_id)
+                .then_with(|| {
+                    left.key_provenance
+                        .rotation_sequence
+                        .cmp(&right.key_provenance.rotation_sequence)
+                })
+                .then_with(|| left.key_provenance.key_id.cmp(&right.key_provenance.key_id))
+        });
+        for identity in identities {
+            self.registry.authorize_verification_identity(&identity)?;
+        }
+        Ok(())
+    }
+
+    pub fn authorize_verification_identity(
+        &mut self,
+        identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), LedgerError> {
+        self.registry.authorize_verification_identity(identity)
+    }
+
+    pub fn verify_detached(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+        payload: &[u8],
+        expected_signed_epoch: SecurityEpoch,
+    ) -> Result<(), LedgerError> {
+        self.registry
+            .verify_registered_detached(envelope, payload, expected_signed_epoch)
     }
 }
 

@@ -7,15 +7,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use frankenengine_engine::evidence_ledger::{EvidenceTrustRegistry, LabEvidenceAuthority};
 use frankenengine_engine::fleet_convergence::{
-    ActionRegistry, ContainmentReceipt, ContainmentThresholds, ConvergenceConfig,
-    ConvergenceDecision, ConvergenceEngine, ConvergenceError, ConvergenceEvent,
+    ActionRegistry, CONVERGENCE_RECEIPT_PRODUCER_ID, ContainmentReceipt, ContainmentThresholds,
+    ConvergenceConfig, ConvergenceDecision, ConvergenceEngine, ConvergenceError, ConvergenceEvent,
     ConvergenceEventType, ConvergenceVerification, HealingInfo, PartitionInfo, PartitionMode,
 };
 use frankenengine_engine::fleet_immune_protocol::{
     ContainmentAction, FleetProtocolState, GossipConfig, NodeId,
 };
-use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn test_node(name: &str) -> NodeId {
@@ -32,13 +33,34 @@ fn test_config() -> ConvergenceConfig {
         },
         degraded_tightening_factor: 750_000,
         convergence_timeout_ns: 1_000_000_000,
-        signing_key: b"test-key".to_vec(),
+        fleet_id: "enrichment-fleet".to_string(),
+        require_receipt_signature: true,
         max_escalation_depth: 3,
     }
 }
 
+fn test_authority() -> LabEvidenceAuthority {
+    LabEvidenceAuthority::deterministic_fixture(
+        CONVERGENCE_RECEIPT_PRODUCER_ID,
+        "fleet-convergence-enrichment-tests",
+        SecurityEpoch::GENESIS,
+    )
+    .expect("lab receipt authority must be valid")
+}
+
 fn test_engine(name: &str) -> ConvergenceEngine {
-    ConvergenceEngine::new(test_node(name), test_config())
+    ConvergenceEngine::new_for_lab(
+        test_node(name),
+        test_config(),
+        test_authority(),
+        SecurityEpoch::GENESIS,
+    )
+    .expect("lab convergence engine must be valid")
+}
+
+fn test_trust_registry(epoch: SecurityEpoch) -> EvidenceTrustRegistry {
+    EvidenceTrustRegistry::from_lab_identities(epoch, [test_authority().verification_identity()])
+        .expect("lab receipt trust registry must be valid")
 }
 
 fn test_fleet_state(node: &str) -> FleetProtocolState {
@@ -467,6 +489,7 @@ fn enrichment_partition_info_zero_fleet() {
 
 fn make_receipt(ext: &str, action: ContainmentAction) -> ContainmentReceipt {
     ContainmentReceipt {
+        fleet_id: "enrichment-fleet".into(),
         action_id: format!("action-{ext}-{}", action.severity()),
         extension_id: ext.to_string(),
         action_type: action,
@@ -478,7 +501,7 @@ fn make_receipt(ext: &str, action: ContainmentAction) -> ContainmentReceipt {
         timestamp_ns: 1000,
         degraded_mode: false,
         escalation_depth: 0,
-        signature: AuthenticityHash::compute_keyed(b"test-key", b"preimage"),
+        signature: None,
     }
 }
 
@@ -565,11 +588,20 @@ fn enrichment_receipt_signing_preimage_deterministic() {
 
 #[test]
 fn enrichment_receipt_verify_signature() {
-    let key = b"test-key";
+    let authority = test_authority();
     let mut receipt = make_receipt("ext-1", ContainmentAction::Sandbox);
-    receipt.signature = AuthenticityHash::compute_keyed(key, &receipt.signing_preimage());
-    assert!(receipt.verify_signature(key));
-    assert!(!receipt.verify_signature(b"wrong-key"));
+    receipt.signature = Some(
+        authority
+            .sign_detached(&receipt.signing_preimage(), receipt.epoch)
+            .expect("lab receipt signing must succeed"),
+    );
+    receipt
+        .verify_signature_for_lab(
+            &test_trust_registry(receipt.epoch),
+            "enrichment-fleet",
+            &test_node("n1"),
+        )
+        .expect("externally trusted lab receipt must verify");
 }
 
 // =========================================================================
@@ -645,7 +677,12 @@ fn enrichment_engine_execute_decision_allow_noop() {
         degraded_mode: false,
         evidence_count: 1,
     };
-    assert!(engine.execute_decision(&decision, 1000).is_none());
+    assert!(
+        engine
+            .execute_decision(&decision, 1000)
+            .expect("allow execution must succeed")
+            .is_none()
+    );
 }
 
 #[test]
@@ -659,12 +696,19 @@ fn enrichment_engine_execute_decision_produces_receipt() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    let receipt = engine.execute_decision(&decision, 1000);
+    let receipt = engine
+        .execute_decision(&decision, 1000)
+        .expect("receipt signing must succeed");
     assert!(receipt.is_some());
     let r = receipt.unwrap();
     assert_eq!(r.action_type, ContainmentAction::Sandbox);
     assert_eq!(r.extension_id, "ext-1");
-    assert!(r.verify_signature(b"test-key"));
+    r.verify_signature_for_lab(
+        &test_trust_registry(r.epoch),
+        &engine.config.fleet_id,
+        &engine.node_id,
+    )
+    .expect("receipt must verify against external lab trust");
 }
 
 #[test]
@@ -678,9 +722,13 @@ fn enrichment_engine_execute_idempotent() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    let first = engine.execute_decision(&decision, 1000);
+    let first = engine
+        .execute_decision(&decision, 1000)
+        .expect("first execution must succeed");
     assert!(first.is_some());
-    let second = engine.execute_decision(&decision, 2000);
+    let second = engine
+        .execute_decision(&decision, 2000)
+        .expect("idempotent execution must succeed");
     assert!(second.is_none());
 }
 
@@ -696,7 +744,12 @@ fn enrichment_engine_monotonic_escalation() {
         degraded_mode: false,
         evidence_count: 10,
     };
-    assert!(engine.execute_decision(&d_term, 1000).is_some());
+    assert!(
+        engine
+            .execute_decision(&d_term, 1000)
+            .expect("terminate execution must succeed")
+            .is_some()
+    );
 
     // Try sandbox (lower) — should be rejected
     let d_sandbox = ConvergenceDecision {
@@ -707,7 +760,12 @@ fn enrichment_engine_monotonic_escalation() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    assert!(engine.execute_decision(&d_sandbox, 2000).is_none());
+    assert!(
+        engine
+            .execute_decision(&d_sandbox, 2000)
+            .expect("lower-severity execution must not fail")
+            .is_none()
+    );
 }
 
 // =========================================================================
@@ -725,7 +783,10 @@ fn enrichment_engine_escalate_sandbox_to_suspend() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    engine.execute_decision(&d, 1000);
+    engine
+        .execute_decision(&d, 1000)
+        .expect("sandbox execution must succeed")
+        .expect("sandbox decision must emit a receipt");
 
     let result = engine.escalate("ext-1", 600_000, 10, 2000);
     assert!(result.is_ok());
@@ -746,7 +807,10 @@ fn enrichment_engine_escalate_max_depth_error() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    engine.execute_decision(&d, 1000);
+    engine
+        .execute_decision(&d, 1000)
+        .expect("sandbox execution must succeed")
+        .expect("sandbox decision must emit a receipt");
     // First escalation OK
     assert!(engine.escalate("ext-1", 600_000, 10, 2000).is_ok());
     // Second escalation should fail
@@ -765,7 +829,9 @@ fn enrichment_engine_escalate_max_depth_error() {
 fn enrichment_engine_process_fleet_state_empty() {
     let mut engine = test_engine("n1");
     let fleet = test_fleet_state("n1");
-    let receipts = engine.process_fleet_state(&fleet, 2_000);
+    let receipts = engine
+        .process_fleet_state(&fleet, 2_000)
+        .expect("empty fleet processing must succeed");
     assert!(receipts.is_empty());
 }
 
@@ -817,7 +883,10 @@ fn enrichment_engine_events_of_type() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    engine.execute_decision(&d, 1000);
+    engine
+        .execute_decision(&d, 1000)
+        .expect("sandbox execution must succeed")
+        .expect("sandbox decision must emit a receipt");
     let action_events = engine.events_of_type(&ConvergenceEventType::ActionExecuted);
     assert_eq!(action_events.len(), 1);
 }
@@ -841,7 +910,9 @@ fn enrichment_json_fields_config() {
     assert!(json.contains("\"thresholds\""));
     assert!(json.contains("\"degraded_tightening_factor\""));
     assert!(json.contains("\"convergence_timeout_ns\""));
-    assert!(json.contains("\"signing_key\""));
+    assert!(json.contains("\"fleet_id\""));
+    assert!(json.contains("\"require_receipt_signature\""));
+    assert!(!json.contains("\"signing_key\""));
     assert!(json.contains("\"max_escalation_depth\""));
 }
 

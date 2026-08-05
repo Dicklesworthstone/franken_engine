@@ -16,9 +16,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use frankenengine_engine::evidence_ledger::{EvidenceTrustRegistry, LabEvidenceAuthority};
 use frankenengine_engine::fleet_convergence::{
-    ActionRegistry, ContainmentReceipt, ContainmentThresholds, ConvergenceConfig,
-    ConvergenceDecision, ConvergenceEngine, ConvergenceError, ConvergenceEvent,
+    ActionRegistry, CONVERGENCE_RECEIPT_PRODUCER_ID, ContainmentReceipt, ContainmentThresholds,
+    ConvergenceConfig, ConvergenceDecision, ConvergenceEngine, ConvergenceError, ConvergenceEvent,
     ConvergenceEventType, ConvergenceVerification, HealingInfo, PartitionInfo, PartitionMode,
 };
 use frankenengine_engine::fleet_immune_protocol::{
@@ -35,17 +36,59 @@ fn node(name: &str) -> NodeId {
 }
 
 fn default_config() -> ConvergenceConfig {
-    ConvergenceConfig::default()
+    ConvergenceConfig {
+        fleet_id: "edge-case-fleet".to_string(),
+        ..ConvergenceConfig::default()
+    }
 }
 
 fn engine(name: &str) -> ConvergenceEngine {
-    ConvergenceEngine::new(node(name), default_config())
+    custom_engine(name, b"default-edge-case-authority")
 }
 
 fn custom_engine(name: &str, key: &[u8]) -> ConvergenceEngine {
-    let mut cfg = default_config();
-    cfg.signing_key = key.to_vec();
-    ConvergenceEngine::new(node(name), cfg)
+    ConvergenceEngine::new_for_lab(
+        node(name),
+        default_config(),
+        lab_authority(key),
+        SecurityEpoch::GENESIS,
+    )
+    .expect("lab convergence engine must be valid")
+}
+
+fn lab_authority(key: &[u8]) -> LabEvidenceAuthority {
+    LabEvidenceAuthority::deterministic_fixture(
+        CONVERGENCE_RECEIPT_PRODUCER_ID,
+        &format!(
+            "fleet-convergence-edge-{}",
+            ContentHash::compute(key).to_hex()
+        ),
+        SecurityEpoch::GENESIS,
+    )
+    .expect("lab receipt authority must be valid")
+}
+
+fn lab_registry(key: &[u8], epoch: SecurityEpoch) -> EvidenceTrustRegistry {
+    EvidenceTrustRegistry::from_lab_identities(epoch, [lab_authority(key).verification_identity()])
+        .expect("lab receipt trust registry must be valid")
+}
+
+fn sign_receipt(receipt: &mut ContainmentReceipt, key: &[u8]) {
+    receipt.signature = Some(
+        lab_authority(key)
+            .sign_detached(&receipt.signing_preimage(), receipt.epoch)
+            .expect("lab receipt signing must succeed"),
+    );
+}
+
+fn verify_receipt(receipt: &ContainmentReceipt, key: &[u8]) -> bool {
+    receipt
+        .verify_signature_for_lab(
+            &lab_registry(key, receipt.epoch),
+            &receipt.fleet_id,
+            &receipt.node_id,
+        )
+        .is_ok()
 }
 
 fn make_signature(n: &str) -> MessageSignature {
@@ -89,6 +132,7 @@ fn heartbeat(n: &str, seq: u64, ts_ns: u64) -> HeartbeatLiveness {
 
 fn make_receipt(ext: &str, action: ContainmentAction, n: &str, key: &[u8]) -> ContainmentReceipt {
     let mut receipt = ContainmentReceipt {
+        fleet_id: "edge-case-fleet".into(),
         action_id: format!("act-{ext}-{}", action.severity()),
         extension_id: ext.into(),
         action_type: action,
@@ -100,9 +144,9 @@ fn make_receipt(ext: &str, action: ContainmentAction, n: &str, key: &[u8]) -> Co
         timestamp_ns: 1_000_000_000,
         degraded_mode: false,
         escalation_depth: 0,
-        signature: AuthenticityHash::compute_keyed(b"placeholder", b"placeholder"),
+        signature: None,
     };
-    receipt.signature = AuthenticityHash::compute_keyed(key, &receipt.signing_preimage());
+    sign_receipt(&mut receipt, key);
     receipt
 }
 
@@ -310,7 +354,8 @@ fn config_default_values() {
     assert_eq!(cfg.degraded_tightening_factor, 750_000);
     assert_eq!(cfg.convergence_timeout_ns, 1_000_000_000);
     assert_eq!(cfg.max_escalation_depth, 3);
-    assert_eq!(cfg.signing_key, b"default-convergence-key");
+    assert!(cfg.fleet_id.is_empty());
+    assert!(cfg.require_receipt_signature);
 }
 
 #[test]
@@ -324,7 +369,8 @@ fn config_custom_serde() {
         },
         degraded_tightening_factor: 500_000,
         convergence_timeout_ns: 5_000_000_000,
-        signing_key: b"custom-key-123".to_vec(),
+        fleet_id: "custom-fleet".into(),
+        require_receipt_signature: true,
         max_escalation_depth: 5,
     };
     let json = serde_json::to_string(&cfg).unwrap();
@@ -342,7 +388,7 @@ fn receipt_preimage_changes_with_action_id() {
     let r1 = make_receipt("ext-1", ContainmentAction::Sandbox, "n1", key);
     let mut r2 = r1.clone();
     r2.action_id = "different-id".into();
-    r2.signature = AuthenticityHash::compute_keyed(key, &r2.signing_preimage());
+    sign_receipt(&mut r2, key);
     assert_ne!(r1.signature, r2.signature);
 }
 
@@ -350,36 +396,36 @@ fn receipt_preimage_changes_with_action_id() {
 fn receipt_tampered_extension_fails_verify() {
     let key = b"key";
     let mut r = make_receipt("ext-1", ContainmentAction::Sandbox, "n1", key);
-    assert!(r.verify_signature(key));
+    assert!(verify_receipt(&r, key));
     r.extension_id = "tampered".into();
-    assert!(!r.verify_signature(key));
+    assert!(!verify_receipt(&r, key));
 }
 
 #[test]
 fn receipt_tampered_posterior_fails_verify() {
     let key = b"key";
     let mut r = make_receipt("ext-1", ContainmentAction::Terminate, "n1", key);
-    assert!(r.verify_signature(key));
+    assert!(verify_receipt(&r, key));
     r.posterior_snapshot = 999_999;
-    assert!(!r.verify_signature(key));
+    assert!(!verify_receipt(&r, key));
 }
 
 #[test]
 fn receipt_tampered_timestamp_fails_verify() {
     let key = b"key";
     let mut r = make_receipt("ext-1", ContainmentAction::Suspend, "n1", key);
-    assert!(r.verify_signature(key));
+    assert!(verify_receipt(&r, key));
     r.timestamp_ns = 0;
-    assert!(!r.verify_signature(key));
+    assert!(!verify_receipt(&r, key));
 }
 
 #[test]
 fn receipt_tampered_degraded_mode_fails_verify() {
     let key = b"key";
     let mut r = make_receipt("ext-1", ContainmentAction::Sandbox, "n1", key);
-    assert!(r.verify_signature(key));
+    assert!(verify_receipt(&r, key));
     r.degraded_mode = true;
-    assert!(!r.verify_signature(key));
+    assert!(!verify_receipt(&r, key));
 }
 
 #[test]
@@ -563,7 +609,7 @@ fn registry_overwrite_same_key() {
     let r1 = make_receipt("ext-1", ContainmentAction::Sandbox, "n1", b"k");
     let mut r2 = r1.clone();
     r2.posterior_snapshot = 999_999;
-    r2.signature = AuthenticityHash::compute_keyed(b"k", &r2.signing_preimage());
+    sign_receipt(&mut r2, b"k");
     reg.record(r1);
     reg.record(r2.clone());
     assert_eq!(reg.total_actions(), 1);
@@ -690,13 +736,16 @@ fn engine_degraded_majority_uses_base_thresholds() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn engine_execute_signs_with_config_key() {
+fn engine_execute_signs_with_explicit_lab_authority() {
     let key = b"my-signing-key-42";
     let mut e = custom_engine("local", key);
     let decision = e.evaluate_extension("ext-1", 300_000, 5);
-    let receipt = e.execute_decision(&decision, 1_000_000_000).unwrap();
-    assert!(receipt.verify_signature(key));
-    assert!(!receipt.verify_signature(b"wrong-key"));
+    let receipt = e
+        .execute_decision(&decision, 1_000_000_000)
+        .unwrap()
+        .unwrap();
+    assert!(verify_receipt(&receipt, key));
+    assert!(!verify_receipt(&receipt, b"wrong-key"));
 }
 
 #[test]
@@ -718,8 +767,8 @@ fn engine_execute_unique_action_ids() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    let r1 = e.execute_decision(&d1, 1_000).unwrap();
-    let r2 = e.execute_decision(&d2, 2_000).unwrap();
+    let r1 = e.execute_decision(&d1, 1_000).unwrap().unwrap();
+    let r2 = e.execute_decision(&d2, 2_000).unwrap().unwrap();
     assert_ne!(r1.action_id, r2.action_id);
 }
 
@@ -733,7 +782,7 @@ fn engine_execute_in_degraded_mode_sets_flag() {
         total_fleet_size: 4,
     });
     let decision = e.evaluate_extension("ext-1", 300_000, 5);
-    let receipt = e.execute_decision(&decision, 1_000).unwrap();
+    let receipt = e.execute_decision(&decision, 1_000).unwrap().unwrap();
     assert!(receipt.degraded_mode);
 }
 
@@ -760,7 +809,7 @@ fn engine_escalate_emits_event() {
         degraded_mode: false,
         evidence_count: 5,
     };
-    e.execute_decision(&d, 1_000);
+    e.execute_decision(&d, 1_000).unwrap().unwrap();
     e.escalate("ext-1", 300_000, 5, 2_000).unwrap();
     let events = e.events_of_type(&ConvergenceEventType::EscalationTriggered);
     assert_eq!(events.len(), 1);
@@ -841,9 +890,9 @@ fn engine_checkpoint_decisions_idempotent() {
         contributing_intent_ids: vec!["i1".into()],
         epoch: SecurityEpoch::from_raw(1),
     }];
-    let r1 = e.apply_checkpoint_decisions(&decisions, 1_000);
+    let r1 = e.apply_checkpoint_decisions(&decisions, 1_000).unwrap();
     assert_eq!(r1.len(), 1);
-    let r2 = e.apply_checkpoint_decisions(&decisions, 2_000);
+    let r2 = e.apply_checkpoint_decisions(&decisions, 2_000).unwrap();
     assert!(r2.is_empty()); // Idempotent
 }
 
@@ -858,7 +907,7 @@ fn engine_checkpoint_can_escalate_but_not_downgrade() {
         contributing_intent_ids: vec![],
         epoch: SecurityEpoch::from_raw(1),
     }];
-    e.apply_checkpoint_decisions(&sandbox, 1_000);
+    e.apply_checkpoint_decisions(&sandbox, 1_000).unwrap();
 
     // Checkpoint says terminate (escalation) → should work
     let terminate = vec![ResolvedContainmentDecision {
@@ -867,7 +916,7 @@ fn engine_checkpoint_can_escalate_but_not_downgrade() {
         contributing_intent_ids: vec![],
         epoch: SecurityEpoch::from_raw(1),
     }];
-    let receipts = e.apply_checkpoint_decisions(&terminate, 2_000);
+    let receipts = e.apply_checkpoint_decisions(&terminate, 2_000).unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].action_type, ContainmentAction::Terminate);
 
@@ -878,7 +927,7 @@ fn engine_checkpoint_can_escalate_but_not_downgrade() {
         contributing_intent_ids: vec![],
         epoch: SecurityEpoch::from_raw(1),
     }];
-    let receipts = e.apply_checkpoint_decisions(&suspend, 3_000);
+    let receipts = e.apply_checkpoint_decisions(&suspend, 3_000).unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -892,7 +941,7 @@ fn engine_serde_roundtrip() {
     e.current_epoch = SecurityEpoch::from_raw(42);
     e.policy_version = 5;
     let d = e.evaluate_extension("ext-1", 300_000, 5);
-    e.execute_decision(&d, 1_000);
+    e.execute_decision(&d, 1_000).unwrap().unwrap();
 
     let json = serde_json::to_string(&e).unwrap();
     let decoded: ConvergenceEngine = serde_json::from_str(&json).unwrap();
@@ -1005,11 +1054,19 @@ fn integration_two_engines_same_evidence_same_decisions() {
     // Deterministic convergence: two engines given identical evidence
     // produce identical decisions.
     let cfg = ConvergenceConfig {
-        signing_key: b"shared-key".to_vec(),
+        fleet_id: "shared-edge-fleet".into(),
         ..ConvergenceConfig::default()
     };
-    let e1 = ConvergenceEngine::new(node("node-1"), cfg.clone());
-    let e2 = ConvergenceEngine::new(node("node-2"), cfg);
+    let authority = lab_authority(b"shared-key");
+    let e1 = ConvergenceEngine::new_for_lab(
+        node("node-1"),
+        cfg.clone(),
+        authority.clone(),
+        SecurityEpoch::GENESIS,
+    )
+    .unwrap();
+    let e2 = ConvergenceEngine::new_for_lab(node("node-2"), cfg, authority, SecurityEpoch::GENESIS)
+        .unwrap();
 
     // Same evidence, same posterior
     let d1 = e1.evaluate_extension("ext-1", 600_000, 10);
@@ -1029,42 +1086,42 @@ fn integration_full_lifecycle_evidence_to_quarantine() {
     // Phase 1: 250k → sandbox (250k >= 200k)
     f.process_evidence(&evidence("remote-1", "ext-1", 1, 250_000))
         .unwrap();
-    let r = e.process_fleet_state(&f, 1_000);
+    let r = e.process_fleet_state(&f, 1_000).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].action_type, ContainmentAction::Sandbox);
 
     // Phase 2: +300k = 550k → suspend (550k >= 500k)
     f.process_evidence(&evidence("remote-2", "ext-1", 1, 300_000))
         .unwrap();
-    let r = e.process_fleet_state(&f, 2_000);
+    let r = e.process_fleet_state(&f, 2_000).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].action_type, ContainmentAction::Suspend);
 
     // Phase 3: +300k = 850k → terminate (850k >= 800k)
     f.process_evidence(&evidence("remote-3", "ext-1", 1, 300_000))
         .unwrap();
-    let r = e.process_fleet_state(&f, 3_000);
+    let r = e.process_fleet_state(&f, 3_000).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].action_type, ContainmentAction::Terminate);
 
     // Phase 4: +200k = 1050k → quarantine (1050k >= 950k)
     f.process_evidence(&evidence("remote-4", "ext-1", 1, 200_000))
         .unwrap();
-    let r = e.process_fleet_state(&f, 4_000);
+    let r = e.process_fleet_state(&f, 4_000).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].action_type, ContainmentAction::Quarantine);
 
     // Phase 5: more evidence → no new receipts (already quarantined)
     f.process_evidence(&evidence("remote-5", "ext-1", 1, 500_000))
         .unwrap();
-    let r = e.process_fleet_state(&f, 5_000);
+    let r = e.process_fleet_state(&f, 5_000).unwrap();
     assert!(r.is_empty());
 
     // Verify all receipts
     let all = e.action_registry.receipts_for_extension("ext-1");
     assert_eq!(all.len(), 4);
     for receipt in all {
-        assert!(receipt.verify_signature(b"test-key"));
+        assert!(verify_receipt(receipt, b"test-key"));
     }
 }
 

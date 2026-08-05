@@ -360,6 +360,15 @@ impl FleetSimulator {
         let message_bus = MessageBus::new();
         let start_time = Instant::now();
         let mut event_log = Vec::new();
+        let receipt_authority =
+            crate::evidence_ledger::LabEvidenceAuthority::deterministic_fixture(
+                crate::fleet_convergence::CONVERGENCE_RECEIPT_PRODUCER_ID,
+                "fleet-simulator-receipts",
+                crate::security_epoch::SecurityEpoch::GENESIS,
+            )
+            .map_err(|error| FleetSimulatorError::ConvergenceError {
+                error: error.to_string(),
+            })?;
 
         // Create N instances
         for i in 0..instance_count {
@@ -373,9 +382,18 @@ impl FleetSimulator {
 
             let convergence_config = crate::fleet_convergence::ConvergenceConfig {
                 thresholds: containment_thresholds.clone(),
+                fleet_id: format!("fleet-simulator-{instance_count}"),
                 ..Default::default()
             };
-            let convergence_engine = ConvergenceEngine::new(node_id.clone(), convergence_config);
+            let convergence_engine = ConvergenceEngine::new_for_lab(
+                node_id.clone(),
+                convergence_config,
+                receipt_authority.clone(),
+                crate::security_epoch::SecurityEpoch::GENESIS,
+            )
+            .map_err(|error| FleetSimulatorError::ConvergenceError {
+                error: error.to_string(),
+            })?;
 
             let protocol_state = FleetProtocolState::new(node_id.clone(), Default::default());
 

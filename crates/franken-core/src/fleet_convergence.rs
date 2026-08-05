@@ -23,13 +23,23 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::evidence_ledger::{
+    EvidenceSignatureEnvelope, EvidenceSigningAuthority, EvidenceTrustRegistry,
+    LabEvidenceAuthority, RuntimeEvidenceAuthority,
+};
 use crate::fleet_immune_protocol::{
     ContainmentAction, FleetProtocolState, NodeId, ProtocolError, QuorumCheckpoint,
     ResolvedContainmentDecision,
 };
-use crate::hash_tiers::{AuthenticityHash, ContentHash};
+use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::spectral_fleet_convergence::{ConvergenceCertificate, GossipTopology, SpectralAnalyzer};
+
+pub const CONVERGENCE_RECEIPT_SCHEMA_VERSION: &str = "franken-core.fleet-convergence-receipt.v2";
+pub const CONVERGENCE_RECEIPT_COMPONENT: &str = "fleet_convergence";
+pub const CONVERGENCE_RECEIPT_PRODUCER_ID: &str = "franken-core.fleet-convergence";
+pub const CONVERGENCE_RECEIPT_SIGNATURE_DOMAIN: &str =
+    "franken-core.fleet-convergence.receipt-signature.v2";
 
 // ---------------------------------------------------------------------------
 // Signing/hash preimage helpers
@@ -109,7 +119,8 @@ impl ContainmentThresholds {
     pub fn tighten(&self, tightening_factor_millionths: u64) -> Self {
         let apply = |threshold: i64| -> i64 {
             let wide = threshold as i128 * tightening_factor_millionths as i128;
-            (wide / 1_000_000) as i64
+            let scaled = wide / 1_000_000;
+            scaled.clamp(i64::MIN as i128, i64::MAX as i128) as i64
         };
         Self {
             sandbox_threshold: apply(self.sandbox_threshold),
@@ -190,6 +201,7 @@ pub struct HealingInfo {
 
 /// Configuration for the convergence engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConvergenceConfig {
     /// Base containment thresholds.
     pub thresholds: ContainmentThresholds,
@@ -199,8 +211,11 @@ pub struct ConvergenceConfig {
     /// Maximum time to wait for convergence after threshold crossing (ns).
     /// Default: 1_000_000_000 (1 second).
     pub convergence_timeout_ns: u64,
-    /// Signing key material for containment receipts.
-    pub signing_key: Vec<u8>,
+    /// Stable deployment scope bound into every containment receipt. Callers
+    /// must set this to a non-empty deployment-specific value.
+    pub fleet_id: String,
+    /// Whether receipt creation must fail closed without a signing authority.
+    pub require_receipt_signature: bool,
     /// Maximum escalation depth before refusing further escalation.
     pub max_escalation_depth: u32,
 }
@@ -211,7 +226,8 @@ impl Default for ConvergenceConfig {
             thresholds: ContainmentThresholds::default(),
             degraded_tightening_factor: 750_000,
             convergence_timeout_ns: 1_000_000_000,
-            signing_key: b"default-convergence-key".to_vec(),
+            fleet_id: String::new(),
+            require_receipt_signature: true,
             max_escalation_depth: 3,
         }
     }
@@ -221,13 +237,15 @@ impl Default for ConvergenceConfig {
 // ContainmentReceipt — signed audit receipt for executed actions
 // ---------------------------------------------------------------------------
 
-/// Signed receipt for an executed containment action.
+/// Authenticated receipt for an executed containment action.
 ///
-/// Each receipt is a cryptographic proof that a specific containment action
-/// was executed at a specific time by a specific node, with supporting
-/// evidence chain.
+/// The claimant-embedded key is never accepted as its own trust anchor;
+/// verification requires an external runtime or lab trust registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContainmentReceipt {
+    /// Fleet deployment scope for which the action was executed.
+    pub fleet_id: String,
     /// Unique action identifier.
     pub action_id: String,
     /// Target extension.
@@ -250,8 +268,9 @@ pub struct ContainmentReceipt {
     pub degraded_mode: bool,
     /// Escalation depth (0 = initial action, 1+ = escalated).
     pub escalation_depth: u32,
-    /// Cryptographic signature over the receipt.
-    pub signature: AuthenticityHash,
+    /// Provenance-bound detached signature, absent only when unsigned receipts
+    /// were explicitly enabled by configuration.
+    pub signature: Option<EvidenceSignatureEnvelope>,
 }
 
 impl ContainmentReceipt {
@@ -263,6 +282,13 @@ impl ContainmentReceipt {
         // not alias action_id="a",ext="bc", and evidence_ids ["ab","c"] must
         // not alias ["a","bc"]). Fixed-width fields need no prefix.
         let mut preimage = Vec::new();
+        push_len_prefixed(&mut preimage, CONVERGENCE_RECEIPT_SCHEMA_VERSION.as_bytes());
+        push_len_prefixed(&mut preimage, CONVERGENCE_RECEIPT_COMPONENT.as_bytes());
+        push_len_prefixed(
+            &mut preimage,
+            CONVERGENCE_RECEIPT_SIGNATURE_DOMAIN.as_bytes(),
+        );
+        push_len_prefixed(&mut preimage, self.fleet_id.as_bytes());
         push_len_prefixed(&mut preimage, self.action_id.as_bytes());
         push_len_prefixed(&mut preimage, self.extension_id.as_bytes());
         preimage.extend_from_slice(&[self.action_type.severity()]);
@@ -283,10 +309,75 @@ impl ContainmentReceipt {
         preimage
     }
 
-    /// Verify the receipt signature against a key.
-    pub fn verify_signature(&self, key: &[u8]) -> bool {
-        let expected = AuthenticityHash::compute_keyed(key, &self.signing_preimage());
-        self.signature.constant_time_eq(&expected)
+    pub fn verify_runtime_signature(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+        expected_fleet_id: &str,
+        expected_node_id: &NodeId,
+    ) -> Result<(), ConvergenceError> {
+        trust_registry.ensure_runtime_scope().map_err(|error| {
+            ConvergenceError::ReceiptVerificationFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        self.verify_signature_with_registry(trust_registry, expected_fleet_id, expected_node_id)
+    }
+
+    pub fn verify_signature_for_lab(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+        expected_fleet_id: &str,
+        expected_node_id: &NodeId,
+    ) -> Result<(), ConvergenceError> {
+        trust_registry.ensure_lab_scope().map_err(|error| {
+            ConvergenceError::ReceiptVerificationFailed {
+                reason: error.to_string(),
+            }
+        })?;
+        self.verify_signature_with_registry(trust_registry, expected_fleet_id, expected_node_id)
+    }
+
+    fn verify_signature_with_registry(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+        expected_fleet_id: &str,
+        expected_node_id: &NodeId,
+    ) -> Result<(), ConvergenceError> {
+        if self.fleet_id != expected_fleet_id {
+            return Err(ConvergenceError::ReceiptVerificationFailed {
+                reason: format!(
+                    "containment receipt fleet scope mismatch: expected {expected_fleet_id}, got {}",
+                    self.fleet_id
+                ),
+            });
+        }
+        if &self.node_id != expected_node_id {
+            return Err(ConvergenceError::ReceiptVerificationFailed {
+                reason: format!(
+                    "containment receipt node scope mismatch: expected {expected_node_id}, got {}",
+                    self.node_id
+                ),
+            });
+        }
+        let signature =
+            self.signature
+                .as_ref()
+                .ok_or_else(|| ConvergenceError::ReceiptVerificationFailed {
+                    reason: "containment receipt is missing its required signature".to_string(),
+                })?;
+        if signature.producer_id != CONVERGENCE_RECEIPT_PRODUCER_ID {
+            return Err(ConvergenceError::ReceiptVerificationFailed {
+                reason: format!(
+                    "containment receipt producer must be {CONVERGENCE_RECEIPT_PRODUCER_ID}, got {}",
+                    signature.producer_id
+                ),
+            });
+        }
+        trust_registry
+            .verify_detached(signature, &self.signing_preimage(), self.epoch)
+            .map_err(|error| ConvergenceError::ReceiptVerificationFailed {
+                reason: error.to_string(),
+            })
     }
 }
 
@@ -431,6 +522,15 @@ impl ActionRegistry {
         *depth
     }
 
+    fn set_escalation_depth(&mut self, extension_id: &str, depth: u32) {
+        if depth == 0 {
+            self.escalation_depth.remove(extension_id);
+        } else {
+            self.escalation_depth
+                .insert(extension_id.to_string(), depth);
+        }
+    }
+
     /// Get the receipt for an executed action, if any.
     pub fn get_receipt(
         &self,
@@ -503,28 +603,128 @@ pub struct ConvergenceEngine {
     max_events: usize,
     /// Trace counter for unique trace IDs.
     trace_counter: u64,
+    /// Non-serializable signing capability supplied by the composition root.
+    #[serde(skip)]
+    receipt_signing_authority: Option<EvidenceSigningAuthority>,
 }
 
 impl ConvergenceEngine {
-    /// Create a new convergence engine for the given node.
-    pub fn new(node_id: NodeId, config: ConvergenceConfig) -> Self {
-        Self {
+    pub fn new(node_id: NodeId, config: ConvergenceConfig) -> Result<Self, ConvergenceError> {
+        Self::new_with_authority(node_id, config, None, SecurityEpoch::GENESIS)
+    }
+
+    pub fn new_with_runtime_authority(
+        node_id: NodeId,
+        config: ConvergenceConfig,
+        authority: RuntimeEvidenceAuthority,
+        current_epoch: SecurityEpoch,
+    ) -> Result<Self, ConvergenceError> {
+        Self::new_with_authority(
+            node_id,
+            config,
+            Some(EvidenceSigningAuthority::Runtime(authority)),
+            current_epoch,
+        )
+    }
+
+    pub fn new_for_lab(
+        node_id: NodeId,
+        config: ConvergenceConfig,
+        authority: LabEvidenceAuthority,
+        current_epoch: SecurityEpoch,
+    ) -> Result<Self, ConvergenceError> {
+        Self::new_with_authority(
+            node_id,
+            config,
+            Some(EvidenceSigningAuthority::Lab(authority)),
+            current_epoch,
+        )
+    }
+
+    fn new_with_authority(
+        node_id: NodeId,
+        config: ConvergenceConfig,
+        receipt_signing_authority: Option<EvidenceSigningAuthority>,
+        current_epoch: SecurityEpoch,
+    ) -> Result<Self, ConvergenceError> {
+        Self::validate_authority(&config, receipt_signing_authority.as_ref(), current_epoch)?;
+        Ok(Self {
             node_id,
             config,
             partition_mode: PartitionMode::Normal,
             action_registry: ActionRegistry::new(),
             policy_version: 1,
-            current_epoch: SecurityEpoch::GENESIS,
+            current_epoch,
             action_counter: 0,
             events: Vec::new(),
             max_events: 10_000,
             trace_counter: 0,
-        }
+            receipt_signing_authority,
+        })
     }
 
-    fn next_action_id(&mut self) -> String {
-        self.action_counter = self.action_counter.saturating_add(1);
-        format!("action-{}-{}", self.node_id, self.action_counter)
+    fn validate_authority(
+        config: &ConvergenceConfig,
+        authority: Option<&EvidenceSigningAuthority>,
+        current_epoch: SecurityEpoch,
+    ) -> Result<(), ConvergenceError> {
+        if !config.thresholds.is_valid() {
+            return Err(ConvergenceError::InvalidThresholds);
+        }
+        if config.fleet_id.trim().is_empty() {
+            return Err(ConvergenceError::ConfigurationError {
+                reason: "fleet convergence fleet_id must not be empty".to_string(),
+            });
+        }
+        if config.require_receipt_signature && authority.is_none() {
+            return Err(ConvergenceError::ConfigurationError {
+                reason:
+                    "containment receipt signing is required but no runtime authority is configured"
+                        .to_string(),
+            });
+        }
+        if let Some(authority) = authority {
+            let identity = authority.verification_identity();
+            if identity.producer_id != CONVERGENCE_RECEIPT_PRODUCER_ID {
+                return Err(ConvergenceError::ConfigurationError {
+                    reason: format!(
+                        "containment receipt authority producer must be {CONVERGENCE_RECEIPT_PRODUCER_ID}, got {}",
+                        identity.producer_id
+                    ),
+                });
+            }
+            if identity.key_provenance.activation_epoch.as_u64() > current_epoch.as_u64() {
+                return Err(ConvergenceError::ConfigurationError {
+                    reason: format!(
+                        "containment receipt key {} activates at epoch {}, after engine epoch {}",
+                        identity.key_provenance.key_id,
+                        identity.key_provenance.activation_epoch.as_u64(),
+                        current_epoch.as_u64()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn attach_runtime_receipt_authority(
+        &mut self,
+        authority: RuntimeEvidenceAuthority,
+    ) -> Result<(), ConvergenceError> {
+        let authority = EvidenceSigningAuthority::Runtime(authority);
+        Self::validate_authority(&self.config, Some(&authority), self.current_epoch)?;
+        self.receipt_signing_authority = Some(authority);
+        Ok(())
+    }
+
+    pub fn attach_lab_receipt_authority(
+        &mut self,
+        authority: LabEvidenceAuthority,
+    ) -> Result<(), ConvergenceError> {
+        let authority = EvidenceSigningAuthority::Lab(authority);
+        Self::validate_authority(&self.config, Some(&authority), self.current_epoch)?;
+        self.receipt_signing_authority = Some(authority);
+        Ok(())
     }
 
     fn next_trace_id(&mut self) -> String {
@@ -626,9 +826,9 @@ impl ConvergenceEngine {
         &mut self,
         decision: &ConvergenceDecision,
         timestamp_ns: u64,
-    ) -> Option<ContainmentReceipt> {
+    ) -> Result<Option<ContainmentReceipt>, ConvergenceError> {
         if decision.action == ContainmentAction::Allow {
-            return None;
+            return Ok(None);
         }
 
         // Idempotency: skip if already executed at this severity.
@@ -636,7 +836,7 @@ impl ConvergenceEngine {
             .action_registry
             .is_executed(&decision.extension_id, decision.action)
         {
-            return None;
+            return Ok(None);
         }
 
         // Monotonic escalation: never execute a lower severity than already executed.
@@ -644,16 +844,23 @@ impl ConvergenceEngine {
             .action_registry
             .highest_executed_action(&decision.extension_id);
         if !decision.action.at_least_as_severe_as(highest) {
-            return None;
+            return Ok(None);
         }
 
-        let action_id = self.next_action_id();
+        let next_action_counter =
+            self.action_counter
+                .checked_add(1)
+                .ok_or(ConvergenceError::ActionCounterExhausted {
+                    node_id: self.node_id.clone(),
+                })?;
+        let action_id = format!("action-{}-{next_action_counter}", self.node_id);
         let degraded = !matches!(self.partition_mode, PartitionMode::Normal);
         let escalation_depth = self
             .action_registry
             .escalation_depth(&decision.extension_id);
 
         let mut receipt = ContainmentReceipt {
+            fleet_id: self.config.fleet_id.clone(),
             action_id,
             extension_id: decision.extension_id.clone(),
             action_type: decision.action,
@@ -665,14 +872,25 @@ impl ConvergenceEngine {
             timestamp_ns,
             degraded_mode: degraded,
             escalation_depth,
-            signature: AuthenticityHash::zeroed(),
+            signature: None,
         };
 
-        // Sign the receipt.
-        receipt.signature =
-            AuthenticityHash::compute_keyed(&self.config.signing_key, &receipt.signing_preimage());
+        if let Some(authority) = self.receipt_signing_authority.as_ref() {
+            receipt.signature = Some(
+                authority
+                    .sign_detached(&receipt.signing_preimage(), receipt.epoch)
+                    .map_err(|error| ConvergenceError::ReceiptSigningFailed {
+                        reason: error.to_string(),
+                    })?,
+            );
+        } else if self.config.require_receipt_signature {
+            return Err(ConvergenceError::ReceiptSigningFailed {
+                reason: "containment receipt signing is required but the engine has no attached authority"
+                    .to_string(),
+            });
+        }
 
-        // Record for idempotency.
+        self.action_counter = next_action_counter;
         self.action_registry.record(receipt.clone());
 
         // Emit telemetry.
@@ -686,7 +904,7 @@ impl ConvergenceEngine {
         fields.insert("degraded_mode".into(), degraded.to_string());
         self.emit_event(ConvergenceEventType::ActionExecuted, timestamp_ns, fields);
 
-        Some(receipt)
+        Ok(Some(receipt))
     }
 
     /// Process all extensions in fleet state: evaluate + execute decisions.
@@ -696,15 +914,15 @@ impl ConvergenceEngine {
         &mut self,
         fleet_state: &FleetProtocolState,
         timestamp_ns: u64,
-    ) -> Vec<ContainmentReceipt> {
+    ) -> Result<Vec<ContainmentReceipt>, ConvergenceError> {
         let decisions = self.evaluate_all(fleet_state);
         let mut receipts = Vec::new();
         for decision in &decisions {
-            if let Some(receipt) = self.execute_decision(decision, timestamp_ns) {
+            if let Some(receipt) = self.execute_decision(decision, timestamp_ns)? {
                 receipts.push(receipt);
             }
         }
-        receipts
+        Ok(receipts)
     }
 
     fn emit_spectral_health(&mut self, fleet_state: &FleetProtocolState, timestamp_ns: u64) {
@@ -896,6 +1114,11 @@ impl ConvergenceEngine {
             }
         };
 
+        let next_depth = current_depth.checked_add(1).ok_or_else(|| {
+            ConvergenceError::EscalationCounterExhausted {
+                extension_id: extension_id.to_string(),
+            }
+        })?;
         self.action_registry.increment_escalation(extension_id);
 
         let decision = ConvergenceDecision {
@@ -907,24 +1130,34 @@ impl ConvergenceEngine {
             evidence_count,
         };
 
-        // Emit escalation telemetry.
+        let receipt = match self.execute_decision(&decision, timestamp_ns) {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                self.action_registry
+                    .set_escalation_depth(extension_id, current_depth);
+                return Err(ConvergenceError::ActionAlreadyExecuted {
+                    extension_id: extension_id.to_string(),
+                    action: next_action,
+                });
+            }
+            Err(error) => {
+                self.action_registry
+                    .set_escalation_depth(extension_id, current_depth);
+                return Err(error);
+            }
+        };
+
         let mut fields = BTreeMap::new();
         fields.insert("extension_id".into(), extension_id.to_string());
         fields.insert("from_action".into(), highest.to_string());
         fields.insert("to_action".into(), next_action.to_string());
-        fields.insert("depth".into(), (current_depth + 1).to_string());
+        fields.insert("depth".into(), next_depth.to_string());
         self.emit_event(
             ConvergenceEventType::EscalationTriggered,
             timestamp_ns,
             fields,
         );
-
-        self.execute_decision(&decision, timestamp_ns).ok_or(
-            ConvergenceError::ActionAlreadyExecuted {
-                extension_id: extension_id.to_string(),
-                action: next_action,
-            },
-        )
+        Ok(receipt)
     }
 
     /// Verify local convergence state against a quorum checkpoint.
@@ -983,7 +1216,7 @@ impl ConvergenceEngine {
         &mut self,
         decisions: &[ResolvedContainmentDecision],
         timestamp_ns: u64,
-    ) -> Vec<ContainmentReceipt> {
+    ) -> Result<Vec<ContainmentReceipt>, ConvergenceError> {
         let mut receipts = Vec::new();
         for resolved in decisions {
             let decision = ConvergenceDecision {
@@ -994,11 +1227,11 @@ impl ConvergenceEngine {
                 degraded_mode: false,
                 evidence_count: 0,
             };
-            if let Some(receipt) = self.execute_decision(&decision, timestamp_ns) {
+            if let Some(receipt) = self.execute_decision(&decision, timestamp_ns)? {
                 receipts.push(receipt);
             }
         }
-        receipts
+        Ok(receipts)
     }
 
     /// Record reconciliation conflict during partition healing.
@@ -1051,7 +1284,7 @@ impl ConvergenceEngine {
         local_action: ContainmentAction,
         remote_action: ContainmentAction,
         timestamp_ns: u64,
-    ) -> (ContainmentAction, Option<ContainmentReceipt>) {
+    ) -> Result<(ContainmentAction, Option<ContainmentReceipt>), ConvergenceError> {
         let resolved = self.record_reconciliation_conflict(
             conflicting_extension,
             local_action,
@@ -1066,8 +1299,8 @@ impl ConvergenceEngine {
             degraded_mode: !matches!(self.partition_mode, PartitionMode::Normal),
             evidence_count: 0,
         };
-        let receipt = self.execute_decision(&decision, timestamp_ns);
-        (resolved, receipt)
+        let receipt = self.execute_decision(&decision, timestamp_ns)?;
+        Ok((resolved, receipt))
     }
 
     /// Get all events of a specific type.
@@ -1103,10 +1336,30 @@ pub enum ConvergenceVerification {
 /// Errors specific to the convergence engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConvergenceError {
+    ConfigurationError {
+        reason: String,
+    },
+    ReceiptSigningFailed {
+        reason: String,
+    },
+    ReceiptVerificationFailed {
+        reason: String,
+    },
+    ActionCounterExhausted {
+        node_id: NodeId,
+    },
+    EscalationCounterExhausted {
+        extension_id: String,
+    },
     /// Maximum escalation depth reached.
-    MaxEscalationReached { extension_id: String, depth: u32 },
+    MaxEscalationReached {
+        extension_id: String,
+        depth: u32,
+    },
     /// Extension is already at maximum severity (quarantine).
-    AlreadyAtMaxSeverity { extension_id: String },
+    AlreadyAtMaxSeverity {
+        extension_id: String,
+    },
     /// Action was already executed (idempotent rejection).
     ActionAlreadyExecuted {
         extension_id: String,
@@ -1121,6 +1374,24 @@ pub enum ConvergenceError {
 impl fmt::Display for ConvergenceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConfigurationError { reason } => {
+                write!(f, "invalid convergence engine configuration: {reason}")
+            }
+            Self::ReceiptSigningFailed { reason } => {
+                write!(f, "containment receipt signing failed: {reason}")
+            }
+            Self::ReceiptVerificationFailed { reason } => {
+                write!(f, "containment receipt verification failed: {reason}")
+            }
+            Self::ActionCounterExhausted { node_id } => {
+                write!(f, "containment action counter exhausted for node {node_id}")
+            }
+            Self::EscalationCounterExhausted { extension_id } => {
+                write!(
+                    f,
+                    "containment escalation counter exhausted for {extension_id}"
+                )
+            }
             Self::MaxEscalationReached {
                 extension_id,
                 depth,
@@ -1160,9 +1431,12 @@ impl From<ProtocolError> for ConvergenceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence_ledger::EvidenceTrustRegistry;
     use crate::fleet_immune_protocol::{
         EvidencePacket, GossipConfig, HeartbeatLiveness, MessageSignature, ProtocolVersion,
     };
+    use crate::hash_tiers::AuthenticityHash;
+    use crate::signature_preimage::SigningKey;
 
     // -- Test helpers --
 
@@ -1180,13 +1454,37 @@ mod tests {
             },
             degraded_tightening_factor: 750_000,
             convergence_timeout_ns: 1_000_000_000,
-            signing_key: b"test-key".to_vec(),
+            fleet_id: "test-fleet".to_string(),
+            require_receipt_signature: true,
             max_escalation_depth: 3,
         }
     }
 
+    fn test_authority() -> LabEvidenceAuthority {
+        LabEvidenceAuthority::deterministic_fixture(
+            CONVERGENCE_RECEIPT_PRODUCER_ID,
+            "core-fleet-convergence-unit-tests",
+            SecurityEpoch::GENESIS,
+        )
+        .expect("lab receipt authority must be valid")
+    }
+
     fn test_engine(name: &str) -> ConvergenceEngine {
-        ConvergenceEngine::new(test_node(name), test_config())
+        ConvergenceEngine::new_for_lab(
+            test_node(name),
+            test_config(),
+            test_authority(),
+            SecurityEpoch::GENESIS,
+        )
+        .expect("lab convergence engine must be valid")
+    }
+
+    fn test_trust_registry(epoch: SecurityEpoch) -> EvidenceTrustRegistry {
+        EvidenceTrustRegistry::from_lab_identities(
+            epoch,
+            [test_authority().verification_identity()],
+        )
+        .expect("lab receipt trust registry must be valid")
     }
 
     fn test_fleet_state(node: &str) -> FleetProtocolState {
@@ -1328,6 +1626,21 @@ mod tests {
     }
 
     #[test]
+    fn thresholds_tighten_extreme_factor_saturates_without_wrapping() {
+        let thresholds = ContainmentThresholds {
+            sandbox_threshold: i64::MAX - 3,
+            suspend_threshold: i64::MAX - 2,
+            terminate_threshold: i64::MAX - 1,
+            quarantine_threshold: i64::MAX,
+        };
+        let tightened = thresholds.tighten(u64::MAX);
+        assert_eq!(tightened.sandbox_threshold, i64::MAX);
+        assert_eq!(tightened.suspend_threshold, i64::MAX);
+        assert_eq!(tightened.terminate_threshold, i64::MAX);
+        assert_eq!(tightened.quarantine_threshold, i64::MAX);
+    }
+
+    #[test]
     fn thresholds_serde_round_trip() {
         let t = ContainmentThresholds::default();
         let json = serde_json::to_string(&t).unwrap();
@@ -1385,6 +1698,7 @@ mod tests {
     fn action_registry_record_and_query() {
         let mut reg = ActionRegistry::new();
         let receipt = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -1396,7 +1710,7 @@ mod tests {
             timestamp_ns: 1_000_000_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         reg.record(receipt);
 
@@ -1415,6 +1729,7 @@ mod tests {
         );
 
         let receipt = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Suspend,
@@ -1426,7 +1741,7 @@ mod tests {
             timestamp_ns: 1_000_000_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         reg.record(receipt);
 
@@ -1453,6 +1768,7 @@ mod tests {
             (ContainmentAction::Terminate, "a2"),
         ] {
             reg.record(ContainmentReceipt {
+                fleet_id: "test-fleet".into(),
                 action_id: action.into(),
                 extension_id: "ext-1".into(),
                 action_type: sev,
@@ -1464,7 +1780,7 @@ mod tests {
                 timestamp_ns: 0,
                 degraded_mode: false,
                 escalation_depth: 0,
-                signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+                signature: None,
             });
         }
 
@@ -1478,8 +1794,9 @@ mod tests {
 
     #[test]
     fn receipt_signing_and_verification() {
-        let key = b"test-signing-key";
+        let authority = test_authority();
         let mut receipt = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "action-1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -1491,22 +1808,154 @@ mod tests {
             timestamp_ns: 1_000_000_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::zeroed(),
+            signature: None,
         };
 
-        receipt.signature = AuthenticityHash::compute_keyed(key, &receipt.signing_preimage());
+        receipt.signature = Some(
+            authority
+                .sign_detached(&receipt.signing_preimage(), receipt.epoch)
+                .expect("lab receipt signing must succeed"),
+        );
+        let trust_registry = EvidenceTrustRegistry::from_lab_identities(
+            receipt.epoch,
+            [authority.verification_identity()],
+        )
+        .expect("lab receipt trust registry must be valid");
 
-        assert!(receipt.verify_signature(key));
-        assert!(!receipt.verify_signature(b"wrong-key"));
+        receipt
+            .verify_signature_for_lab(&trust_registry, "test-fleet", &test_node("local"))
+            .expect("externally trusted lab receipt must verify");
 
         let mut tampered = receipt.clone();
-        tampered.signature.0[31] ^= 0x01;
-        assert!(!tampered.verify_signature(key));
+        tampered
+            .signature
+            .as_mut()
+            .expect("signed receipt")
+            .signature
+            .upper[31] ^= 0x01;
+        assert!(
+            tampered
+                .verify_signature_for_lab(&trust_registry, "test-fleet", &test_node("local"),)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn bd_gi7sp_core_default_fails_closed_and_rejects_legacy_key_field() {
+        let missing_scope = ConvergenceEngine::new_for_lab(
+            test_node("local"),
+            ConvergenceConfig::default(),
+            test_authority(),
+            SecurityEpoch::GENESIS,
+        )
+        .expect_err("deployment-specific fleet scope must be explicit");
+        assert!(matches!(
+            missing_scope,
+            ConvergenceError::ConfigurationError { .. }
+        ));
+
+        let authenticated_config = ConvergenceConfig {
+            fleet_id: "explicit-fleet".to_string(),
+            ..ConvergenceConfig::default()
+        };
+        let error = ConvergenceEngine::new(test_node("local"), authenticated_config)
+            .expect_err("default authenticated receipts require explicit authority");
+        assert!(matches!(error, ConvergenceError::ConfigurationError { .. }));
+
+        let mut encoded =
+            serde_json::to_value(ConvergenceConfig::default()).expect("config must serialize");
+        assert!(encoded.get("signing_key").is_none());
+        encoded
+            .as_object_mut()
+            .expect("config serializes as an object")
+            .insert(
+                "signing_key".to_string(),
+                serde_json::json!(b"default-convergence-key"),
+            );
+        assert!(serde_json::from_value::<ConvergenceConfig>(encoded).is_err());
+    }
+
+    #[test]
+    fn bd_gi7sp_core_runtime_receipt_rejects_historical_public_bytes() {
+        let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+            CONVERGENCE_RECEIPT_PRODUCER_ID,
+            SecurityEpoch::GENESIS,
+            1,
+            None,
+        )
+        .expect("operating-system runtime authority generation must succeed");
+        let trusted_identity = authority.verification_identity();
+        let mut engine = ConvergenceEngine::new_with_runtime_authority(
+            test_node("local"),
+            test_config(),
+            authority,
+            SecurityEpoch::GENESIS,
+        )
+        .expect("runtime convergence engine must be valid");
+        let decision = engine.evaluate_extension("ext-1", 300_000, 5);
+        let receipt = engine
+            .execute_decision(&decision, 1_000)
+            .expect("runtime receipt signing must succeed")
+            .expect("sandbox decision must emit a receipt");
+        let trust_registry =
+            EvidenceTrustRegistry::from_runtime_identities(receipt.epoch, [trusted_identity])
+                .expect("external runtime trust registry must be valid");
+        receipt
+            .verify_runtime_signature(&trust_registry, &engine.config.fleet_id, &engine.node_id)
+            .expect("externally trusted runtime receipt must verify");
+
+        let historical_seed = *ContentHash::compute(b"default-convergence-key").as_bytes();
+        let historical_key =
+            SigningKey::from_bytes(historical_seed).expect("historical-key digest is non-zero");
+        let attacker = RuntimeEvidenceAuthority::from_signing_key(
+            CONVERGENCE_RECEIPT_PRODUCER_ID,
+            historical_key,
+            SecurityEpoch::GENESIS,
+            1,
+            None,
+        )
+        .expect("attacker fixture has structurally valid public provenance");
+        let mut forged = receipt.clone();
+        forged.action_id = "forged-from-historical-public-bytes".to_string();
+        forged.signature = Some(
+            attacker
+                .sign_detached(&forged.signing_preimage(), forged.epoch)
+                .expect("attacker can sign with its own untrusted key"),
+        );
+        assert!(
+            forged
+                .verify_runtime_signature(
+                    &trust_registry,
+                    &engine.config.fleet_id,
+                    &engine.node_id,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn bd_gi7sp_core_deserialized_engine_fails_atomically_without_authority() {
+        let encoded =
+            serde_json::to_vec(&test_engine("local")).expect("engine state must serialize");
+        let mut restored: ConvergenceEngine =
+            serde_json::from_slice(&encoded).expect("engine state must deserialize");
+        let decision = restored.evaluate_extension("ext-1", 300_000, 5);
+        let error = restored
+            .execute_decision(&decision, 1_000)
+            .expect_err("deserialized engine must fail closed until authority is reattached");
+        assert!(matches!(
+            error,
+            ConvergenceError::ReceiptSigningFailed { .. }
+        ));
+        assert_eq!(restored.action_counter, 0);
+        assert_eq!(restored.action_registry.total_actions(), 0);
+        assert!(restored.events.is_empty());
     }
 
     #[test]
     fn receipt_serde_round_trip() {
         let receipt = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "action-1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Terminate,
@@ -1518,7 +1967,7 @@ mod tests {
             timestamp_ns: 5_000_000_000,
             degraded_mode: true,
             escalation_depth: 1,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         let json = serde_json::to_string(&receipt).unwrap();
         let decoded: ContainmentReceipt = serde_json::from_str(&json).unwrap();
@@ -1557,7 +2006,12 @@ mod tests {
     fn engine_execute_allow_produces_no_receipt() {
         let mut engine = test_engine("local");
         let decision = engine.evaluate_extension("ext-1", 50_000, 1);
-        assert!(engine.execute_decision(&decision, 1_000_000_000).is_none());
+        assert!(
+            engine
+                .execute_decision(&decision, 1_000_000_000)
+                .expect("allow execution must succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1566,11 +2020,18 @@ mod tests {
         let decision = engine.evaluate_extension("ext-1", 300_000, 5);
         let receipt = engine
             .execute_decision(&decision, 1_000_000_000)
-            .expect("should produce receipt");
+            .expect("receipt signing must succeed")
+            .expect("sandbox decision should produce a receipt");
 
         assert_eq!(receipt.action_type, ContainmentAction::Sandbox);
         assert_eq!(receipt.extension_id, "ext-1");
-        assert!(receipt.verify_signature(&engine.config.signing_key));
+        receipt
+            .verify_signature_for_lab(
+                &test_trust_registry(receipt.epoch),
+                &engine.config.fleet_id,
+                &engine.node_id,
+            )
+            .expect("receipt must verify against external lab trust");
     }
 
     #[test]
@@ -1578,10 +2039,14 @@ mod tests {
         let mut engine = test_engine("local");
         let decision = engine.evaluate_extension("ext-1", 300_000, 5);
 
-        let first = engine.execute_decision(&decision, 1_000_000_000);
+        let first = engine
+            .execute_decision(&decision, 1_000_000_000)
+            .expect("first execution must succeed");
         assert!(first.is_some());
 
-        let second = engine.execute_decision(&decision, 2_000_000_000);
+        let second = engine
+            .execute_decision(&decision, 2_000_000_000)
+            .expect("idempotent execution must succeed");
         assert!(second.is_none()); // Idempotent.
     }
 
@@ -1598,7 +2063,10 @@ mod tests {
             degraded_mode: false,
             evidence_count: 20,
         };
-        engine.execute_decision(&terminate, 1_000_000_000).unwrap();
+        engine
+            .execute_decision(&terminate, 1_000_000_000)
+            .unwrap()
+            .unwrap();
 
         // Attempt sandbox (lower severity) — should be rejected.
         let sandbox = ConvergenceDecision {
@@ -1609,7 +2077,12 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        assert!(engine.execute_decision(&sandbox, 2_000_000_000).is_none());
+        assert!(
+            engine
+                .execute_decision(&sandbox, 2_000_000_000)
+                .unwrap()
+                .is_none()
+        );
     }
 
     // -- ConvergenceEngine: fleet state processing --
@@ -1618,7 +2091,7 @@ mod tests {
     fn engine_process_fleet_state_no_evidence() {
         let mut engine = test_engine("local");
         let fleet = test_fleet_state("local");
-        let receipts = engine.process_fleet_state(&fleet, 1_000_000_000);
+        let receipts = engine.process_fleet_state(&fleet, 1_000_000_000).unwrap();
         assert!(receipts.is_empty());
     }
 
@@ -1632,7 +2105,7 @@ mod tests {
             .process_evidence(&test_evidence("remote-1", "ext-1", 1, 300_000))
             .unwrap();
 
-        let receipts = engine.process_fleet_state(&fleet, 1_000_000_000);
+        let receipts = engine.process_fleet_state(&fleet, 1_000_000_000).unwrap();
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].action_type, ContainmentAction::Sandbox);
         assert_eq!(receipts[0].extension_id, "ext-1");
@@ -1650,7 +2123,7 @@ mod tests {
             .process_evidence(&test_evidence("remote-1", "ext-2", 2, 600_000))
             .unwrap();
 
-        let receipts = engine.process_fleet_state(&fleet, 1_000_000_000);
+        let receipts = engine.process_fleet_state(&fleet, 1_000_000_000).unwrap();
         assert_eq!(receipts.len(), 2);
 
         let actions: BTreeSet<_> = receipts.iter().map(|r| r.action_type).collect();
@@ -1755,7 +2228,10 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        engine.execute_decision(&decision, 1_000_000_000).unwrap();
+        engine
+            .execute_decision(&decision, 1_000_000_000)
+            .unwrap()
+            .unwrap();
 
         // Escalate due to sandbox failure.
         let receipt = engine.escalate("ext-1", 300_000, 5, 2_000_000_000).unwrap();
@@ -1777,7 +2253,10 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        engine.execute_decision(&sandbox, 1_000_000_000).unwrap();
+        engine
+            .execute_decision(&sandbox, 1_000_000_000)
+            .unwrap()
+            .unwrap();
 
         // First escalation succeeds.
         engine.escalate("ext-1", 300_000, 5, 2_000_000_000).unwrap();
@@ -1802,7 +2281,10 @@ mod tests {
             degraded_mode: false,
             evidence_count: 50,
         };
-        engine.execute_decision(&quarantine, 1_000_000_000).unwrap();
+        engine
+            .execute_decision(&quarantine, 1_000_000_000)
+            .unwrap()
+            .unwrap();
 
         let err = engine
             .escalate("ext-1", 1_000_000, 50, 2_000_000_000)
@@ -1862,7 +2344,9 @@ mod tests {
             },
         ];
 
-        let receipts = engine.apply_checkpoint_decisions(&decisions, 5_000_000_000);
+        let receipts = engine
+            .apply_checkpoint_decisions(&decisions, 5_000_000_000)
+            .unwrap();
         assert_eq!(receipts.len(), 2);
 
         // Verify the actions are now registered.
@@ -1891,7 +2375,10 @@ mod tests {
             degraded_mode: true,
             evidence_count: 50,
         };
-        engine.execute_decision(&quarantine, 1_000_000_000).unwrap();
+        engine
+            .execute_decision(&quarantine, 1_000_000_000)
+            .unwrap()
+            .unwrap();
 
         // Checkpoint from other partition says sandbox.
         let decisions = vec![ResolvedContainmentDecision {
@@ -1902,7 +2389,9 @@ mod tests {
         }];
 
         // Should not produce receipt (lower severity than existing).
-        let receipts = engine.apply_checkpoint_decisions(&decisions, 5_000_000_000);
+        let receipts = engine
+            .apply_checkpoint_decisions(&decisions, 5_000_000_000)
+            .unwrap();
         assert!(receipts.is_empty());
 
         // Quarantine still holds.
@@ -1969,12 +2458,14 @@ mod tests {
     #[test]
     fn engine_apply_reconciliation_conflict_executes_resolution() {
         let mut engine = test_engine("local");
-        let (resolved, receipt) = engine.apply_reconciliation_conflict(
-            "ext-1",
-            ContainmentAction::Sandbox,
-            ContainmentAction::Terminate,
-            11_000_000_000,
-        );
+        let (resolved, receipt) = engine
+            .apply_reconciliation_conflict(
+                "ext-1",
+                ContainmentAction::Sandbox,
+                ContainmentAction::Terminate,
+                11_000_000_000,
+            )
+            .unwrap();
         assert_eq!(resolved, ContainmentAction::Terminate);
         let receipt = receipt.expect("first reconciliation apply should execute");
         assert_eq!(receipt.action_type, ContainmentAction::Terminate);
@@ -1987,12 +2478,14 @@ mod tests {
         // must record but NOT downgrade the executed action. Suspend sits
         // strictly below the already-executed Terminate on the ladder
         // (allow < challenge < sandbox < suspend < terminate < quarantine).
-        let (resolved2, receipt2) = engine.apply_reconciliation_conflict(
-            "ext-1",
-            ContainmentAction::Sandbox,
-            ContainmentAction::Suspend,
-            12_000_000_000,
-        );
+        let (resolved2, receipt2) = engine
+            .apply_reconciliation_conflict(
+                "ext-1",
+                ContainmentAction::Sandbox,
+                ContainmentAction::Suspend,
+                12_000_000_000,
+            )
+            .unwrap();
         assert_eq!(resolved2, ContainmentAction::Suspend);
         assert!(
             receipt2.is_none(),
@@ -2010,7 +2503,10 @@ mod tests {
     fn engine_emits_action_executed_events() {
         let mut engine = test_engine("local");
         let decision = engine.evaluate_extension("ext-1", 300_000, 5);
-        engine.execute_decision(&decision, 1_000_000_000);
+        engine
+            .execute_decision(&decision, 1_000_000_000)
+            .expect("action execution must succeed")
+            .expect("sandbox decision must emit a receipt");
 
         let events = engine.events_of_type(&ConvergenceEventType::ActionExecuted);
         assert_eq!(events.len(), 1);
@@ -2177,13 +2673,23 @@ mod tests {
             .unwrap();
 
         // Process fleet state.
-        let receipts = engine.process_fleet_state(&fleet, 5_000_000_000);
+        let receipts = engine
+            .process_fleet_state(&fleet, 5_000_000_000)
+            .expect("fleet processing must succeed");
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].action_type, ContainmentAction::Suspend);
-        assert!(receipts[0].verify_signature(&engine.config.signing_key));
+        receipts[0]
+            .verify_signature_for_lab(
+                &test_trust_registry(receipts[0].epoch),
+                &engine.config.fleet_id,
+                &engine.node_id,
+            )
+            .expect("externally trusted receipt must verify");
 
         // Idempotent reprocessing produces no new receipts.
-        let again = engine.process_fleet_state(&fleet, 6_000_000_000);
+        let again = engine
+            .process_fleet_state(&fleet, 6_000_000_000)
+            .expect("idempotent fleet processing must succeed");
         assert!(again.is_empty());
     }
 
@@ -2215,7 +2721,9 @@ mod tests {
         fleet
             .process_evidence(&test_evidence("n1", "ext-1", 5, 170_000))
             .unwrap();
-        let receipts = engine.process_fleet_state(&fleet, 20_000_000_001);
+        let receipts = engine
+            .process_fleet_state(&fleet, 20_000_000_001)
+            .expect("degraded fleet processing must succeed");
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].action_type, ContainmentAction::Sandbox);
         assert!(receipts[0].degraded_mode);
@@ -2246,7 +2754,10 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        let r0 = engine.execute_decision(&sandbox, 1_000_000_000).unwrap();
+        let r0 = engine
+            .execute_decision(&sandbox, 1_000_000_000)
+            .expect("sandbox execution must succeed")
+            .expect("sandbox decision must emit a receipt");
         assert_eq!(r0.action_type, ContainmentAction::Sandbox);
 
         // Escalate: sandbox → suspend.
@@ -2346,6 +2857,7 @@ mod tests {
     fn action_registry_serde_roundtrip() {
         let mut reg = ActionRegistry::new();
         reg.record(ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Suspend,
@@ -2357,7 +2869,7 @@ mod tests {
             timestamp_ns: 1_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         });
         reg.increment_escalation("ext-1");
 
@@ -2394,6 +2906,21 @@ mod tests {
     #[test]
     fn convergence_error_display_all_variants_distinct() {
         let variants: Vec<ConvergenceError> = vec![
+            ConvergenceError::ConfigurationError {
+                reason: "bad config".into(),
+            },
+            ConvergenceError::ReceiptSigningFailed {
+                reason: "signing failed".into(),
+            },
+            ConvergenceError::ReceiptVerificationFailed {
+                reason: "verification failed".into(),
+            },
+            ConvergenceError::ActionCounterExhausted {
+                node_id: test_node("local"),
+            },
+            ConvergenceError::EscalationCounterExhausted {
+                extension_id: "ext-overflow".into(),
+            },
             ConvergenceError::MaxEscalationReached {
                 extension_id: "ext-1".into(),
                 depth: 3,
@@ -2420,6 +2947,7 @@ mod tests {
     #[test]
     fn receipt_preimage_sensitive_to_action_type() {
         let base = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -2431,7 +2959,7 @@ mod tests {
             timestamp_ns: 1_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         let mut other = base.clone();
         other.action_type = ContainmentAction::Terminate;
@@ -2441,6 +2969,7 @@ mod tests {
     #[test]
     fn receipt_preimage_sensitive_to_extension_id() {
         let base = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -2452,7 +2981,7 @@ mod tests {
             timestamp_ns: 1_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         let mut other = base.clone();
         other.extension_id = "ext-2".into();
@@ -2466,6 +2995,7 @@ mod tests {
         // distinct receipts could share a signing preimage (-> same signature).
         let mk = |action_id: &str, extension_id: &str, evidence: Vec<&str>| {
             ContainmentReceipt {
+                fleet_id: "test-fleet".into(),
                 action_id: action_id.into(),
                 extension_id: extension_id.into(),
                 action_type: ContainmentAction::Sandbox,
@@ -2477,7 +3007,7 @@ mod tests {
                 timestamp_ns: 1_000,
                 degraded_mode: false,
                 escalation_depth: 0,
-                signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+                signature: None,
             }
             .signing_preimage()
         };
@@ -2521,6 +3051,7 @@ mod tests {
         );
 
         let receipt = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -2532,7 +3063,7 @@ mod tests {
             timestamp_ns: 1_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         reg.record(receipt.clone());
 
@@ -2584,7 +3115,8 @@ mod tests {
         let cfg = ConvergenceConfig::default();
         assert_eq!(cfg.degraded_tightening_factor, 750_000);
         assert_eq!(cfg.convergence_timeout_ns, 1_000_000_000);
-        assert_eq!(cfg.signing_key, b"default-convergence-key".to_vec());
+        assert!(cfg.fleet_id.is_empty());
+        assert!(cfg.require_receipt_signature);
         assert_eq!(cfg.max_escalation_depth, 3);
         assert!(cfg.thresholds.is_valid());
     }
@@ -2602,8 +3134,23 @@ mod tests {
     }
 
     #[test]
-    fn convergence_error_serde_all_5_variants() {
+    fn convergence_error_serde_all_variants() {
         let variants: Vec<ConvergenceError> = vec![
+            ConvergenceError::ConfigurationError {
+                reason: "bad config".into(),
+            },
+            ConvergenceError::ReceiptSigningFailed {
+                reason: "signing failed".into(),
+            },
+            ConvergenceError::ReceiptVerificationFailed {
+                reason: "verification failed".into(),
+            },
+            ConvergenceError::ActionCounterExhausted {
+                node_id: test_node("local"),
+            },
+            ConvergenceError::EscalationCounterExhausted {
+                extension_id: "ext-overflow".into(),
+            },
             ConvergenceError::MaxEscalationReached {
                 extension_id: "ext-1".into(),
                 depth: 3,
@@ -2676,7 +3223,9 @@ mod tests {
         // Generate 7 events — only last 5 should survive.
         for i in 0..7u64 {
             let decision = engine.evaluate_extension(&format!("ext-{i}"), 300_000, 5);
-            engine.execute_decision(&decision, i * 1_000_000_000);
+            engine
+                .execute_decision(&decision, i * 1_000_000_000)
+                .expect("event-generating action must succeed");
         }
 
         assert_eq!(engine.events.len(), 5);
@@ -2835,10 +3384,16 @@ mod tests {
         let mut engine = test_engine("local");
 
         let d1 = engine.evaluate_extension("ext-1", 300_000, 5);
-        let r1 = engine.execute_decision(&d1, 1_000_000_000).unwrap();
+        let r1 = engine
+            .execute_decision(&d1, 1_000_000_000)
+            .expect("first action must succeed")
+            .expect("first action must emit a receipt");
 
         let d2 = engine.evaluate_extension("ext-2", 600_000, 10);
-        let r2 = engine.execute_decision(&d2, 2_000_000_000).unwrap();
+        let r2 = engine
+            .execute_decision(&d2, 2_000_000_000)
+            .expect("second action must succeed")
+            .expect("second action must emit a receipt");
 
         assert_ne!(r1.action_id, r2.action_id);
         assert!(r1.action_id.contains("local"));
@@ -2857,7 +3412,10 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        engine.execute_decision(&sandbox, 1_000_000_000).unwrap();
+        engine
+            .execute_decision(&sandbox, 1_000_000_000)
+            .expect("sandbox execution must succeed")
+            .expect("sandbox decision must emit a receipt");
 
         engine.escalate("ext-1", 300_000, 5, 2_000_000_000).unwrap();
 
@@ -2891,6 +3449,7 @@ mod tests {
     #[test]
     fn receipt_signing_preimage_sensitive_to_degraded_mode() {
         let base = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -2902,7 +3461,7 @@ mod tests {
             timestamp_ns: 1_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         let mut degraded = base.clone();
         degraded.degraded_mode = true;
@@ -2912,6 +3471,7 @@ mod tests {
     #[test]
     fn receipt_signing_preimage_sensitive_to_escalation_depth() {
         let base = ContainmentReceipt {
+            fleet_id: "test-fleet".into(),
             action_id: "a1".into(),
             extension_id: "ext-1".into(),
             action_type: ContainmentAction::Sandbox,
@@ -2923,7 +3483,7 @@ mod tests {
             timestamp_ns: 1_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            signature: None,
         };
         let mut escalated = base.clone();
         escalated.escalation_depth = 2;

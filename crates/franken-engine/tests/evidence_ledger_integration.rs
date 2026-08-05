@@ -88,6 +88,105 @@ fn sample_entry() -> EvidenceEntry {
     .expect("build sample entry")
 }
 
+#[test]
+fn bd_kxp4o_engine_rejects_hash_valid_legacy_core_unsigned_wire() {
+    use frankenengine_core::evidence_ledger::{
+        ChosenAction as CoreChosenAction, DecisionType as CoreDecisionType,
+        LegacyUnsignedEvidenceEntryV1, SchemaVersion as CoreSchemaVersion,
+    };
+    use frankenengine_core::hash_tiers::ContentHash as CoreContentHash;
+    use frankenengine_core::security_epoch::SecurityEpoch as CoreSecurityEpoch;
+
+    let mut legacy = LegacyUnsignedEvidenceEntryV1 {
+        schema_version: CoreSchemaVersion::new(1, 0, 0),
+        entry_id: String::new(),
+        trace_id: "trace-legacy-core".to_string(),
+        decision_id: "decision-legacy-core".to_string(),
+        policy_id: "policy-legacy-core".to_string(),
+        epoch_id: CoreSecurityEpoch::from_raw(5),
+        timestamp_ns: 1_000_000,
+        decision_type: CoreDecisionType::SecurityAction,
+        candidates: Vec::new(),
+        constraints: Vec::new(),
+        chosen_action: CoreChosenAction {
+            action_name: "sandbox".to_string(),
+            expected_loss_millionths: 100_000,
+            rationale: "legacy unsigned fixture".to_string(),
+        },
+        witnesses: Vec::new(),
+        evidence_hash: String::new(),
+        metadata: BTreeMap::new(),
+    };
+    let hash_preimage =
+        serde_json::to_string(&legacy).expect("serialize legacy core hash preimage");
+    legacy.evidence_hash = CoreContentHash::compute(hash_preimage.as_bytes()).to_hex();
+    legacy.entry_id = format!("ev-{}", &legacy.evidence_hash[..32]);
+    let wire = serde_json::to_string(&legacy).expect("serialize legacy core entry");
+
+    LegacyUnsignedEvidenceEntryV1::parse_json(&wire)
+        .expect("explicit core legacy parser accepts hash-valid v1 as untrusted");
+    let error = serde_json::from_str::<EvidenceEntry>(&wire)
+        .expect_err("engine authenticated evidence must reject unsigned core v1");
+    assert!(
+        error.to_string().contains("signed_envelope"),
+        "rejection must identify the mandatory authentication field: {error}"
+    );
+}
+
+#[test]
+fn bd_kxp4o_engine_verifies_normal_core_authenticated_wire() {
+    use frankenengine_core::evidence_ledger::{
+        ChosenAction as CoreChosenAction, DecisionType as CoreDecisionType,
+        EvidenceEntryBuilder as CoreEvidenceEntryBuilder, RuntimeEvidenceAuthority,
+    };
+    use frankenengine_core::security_epoch::SecurityEpoch as CoreSecurityEpoch;
+    use frankenengine_core::signature_preimage::SigningKey as CoreSigningKey;
+    use frankenengine_engine::evidence_ledger::EvidenceVerificationIdentity;
+
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "franken-core.compatibility-test",
+        CoreSigningKey::from_bytes([0x6a; 32]).expect("non-zero core runtime key"),
+        CoreSecurityEpoch::GENESIS,
+        1,
+        None,
+    )
+    .expect("core runtime authority");
+    let core_trusted_identity = authority.verification_identity();
+    let core_entry = CoreEvidenceEntryBuilder::new_with_runtime_authority(
+        "trace-authenticated-core",
+        "decision-authenticated-core",
+        "policy-authenticated-core",
+        CoreSecurityEpoch::from_raw(5),
+        CoreDecisionType::SecurityAction,
+        &authority,
+    )
+    .timestamp_ns(1_000_000)
+    .chosen(CoreChosenAction {
+        action_name: "sandbox".to_string(),
+        expected_loss_millionths: 100_000,
+        rationale: "authenticated compatibility fixture".to_string(),
+    })
+    .build()
+    .expect("build authenticated core entry");
+    core_entry
+        .verify_with_trusted_identity(&core_trusted_identity)
+        .expect("core verifies its entry against external trust");
+
+    let entry_wire = serde_json::to_string(&core_entry).expect("serialize core v2 entry");
+    let engine_entry: EvidenceEntry =
+        serde_json::from_str(&entry_wire).expect("engine parses authenticated core v2 wire");
+    let identity_wire =
+        serde_json::to_value(core_trusted_identity).expect("serialize core public identity");
+    let engine_trusted_identity: EvidenceVerificationIdentity =
+        serde_json::from_value(identity_wire)
+            .expect("engine parses the separately supplied core trust root");
+
+    engine_entry
+        .verify_with_trusted_identity(&engine_trusted_identity)
+        .expect("engine verifies normal core evidence end to end");
+    assert_eq!(engine_entry.schema_version, current_schema_version());
+}
+
 fn make_entry(
     trace: &str,
     decision: &str,

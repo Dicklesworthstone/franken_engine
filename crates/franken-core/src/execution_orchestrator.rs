@@ -36,7 +36,8 @@ use crate::entropy_evidence_compressor::{
 };
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
-    EvidenceEntryBuilder, InMemoryLedger, LedgerError, Witness,
+    EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity, InMemoryLedger,
+    LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, VerifiedEvidenceEntry, Witness,
 };
 use crate::execution_cell::{CellError, CellEvent, CellKind, ExecutionCell};
 use crate::expected_loss_selector::{
@@ -275,7 +276,7 @@ pub struct OrchestratorResult {
     pub optimal_stopping_certificate: Option<OptimalStoppingCertificate>,
 
     // Evidence
-    pub evidence_entries: Vec<EvidenceEntry>,
+    pub evidence_entries: Vec<VerifiedEvidenceEntry>,
     pub evidence_compression_certificate: Option<CompressionCertificate>,
     pub evidence_compression_status: EvidenceCompressionStatus,
 
@@ -640,6 +641,7 @@ pub struct ExecutionOrchestrator {
     posterior_updater: BayesianPosteriorUpdater,
     loss_selector: ExpectedLossSelector,
     ledger: InMemoryLedger,
+    evidence_signing_authority: EvidenceSigningAuthority,
     saga_orchestrator: SagaOrchestrator,
     containment_executor: ContainmentExecutor,
     reserved_execution_context: Option<ReservedExecutionContext>,
@@ -656,16 +658,90 @@ pub struct ExecutionOrchestrator {
 }
 
 impl ExecutionOrchestrator {
-    /// Create a new orchestrator with the given configuration.
+    /// Create a deterministic test orchestrator with an explicitly lab-scoped
+    /// evidence identity.
+    #[cfg(test)]
     pub fn new(config: OrchestratorConfig) -> Self {
-        Self::new_with_runtime_config(config, RuntimeConfig::default())
+        Self::new_lab(config)
     }
 
-    /// Create a new orchestrator with both orchestrator and runtime configs.
+    /// Create a deterministic test orchestrator with both runtime configs.
+    #[cfg(test)]
     pub fn new_with_runtime_config(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
     ) -> Self {
+        Self::try_new_lab_with_runtime_config(config, runtime_config)
+            .expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Construct a production orchestrator with an explicit runtime evidence
+    /// authority supplied by the product composition root.
+    pub fn try_new_with_runtime_authority(
+        config: OrchestratorConfig,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config_and_authority(
+            config,
+            RuntimeConfig::default(),
+            evidence_authority,
+        )
+    }
+
+    /// Full production constructor. No implicit or source-known signing
+    /// identity is available on this path.
+    pub fn try_new_with_runtime_config_and_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_resolved_evidence_authority(
+            config,
+            runtime_config,
+            EvidenceSigningAuthority::Runtime(evidence_authority),
+        )
+    }
+
+    /// Construct a deterministic, explicitly lab-scoped orchestrator.
+    pub fn new_lab(config: OrchestratorConfig) -> Self {
+        Self::try_new_lab(config).expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible deterministic lab constructor.
+    pub fn try_new_lab(config: OrchestratorConfig) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config(config, RuntimeConfig::default())
+    }
+
+    /// Lab constructor with explicit runtime configuration.
+    pub fn try_new_lab_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<Self, OrchestratorError> {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-core.execution-orchestrator",
+            "public-lab-orchestrator-v2",
+            SecurityEpoch::GENESIS,
+        )?;
+        Self::try_new_with_resolved_evidence_authority(
+            config,
+            runtime_config,
+            EvidenceSigningAuthority::Lab(authority),
+        )
+    }
+
+    fn try_new_with_resolved_evidence_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        evidence_signing_authority: EvidenceSigningAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        let ledger = match &evidence_signing_authority {
+            EvidenceSigningAuthority::Runtime(authority) => {
+                InMemoryLedger::for_runtime_authority(config.epoch, authority)?
+            }
+            EvidenceSigningAuthority::Lab(authority) => {
+                InMemoryLedger::for_lab_authority(config.epoch, authority)?
+            }
+        };
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
         let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
@@ -683,14 +759,15 @@ impl ExecutionOrchestrator {
             gamma,
         )
         .expect("adaptive router configuration must be valid");
-        Self {
+        Ok(Self {
             parser: CanonicalEs2020Parser,
             adaptive_router,
             stopping_policies: BTreeMap::new(),
             last_cumulative_llr_by_extension: BTreeMap::new(),
             posterior_updater: BayesianPosteriorUpdater::new(prior, "orchestrator"),
             loss_selector: ExpectedLossSelector::new(loss_matrix),
-            ledger: InMemoryLedger::new(),
+            ledger,
+            evidence_signing_authority,
             saga_orchestrator: SagaOrchestrator::new(config.epoch, config.max_concurrent_sagas),
             containment_executor: ContainmentExecutor::new(),
             reserved_execution_context: None,
@@ -706,10 +783,11 @@ impl ExecutionOrchestrator {
             containment_action_override: None,
             config,
             runtime_config,
-        }
+        })
     }
 
     /// Create an orchestrator with default configuration.
+    #[cfg(test)]
     pub fn with_defaults() -> Self {
         Self::new(OrchestratorConfig::default())
     }
@@ -739,6 +817,12 @@ impl ExecutionOrchestrator {
     /// Access the evidence ledger.
     pub fn ledger(&self) -> &InMemoryLedger {
         &self.ledger
+    }
+
+    /// Public signer coordinates that replay/verifier inputs must pin through
+    /// an authenticated channel. No private key material is exposed.
+    pub fn evidence_verification_identity(&self) -> EvidenceVerificationIdentity {
+        self.evidence_signing_authority.verification_identity()
     }
 
     /// Access the saga orchestrator.
@@ -1432,7 +1516,7 @@ impl ExecutionOrchestrator {
         input: EvidenceRecordInput<'_>,
     ) -> Result<
         (
-            Vec<EvidenceEntry>,
+            Vec<VerifiedEvidenceEntry>,
             Option<CompressionCertificate>,
             EvidenceCompressionStatus,
         ),
@@ -1464,12 +1548,13 @@ impl ExecutionOrchestrator {
             capability_summary: _,
         } = input;
         let guardplane_summary = guardplane_report.map(|report| &report.summary);
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             decision_id,
             &self.config.policy_id,
             self.config.epoch,
             DecisionType::SecurityAction,
+            &self.evidence_signing_authority,
         );
 
         builder = builder.timestamp_ns(0);
@@ -1714,13 +1799,20 @@ impl ExecutionOrchestrator {
                     index,
                     decision,
                     &self.config,
+                    &self.evidence_signing_authority,
                 )?;
                 entries.push(guardplane_entry);
             }
         }
 
-        self.ledger.emit_batch(entries.clone())?;
-        Ok((entries, compression_certificate, compression_status))
+        let verified_start = self.ledger.len();
+        self.ledger.emit_batch(entries)?;
+        let verified_entries = self.ledger.entries()[verified_start..].to_vec();
+        Ok((
+            verified_entries,
+            compression_certificate,
+            compression_status,
+        ))
     }
 
     fn build_guardplane_decision_entry(
@@ -1730,13 +1822,15 @@ impl ExecutionOrchestrator {
         index: usize,
         record: &GuardplaneDecisionRecord,
         config: &OrchestratorConfig,
+        evidence_authority: &EvidenceSigningAuthority,
     ) -> Result<EvidenceEntry, OrchestratorError> {
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             format!("{decision_id}:guardplane:{index}"),
             &config.policy_id,
             config.epoch,
             DecisionType::SecurityAction,
+            evidence_authority,
         )
         .timestamp_ns(0);
 
@@ -2784,7 +2878,7 @@ mod tests {
         let mut orchestrator = ExecutionOrchestrator::with_defaults();
         orchestrator
             .ledger
-            .emit(duplicate_entry)
+            .emit(duplicate_entry.into_entry())
             .expect("the duplicate fixture must be admitted once");
 
         let error = orchestrator
@@ -2838,7 +2932,7 @@ mod tests {
         let mut orchestrator = ExecutionOrchestrator::with_defaults();
         orchestrator
             .ledger
-            .emit(duplicate_entry)
+            .emit(duplicate_entry.into_entry())
             .expect("the late-duplicate fixture must be admitted once");
         let before_ids = orchestrator
             .ledger()
@@ -4077,23 +4171,67 @@ mod tests {
             entry.evidence_hash
         );
 
-        let mut hash_preimage = entry.clone();
-        hash_preimage.entry_id.clear();
-        hash_preimage.evidence_hash.clear();
-        let encoded = serde_json::to_string(&hash_preimage).expect("serialize evidence preimage");
-        assert_eq!(
-            ContentHash::compute(encoded.as_bytes()).to_hex(),
-            entry.evidence_hash
+        let trusted_identity = orch.evidence_verification_identity();
+        entry
+            .verify_with_trusted_identity(&trusted_identity)
+            .expect("orchestrator evidence must verify against its recorded public identity");
+
+        let mut tampered = serde_json::to_value(entry).expect("serialize evidence entry");
+        tampered["metadata"]["evidence_compression_failure_stage"] = serde_json::json!("encode");
+        let tampered: EvidenceEntry =
+            serde_json::from_value(tampered).expect("tampered entry retains the schema shape");
+        assert!(
+            tampered
+                .verify_with_trusted_identity(&trusted_identity)
+                .is_err(),
+            "signature-bound compression metadata must reject mutation"
         );
-        hash_preimage.metadata.insert(
-            "evidence_compression_failure_stage".to_string(),
-            "encode".to_string(),
-        );
-        let tampered = serde_json::to_string(&hash_preimage).expect("serialize tampered evidence");
-        assert_ne!(
-            ContentHash::compute(tampered.as_bytes()).to_hex(),
-            entry.evidence_hash
-        );
+    }
+
+    #[test]
+    fn bd_kxp4o_runtime_orchestrator_evidence_is_externally_verifiable() {
+        let config = OrchestratorConfig::default();
+        let authority = RuntimeEvidenceAuthority::from_signing_key(
+            "franken-core.runtime-orchestrator",
+            crate::signature_preimage::SigningKey::from_bytes([0x4d; 32])
+                .expect("non-zero runtime test key"),
+            SecurityEpoch::GENESIS,
+            1,
+            None,
+        )
+        .expect("runtime evidence authority");
+        let trusted_identity = authority.verification_identity();
+        let mut orch = ExecutionOrchestrator::try_new_with_runtime_authority(config, authority)
+            .expect("production constructor accepts explicit runtime authority");
+
+        assert_eq!(orch.evidence_verification_identity(), trusted_identity);
+        let result = orch.execute(&simple_package()).expect("execute");
+        assert!(!result.evidence_entries.is_empty());
+        for entry in &result.evidence_entries {
+            entry
+                .verify_with_trusted_identity(&trusted_identity)
+                .expect("normal core execution evidence must verify externally");
+            assert_eq!(
+                entry.signed_envelope().key_provenance.authority_class,
+                crate::evidence_ledger::EvidenceAuthorityClass::Runtime
+            );
+
+            let wire = serde_json::to_value(entry).expect("serialize replay evidence");
+            let envelope = wire["signed_envelope"]
+                .as_object()
+                .expect("signed envelope is a JSON object");
+            assert_eq!(
+                envelope.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    "key_provenance",
+                    "producer_id",
+                    "signature",
+                    "signed_epoch",
+                    "verification_key",
+                ]),
+                "replay evidence exposes public signer coordinates, never private key material"
+            );
+        }
     }
 
     #[test]

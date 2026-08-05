@@ -146,6 +146,52 @@ fn unknown_hostcall_tags_fail_closed() {
 }
 
 #[test]
+fn overlong_denied_hostcall_tags_retain_bounded_unique_identity() {
+    const RECORD_BYTE_CAP: usize = 256;
+    const DIGEST_PREFIX: &str = "<TRUNCATED:sha256:";
+
+    fn denied_capability_label(tag: &str) -> String {
+        let module = make_hostcall_module(tag);
+        let error = QuickJsLane::with_config(config_with_execution_caps())
+            .execute(&module, "trace-overlong-identity")
+            .expect_err("unknown hostcall capability must fail closed");
+        match error {
+            InterpreterError::CapabilityDenied { capability } => capability,
+            other => panic!("expected CapabilityDenied for overlong tag, got: {other:?}"),
+        }
+    }
+
+    let shared = "future.".to_string() + &"X".repeat(RECORD_BYTE_CAP * 2);
+    let first = format!("{shared}:first");
+    let second = format!("{shared}:second");
+    let first_recorded = denied_capability_label(&first);
+    let second_recorded = denied_capability_label(&second);
+    let first_marker = format!(
+        "{DIGEST_PREFIX}{}>:",
+        ContentHash::compute(first.as_bytes()).to_hex()
+    );
+    let second_marker = format!(
+        "{DIGEST_PREFIX}{}>:",
+        ContentHash::compute(second.as_bytes()).to_hex()
+    );
+
+    assert!(first_recorded.len() <= RECORD_BYTE_CAP);
+    assert!(second_recorded.len() <= RECORD_BYTE_CAP);
+    assert!(first_recorded.starts_with(&first_marker));
+    assert!(second_recorded.starts_with(&second_marker));
+    assert!(first.starts_with(&first_recorded[first_marker.len()..]));
+    assert!(second.starts_with(&second_recorded[second_marker.len()..]));
+    assert_ne!(first_recorded, second_recorded);
+
+    // Encoded representations are themselves short strings. Replaying one as
+    // an input must escape the reserved namespace instead of impersonating
+    // the original long label.
+    let escaped = denied_capability_label(&first_recorded);
+    assert!(escaped.starts_with(DIGEST_PREFIX));
+    assert_ne!(escaped, first_recorded);
+}
+
+#[test]
 fn internal_ifc_runtime_guard_is_allowlisted_without_package_grant() {
     let m = make_hostcall_module("ifc.check_flow");
     let config = config_with_execution_caps();

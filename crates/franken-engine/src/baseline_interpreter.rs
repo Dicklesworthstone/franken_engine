@@ -623,6 +623,11 @@ const KNOWN_PROMISE_SUBCAPS: &[&str] = &[
 /// extension cannot inflate the audit log to arbitrary size via a single
 /// long `HostCall` argument (bd-hxukn defense-in-depth).
 const CAPABILITY_TAG_RECORD_BYTE_CAP: usize = 256;
+/// Reserved prefix for a bounded capability-tag representation that commits
+/// to the complete original tag with SHA-256. Inputs already using this
+/// prefix are re-encoded so an ordinary short tag cannot impersonate the
+/// representation of a different, overlong tag.
+const CAPABILITY_TAG_DIGEST_PREFIX: &str = "<TRUNCATED:sha256:";
 const IMPORT_META_URL_VALUE: &str = "frankenengine://module/import-meta";
 const IMPORT_META_DIRNAME_VALUE: &str = "frankenengine://module/";
 
@@ -738,28 +743,36 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Borrow `tag` if it fits within [`CAPABILITY_TAG_RECORD_BYTE_CAP`];
-/// otherwise return a `Cow::Owned` containing the first
-/// `CAPABILITY_TAG_RECORD_BYTE_CAP - marker.len()` bytes followed by a
-/// `<TRUNCATED>` marker. Used at every recording site to keep
-/// attacker-controlled tags from inflating the witness or decision log
-/// (bd-hxukn).
+/// Borrow `tag` if it fits within [`CAPABILITY_TAG_RECORD_BYTE_CAP`] and does
+/// not occupy the reserved digest namespace. Otherwise return a `Cow::Owned`
+/// beginning with a SHA-256 commitment to the complete tag, followed by as
+/// much UTF-8-safe display prefix as fits within the byte cap.
+///
+/// Prefixing the digest representation, and re-encoding inputs that already
+/// start with [`CAPABILITY_TAG_DIGEST_PREFIX`], keeps the encoded and verbatim
+/// domains disjoint. This prevents both overlong-prefix collisions and a
+/// crafted short tag from impersonating an encoded long tag while preserving
+/// ordinary short tags byte-for-byte (bd-hxukn, bd-lvoff).
 fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
-    if tag.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP {
+    if tag.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP && !tag.starts_with(CAPABILITY_TAG_DIGEST_PREFIX)
+    {
         return Cow::Borrowed(tag);
     }
-    const MARKER: &str = "<TRUNCATED>";
-    let prefix_len = CAPABILITY_TAG_RECORD_BYTE_CAP.saturating_sub(MARKER.len());
+
+    let digest = ContentHash::compute(tag.as_bytes()).to_hex();
+    let marker = format!("{CAPABILITY_TAG_DIGEST_PREFIX}{digest}>:");
+    let prefix_len = CAPABILITY_TAG_RECORD_BYTE_CAP.saturating_sub(marker.len());
     // Walk back to the nearest UTF-8 char boundary so the prefix stays
     // a valid `&str` slice.
     let mut cut = prefix_len.min(tag.len());
     while cut > 0 && !tag.is_char_boundary(cut) {
         cut -= 1;
     }
-    let mut out = String::with_capacity(cut + MARKER.len());
+    let mut out = String::with_capacity(marker.len() + cut);
+    out.push_str(&marker);
     out.push_str(&tag[..cut]);
-    out.push_str(MARKER);
+    debug_assert!(out.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
     Cow::Owned(out)
 }
 
@@ -72218,10 +72231,7 @@ mod module_resolution_security_tests {
 
 #[cfg(test)]
 mod hostcall_capability_classification_tests {
-    use super::{
-        CAPABILITY_TAG_RECORD_BYTE_CAP, HostcallCapabilityClass, KNOWN_PROMISE_SUBCAPS,
-        classify_hostcall_capability, recordable_capability_tag,
-    };
+    use super::{HostcallCapabilityClass, KNOWN_PROMISE_SUBCAPS, classify_hostcall_capability};
 
     /// bd-hxukn: every known `promise:*` sub-capability — the ones the
     /// dispatch table actually understands — must classify as
@@ -72275,52 +72285,93 @@ mod hostcall_capability_classification_tests {
             HostcallCapabilityClass::Unknown,
         );
     }
+}
 
-    /// bd-hxukn: short tags pass through `recordable_capability_tag`
-    /// untouched (no allocation, returned as `Cow::Borrowed`).
+#[cfg(test)]
+mod recordable_capability_tag_tests {
+    use super::{
+        CAPABILITY_TAG_DIGEST_PREFIX, CAPABILITY_TAG_RECORD_BYTE_CAP, ContentHash,
+        recordable_capability_tag,
+    };
+
+    fn digest_marker(tag: &str) -> String {
+        format!(
+            "{CAPABILITY_TAG_DIGEST_PREFIX}{}>:",
+            ContentHash::compute(tag.as_bytes()).to_hex()
+        )
+    }
+
+    /// Ordinary short tags retain their exact serialized representation and
+    /// do not allocate.
     #[test]
     fn recordable_tag_passthrough_for_short_tags() {
         let tag = "promise:resolve";
-        let rec = recordable_capability_tag(tag);
-        assert_eq!(rec.as_ref(), tag);
-        assert!(matches!(rec, std::borrow::Cow::Borrowed(_)));
+        let recorded = recordable_capability_tag(tag);
+        assert_eq!(recorded.as_ref(), tag);
+        assert!(matches!(recorded, std::borrow::Cow::Borrowed(_)));
     }
 
-    /// bd-hxukn: tags longer than `CAPABILITY_TAG_RECORD_BYTE_CAP` are
-    /// truncated with a `<TRUNCATED>` marker. Verifies the output stays
-    /// within the cap so the witness-log can't be inflated by a single
-    /// attacker-controlled call.
+    /// Overlong tags remain bounded while committing their complete original
+    /// bytes into the recorded representation.
     #[test]
-    fn recordable_tag_truncates_overlong_tags() {
-        let attacker = "promise:".to_string() + &"X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 64);
-        let rec = recordable_capability_tag(&attacker);
-        assert!(
-            rec.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP,
-            "recorded payload must stay within cap, got {} bytes",
-            rec.len()
-        );
-        assert!(
-            rec.ends_with("<TRUNCATED>"),
-            "expected truncation marker, got: {rec}",
-        );
-        assert!(matches!(rec, std::borrow::Cow::Owned(_)));
+    fn recordable_tag_hashes_and_truncates_overlong_tags() {
+        let tag = "promise:".to_string() + &"X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 64);
+        let marker = digest_marker(&tag);
+        let recorded = recordable_capability_tag(&tag);
+
+        assert!(recorded.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+        assert!(recorded.starts_with(&marker));
+        assert!(tag.starts_with(&recorded[marker.len()..]));
+        assert!(matches!(recorded, std::borrow::Cow::Owned(_)));
     }
 
-    /// bd-hxukn: the truncation step must not split a multi-byte UTF-8
-    /// codepoint mid-sequence; doing so would produce an invalid `&str`
-    /// slice and panic. Use a tag built entirely from a 3-byte codepoint
-    /// to surface any boundary-walk regression.
+    /// The retained display prefix must stop on a UTF-8 character boundary.
     #[test]
     fn recordable_tag_truncation_respects_utf8_boundaries() {
         // U+1234 (ETHIOPIC SYLLABLE SEE) is 3 bytes in UTF-8 (E1 88 B4).
-        let codepoint = '\u{1234}';
-        let attacker: String =
-            std::iter::repeat_n(codepoint, CAPABILITY_TAG_RECORD_BYTE_CAP * 4).collect();
-        let rec = recordable_capability_tag(&attacker);
-        // Must still be valid UTF-8 (the assertion is implicit — &str
-        // can only exist if it is).
-        assert!(rec.ends_with("<TRUNCATED>"));
-        assert!(rec.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+        let tag: String =
+            std::iter::repeat_n('\u{1234}', CAPABILITY_TAG_RECORD_BYTE_CAP * 4).collect();
+        let marker = digest_marker(&tag);
+        let recorded = recordable_capability_tag(&tag);
+
+        assert!(recorded.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+        assert!(recorded.starts_with(&marker));
+        assert!(tag.starts_with(&recorded[marker.len()..]));
+    }
+
+    /// Distinct complete tags with the same retained display prefix must
+    /// remain distinct in decision logs and compression-sketch inputs.
+    #[test]
+    fn recordable_tag_digest_disambiguates_shared_long_prefix() {
+        let shared = "X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 2);
+        let first = format!("{shared}:first");
+        let second = format!("{shared}:second");
+        let first_marker = digest_marker(&first);
+        let second_marker = digest_marker(&second);
+        let first_recorded = recordable_capability_tag(&first);
+        let second_recorded = recordable_capability_tag(&second);
+
+        assert_ne!(first_marker, second_marker);
+        assert_eq!(
+            &first_recorded[first_marker.len()..],
+            &second_recorded[second_marker.len()..]
+        );
+        assert_ne!(first_recorded, second_recorded);
+    }
+
+    /// An ordinary input equal to an encoded long-tag representation must be
+    /// escaped rather than colliding with that long tag's identity.
+    #[test]
+    fn recordable_tag_reserved_prefix_cannot_impersonate_encoding() {
+        let long_tag = "X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 2);
+        let encoded_long = recordable_capability_tag(&long_tag).into_owned();
+        assert!(encoded_long.starts_with(CAPABILITY_TAG_DIGEST_PREFIX));
+        assert!(encoded_long.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+
+        let escaped_short = recordable_capability_tag(&encoded_long);
+        assert!(matches!(escaped_short, std::borrow::Cow::Owned(_)));
+        assert_ne!(escaped_short.as_ref(), encoded_long);
+        assert!(escaped_short.starts_with(&digest_marker(&encoded_long)));
     }
 }
 

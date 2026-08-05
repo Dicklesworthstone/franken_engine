@@ -120,6 +120,16 @@ const WELL_KNOWN_SYMBOL_SCHEMA: &str = "es2020-symbol-ids-1-13-v1";
 /// First dynamically allocated Symbol identity after the fixed well-known set.
 const FIRST_DYNAMIC_SYMBOL_ID: u32 = 14;
 
+/// Maximum length of a capability tag recorded in witness and decision-log
+/// payloads. Execution continues to use the complete tag; only the bounded
+/// evidence representation is shortened.
+const CAPABILITY_TAG_RECORD_BYTE_CAP: usize = 256;
+/// Reserved prefix for a bounded capability-tag representation that commits
+/// to the complete original tag with SHA-256. Inputs already using this
+/// prefix are re-encoded so an ordinary short tag cannot impersonate the
+/// representation of a different, overlong tag.
+const CAPABILITY_TAG_DIGEST_PREFIX: &str = "<TRUNCATED:sha256:";
+
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
 /// Canonical operator-facing label for the throughput execution profile.
@@ -128,6 +138,39 @@ pub const THROUGHPUT_PROFILE_LABEL: &str = "baseline_throughput_profile";
 pub const LEGACY_QUICKJS_PROFILE_LABEL: &str = "quickjs_inspired_native";
 /// Legacy lineage label still accepted on input for the throughput profile.
 pub const LEGACY_V8_PROFILE_LABEL: &str = "v8_inspired_native";
+
+/// Borrow `tag` if it fits within [`CAPABILITY_TAG_RECORD_BYTE_CAP`] and does
+/// not occupy the reserved digest namespace. Otherwise return a `Cow::Owned`
+/// beginning with a SHA-256 commitment to the complete tag, followed by as
+/// much UTF-8-safe display prefix as fits within the byte cap.
+///
+/// Prefixing the digest representation, and re-encoding inputs that already
+/// start with [`CAPABILITY_TAG_DIGEST_PREFIX`], keeps the encoded and verbatim
+/// domains disjoint. This prevents both overlong-prefix collisions and a
+/// crafted short tag from impersonating an encoded long tag while preserving
+/// ordinary short tags byte-for-byte (bd-hxukn, bd-lvoff).
+fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if tag.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP && !tag.starts_with(CAPABILITY_TAG_DIGEST_PREFIX)
+    {
+        return Cow::Borrowed(tag);
+    }
+
+    let digest = ContentHash::compute(tag.as_bytes()).to_hex();
+    let marker = format!("{CAPABILITY_TAG_DIGEST_PREFIX}{digest}>:");
+    let prefix_len = CAPABILITY_TAG_RECORD_BYTE_CAP.saturating_sub(marker.len());
+    // Walk back to the nearest UTF-8 char boundary so the prefix stays
+    // a valid `&str` slice.
+    let mut cut = prefix_len.min(tag.len());
+    while cut > 0 && !tag.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut out = String::with_capacity(marker.len() + cut);
+    out.push_str(&marker);
+    out.push_str(&tag[..cut]);
+    debug_assert!(out.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+    Cow::Owned(out)
+}
 
 // ---------------------------------------------------------------------------
 // Float64 — Deterministic f64 wrapper with total ordering
@@ -7741,38 +7784,46 @@ impl InterpreterCore {
                                     )
                             });
 
-                    if !resuming_object_assign && !is_promise_cap {
-                        // Map the CapabilityTag string to a typed RuntimeCapability.
-                        // Tags that map to a RuntimeCapability are checked against
-                        // the granted set.  Tags with no mapping are internal
-                        // dispatch tags (ifc.*, hostcall.*) emitted by the
-                        // trusted lowering pipeline and pass through.
-                        if let Some(required_cap) = RuntimeCapability::from_tag_str(&capability.0)
-                            && !self.config.granted_capabilities.contains(&required_cap)
-                        {
-                            self.emit_witness(
-                                WitnessEventKind::CapabilityChecked,
-                                Some(&format!("denied:{}", capability.0)),
-                            );
-                            return Err(InterpreterError::CapabilityDenied {
-                                capability: capability.0.clone(),
-                            });
-                        }
-                    }
-
                     if !resuming_object_assign {
+                        // Keep attacker-controlled evidence bounded while
+                        // committing the complete pre-shortening tag. Dispatch
+                        // below still uses the original capability string.
+                        let recordable_tag = recordable_capability_tag(&capability.0);
+
+                        if !is_promise_cap {
+                            // Map the CapabilityTag string to a typed RuntimeCapability.
+                            // Tags that map to a RuntimeCapability are checked against
+                            // the granted set.  Tags with no mapping are internal
+                            // dispatch tags (ifc.*, hostcall.*) emitted by the
+                            // trusted lowering pipeline and pass through.
+                            if let Some(required_cap) =
+                                RuntimeCapability::from_tag_str(&capability.0)
+                                && !self.config.granted_capabilities.contains(&required_cap)
+                            {
+                                self.emit_witness(
+                                    WitnessEventKind::CapabilityChecked,
+                                    Some(&format!("denied:{recordable_tag}")),
+                                );
+                                return Err(InterpreterError::CapabilityDenied {
+                                    capability: recordable_tag.into_owned(),
+                                });
+                            }
+                        }
+
                         self.emit_witness(
                             WitnessEventKind::HostcallDispatched,
-                            Some(&format!("cap:{}", capability.0)),
+                            Some(&format!("cap:{recordable_tag}")),
                         );
                         self.emit_witness(
                             WitnessEventKind::CapabilityChecked,
-                            Some(&format!("granted:{}", capability.0)),
+                            Some(&format!("granted:{recordable_tag}")),
                         );
 
                         self.hostcall_decisions.push(HostcallDecisionRecord {
                             seq: self.hostcall_decisions.len() as u64,
-                            capability: capability.clone(),
+                            capability: crate::ir_contract::CapabilityTag(
+                                recordable_tag.into_owned(),
+                            ),
                             allowed: true,
                             instruction_index: self.ip as u32,
                         });
@@ -17149,6 +17200,94 @@ impl LaneRouter {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod recordable_capability_tag_tests {
+    use super::{
+        CAPABILITY_TAG_DIGEST_PREFIX, CAPABILITY_TAG_RECORD_BYTE_CAP, ContentHash,
+        recordable_capability_tag,
+    };
+
+    fn digest_marker(tag: &str) -> String {
+        format!(
+            "{CAPABILITY_TAG_DIGEST_PREFIX}{}>:",
+            ContentHash::compute(tag.as_bytes()).to_hex()
+        )
+    }
+
+    /// Ordinary short tags retain their exact serialized representation and
+    /// do not allocate.
+    #[test]
+    fn recordable_tag_passthrough_for_short_tags() {
+        let tag = "promise:resolve";
+        let recorded = recordable_capability_tag(tag);
+        assert_eq!(recorded.as_ref(), tag);
+        assert!(matches!(recorded, std::borrow::Cow::Borrowed(_)));
+    }
+
+    /// Overlong tags remain bounded while committing their complete original
+    /// bytes into the recorded representation.
+    #[test]
+    fn recordable_tag_hashes_and_truncates_overlong_tags() {
+        let tag = "promise:".to_string() + &"X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 64);
+        let marker = digest_marker(&tag);
+        let recorded = recordable_capability_tag(&tag);
+
+        assert!(recorded.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+        assert!(recorded.starts_with(&marker));
+        assert!(tag.starts_with(&recorded[marker.len()..]));
+        assert!(matches!(recorded, std::borrow::Cow::Owned(_)));
+    }
+
+    /// The retained display prefix must stop on a UTF-8 character boundary.
+    #[test]
+    fn recordable_tag_truncation_respects_utf8_boundaries() {
+        // U+1234 (ETHIOPIC SYLLABLE SEE) is 3 bytes in UTF-8 (E1 88 B4).
+        let tag: String =
+            std::iter::repeat_n('\u{1234}', CAPABILITY_TAG_RECORD_BYTE_CAP * 4).collect();
+        let marker = digest_marker(&tag);
+        let recorded = recordable_capability_tag(&tag);
+
+        assert!(recorded.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+        assert!(recorded.starts_with(&marker));
+        assert!(tag.starts_with(&recorded[marker.len()..]));
+    }
+
+    /// Distinct complete tags with the same retained display prefix must
+    /// remain distinct in decision logs and compression-sketch inputs.
+    #[test]
+    fn recordable_tag_digest_disambiguates_shared_long_prefix() {
+        let shared = "X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 2);
+        let first = format!("{shared}:first");
+        let second = format!("{shared}:second");
+        let first_marker = digest_marker(&first);
+        let second_marker = digest_marker(&second);
+        let first_recorded = recordable_capability_tag(&first);
+        let second_recorded = recordable_capability_tag(&second);
+
+        assert_ne!(first_marker, second_marker);
+        assert_eq!(
+            &first_recorded[first_marker.len()..],
+            &second_recorded[second_marker.len()..]
+        );
+        assert_ne!(first_recorded, second_recorded);
+    }
+
+    /// An ordinary input equal to an encoded long-tag representation must be
+    /// escaped rather than colliding with that long tag's identity.
+    #[test]
+    fn recordable_tag_reserved_prefix_cannot_impersonate_encoding() {
+        let long_tag = "X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 2);
+        let encoded_long = recordable_capability_tag(&long_tag).into_owned();
+        assert!(encoded_long.starts_with(CAPABILITY_TAG_DIGEST_PREFIX));
+        assert!(encoded_long.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+
+        let escaped_short = recordable_capability_tag(&encoded_long);
+        assert!(matches!(escaped_short, std::borrow::Cow::Owned(_)));
+        assert_ne!(escaped_short.as_ref(), encoded_long);
+        assert!(escaped_short.starts_with(&digest_marker(&encoded_long)));
+    }
+}
 
 #[cfg(test)]
 mod tests {

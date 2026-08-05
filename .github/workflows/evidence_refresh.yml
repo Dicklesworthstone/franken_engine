@@ -11,19 +11,12 @@ name: Evidence Refresh
 #   standard   90d window  -> monthly    (1st 07:00 UTC)
 #   frozen    180d window  -> quarterly  (1st of Jan/Apr/Jul/Oct 08:00 UTC)
 #
-# WHERE THIS ACTUALLY RUNS. Most OBSERVED claims verify with default-feature cargo
-# builds, and the nine `/dp` sibling path dependencies resolve even when their
-# features are off (bd-ndpm2), so this job can only do real work on a machine that
-# has the `/dp` checkouts. A GitHub-hosted runner does not. Rather than pretend, the
-# refresh script detects their absence and records a `skipped` outcome — the same
-# skip-vs-fail discipline the cross-repo integration suite uses, because "we could
-# not verify" and "verification failed" are different evidence states and conflating
-# them is how a green dashboard starts meaning nothing.
-#
-# To make this do real work, point the repository variable EVIDENCE_REFRESH_RUNNER at
-# a self-hosted runner label on a machine with `/dp` present. Until then the job runs,
-# reports `skipped`, and uploads that as its artifact. Publishing the sibling crates
-# to a registry (bd-gw4cg) is what would eventually remove this constraint.
+# HOSTED-RUNNER SUPPORT. The sibling crates that once required `/dp` path checkouts
+# are now published and resolved from the registry (bd-gw4cg). The obsolete checkout
+# preflight was removed under bd-pa12f after three hosted runs showed it was the
+# immediate reason the verifier never started. This workflow intentionally runs on
+# `ubuntu-latest`; an unavailable registry or a build failure must reach the normal
+# infrastructure-vs-regression classifier rather than being hidden as `skipped`.
 
 on:
   schedule:
@@ -38,6 +31,10 @@ on:
         default: volatile
         type: choice
         options: [volatile, standard, frozen, all]
+      only:
+        description: "Optional comma-separated FE-CLAIM-xxx filter from the selected tier"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -45,7 +42,7 @@ permissions:
 jobs:
   refresh:
     name: refresh ${{ github.event.inputs.tier || 'scheduled tier' }}
-    runs-on: ${{ vars.EVIDENCE_REFRESH_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -75,10 +72,29 @@ jobs:
           echo "tier=${tier}" >>"$GITHUB_OUTPUT"
           echo "refreshing tier: ${tier}"
 
-      # Exits non-zero only on a REGRESSION (a verification command that failed),
-      # never on staleness — ADR-0012 §5 keeps those on separate channels.
+      # Exits non-zero only on a REGRESSION (failed verification or invalid verifier
+      # configuration), never on staleness — ADR-0012 §5 keeps those separate.
       - name: Run evidence refresh
+        env:
+          EVIDENCE_REFRESH_ONLY: ${{ github.event.inputs.only || '' }}
         run: ./scripts/run_evidence_refresh_schedule.sh "${{ steps.tier.outputs.tier }}"
+
+      # The runner checkout is ephemeral and this workflow has read-only repository
+      # permissions. Preserve the exact tracked receipt edits as an apply-able patch
+      # inside the uploaded bundle so a human can review, regenerate the
+      # content-addressed indexes, and land them deliberately.
+      - name: Bundle refreshed receipt changes
+        if: always()
+        run: |
+          mkdir -p artifacts/evidence_refresh
+          git diff --binary -- docs/evidence/ > artifacts/evidence_refresh/refreshed-receipts.patch
+          git diff --stat -- docs/evidence/ > artifacts/evidence_refresh/refreshed-receipts.stat
+          if [[ -s artifacts/evidence_refresh/refreshed-receipts.patch ]]; then
+            echo "::notice::Refreshed receipts differ from the committed state; review refreshed-receipts.patch and regenerate the content-addressed evidence manifests before landing."
+            cat artifacts/evidence_refresh/refreshed-receipts.stat
+          else
+            echo "No receipt changes."
+          fi
 
       - name: Upload refresh bundle
         if: always()
@@ -88,18 +104,3 @@ jobs:
           path: artifacts/evidence_refresh/
           if-no-files-found: warn
           retention-days: 90
-
-      # The receipts the refresh writes are git-tracked files under docs/evidence/.
-      # This job deliberately does NOT commit them: a scheduled job that rewrites
-      # committed evidence unattended is exactly the kind of unattributed mutation
-      # the acceptance-ledger discipline exists to prevent. The bundle is uploaded
-      # for a human to review and land.
-      - name: Report uncommitted receipt changes
-        if: always()
-        run: |
-          if ! git diff --quiet -- docs/evidence/; then
-            echo "::notice::Refreshed receipts differ from the committed state; review the uploaded bundle and land them deliberately."
-            git diff --stat -- docs/evidence/
-          else
-            echo "No receipt changes."
-          fi

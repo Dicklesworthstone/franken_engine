@@ -304,7 +304,7 @@ risk-weighted until the comparisons are live.
 
 | # | Note | State |
 |---|---|---|
-| 1 | Schedule the refresh in CI | **done** 2026-07-26 (runner caveat) |
+| 1 | Schedule the refresh in CI | **done** 2026-07-26; hosted execution re-enabled 2026-08-05 (`bd-pa12f`) |
 | 2 | Covered-paths list per claim (source drift) | **done** 2026-07-26 |
 | 3 | `env.json` fingerprint comparison | **done** 2026-07-26 (accrues forward) |
 | 4 | Populate per-claim `freshness_days` | **done** 2026-07-26 |
@@ -373,14 +373,15 @@ blocks unrelated work on unrelated evidence age, which reliably produces bypasse
 bypassed gate protects nothing. Failing closed at publication catches the thing that actually
 matters: shipping prose backed by evidence the matrix can no longer stand behind.
 
-**Caveat on note 1.** The schedule is implemented
+**Historical caveat on note 1 (as implemented 2026-07-26).** The schedule was
+implemented
 (`.github/workflows/evidence_refresh.yml` + `scripts/run_evidence_refresh_schedule.sh`,
-sharded by tier at a quarter of each window) but it can only do real work where the `/dp`
-sibling checkouts exist, since most verification commands are default-feature cargo builds
-(bd-ndpm2). A GitHub-hosted runner has none, so the job records `skipped` there rather than
+sharded by tier at a quarter of each window) but could only do real work where the `/dp`
+sibling checkouts existed, since most verification commands are default-feature cargo builds
+(bd-ndpm2). A GitHub-hosted runner had none, so the job recorded `skipped` there rather than
 reporting a refresh that did not happen. Pointing the `EVIDENCE_REFRESH_RUNNER` repository
-variable at a self-hosted runner with `/dp` present makes it live; publishing the sibling
-crates (bd-gw4cg) would remove the constraint entirely. Sharding is currently by freshness
+variable at a self-hosted runner with `/dp` present made it live; publishing the sibling
+crates (bd-gw4cg) would remove the constraint entirely. Sharding remains by freshness
 tier rather than measured cost, because no per-claim cost data existed; the refresh now
 records `duration_seconds` per claim, which is how that data starts existing.
 
@@ -403,6 +404,19 @@ records `duration_seconds` per claim, which is how that data starts existing.
 > exists to keep. Second, the honest next step is empirical rather than argued: run
 > the schedule once on a hosted runner and see whether it reports `passed` instead of
 > `skipped`. Tracked on `bd-pa12f`, along with the still-open sharding rebalance.
+
+> **FOLLOW-UP 2026-08-05 (`bd-pa12f`).** Three later GitHub-hosted runs still
+> reported `skipped`, but their logs showed that no verification command started:
+> `run_evidence_refresh_schedule.sh` retained an explicit `/dp` directory preflight
+> after the registry migration had removed the constraint. The preflight and the
+> `EVIDENCE_REFRESH_RUNNER` workaround are now removed. Hosted runs execute on
+> `ubuntu-latest` and must reach the existing passed / infrastructure / regression
+> classifier; missing registry access is no longer hidden as a checkout skip. A
+> validated optional `EVIDENCE_REFRESH_ONLY=FE-CLAIM-xxx` filter permits a bounded
+> real-claim dispatch while retaining the same fail-closed receipt rule. The
+> ephemeral job bundles the exact tracked receipt diff for review rather than
+> discarding it or committing evidence unattended. Measured cost rebalancing remains
+> downstream of the first real duration samples.
 
 ## Alternatives considered
 

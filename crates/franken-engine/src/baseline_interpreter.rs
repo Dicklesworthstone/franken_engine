@@ -7998,62 +7998,278 @@ struct WritableWriteRecord {
     completion_failed: bool,
 }
 
-/// Allocation-exact FIFO for live Writable records. `LinkedList` gives every
-/// append one independently charged node, so a transaction never needs to
-/// clone or grow an allocator-rounded queue before its budget preflight.
+/// Allocation-exact split FIFO for live Writable records. `LinkedList` gives
+/// every append one independently charged node, so a transaction never needs
+/// to clone or grow an allocator-rounded queue before its budget preflight.
+///
+/// Completed records remain in registration order for deferred callbacks, but
+/// they must not sit in front of the active/pending scheduler cursor. Keeping
+/// completed and ready nodes in separate lists makes activation, completion,
+/// callback drainage, pending-token accounting, and hot-path memory accounting
+/// constant time. Moving the ready front uses `split_off(1)` plus `append`, so
+/// the already-charged linked-list node is relinked without another allocation.
 #[allow(clippy::linkedlist)]
 #[derive(Debug, Default, PartialEq, Eq)]
-struct WritableWriteQueue(LinkedList<WritableWriteRecord>);
+struct WritableWriteQueue {
+    completed: LinkedList<WritableWriteRecord>,
+    ready: LinkedList<WritableWriteRecord>,
+    retained_bytes: u64,
+    #[cfg(test)]
+    scheduler_steps: u64,
+}
 
-impl std::ops::Deref for WritableWriteQueue {
-    type Target = LinkedList<WritableWriteRecord>;
+impl WritableWriteQueue {
+    fn len(&self) -> usize {
+        self.completed.len().saturating_add(self.ready.len())
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    fn is_empty(&self) -> bool {
+        self.completed.is_empty() && self.ready.is_empty()
+    }
+
+    fn retained_bytes(&self) -> u64 {
+        self.retained_bytes
+    }
+
+    fn recompute_retained_bytes(&self) -> u64 {
+        self.iter().fold(0u64, |total, record| {
+            total.saturating_add(InterpreterCore::estimate_writable_write_record_bytes(
+                record,
+            ))
+        })
+    }
+
+    fn pending_len(&self) -> usize {
+        self.ready
+            .len()
+            .saturating_sub(usize::from(self.ready.front().is_some_and(|record| {
+                matches!(
+                    record.status,
+                    WritableWriteStatus::Active(_) | WritableWriteStatus::Completed
+                )
+            })))
+    }
+
+    fn iter(
+        &self,
+    ) -> std::iter::Chain<
+        std::collections::linked_list::Iter<'_, WritableWriteRecord>,
+        std::collections::linked_list::Iter<'_, WritableWriteRecord>,
+    > {
+        self.completed.iter().chain(self.ready.iter())
+    }
+
+    fn iter_mut(
+        &mut self,
+    ) -> std::iter::Chain<
+        std::collections::linked_list::IterMut<'_, WritableWriteRecord>,
+        std::collections::linked_list::IterMut<'_, WritableWriteRecord>,
+    > {
+        self.completed.iter_mut().chain(self.ready.iter_mut())
+    }
+
+    fn front(&self) -> Option<&WritableWriteRecord> {
+        self.completed.front().or_else(|| self.ready.front())
+    }
+
+    fn ready_front(&self) -> Option<&WritableWriteRecord> {
+        self.ready.front()
+    }
+
+    fn push_back(&mut self, record: WritableWriteRecord) {
+        let record_bytes = InterpreterCore::estimate_writable_write_record_bytes(&record);
+        self.retained_bytes = self.retained_bytes.saturating_add(record_bytes);
+        self.ready.push_back(record);
+        self.record_scheduler_steps(1);
+    }
+
+    fn has_active_token(&self, token: u32) -> bool {
+        self.ready
+            .front()
+            .is_some_and(|record| record.status == WritableWriteStatus::Active(token))
+    }
+
+    fn active_label(&self, token: u32) -> Option<&Label> {
+        self.ready
+            .front()
+            .filter(|record| record.status == WritableWriteStatus::Active(token))
+            .map(|record| &record.label)
+    }
+
+    fn has_active(&self) -> bool {
+        self.ready
+            .front()
+            .is_some_and(|record| matches!(record.status, WritableWriteStatus::Active(_)))
+    }
+
+    fn has_completed(&self) -> bool {
+        !self.completed.is_empty()
+            || self
+                .ready
+                .front()
+                .is_some_and(|record| record.status == WritableWriteStatus::Completed)
+    }
+
+    fn activate_front(&mut self, token: u32) -> bool {
+        let Some(record) = self.ready.front_mut() else {
+            return false;
+        };
+        if record.status != WritableWriteStatus::Pending {
+            return false;
+        }
+        record.status = WritableWriteStatus::Active(token);
+        self.record_scheduler_steps(1);
+        true
+    }
+
+    fn rollback_active(&mut self, token: u32) -> bool {
+        let Some(record) = self.ready.front_mut() else {
+            return false;
+        };
+        if record.status != WritableWriteStatus::Active(token) {
+            return false;
+        }
+        record.status = WritableWriteStatus::Pending;
+        self.record_scheduler_steps(1);
+        true
+    }
+
+    fn complete_active(&mut self, token: u32, completion_failed: bool) -> Option<usize> {
+        let record = self.ready.front_mut()?;
+        if record.status != WritableWriteStatus::Active(token) {
+            return None;
+        }
+        let units = record.units;
+        record.status = WritableWriteStatus::Completed;
+        record.completion_failed = completion_failed;
+        self.move_ready_front_to_completed();
+        self.record_scheduler_steps(1);
+        Some(units)
+    }
+
+    fn complete_all_ready_failed(&mut self) {
+        let visited = u64::try_from(self.ready.len()).unwrap_or(u64::MAX);
+        for record in &mut self.ready {
+            record.status = WritableWriteStatus::Completed;
+            record.completion_failed = true;
+        }
+        self.completed.append(&mut self.ready);
+        self.record_scheduler_steps(visited);
+    }
+
+    fn all_completed(&self) -> bool {
+        self.ready
+            .iter()
+            .all(|record| record.status == WritableWriteStatus::Completed)
+    }
+
+    fn active_units(&self) -> usize {
+        self.ready.front().map_or(0, |record| {
+            if matches!(record.status, WritableWriteStatus::Active(_)) {
+                record.units
+            } else {
+                0
+            }
+        })
+    }
+
+    fn pop_completed_front(&mut self) -> Option<WritableWriteRecord> {
+        let record = if let Some(record) = self.completed.pop_front() {
+            record
+        } else if self
+            .ready
+            .front()
+            .is_some_and(|record| record.status == WritableWriteStatus::Completed)
+        {
+            // Unit tests sometimes arrange a completed prefix directly. The
+            // production completion path relinks it into `completed` first.
+            self.ready.pop_front()?
+        } else {
+            return None;
+        };
+        let record_bytes = InterpreterCore::estimate_writable_write_record_bytes(&record);
+        self.retained_bytes = self.retained_bytes.saturating_sub(record_bytes);
+        self.record_scheduler_steps(1);
+        Some(record)
+    }
+
+    fn normalize_completed_prefix(&mut self) {
+        while self
+            .ready
+            .front()
+            .is_some_and(|record| record.status == WritableWriteStatus::Completed)
+        {
+            self.move_ready_front_to_completed();
+            self.record_scheduler_steps(1);
+        }
+        // This recovery path is reachable only from tests that construct
+        // internal queue states directly. Production completion relinks the
+        // node at the status transition.
+    }
+
+    fn move_ready_front_to_completed(&mut self) {
+        debug_assert!(!self.ready.is_empty());
+        let tail = self.ready.split_off(1);
+        self.completed.append(&mut self.ready);
+        self.ready = tail;
+    }
+
+    #[cfg(test)]
+    fn scheduler_steps(&self) -> u64 {
+        self.scheduler_steps
+    }
+
+    fn record_scheduler_steps(&mut self, steps: u64) {
+        #[cfg(test)]
+        {
+            self.scheduler_steps = self.scheduler_steps.saturating_add(steps);
+        }
+        #[cfg(not(test))]
+        let _ = steps;
     }
 }
 
-impl std::ops::DerefMut for WritableWriteQueue {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
+#[cfg(test)]
 impl std::ops::Index<usize> for WritableWriteQueue {
     type Output = WritableWriteRecord;
 
     fn index(&self, index: usize) -> &Self::Output {
-        self.0
-            .iter()
+        self.iter()
             .nth(index)
-            .expect("Writable write queue index was validated")
+            .expect("Writable write queue test index was validated")
     }
 }
 
+#[cfg(test)]
 impl std::ops::IndexMut<usize> for WritableWriteQueue {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.0
-            .iter_mut()
+        self.iter_mut()
             .nth(index)
-            .expect("Writable write queue index was validated")
+            .expect("Writable write queue test index was validated")
     }
 }
 
 impl<'a> IntoIterator for &'a WritableWriteQueue {
     type Item = &'a WritableWriteRecord;
-    type IntoIter = std::collections::linked_list::Iter<'a, WritableWriteRecord>;
+    type IntoIter = std::iter::Chain<
+        std::collections::linked_list::Iter<'a, WritableWriteRecord>,
+        std::collections::linked_list::Iter<'a, WritableWriteRecord>,
+    >;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.iter()
     }
 }
 
 impl<'a> IntoIterator for &'a mut WritableWriteQueue {
     type Item = &'a mut WritableWriteRecord;
-    type IntoIter = std::collections::linked_list::IterMut<'a, WritableWriteRecord>;
+    type IntoIter = std::iter::Chain<
+        std::collections::linked_list::IterMut<'a, WritableWriteRecord>,
+        std::collections::linked_list::IterMut<'a, WritableWriteRecord>,
+    >;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
+        self.iter_mut()
     }
 }
 
@@ -18110,14 +18326,7 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let reserved = self.writable_streams.values().fold(0u64, |total, state| {
             let pending_writes = if state.write_callback.is_some() {
-                u64::try_from(
-                    state
-                        .writes
-                        .iter()
-                        .filter(|record| record.status == WritableWriteStatus::Pending)
-                        .count(),
-                )
-                .unwrap_or(u64::MAX)
+                u64::try_from(state.writes.pending_len()).unwrap_or(u64::MAX)
             } else {
                 0
             };
@@ -18291,11 +18500,7 @@ impl InterpreterCore {
         }
 
         let previous_bytes = Self::estimate_writable_state_bytes(current);
-        let retained_active_length = current
-            .writes
-            .iter()
-            .filter(|record| matches!(record.status, WritableWriteStatus::Active(_)))
-            .fold(0usize, |total, record| total.saturating_add(record.units));
+        let retained_active_length = current.writes.active_units();
         let lifecycle_label_bytes = if current.lifecycle_label >= trigger_label {
             Self::estimate_label_bytes(&current.lifecycle_label)
         } else {
@@ -18306,11 +18511,8 @@ impl InterpreterCore {
         } else {
             Some(WritableErrorOrigin::Destroy)
         };
-        let retain_terminal_callbacks = current
-            .writes
-            .iter()
-            .all(|record| record.status == WritableWriteStatus::Completed)
-            && current.final_status == WritableFinalStatus::Done;
+        let retain_terminal_callbacks =
+            current.writes.all_completed() && current.final_status == WritableFinalStatus::Done;
         let finishing_success_batch = retain_terminal_callbacks
             && current.terminal_error_origin.is_none()
             && matches!(
@@ -18757,14 +18959,16 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let (object_id, token) = Self::writable_bound_completion(builtin)?;
         let completion_error_register = self.writable_completion_error_register(args)?;
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.writes.normalize_completed_prefix();
+        }
         let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(Value::Undefined);
         };
-        let Some((record_index, record)) = state
+        let Some(record) = state
             .writes
-            .iter()
-            .enumerate()
-            .find(|(_, record)| record.status == WritableWriteStatus::Active(token))
+            .ready_front()
+            .filter(|record| record.status == WritableWriteStatus::Active(token))
         else {
             return Ok(Value::Undefined);
         };
@@ -18815,15 +19019,12 @@ impl InterpreterCore {
             .writable_streams
             .get_mut(&object_id)
             .expect("Writable completion state survived preflight");
-        state.writes[record_index].status = WritableWriteStatus::Completed;
-        state.writes[record_index].completion_failed = completion_error.is_some();
+        state
+            .writes
+            .complete_active(token, completion_error.is_some())
+            .expect("authenticated Writable completion remained at the ready front");
         if let Some((error, error_label)) = completion_error {
-            for record in &mut state.writes {
-                if record.status == WritableWriteStatus::Pending {
-                    record.status = WritableWriteStatus::Completed;
-                    record.completion_failed = true;
-                }
-            }
+            state.writes.complete_all_ready_failed();
             state.buffered_length = 0;
             state.terminal_error = None;
             let terminal_label = if error_label > state.lifecycle_label {
@@ -19103,15 +19304,7 @@ impl InterpreterCore {
         if let Some(state) = self.writable_streams.get_mut(&object_id) {
             state.destroy_requested = true;
             if origin == WritableErrorOrigin::Write {
-                for record in &mut state.writes {
-                    if matches!(
-                        record.status,
-                        WritableWriteStatus::Pending | WritableWriteStatus::Active(_)
-                    ) {
-                        record.status = WritableWriteStatus::Completed;
-                        record.completion_failed = true;
-                    }
-                }
+                state.writes.complete_all_ready_failed();
                 state.buffered_length = 0;
             }
         }
@@ -19244,36 +19437,28 @@ impl InterpreterCore {
                 if state.terminal_error.is_some()
                     || state.destroy_requested
                     || state.cork_depth > 0
-                    || state
-                        .writes
-                        .iter()
-                        .any(|record| matches!(record.status, WritableWriteStatus::Active(_)))
+                    || state.writes.has_active()
                 {
                     return Ok(());
                 }
-                if let Some(index) = state
+                if let Some(record) = state
                     .writes
-                    .iter()
-                    .position(|record| record.status == WritableWriteStatus::Pending)
+                    .ready_front()
+                    .filter(|record| record.status == WritableWriteStatus::Pending)
                 {
                     Some((
                         false,
-                        Some(index),
                         state.write_callback.clone(),
-                        state.writes[index].value.clone(),
-                        state.writes[index].label.join(&state.lifecycle_label),
+                        record.value.clone(),
+                        record.label.join(&state.lifecycle_label),
                         state.flavor,
                     ))
                 } else if state.end_requested
                     && state.final_status == WritableFinalStatus::NotStarted
-                    && state
-                        .writes
-                        .iter()
-                        .all(|record| record.status == WritableWriteStatus::Completed)
+                    && state.writes.ready_front().is_none()
                 {
                     Some((
                         true,
-                        None,
                         state.final_callback.clone(),
                         Value::Undefined,
                         state.lifecycle_label.clone(),
@@ -19284,7 +19469,7 @@ impl InterpreterCore {
                 }
             };
 
-            let Some((is_final, record_index, callback, value, mut label, flavor)) = action else {
+            let Some((is_final, callback, value, mut label, flavor)) = action else {
                 return Ok(());
             };
             if !is_final && callback.is_none() {
@@ -19312,8 +19497,11 @@ impl InterpreterCore {
             let Some(state) = self.writable_streams.get_mut(&object_id) else {
                 return Ok(());
             };
-            if let Some(index) = record_index {
-                state.writes[index].status = WritableWriteStatus::Active(token);
+            if !is_final {
+                assert!(
+                    state.writes.activate_front(token),
+                    "Writable pending front survived callback preflight"
+                );
                 state.inside_write_invocation = true;
             } else {
                 state.final_status = WritableFinalStatus::Active(token);
@@ -19410,12 +19598,7 @@ impl InterpreterCore {
                     let Some(state) = self.writable_streams.get_mut(&object_id) else {
                         return Err(error);
                     };
-                    if let Some(record) = state
-                        .writes
-                        .iter_mut()
-                        .find(|record| record.status == WritableWriteStatus::Active(token))
-                    {
-                        record.status = WritableWriteStatus::Pending;
+                    if state.writes.rollback_active(token) {
                         self.next_writable_completion_token = token;
                     }
                 } else if passthrough_internal || flavor == WritableStreamFlavor::Transform {
@@ -19442,12 +19625,10 @@ impl InterpreterCore {
                 }
                 return Err(error);
             }
-            let completed = self.writable_streams.get(&object_id).is_some_and(|state| {
-                state
-                    .writes
-                    .iter()
-                    .any(|record| record.status == WritableWriteStatus::Completed)
-            });
+            let completed = self
+                .writable_streams
+                .get(&object_id)
+                .is_some_and(|state| state.writes.has_completed());
             if !completed {
                 return Ok(());
             }
@@ -20332,7 +20513,7 @@ impl InterpreterCore {
                         let previous = Self::estimate_writable_state_bytes(state);
                         let record = state
                             .writes
-                            .pop_front()
+                            .pop_completed_front()
                             .expect("completed Writable front was checked");
                         let next = Self::estimate_writable_state_bytes(state);
                         (record, previous.saturating_sub(next))
@@ -23144,12 +23325,10 @@ impl InterpreterCore {
         let (completion_object, token) = Self::writable_bound_completion(&completion)?;
         if completion.kind != BuiltinFunctionKind::StreamWritableWriteDone
             || completion_object != object_id
-            || !self.writable_streams.get(&object_id).is_some_and(|state| {
-                state
-                    .writes
-                    .iter()
-                    .any(|record| record.status == WritableWriteStatus::Active(token))
-            })
+            || !self
+                .writable_streams
+                .get(&object_id)
+                .is_some_and(|state| state.writes.has_active_token(token))
         {
             return Err(InterpreterError::InternalError {
                 details: "PassThrough write completion authentication failed".to_string(),
@@ -23292,9 +23471,8 @@ impl InterpreterCore {
             .and_then(|state| {
                 state
                     .writes
-                    .iter()
-                    .find(|record| record.status == WritableWriteStatus::Active(token))
-                    .map(|record| record.label.clone())
+                    .active_label(token)
+                    .cloned()
                     .or_else(|| Some(state.lifecycle_label.clone()))
             })
             .unwrap_or(Label::Public);
@@ -23327,11 +23505,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let (object_id, token) = Self::writable_bound_completion(builtin)?;
         let authenticated = self.writable_streams.get(&object_id).is_some_and(|state| {
-            state.flavor == WritableStreamFlavor::Transform
-                && state
-                    .writes
-                    .iter()
-                    .any(|record| record.status == WritableWriteStatus::Active(token))
+            state.flavor == WritableStreamFlavor::Transform && state.writes.has_active_token(token)
         });
         if !authenticated {
             return Ok(Value::Undefined);
@@ -65339,7 +65513,7 @@ impl InterpreterCore {
         }
     }
 
-    fn estimate_writable_state_bytes(state: &WritableState) -> u64 {
+    fn estimate_writable_state_without_writes_bytes(state: &WritableState) -> u64 {
         MEMORY_ESTIMATE_WRITABLE_BASE_BYTES
             .saturating_add(
                 state
@@ -65355,17 +65529,6 @@ impl InterpreterCore {
                     .map(Self::estimate_writable_value_bytes)
                     .unwrap_or(0),
             )
-            .saturating_add(
-                u64::try_from(state.writes.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES),
-            )
-            .saturating_add(state.writes.iter().fold(0u64, |total, record| {
-                total.saturating_add(
-                    Self::estimate_writable_write_record_bytes(record)
-                        .saturating_sub(MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES),
-                )
-            }))
             .saturating_add(
                 u64::try_from(state.end_callbacks.len())
                     .unwrap_or(u64::MAX)
@@ -65385,6 +65548,16 @@ impl InterpreterCore {
                     .unwrap_or(0),
             )
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_writable_state_bytes(state: &WritableState) -> u64 {
+        Self::estimate_writable_state_without_writes_bytes(state)
+            .saturating_add(state.writes.retained_bytes())
+    }
+
+    fn recompute_writable_state_bytes(state: &WritableState) -> u64 {
+        Self::estimate_writable_state_without_writes_bytes(state)
+            .saturating_add(state.writes.recompute_retained_bytes())
     }
 
     fn estimate_writable_terminal_state_bytes(state: &WritableTerminalState) -> u64 {
@@ -65989,7 +66162,7 @@ impl InterpreterCore {
         Self::saturating_sum(
             self.writable_streams
                 .values()
-                .map(Self::estimate_writable_state_bytes),
+                .map(Self::recompute_writable_state_bytes),
         )
     }
 
@@ -79434,6 +79607,165 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_synchronous_burst_uses_linear_fifo_steps_bd_zl516() {
+        const BURST: usize = 2_048;
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 2,
+                    args: RegRange { start: 3, count: 0 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 4,
+                name: Some("synchronous_write_completion".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let options = core
+            .alloc_object_with_properties(&[("write", Value::Function(0))])
+            .expect("synchronous Writable options");
+        core.write_reg(0, Value::Object(options))
+            .expect("synchronous Writable options register");
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("synchronous Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+
+        for sequence in 0..BURST {
+            core.write_reg(1, Value::str(sequence.to_string()))
+                .expect("burst chunk register");
+            assert_eq!(
+                core.writable_write(
+                    &module,
+                    Value::Object(writable),
+                    RegRange { start: 1, count: 1 },
+                ),
+                Ok(Value::Bool(true))
+            );
+        }
+
+        let state = &core.writable_streams[&writable];
+        assert!(state.writes.ready.is_empty());
+        assert_eq!(state.writes.completed.len(), BURST);
+        assert_eq!(state.writes.pending_len(), 0);
+        assert_eq!(
+            state.writes.scheduler_steps(),
+            3 * u64::try_from(BURST).expect("burst length fits u64"),
+            "enqueue, front activation, and front completion must each cost one queue step"
+        );
+        assert_eq!(
+            state.writes.retained_bytes(),
+            state.writes.recompute_retained_bytes(),
+            "cached hot-path accounting must match an independent full traversal"
+        );
+        for (sequence, record) in state.writes.iter().enumerate() {
+            assert_eq!(record.value, Value::str(sequence.to_string()));
+            assert_eq!(record.status, WritableWriteStatus::Completed);
+        }
+
+        let steps_before_stale_completion = state.writes.scheduler_steps();
+        let stale_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableWriteDone,
+            writable,
+            0,
+        );
+        assert_eq!(
+            core.writable_write_done(&module, &stale_completion, RegRange { start: 0, count: 0 },),
+            Ok(Value::Undefined)
+        );
+        assert_eq!(
+            core.writable_streams[&writable].writes.scheduler_steps(),
+            steps_before_stale_completion,
+            "a stale completion lookup must be a constant-time no-op"
+        );
+
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("burst callback checkpoint");
+        let state = &core.writable_streams[&writable];
+        assert!(state.writes.is_empty());
+        assert_eq!(
+            state.writes.scheduler_steps(),
+            4 * u64::try_from(BURST).expect("burst length fits u64"),
+            "deferred FIFO drainage must add exactly one queue step per record"
+        );
+        assert_eq!(state.writes.retained_bytes(), 0);
+        assert_eq!(state.buffered_length, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_destroy_cancels_long_pending_fifo_exactly_bd_zl516() {
+        const PENDING: usize = 1_024;
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 3,
+                name: Some("pending_write".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let options = core
+            .alloc_object_with_properties(&[("write", Value::Function(0))])
+            .expect("pending Writable options");
+        core.write_reg(0, Value::Object(options))
+            .expect("pending Writable options register");
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("pending Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_cork(Value::Object(writable), RegRange { start: 1, count: 0 })
+            .expect("cork pending Writable");
+
+        for _ in 0..PENDING {
+            core.write_reg(1, Value::str("queued"))
+                .expect("pending chunk register");
+            core.writable_write(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect("corked pending write");
+        }
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.writes.pending_len(), PENDING);
+        assert_eq!(state.writes.scheduler_steps(), PENDING as u64);
+        assert_eq!(
+            state.writes.retained_bytes(),
+            state.writes.recompute_retained_bytes()
+        );
+
+        core.writable_destroy(Value::Object(writable), RegRange { start: 2, count: 0 })
+            .expect("destroy cancels pending writes");
+        let state = &core.writable_streams[&writable];
+        assert!(state.writes.is_empty());
+        assert_eq!(state.buffered_length, 0);
+        assert!(state.destroy_requested);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "cancellation must release every cached queue byte exactly"
         );
     }
 

@@ -4,20 +4,33 @@
 //! enforce containment policies during interpreter execution.
 
 use frankenengine_engine::ast::SourceSpan;
+use frankenengine_engine::evidence_ledger::LabEvidenceAuthority;
 use frankenengine_engine::guardplane_integration::{
     AllocationContext, AllocationType, BasicGuardplaneAdapter, CallContext, CallType,
-    CodeTrustLevel, GuardplaneConfig, HookAction, ImportContext, ImportType, InterpreterHook,
-    PropertyAccessContext, PropertyAccessType,
+    CodeTrustLevel, GUARDPLANE_EVIDENCE_PRODUCER_ID, GuardplaneConfig, HookAction, ImportContext,
+    ImportType, InterpreterHook, PropertyAccessContext, PropertyAccessType,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn create_test_span() -> SourceSpan {
     SourceSpan::new(0, 10, 1, 0, 1, 10)
 }
 
+fn lab_adapter(config: GuardplaneConfig) -> BasicGuardplaneAdapter {
+    let authority = LabEvidenceAuthority::deterministic_fixture(
+        GUARDPLANE_EVIDENCE_PRODUCER_ID,
+        "guardplane-integration-tests",
+        SecurityEpoch::GENESIS,
+    )
+    .expect("guardplane integration lab authority");
+    BasicGuardplaneAdapter::new_for_lab(config, authority, SecurityEpoch::GENESIS)
+        .expect("guardplane integration lab adapter")
+}
+
 #[test]
 fn test_trusted_code_bypasses_guardplane() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Trusted property access should always be allowed
     let context = PropertyAccessContext {
@@ -40,7 +53,7 @@ fn test_trusted_code_bypasses_guardplane() {
 #[test]
 fn test_untrusted_property_access_triggers_guardplane() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     let context = PropertyAccessContext {
         object_id: 1,
@@ -68,7 +81,7 @@ fn test_high_risk_property_access_triggers_containment() {
         ..Default::default()
     };
 
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     let context = PropertyAccessContext {
         object_id: 1,
@@ -88,7 +101,7 @@ fn test_high_risk_property_access_triggers_containment() {
 #[test]
 fn test_function_call_risk_assessment() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Constructor calls are higher risk than regular function calls
     let constructor_context = CallContext {
@@ -124,7 +137,7 @@ fn test_function_call_risk_assessment() {
 #[test]
 fn test_allocation_monitoring() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     let context = AllocationContext {
         allocation_type: AllocationType::Function,
@@ -143,7 +156,7 @@ fn test_allocation_monitoring() {
 #[test]
 fn test_import_risk_assessment() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Dynamic imports are riskier than static imports
     let dynamic_context = ImportContext {
@@ -176,7 +189,8 @@ fn test_evidence_generation_disabled() {
         ..Default::default()
     };
 
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = BasicGuardplaneAdapter::new(config)
+        .expect("disabled evidence does not require signing authority");
 
     let context = PropertyAccessContext {
         object_id: 1,
@@ -204,7 +218,7 @@ fn test_risk_threshold_configuration() {
         ..Default::default()
     };
 
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Even low-risk operations should trigger challenges
     let context = PropertyAccessContext {
@@ -224,7 +238,7 @@ fn test_risk_threshold_configuration() {
 #[test]
 fn test_decision_evidence_structure() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     let context = CallContext {
         function_id: 100,
@@ -241,9 +255,17 @@ fn test_decision_evidence_structure() {
     let evidence = &adapter.decision_history[0];
 
     assert!(!evidence.decision_id.is_empty());
-    assert!(evidence.timestamp > 0);
+    assert_eq!(
+        evidence.timestamp, 0,
+        "first decision uses logical sequence zero"
+    );
+    assert_eq!(evidence.security_epoch, SecurityEpoch::GENESIS);
     assert!(!evidence.reason.is_empty());
     assert!(!evidence.evidence_hash.as_bytes().is_empty());
+    assert!(
+        evidence.signature.is_some(),
+        "lab adapter still emits a provenance-bound signature"
+    );
 
     // Check that the operation context was preserved
     match &evidence.operation_context {
@@ -258,7 +280,7 @@ fn test_decision_evidence_structure() {
 #[test]
 fn test_multiple_operations_build_history() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Perform multiple operations
     let prop_context = PropertyAccessContext {
@@ -320,7 +342,7 @@ fn test_multiple_operations_build_history() {
 #[test]
 fn test_escalating_risk_patterns() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Simulate escalating risk pattern: Get → Set → Delete
     let operations = [
@@ -353,7 +375,7 @@ fn test_escalating_risk_patterns() {
 #[test]
 fn test_large_allocation_triggers_scrutiny() {
     let config = GuardplaneConfig::default();
-    let mut adapter = BasicGuardplaneAdapter::new(config);
+    let mut adapter = lab_adapter(config);
 
     // Large allocation should be more scrutinized
     let large_context = AllocationContext {

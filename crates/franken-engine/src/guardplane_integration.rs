@@ -21,22 +21,29 @@ use crate::ast::SourceSpan;
 use crate::eprocess_guardrail::{
     EProcessGuardrail, ExpectedLossMatrix, GuardrailRegistry, ThresholdLikelihoodRatio,
 };
-use crate::hash_tiers::{AuthenticityHash, ContentHash};
+use crate::evidence_ledger::{
+    EvidenceSignatureEnvelope, EvidenceSigningAuthority, EvidenceTrustRegistry,
+    LabEvidenceAuthority, RuntimeEvidenceAuthority,
+};
+use crate::hash_tiers::ContentHash;
 use crate::martingale_decision_ledger::StoppingThreshold;
+use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /// Schema version for guardplane integration contract.
-pub const GUARDPLANE_INTEGRATION_SCHEMA_VERSION: &str = "franken-engine.guardplane-integration.v1";
+pub const GUARDPLANE_INTEGRATION_SCHEMA_VERSION: &str = "franken-engine.guardplane-integration.v2";
 /// Component name for evidence linkage.
 pub const GUARDPLANE_INTEGRATION_COMPONENT: &str = "guardplane_integration";
 /// Policy ID binding for this module.
 pub const GUARDPLANE_INTEGRATION_POLICY_ID: &str = "RC-4";
+/// Canonical producer ID for guardplane decision evidence.
+pub const GUARDPLANE_EVIDENCE_PRODUCER_ID: &str = "franken-engine.guardplane";
 /// Domain separator for guardplane evidence signatures.
 pub const GUARDPLANE_EVIDENCE_SIGNATURE_DOMAIN: &str =
-    "franken-engine.guardplane.decision-evidence.signature.v1";
+    "franken-engine.guardplane.decision-evidence.signature.v2";
 const CONFIDENCE_MIN: u32 = 250_000;
 const CONFIDENCE_MAX: u32 = 950_000;
 const CONFIDENCE_BASELINE: u32 = 500_000;
@@ -293,6 +300,8 @@ pub enum GuardplaneError {
     PolicyLookupFailed(String),
     /// Evidence generation failed.
     EvidenceGenerationFailed(String),
+    /// Evidence authenticity verification failed.
+    EvidenceVerificationFailed(String),
     /// Bayesian update failed.
     BayesianUpdateFailed(String),
     /// Unknown extension ID.
@@ -307,6 +316,9 @@ impl fmt::Display for GuardplaneError {
             Self::RiskAssessmentFailed(msg) => write!(f, "Risk assessment failed: {}", msg),
             Self::PolicyLookupFailed(msg) => write!(f, "Policy lookup failed: {}", msg),
             Self::EvidenceGenerationFailed(msg) => write!(f, "Evidence generation failed: {}", msg),
+            Self::EvidenceVerificationFailed(msg) => {
+                write!(f, "Evidence verification failed: {}", msg)
+            }
             Self::BayesianUpdateFailed(msg) => write!(f, "Bayesian update failed: {}", msg),
             Self::UnknownExtension(id) => write!(f, "Unknown extension: {}", id),
             Self::ConfigurationError(msg) => write!(f, "Configuration error: {}", msg),
@@ -338,9 +350,13 @@ pub struct GuardplaneDecisionEvidence {
     /// the evidence chain replays byte-identically. bd-jn3uv: prior to this
     /// the field stored `SystemTime::now().as_secs()` which made the
     /// evidence_hash wall-clock-dependent. Operators who need wall-time
-    /// correlation should use the [`crate::security_epoch::SecurityEpoch`]
-    /// surfaced through the adapter's config rather than this field.
+    /// correlation should use the separately bound
+    /// [`crate::security_epoch::SecurityEpoch`] rather than this field.
     pub timestamp: u64,
+    /// Runtime security epoch bound into both the evidence hash and signature
+    /// envelope. This is distinct from `timestamp`, which is a replay-stable
+    /// per-adapter decision sequence.
+    pub security_epoch: SecurityEpoch,
     /// Operation context that triggered the decision.
     pub operation_context: OperationContext,
     /// Risk assessment results.
@@ -351,8 +367,10 @@ pub struct GuardplaneDecisionEvidence {
     pub reason: String,
     /// Evidence hash for integrity.
     pub evidence_hash: ContentHash,
-    /// Signature (if available).
-    pub signature: Option<Vec<u8>>,
+    /// Provenance-bound signature envelope (if evidence signing is enabled).
+    /// Verifiers must authenticate this against an externally supplied trust
+    /// registry; the claimant's embedded verification key is not a trust root.
+    pub signature: Option<EvidenceSignatureEnvelope>,
 }
 
 impl GuardplaneDecisionEvidence {
@@ -361,6 +379,7 @@ impl GuardplaneDecisionEvidence {
         compute_guardplane_evidence_hash(
             &self.decision_id,
             self.timestamp,
+            self.security_epoch,
             &self.operation_context,
             &self.risk_assessment,
             self.action,
@@ -368,39 +387,66 @@ impl GuardplaneDecisionEvidence {
         )
     }
 
-    /// Verify the evidence hash and keyed signature using constant-time tag comparison.
-    pub fn verify_signature_with_key(&self, signing_key: &[u8]) -> Result<bool, GuardplaneError> {
-        let Some(signature) = self.signature.as_deref() else {
-            return Ok(false);
-        };
-        let Some(actual) = authenticity_hash_from_signature(signature) else {
-            return Ok(false);
-        };
-
-        let recomputed_hash = self.recompute_evidence_hash()?;
-        if !self.evidence_hash.constant_time_eq(&recomputed_hash) {
-            return Ok(false);
-        }
-
-        let expected = self.compute_signature(signing_key)?;
-        Ok(actual.constant_time_eq(&expected))
+    /// Verify integrity and producer authenticity through an externally
+    /// populated production runtime trust registry.
+    pub fn verify_runtime_signature(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+    ) -> Result<(), GuardplaneError> {
+        trust_registry
+            .ensure_runtime_scope()
+            .map_err(|error| GuardplaneError::EvidenceVerificationFailed(error.to_string()))?;
+        self.verify_signature_with_registry(trust_registry)
     }
 
-    fn compute_signature(&self, signing_key: &[u8]) -> Result<AuthenticityHash, GuardplaneError> {
-        validate_guardplane_signing_key(signing_key)?;
-        let signature_bytes = serde_json::to_vec(&GuardplaneDecisionEvidenceSignaturePreimage {
+    /// Verify an explicitly lab-scoped fixture. A runtime trust registry is
+    /// rejected here just as a lab registry is rejected by
+    /// [`Self::verify_runtime_signature`].
+    pub fn verify_signature_for_lab(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+    ) -> Result<(), GuardplaneError> {
+        trust_registry
+            .ensure_lab_scope()
+            .map_err(|error| GuardplaneError::EvidenceVerificationFailed(error.to_string()))?;
+        self.verify_signature_with_registry(trust_registry)
+    }
+
+    fn verify_signature_with_registry(
+        &self,
+        trust_registry: &EvidenceTrustRegistry,
+    ) -> Result<(), GuardplaneError> {
+        let signature = self.signature.as_ref().ok_or_else(|| {
+            GuardplaneError::EvidenceVerificationFailed(
+                "guardplane decision evidence has no signature envelope".to_string(),
+            )
+        })?;
+        if signature.producer_id != GUARDPLANE_EVIDENCE_PRODUCER_ID {
+            return Err(GuardplaneError::EvidenceVerificationFailed(format!(
+                "guardplane decision evidence producer must be {GUARDPLANE_EVIDENCE_PRODUCER_ID}, got {}",
+                signature.producer_id
+            )));
+        }
+        let recomputed_hash = self.recompute_evidence_hash()?;
+        if !self.evidence_hash.constant_time_eq(&recomputed_hash) {
+            return Err(GuardplaneError::EvidenceVerificationFailed(
+                "guardplane decision evidence hash mismatch".to_string(),
+            ));
+        }
+        trust_registry
+            .verify_detached(signature, &self.signature_payload()?, self.security_epoch)
+            .map_err(|error| GuardplaneError::EvidenceVerificationFailed(error.to_string()))
+    }
+
+    fn signature_payload(&self) -> Result<Vec<u8>, GuardplaneError> {
+        serde_json::to_vec(&GuardplaneDecisionEvidenceSignaturePayload {
             schema_version: GUARDPLANE_INTEGRATION_SCHEMA_VERSION,
             component: GUARDPLANE_INTEGRATION_COMPONENT,
             policy_id: GUARDPLANE_INTEGRATION_POLICY_ID,
             signature_domain: GUARDPLANE_EVIDENCE_SIGNATURE_DOMAIN,
             evidence_hash: &self.evidence_hash,
         })
-        .map_err(|err| GuardplaneError::EvidenceGenerationFailed(err.to_string()))?;
-
-        Ok(AuthenticityHash::compute_keyed(
-            signing_key,
-            &signature_bytes,
-        ))
+        .map_err(|err| GuardplaneError::EvidenceGenerationFailed(err.to_string()))
     }
 }
 
@@ -411,6 +457,7 @@ struct GuardplaneDecisionEvidenceHashPreimage<'a> {
     policy_id: &'static str,
     decision_id: &'a str,
     timestamp: u64,
+    security_epoch: SecurityEpoch,
     operation_context: &'a OperationContext,
     risk_assessment: &'a RiskAssessment,
     action: HookAction,
@@ -418,7 +465,7 @@ struct GuardplaneDecisionEvidenceHashPreimage<'a> {
 }
 
 #[derive(Serialize)]
-struct GuardplaneDecisionEvidenceSignaturePreimage<'a> {
+struct GuardplaneDecisionEvidenceSignaturePayload<'a> {
     schema_version: &'static str,
     component: &'static str,
     policy_id: &'static str,
@@ -476,10 +523,15 @@ pub struct BasicGuardplaneAdapter {
     /// which made the chain unreplayable; the counter restores the
     /// "deterministic replay" property the module-level docstring asserts.
     decision_sequence: u64,
+    /// Non-serializable signing capability supplied by the composition root.
+    evidence_signing_authority: Option<EvidenceSigningAuthority>,
+    /// Runtime epoch bound into every emitted evidence record and envelope.
+    evidence_epoch: SecurityEpoch,
 }
 
 /// Configuration for guardplane behavior.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GuardplaneConfig {
     /// Risk threshold for challenge (0.0 to 1.0, fixed-point).
     pub challenge_threshold: u32,
@@ -491,9 +543,7 @@ pub struct GuardplaneConfig {
     pub terminate_threshold: u32,
     /// Whether to emit evidence records.
     pub emit_evidence: bool,
-    /// Key used to produce authenticity signatures for decision evidence.
-    pub evidence_signing_key: Option<Vec<u8>>,
-    /// Whether evidence emission must fail closed when no signing key is configured.
+    /// Whether evidence emission must fail closed when no signing authority is configured.
     pub require_evidence_signature: bool,
     /// Whether to use Bayesian learning.
     pub bayesian_learning: bool,
@@ -507,7 +557,6 @@ impl Default for GuardplaneConfig {
             suspend_threshold: 600_000,   // 0.6
             terminate_threshold: 800_000, // 0.8
             emit_evidence: true,
-            evidence_signing_key: Some(default_guardplane_evidence_signing_key()),
             require_evidence_signature: true,
             bayesian_learning: false, // Conservative default
         }
@@ -663,8 +712,77 @@ fn compute_assessment_confidence(
 }
 
 impl BasicGuardplaneAdapter {
-    /// Create a new basic guardplane adapter with unified substrate.
-    pub fn new(config: GuardplaneConfig) -> Self {
+    /// Create an adapter without a signing authority.
+    ///
+    /// This succeeds only when evidence emission is disabled or unsigned
+    /// evidence is explicitly permitted. The default configuration therefore
+    /// fails closed; production composition roots must use
+    /// [`Self::new_with_runtime_authority`].
+    pub fn new(config: GuardplaneConfig) -> Result<Self, GuardplaneError> {
+        Self::new_with_authority(config, None, SecurityEpoch::GENESIS)
+    }
+
+    /// Create a production adapter with a runtime-owned signing authority.
+    pub fn new_with_runtime_authority(
+        config: GuardplaneConfig,
+        authority: RuntimeEvidenceAuthority,
+        evidence_epoch: SecurityEpoch,
+    ) -> Result<Self, GuardplaneError> {
+        Self::new_with_authority(
+            config,
+            Some(EvidenceSigningAuthority::Runtime(authority)),
+            evidence_epoch,
+        )
+    }
+
+    /// Create an explicitly lab-scoped adapter with deterministic fixture
+    /// authority. Lab provenance is signature-bound and cannot be authorized
+    /// by a production runtime trust registry.
+    pub fn new_for_lab(
+        config: GuardplaneConfig,
+        authority: LabEvidenceAuthority,
+        evidence_epoch: SecurityEpoch,
+    ) -> Result<Self, GuardplaneError> {
+        Self::new_with_authority(
+            config,
+            Some(EvidenceSigningAuthority::Lab(authority)),
+            evidence_epoch,
+        )
+    }
+
+    fn new_with_authority(
+        config: GuardplaneConfig,
+        evidence_signing_authority: Option<EvidenceSigningAuthority>,
+        evidence_epoch: SecurityEpoch,
+    ) -> Result<Self, GuardplaneError> {
+        if config.emit_evidence
+            && config.require_evidence_signature
+            && evidence_signing_authority.is_none()
+        {
+            return Err(GuardplaneError::ConfigurationError(
+                "guardplane evidence signing is required but no runtime authority is configured"
+                    .to_string(),
+            ));
+        }
+
+        if let Some(authority) = evidence_signing_authority.as_ref() {
+            let identity = authority.verification_identity();
+            if identity.producer_id != GUARDPLANE_EVIDENCE_PRODUCER_ID {
+                return Err(GuardplaneError::ConfigurationError(format!(
+                    "guardplane evidence authority producer must be {GUARDPLANE_EVIDENCE_PRODUCER_ID}, got {}",
+                    identity.producer_id
+                )));
+            }
+            if identity.key_provenance.activation_epoch.as_u64() > evidence_epoch.as_u64() {
+                return Err(GuardplaneError::ConfigurationError(format!(
+                    "guardplane evidence key {} activates at epoch {}, after adapter epoch {}",
+                    identity.key_provenance.key_id,
+                    identity.key_provenance.activation_epoch.as_u64(),
+                    evidence_epoch.as_u64()
+                )));
+            }
+        }
+
         let mut unified_guardrail_registry = GuardrailRegistry::new();
 
         // Create expected-loss matrix for integration decisions
@@ -699,12 +817,14 @@ impl BasicGuardplaneAdapter {
         );
         unified_guardrail_registry.add(unified_guardrail);
 
-        Self {
+        Ok(Self {
             config,
             decision_history: Vec::new(),
             unified_guardrail_registry,
             decision_sequence: 0,
-        }
+            evidence_signing_authority,
+            evidence_epoch,
+        })
     }
 
     /// Assess risk for a given operation context.
@@ -857,10 +977,11 @@ impl BasicGuardplaneAdapter {
         action: HookAction,
     ) -> Result<GuardplaneDecisionEvidence, GuardplaneError> {
         let sequence = self.decision_sequence;
-        // Saturate at u64::MAX rather than wrap: counter must remain monotonic
-        // even after pathological volumes; downstream chain-linking relies on
-        // the monotonic property.
-        self.decision_sequence = self.decision_sequence.saturating_add(1);
+        let next_sequence = sequence.checked_add(1).ok_or_else(|| {
+            GuardplaneError::EvidenceGenerationFailed(
+                "guardplane decision sequence exhausted".to_string(),
+            )
+        })?;
         let timestamp = sequence;
 
         let reason = format!(
@@ -875,12 +996,20 @@ impl BasicGuardplaneAdapter {
         // the bd-jn3uv fix: replaces `format!("decision_{}_{}", timestamp,
         // rand::random::<u64>())` with a deterministic hash so two replays
         // produce the same decision_id.
-        let decision_id =
-            derive_deterministic_decision_id(sequence, timestamp, context, risk, action, &reason)?;
+        let decision_id = derive_deterministic_decision_id(
+            sequence,
+            timestamp,
+            self.evidence_epoch,
+            context,
+            risk,
+            action,
+            &reason,
+        )?;
 
         let evidence_hash = compute_guardplane_evidence_hash(
             &decision_id,
             timestamp,
+            self.evidence_epoch,
             context,
             risk,
             action,
@@ -890,6 +1019,7 @@ impl BasicGuardplaneAdapter {
         let mut evidence = GuardplaneDecisionEvidence {
             decision_id,
             timestamp,
+            security_epoch: self.evidence_epoch,
             operation_context: context.clone(),
             risk_assessment: risk.clone(),
             action,
@@ -898,20 +1028,28 @@ impl BasicGuardplaneAdapter {
             signature: None,
         };
 
-        match self.config.evidence_signing_key.as_deref() {
-            Some(signing_key) => {
-                let signature = evidence.compute_signature(signing_key)?;
-                evidence.signature = Some(signature.as_bytes().to_vec());
+        match self.evidence_signing_authority.as_ref() {
+            Some(authority) => {
+                evidence.signature = Some(
+                    authority
+                        .sign_detached(&evidence.signature_payload()?, self.evidence_epoch)
+                        .map_err(|error| {
+                            GuardplaneError::EvidenceGenerationFailed(error.to_string())
+                        })?,
+                );
             }
             None if self.config.require_evidence_signature => {
                 return Err(GuardplaneError::ConfigurationError(
-                    "guardplane evidence signing is required but no signing key is configured"
+                    "guardplane evidence signing is required but no signing authority is configured"
                         .to_string(),
                 ));
             }
             None => {}
         }
 
+        // Commit the sequence only after every fallible evidence operation has
+        // succeeded. A missing or failed signer cannot create a hidden gap.
+        self.decision_sequence = next_sequence;
         Ok(evidence)
     }
 }
@@ -935,6 +1073,7 @@ impl BasicGuardplaneAdapter {
 fn derive_deterministic_decision_id(
     sequence: u64,
     timestamp: u64,
+    security_epoch: SecurityEpoch,
     operation_context: &OperationContext,
     risk_assessment: &RiskAssessment,
     action: HookAction,
@@ -948,6 +1087,7 @@ fn derive_deterministic_decision_id(
     let hash = compute_guardplane_evidence_hash(
         DECISION_ID_DERIVATION_SENTINEL,
         timestamp,
+        security_epoch,
         operation_context,
         risk_assessment,
         action,
@@ -960,6 +1100,7 @@ fn derive_deterministic_decision_id(
 fn compute_guardplane_evidence_hash(
     decision_id: &str,
     timestamp: u64,
+    security_epoch: SecurityEpoch,
     operation_context: &OperationContext,
     risk_assessment: &RiskAssessment,
     action: HookAction,
@@ -971,6 +1112,7 @@ fn compute_guardplane_evidence_hash(
         policy_id: GUARDPLANE_INTEGRATION_POLICY_ID,
         decision_id,
         timestamp,
+        security_epoch,
         operation_context,
         risk_assessment,
         action,
@@ -979,24 +1121,6 @@ fn compute_guardplane_evidence_hash(
     let hash_bytes = serde_json::to_vec(&hash_preimage)
         .map_err(|err| GuardplaneError::EvidenceGenerationFailed(err.to_string()))?;
     Ok(ContentHash::compute(&hash_bytes))
-}
-
-fn validate_guardplane_signing_key(signing_key: &[u8]) -> Result<(), GuardplaneError> {
-    if signing_key.is_empty() {
-        return Err(GuardplaneError::ConfigurationError(
-            "guardplane evidence signing key must not be empty".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn authenticity_hash_from_signature(signature: &[u8]) -> Option<AuthenticityHash> {
-    let bytes: [u8; 32] = signature.try_into().ok()?;
-    Some(AuthenticityHash(bytes))
-}
-
-fn default_guardplane_evidence_signing_key() -> Vec<u8> {
-    b"franken-engine.guardplane.default-evidence-key.v1".to_vec()
 }
 
 impl InterpreterHook for BasicGuardplaneAdapter {
@@ -1177,6 +1301,30 @@ impl InterpreterHook for BasicGuardplaneAdapter {
 mod tests {
     use super::*;
 
+    const LAB_FIXTURE_ID: &str = "guardplane-integration-unit-tests";
+
+    fn lab_authority() -> LabEvidenceAuthority {
+        LabEvidenceAuthority::deterministic_fixture(
+            GUARDPLANE_EVIDENCE_PRODUCER_ID,
+            LAB_FIXTURE_ID,
+            SecurityEpoch::GENESIS,
+        )
+        .expect("built-in guardplane lab authority must be valid")
+    }
+
+    fn lab_adapter(config: GuardplaneConfig) -> BasicGuardplaneAdapter {
+        BasicGuardplaneAdapter::new_for_lab(config, lab_authority(), SecurityEpoch::GENESIS)
+            .expect("lab guardplane adapter must be valid")
+    }
+
+    fn lab_trust_registry() -> EvidenceTrustRegistry {
+        EvidenceTrustRegistry::from_lab_identities(
+            SecurityEpoch::GENESIS,
+            [lab_authority().verification_identity()],
+        )
+        .expect("lab guardplane trust registry must be valid")
+    }
+
     #[test]
     fn test_hook_action_properties() {
         assert!(HookAction::Allow.allows_continuation());
@@ -1191,7 +1339,7 @@ mod tests {
     #[test]
     fn test_basic_guardplane_adapter_trusted_code() {
         let config = GuardplaneConfig::default();
-        let mut adapter = BasicGuardplaneAdapter::new(config);
+        let mut adapter = lab_adapter(config);
 
         let context = PropertyAccessContext {
             object_id: 1,
@@ -1216,7 +1364,7 @@ mod tests {
     #[test]
     fn test_basic_guardplane_adapter_untrusted_code() {
         let config = GuardplaneConfig::default();
-        let mut adapter = BasicGuardplaneAdapter::new(config);
+        let mut adapter = lab_adapter(config);
 
         let context = PropertyAccessContext {
             object_id: 1,
@@ -1241,7 +1389,7 @@ mod tests {
     #[test]
     fn test_risk_assessment_by_operation_type() {
         let config = GuardplaneConfig::default();
-        let adapter = BasicGuardplaneAdapter::new(config);
+        let adapter = lab_adapter(config);
 
         // Delete operation should be higher risk than Get
         let delete_ctx = OperationContext::PropertyAccess(PropertyAccessContext {
@@ -1277,7 +1425,7 @@ mod tests {
     #[test]
     fn test_risk_assessment_confidence_uses_context_coverage() {
         let config = GuardplaneConfig::default();
-        let adapter = BasicGuardplaneAdapter::new(config);
+        let adapter = lab_adapter(config);
 
         let attributed_ctx = OperationContext::PropertyAccess(PropertyAccessContext {
             object_id: 1,
@@ -1321,7 +1469,7 @@ mod tests {
     #[test]
     fn test_risk_assessment_confidence_penalizes_policy_violations() {
         let config = GuardplaneConfig::default();
-        let adapter = BasicGuardplaneAdapter::new(config);
+        let adapter = lab_adapter(config);
 
         let normal_ctx = OperationContext::Import(ImportContext {
             module_specifier: "safe-module".to_string(),
@@ -1369,7 +1517,7 @@ mod tests {
             ..Default::default()
         };
 
-        let adapter = BasicGuardplaneAdapter::new(config);
+        let adapter = lab_adapter(config);
 
         // Low risk → Allow
         let low_risk = RiskAssessment {
@@ -1408,11 +1556,7 @@ mod tests {
     #[test]
     fn test_evidence_generation() {
         let config = GuardplaneConfig::default();
-        let signing_key = config
-            .evidence_signing_key
-            .clone()
-            .expect("default config signs evidence");
-        let mut adapter = BasicGuardplaneAdapter::new(config);
+        let mut adapter = lab_adapter(config);
 
         let context = OperationContext::Call(CallContext {
             function_id: 42,
@@ -1451,15 +1595,12 @@ mod tests {
             evidence
                 .signature
                 .as_ref()
-                .is_some_and(|sig| sig.len() == 32),
-            "decision evidence must carry a keyed authenticity signature"
+                .is_some_and(|envelope| !envelope.signature.is_sentinel()),
+            "decision evidence must carry a provenance-bound signature"
         );
-        assert!(
-            evidence
-                .verify_signature_with_key(&signing_key)
-                .expect("operation should succeed for valid inputs"),
-            "decision evidence signature must verify with the configured key"
-        );
+        evidence
+            .verify_signature_for_lab(&lab_trust_registry())
+            .expect("decision evidence must verify through external lab trust");
     }
 
     // -----------------------------------------------------------------------
@@ -1497,7 +1638,7 @@ mod tests {
 
     #[test]
     fn evidence_sequence_starts_at_zero_and_increments() {
-        let mut adapter = BasicGuardplaneAdapter::new(GuardplaneConfig::default());
+        let mut adapter = lab_adapter(GuardplaneConfig::default());
         let context = deterministic_test_context();
         let risk = deterministic_test_risk();
 
@@ -1525,8 +1666,8 @@ mod tests {
         // previous SystemTime + rand::random construction. If it ever fails
         // again, the wall-clock dependence has crept back.
         let config = GuardplaneConfig::default();
-        let mut adapter_a = BasicGuardplaneAdapter::new(config.clone());
-        let mut adapter_b = BasicGuardplaneAdapter::new(config);
+        let mut adapter_a = lab_adapter(config.clone());
+        let mut adapter_b = lab_adapter(config);
         let context = deterministic_test_context();
         let risk = deterministic_test_risk();
 
@@ -1556,11 +1697,11 @@ mod tests {
         // Distinct (context, risk, action) tuples at the same sequence
         // position must produce distinct hex tails — otherwise the
         // attacker can collide two different decisions under the same id.
-        let mut adapter = BasicGuardplaneAdapter::new(GuardplaneConfig::default());
+        let mut adapter = lab_adapter(GuardplaneConfig::default());
         let context = deterministic_test_context();
         let risk = deterministic_test_risk();
 
-        let mut adapter_b = BasicGuardplaneAdapter::new(GuardplaneConfig::default());
+        let mut adapter_b = lab_adapter(GuardplaneConfig::default());
         let alt_risk = RiskAssessment {
             risk_score: risk.risk_score + 1,
             ..risk.clone()
@@ -1584,6 +1725,31 @@ mod tests {
             ev_a.evidence_hash, ev_b.evidence_hash,
             "evidence_hash must depend on the canonical body"
         );
+    }
+
+    #[test]
+    fn evidence_sequence_exhaustion_fails_closed_without_duplicate_id() {
+        let mut adapter = lab_adapter(GuardplaneConfig::default());
+        adapter.decision_sequence = u64::MAX - 1;
+        let context = deterministic_test_context();
+        let risk = deterministic_test_risk();
+
+        let final_evidence = adapter
+            .generate_evidence(&context, &risk, HookAction::Allow)
+            .expect("the final non-overflowing sequence should be usable");
+        assert_eq!(final_evidence.timestamp, u64::MAX - 1);
+        let expected_prefix = format!("decision_{}_", u64::MAX - 1);
+        assert!(final_evidence.decision_id.starts_with(&expected_prefix));
+
+        let error = adapter
+            .generate_evidence(&context, &risk, HookAction::Allow)
+            .expect_err("sequence exhaustion must not reuse the final decision id");
+        assert!(matches!(
+            error,
+            GuardplaneError::EvidenceGenerationFailed(message)
+                if message.contains("sequence exhausted")
+        ));
+        assert_eq!(adapter.decision_sequence, u64::MAX);
     }
 
     #[test]

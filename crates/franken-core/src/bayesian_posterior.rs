@@ -533,6 +533,14 @@ pub struct CalibrationResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BayesianPosteriorUpdater {
     posterior: Posterior,
+    /// The configured baseline prior. BOCPD's "new regime" predictive
+    /// resets to this prior, not the factory default; [`Self::reset`] replaces
+    /// the baseline together with the current posterior.
+    ///
+    /// The serde default preserves the historical behavior for checkpoints
+    /// written before this field existed.
+    #[serde(default = "Posterior::default_prior")]
+    prior: Posterior,
     likelihood_model: LikelihoodModel,
     change_detector: ChangePointDetector,
     cumulative_llr_millionths: i64,
@@ -562,11 +570,55 @@ fn evidence_content_hash(evidence: &Evidence) -> ContentHash {
     ContentHash::compute(&bytes)
 }
 
+/// Fixed-point natural logarithm of a ratio, in millionths of nats:
+/// `round-toward-zero of ln(num / den) * 1_000_000`, for `num > 0`,
+/// `den > 0`. Integer-only (no `f64` per the determinism discipline):
+/// normalize `num/den` into `[1, 2)` collecting `k * ln 2`, then evaluate
+/// `ln m = 2 * atanh((m - 1) / (m + 1))` by series. For `m` in `[1, 2)`
+/// the series argument is at most 1/3, so terms decay by at least 1/9 per
+/// step and the truncated tail past z^11 is below one millionth; total
+/// truncation error is a few millionths of a nat (telemetry-grade).
+fn ln_ratio_millionths(num: i64, den: i64) -> i64 {
+    const LN2_MILLIONTHS: u128 = 693_147;
+    debug_assert!(
+        num > 0 && den > 0,
+        "ln_ratio_millionths needs positive inputs"
+    );
+    if num == den {
+        return 0;
+    }
+    if num < den {
+        return -ln_ratio_millionths(den, num);
+    }
+    let a = num as u128;
+    let mut b = den as u128;
+    // Normalize a/b into [1, 2): each doubling of b contributes ln 2.
+    let mut k: u128 = 0;
+    while a >= b * 2 {
+        b *= 2;
+        k += 1;
+    }
+    // z = (a - b) / (a + b) in millionths; z <= 1/3 because a/b < 2.
+    let z = (a - b) * 1_000_000 / (a + b);
+    let z_sq = z * z / 1_000_000;
+    // atanh(z) = z + z^3/3 + z^5/5 + z^7/7 + z^9/9 + z^11/11 + ...
+    let mut power = z;
+    let mut sum = z;
+    for odd in [3u128, 5, 7, 9, 11] {
+        power = power * z_sq / 1_000_000;
+        sum += power / odd;
+    }
+    let ln_m = 2 * sum;
+    let total = k * LN2_MILLIONTHS + ln_m;
+    i64::try_from(total).unwrap_or(i64::MAX)
+}
+
 impl BayesianPosteriorUpdater {
     /// Create a new updater with the given prior and extension ID.
     pub fn new(prior: Posterior, extension_id: impl Into<String>) -> Self {
         Self {
-            posterior: prior,
+            posterior: prior.clone(),
+            prior,
             likelihood_model: LikelihoodModel::default(),
             change_detector: ChangePointDetector::new(50_000, 100), // 5% hazard, max 100 steps
             cumulative_llr_millionths: 0,
@@ -607,31 +659,29 @@ impl BayesianPosteriorUpdater {
             unnormalized[3],
         );
 
-        // Update cumulative log-likelihood ratio (benign vs malicious).
-        // LLR = log(L_malicious / L_benign), in millionths of nats.
+        // Update the cumulative log-likelihood-ratio statistic (malicious vs
+        // benign), in millionths of nats. The previous first-order `(r - 1)`
+        // proxy overstated the stopping-policy input as the likelihood ratio
+        // moved away from 1.
         let llr_step = if likelihoods[0] > 0 && likelihoods[2] > 0 {
-            if likelihoods[2] >= likelihoods[0] {
-                (likelihoods[2] - likelihoods[0]) * MILLION / likelihoods[0]
-            } else {
-                -((likelihoods[0] - likelihoods[2]) * MILLION / likelihoods[2])
-            }
+            ln_ratio_millionths(likelihoods[2], likelihoods[0])
         } else if likelihoods[0] == 0 {
-            MILLION // Max positive LLR when benign likelihood is 0.
+            MILLION // Cap at +1 nat when benign likelihood is 0.
         } else {
-            -MILLION // Max negative LLR when malicious likelihood is 0.
+            -MILLION // Cap at -1 nat when malicious likelihood is 0.
         };
         self.cumulative_llr_millionths = self.cumulative_llr_millionths.saturating_add(llr_step);
 
-        // BOCPD update: evaluate how well current posterior predicts data vs the prior.
+        // BOCPD update: evaluate how well the current posterior predicts the
+        // data versus a regime reset to the configured baseline prior.
         let predictive_continuation = unnormalized
             .iter()
             .fold(0i64, |acc, x| acc.saturating_add(*x));
 
-        let prior = Posterior::default_prior();
-        let predictive_new = (prior.p_benign * likelihoods[0] / MILLION)
-            + (prior.p_anomalous * likelihoods[1] / MILLION)
-            + (prior.p_malicious * likelihoods[2] / MILLION)
-            + (prior.p_unknown * likelihoods[3] / MILLION);
+        let predictive_new = (self.prior.p_benign * likelihoods[0] / MILLION)
+            + (self.prior.p_anomalous * likelihoods[1] / MILLION)
+            + (self.prior.p_malicious * likelihoods[2] / MILLION)
+            + (self.prior.p_unknown * likelihoods[3] / MILLION);
 
         self.change_detector
             .update(predictive_continuation, predictive_new);
@@ -671,7 +721,8 @@ impl BayesianPosteriorUpdater {
 
     /// Reset to a new prior, clearing all accumulated evidence.
     pub fn reset(&mut self, prior: Posterior) {
-        self.posterior = prior;
+        self.posterior = prior.clone();
+        self.prior = prior;
         self.cumulative_llr_millionths = 0;
         self.update_count = 0;
         self.evidence_hashes.clear();
@@ -838,6 +889,10 @@ mod tests {
             denial_rate_millionths: 100_000,    // 10%
             epoch: SecurityEpoch::GENESIS,
         }
+    }
+
+    fn malicious_heavy_prior() -> Posterior {
+        Posterior::from_millionths(50_000, 50_000, 850_000, 50_000)
     }
 
     // -----------------------------------------------------------------------
@@ -1088,6 +1143,49 @@ mod tests {
     }
 
     #[test]
+    fn custom_prior_drives_first_change_point_baseline() {
+        let prior = malicious_heavy_prior();
+        let evidence = malicious_evidence();
+        let likelihoods = LikelihoodModel::default().compute_likelihoods(&evidence);
+        let predictive = (prior.p_benign * likelihoods[0] / MILLION)
+            + (prior.p_anomalous * likelihoods[1] / MILLION)
+            + (prior.p_malicious * likelihoods[2] / MILLION)
+            + (prior.p_unknown * likelihoods[3] / MILLION);
+        let mut expected_detector = ChangePointDetector::new(50_000, 100);
+        let expected_probability = expected_detector.update(predictive, predictive);
+
+        let mut updater = BayesianPosteriorUpdater::new(prior, "ext-001");
+        updater.update(&evidence);
+
+        assert_eq!(
+            updater.change_point_probability(),
+            expected_probability,
+            "the first new-regime predictive must use the configured prior"
+        );
+    }
+
+    #[test]
+    fn reset_replaces_change_point_baseline_prior() {
+        let replacement = malicious_heavy_prior();
+        let mut reset = BayesianPosteriorUpdater::new(Posterior::uniform(), "ext-001");
+        reset.update(&benign_evidence());
+        reset.reset(replacement.clone());
+        assert_eq!(reset.prior, replacement);
+
+        let mut fresh = BayesianPosteriorUpdater::new(replacement, "ext-001");
+        let reset_result = reset.update(&malicious_evidence());
+        let fresh_result = fresh.update(&malicious_evidence());
+
+        assert_eq!(reset_result, fresh_result);
+        assert_eq!(
+            reset.change_point_probability(),
+            fresh.change_point_probability(),
+            "a reset updater must score BOCPD exactly like a fresh updater"
+        );
+        assert_eq!(reset.evidence_hashes(), fresh.evidence_hashes());
+    }
+
+    #[test]
     fn deterministic_updates() {
         let mut u1 = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let mut u2 = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
@@ -1131,6 +1229,18 @@ mod tests {
         let restored: BayesianPosteriorUpdater = serde_json::from_str(&json).unwrap();
         assert_eq!(updater.posterior(), restored.posterior());
         assert_eq!(updater.update_count(), restored.update_count());
+    }
+
+    #[test]
+    fn updater_legacy_json_defaults_missing_prior() {
+        let updater = BayesianPosteriorUpdater::new(malicious_heavy_prior(), "ext-001");
+        let mut json = serde_json::to_value(&updater).unwrap();
+        json.as_object_mut()
+            .expect("updater serializes as an object")
+            .remove("prior");
+
+        let restored: BayesianPosteriorUpdater = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.prior, Posterior::default_prior());
     }
 
     // -----------------------------------------------------------------------
@@ -1428,6 +1538,55 @@ mod tests {
             "LLR should be <= 0 for benign evidence: {}",
             updater.log_likelihood_ratio()
         );
+    }
+
+    #[test]
+    fn ln_ratio_millionths_matches_known_nat_values() {
+        let close = |got: i64, want: i64| (got - want).abs() <= 12;
+        assert_eq!(ln_ratio_millionths(5, 5), 0);
+        assert!(close(ln_ratio_millionths(2, 1), 693_147), "ln 2");
+        assert!(close(ln_ratio_millionths(3, 1), 1_098_612), "ln 3");
+        assert!(close(ln_ratio_millionths(10, 1), 2_302_585), "ln 10");
+        assert!(close(ln_ratio_millionths(7, 5), 336_472), "ln 1.4");
+        assert!(close(ln_ratio_millionths(1, 2), -693_147), "ln 0.5");
+    }
+
+    #[test]
+    fn ln_ratio_millionths_is_antisymmetric_and_scale_invariant() {
+        for (a, b) in [(3i64, 1i64), (17, 4), (1_000_000, 1), (999, 998)] {
+            assert_eq!(
+                ln_ratio_millionths(a, b),
+                -ln_ratio_millionths(b, a),
+                "antisymmetry for {a}/{b}"
+            );
+        }
+        assert_eq!(
+            ln_ratio_millionths(600_000, 200_000),
+            ln_ratio_millionths(3, 1)
+        );
+    }
+
+    #[test]
+    fn llr_step_is_true_log_ratio_not_first_order_proxy() {
+        let step = ln_ratio_millionths(750_000, 250_000);
+        assert!(
+            (step - 1_098_612).abs() <= 12,
+            "step must be ln 3 in millionths of nats, got {step}"
+        );
+        assert!(
+            step < 1_200_000,
+            "step must not be the (r - 1) proxy (2_000_000), got {step}"
+        );
+    }
+
+    #[test]
+    fn updater_records_true_log_likelihood_ratio() {
+        let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
+        let result = updater.update(&malicious_evidence());
+        let expected = ln_ratio_millionths(result.likelihoods[2], result.likelihoods[0]);
+
+        assert_eq!(result.cumulative_llr_millionths, expected);
+        assert_eq!(updater.log_likelihood_ratio(), expected);
     }
 
     #[test]

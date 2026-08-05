@@ -533,13 +533,12 @@ pub struct CalibrationResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BayesianPosteriorUpdater {
     posterior: Posterior,
-    /// The prior the updater was constructed with. BOCPD's "new regime"
-    /// predictive resets to THIS prior, not the factory default — otherwise
-    /// change-point detection for an updater configured with a custom prior
-    /// (orchestrator/guardplane/federated callers pass variable priors) would
-    /// score regime changes against a baseline the model never declared.
-    /// Serde default keeps previously persisted updaters loadable with the
-    /// old behavior.
+    /// The configured baseline prior. BOCPD's "new regime" predictive
+    /// resets to this prior, not the factory default; [`Self::reset`] replaces
+    /// the baseline together with the current posterior.
+    ///
+    /// The serde default preserves the historical behavior for checkpoints
+    /// written before this field existed.
     #[serde(default = "Posterior::default_prior")]
     prior: Posterior,
     likelihood_model: LikelihoodModel,
@@ -661,12 +660,9 @@ impl BayesianPosteriorUpdater {
         );
 
         // Update the cumulative log-likelihood-ratio statistic (malicious vs
-        // benign), in millionths of nats: ln(L_mal / L_ben) computed with the
-        // fixed-point integer `ln_ratio_millionths` (bd-20y1l — the previous
-        // first-order proxy (r - 1) overstated |ln r| increasingly with r,
-        // ~1.8x at r = 3, while the field name and consumers
-        // (`log_likelihood_ratio_millionths` in guardplane decision records)
-        // claim nats). Zero-likelihood edges keep the historical ±1-nat cap.
+        // benign), in millionths of nats. The previous first-order `(r - 1)`
+        // proxy overstated the stopping-policy input as the likelihood ratio
+        // moved away from 1.
         let llr_step = if likelihoods[0] > 0 && likelihoods[2] > 0 {
             ln_ratio_millionths(likelihoods[2], likelihoods[0])
         } else if likelihoods[0] == 0 {
@@ -677,8 +673,7 @@ impl BayesianPosteriorUpdater {
         self.cumulative_llr_millionths = self.cumulative_llr_millionths.saturating_add(llr_step);
 
         // BOCPD update: evaluate how well the current posterior predicts the
-        // data versus a regime reset to the CONFIGURED prior (the model's own
-        // baseline, not the factory default).
+        // data versus a regime reset to the configured baseline prior.
         let predictive_continuation = unnormalized
             .iter()
             .fold(0i64, |acc, x| acc.saturating_add(*x));
@@ -726,7 +721,8 @@ impl BayesianPosteriorUpdater {
 
     /// Reset to a new prior, clearing all accumulated evidence.
     pub fn reset(&mut self, prior: Posterior) {
-        self.posterior = prior;
+        self.posterior = prior.clone();
+        self.prior = prior;
         self.cumulative_llr_millionths = 0;
         self.update_count = 0;
         self.evidence_hashes.clear();
@@ -893,6 +889,10 @@ mod tests {
             denial_rate_millionths: 100_000,    // 10%
             epoch: SecurityEpoch::GENESIS,
         }
+    }
+
+    fn malicious_heavy_prior() -> Posterior {
+        Posterior::from_millionths(50_000, 50_000, 850_000, 50_000)
     }
 
     // -----------------------------------------------------------------------
@@ -1146,6 +1146,49 @@ mod tests {
     }
 
     #[test]
+    fn custom_prior_drives_first_change_point_baseline() {
+        let prior = malicious_heavy_prior();
+        let evidence = malicious_evidence();
+        let likelihoods = LikelihoodModel::default().compute_likelihoods(&evidence);
+        let predictive = (prior.p_benign * likelihoods[0] / MILLION)
+            + (prior.p_anomalous * likelihoods[1] / MILLION)
+            + (prior.p_malicious * likelihoods[2] / MILLION)
+            + (prior.p_unknown * likelihoods[3] / MILLION);
+        let mut expected_detector = ChangePointDetector::new(50_000, 100);
+        let expected_probability = expected_detector.update(predictive, predictive);
+
+        let mut updater = BayesianPosteriorUpdater::new(prior, "ext-001");
+        updater.update(&evidence);
+
+        assert_eq!(
+            updater.change_point_probability(),
+            expected_probability,
+            "the first new-regime predictive must use the configured prior"
+        );
+    }
+
+    #[test]
+    fn reset_replaces_change_point_baseline_prior() {
+        let replacement = malicious_heavy_prior();
+        let mut reset = BayesianPosteriorUpdater::new(Posterior::uniform(), "ext-001");
+        reset.update(&benign_evidence());
+        reset.reset(replacement.clone());
+        assert_eq!(reset.prior, replacement);
+
+        let mut fresh = BayesianPosteriorUpdater::new(replacement, "ext-001");
+        let reset_result = reset.update(&malicious_evidence());
+        let fresh_result = fresh.update(&malicious_evidence());
+
+        assert_eq!(reset_result, fresh_result);
+        assert_eq!(
+            reset.change_point_probability(),
+            fresh.change_point_probability(),
+            "a reset updater must score BOCPD exactly like a fresh updater"
+        );
+        assert_eq!(reset.evidence_hashes(), fresh.evidence_hashes());
+    }
+
+    #[test]
     fn deterministic_updates() {
         let mut u1 = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let mut u2 = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
@@ -1190,6 +1233,19 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(updater.posterior(), restored.posterior());
         assert_eq!(updater.update_count(), restored.update_count());
+    }
+
+    #[test]
+    fn updater_legacy_json_defaults_missing_prior() {
+        let updater = BayesianPosteriorUpdater::new(malicious_heavy_prior(), "ext-001");
+        let mut json = serde_json::to_value(&updater).expect("serialize updater as a JSON value");
+        json.as_object_mut()
+            .expect("updater serializes as an object")
+            .remove("prior");
+
+        let restored: BayesianPosteriorUpdater =
+            serde_json::from_value(json).expect("deserialize legacy updater JSON");
+        assert_eq!(restored.prior, Posterior::default_prior());
     }
 
     // -----------------------------------------------------------------------
@@ -1543,6 +1599,16 @@ mod tests {
             step < 1_200_000,
             "step must not be the (r - 1) proxy (2_000_000), got {step}"
         );
+    }
+
+    #[test]
+    fn updater_records_true_log_likelihood_ratio() {
+        let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
+        let result = updater.update(&malicious_evidence());
+        let expected = ln_ratio_millionths(result.likelihoods[2], result.likelihoods[0]);
+
+        assert_eq!(result.cumulative_llr_millionths, expected);
+        assert_eq!(updater.log_likelihood_ratio(), expected);
     }
 
     #[test]

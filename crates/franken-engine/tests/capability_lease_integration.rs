@@ -58,6 +58,7 @@ fn full_lease_lifecycle_grants_exhausts_resets_challenges_revokes() {
         let decision = manager
             .request_use(
                 "net-1",
+                "ext-alpha",
                 RuntimeCapability::NetworkEgress,
                 &benign(),
                 tick as u64,
@@ -66,7 +67,13 @@ fn full_lease_lifecycle_grants_exhausts_resets_challenges_revokes() {
         assert!(matches!(decision, LeaseDecision::Granted { .. }));
     }
     let exhausted = manager
-        .request_use("net-1", RuntimeCapability::NetworkEgress, &benign(), 10)
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            10,
+        )
         .expect("request should succeed");
     assert!(matches!(
         exhausted,
@@ -77,13 +84,25 @@ fn full_lease_lifecycle_grants_exhausts_resets_challenges_revokes() {
 
     // New window at tick 50: budget restored deterministically.
     let renewed = manager
-        .request_use("net-1", RuntimeCapability::NetworkEgress, &benign(), 50)
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            50,
+        )
         .expect("request should succeed");
     assert!(matches!(renewed, LeaseDecision::Granted { .. }));
 
     // Elevated risk demands a challenge and spends nothing.
     let challenged = manager
-        .request_use("net-1", RuntimeCapability::NetworkEgress, &elevated(), 51)
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &elevated(),
+            51,
+        )
         .expect("request should succeed");
     assert!(matches!(
         challenged,
@@ -92,7 +111,13 @@ fn full_lease_lifecycle_grants_exhausts_resets_challenges_revokes() {
 
     // Hostile risk revokes; the lease stays dead afterwards.
     let revoked = manager
-        .request_use("net-1", RuntimeCapability::NetworkEgress, &hostile(), 52)
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &hostile(),
+            52,
+        )
         .expect("request should succeed");
     assert!(matches!(revoked, LeaseDecision::Revoked { .. }));
     assert_eq!(
@@ -102,7 +127,13 @@ fn full_lease_lifecycle_grants_exhausts_resets_challenges_revokes() {
         CapabilityLeaseStatus::Revoked
     );
     let post_revoke = manager
-        .request_use("net-1", RuntimeCapability::NetworkEgress, &benign(), 53)
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            53,
+        )
         .expect("request should succeed");
     assert!(matches!(
         post_revoke,
@@ -153,13 +184,31 @@ fn per_extension_spend_is_separated_in_the_report() {
         .expect("registration should succeed");
 
     manager
-        .request_use("net-alpha", RuntimeCapability::NetworkEgress, &benign(), 1)
+        .request_use(
+            "net-alpha",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            1,
+        )
         .expect("request should succeed");
     manager
-        .request_use("net-alpha", RuntimeCapability::NetworkEgress, &benign(), 2)
+        .request_use(
+            "net-alpha",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            2,
+        )
         .expect("request should succeed");
     manager
-        .request_use("net-beta", RuntimeCapability::NetworkEgress, &benign(), 1)
+        .request_use(
+            "net-beta",
+            "ext-beta",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            1,
+        )
         .expect("request should succeed");
 
     let report = manager.report().expect("report should build");
@@ -188,6 +237,95 @@ fn per_extension_spend_is_separated_in_the_report() {
 }
 
 #[test]
+fn authority_and_logical_clock_fail_closed_without_restoring_budget() {
+    let mut constrained = egress_lease("net-1", "ext-alpha");
+    constrained.window_budget_millionths = 2 * MILLION;
+    constrained.budget_window_ticks = 10;
+    let mut manager = LeaseManager::balanced();
+    manager
+        .register_lease(constrained)
+        .expect("registration should succeed");
+
+    let remaining_after_grant = match manager
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            5,
+        )
+        .expect("authorized request should succeed")
+    {
+        LeaseDecision::Granted {
+            remaining_budget_millionths,
+            ..
+        } => remaining_budget_millionths,
+        other => panic!("expected grant, got {other:?}"),
+    };
+
+    let wrong_extension = manager
+        .request_use(
+            "net-1",
+            "ext-other",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            10,
+        )
+        .expect("identity mismatch should produce a denial");
+    assert!(matches!(
+        wrong_extension,
+        LeaseDecision::Denied {
+            reason: DenialReason::ExtensionMismatch { .. }
+        }
+    ));
+
+    let clock_regression = manager
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            4,
+        )
+        .expect("clock regression should produce a denial");
+    assert_eq!(
+        clock_regression,
+        LeaseDecision::Denied {
+            reason: DenialReason::NonMonotonicTick {
+                previous_tick: 5,
+                requested_tick: 4,
+            },
+        }
+    );
+
+    assert!(
+        manager
+            .receipts()
+            .iter()
+            .all(|receipt| receipt.verify_content_hash())
+    );
+    assert_eq!(
+        manager.receipts()[1].remaining_budget_millionths,
+        remaining_after_grant
+    );
+    assert_eq!(
+        manager.receipts()[2].remaining_budget_millionths,
+        remaining_after_grant
+    );
+
+    let report = manager.report().expect("report should build");
+    let summary = &report.summaries[0];
+    assert_eq!(summary.extension_mismatches, 1);
+    assert_eq!(summary.tick_regressions, 1);
+    assert_eq!(summary.remaining_budget_millionths, remaining_after_grant);
+    assert_eq!(
+        summary.recommendation,
+        LeaseRecommendation::ReviewExtensionMismatch,
+        "identity misuse takes precedence over a clock repair recommendation"
+    );
+}
+
+#[test]
 fn report_and_receipts_are_deterministic_across_identical_runs() {
     let run = || -> (LeaseReport, usize) {
         let mut manager = LeaseManager::balanced();
@@ -195,10 +333,22 @@ fn report_and_receipts_are_deterministic_across_identical_runs() {
             .register_lease(egress_lease("net-1", "ext-alpha"))
             .expect("registration should succeed");
         manager
-            .request_use("net-1", RuntimeCapability::NetworkEgress, &benign(), 1)
+            .request_use(
+                "net-1",
+                "ext-alpha",
+                RuntimeCapability::NetworkEgress,
+                &benign(),
+                1,
+            )
             .expect("request should succeed");
         manager
-            .request_use("net-1", RuntimeCapability::NetworkEgress, &elevated(), 2)
+            .request_use(
+                "net-1",
+                "ext-alpha",
+                RuntimeCapability::NetworkEgress,
+                &elevated(),
+                2,
+            )
             .expect("request should succeed");
         (
             manager.report().expect("report should build"),
@@ -229,7 +379,13 @@ fn report_serde_round_trip() {
         .register_lease(egress_lease("net-1", "ext-alpha"))
         .expect("registration should succeed");
     manager
-        .request_use("net-1", RuntimeCapability::NetworkEgress, &benign(), 1)
+        .request_use(
+            "net-1",
+            "ext-alpha",
+            RuntimeCapability::NetworkEgress,
+            &benign(),
+            1,
+        )
         .expect("request should succeed");
     let report = manager.report().expect("report should build");
     let json = serde_json::to_string(&report).expect("serialize should succeed");

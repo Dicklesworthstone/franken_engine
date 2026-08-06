@@ -986,7 +986,7 @@ mod tests {
                 RiskState::ALL.iter().map(move |state| LossEntry {
                     action: *action,
                     state: *state,
-                    loss_millionths: -1,
+                    loss_millionths: -MILLION,
                 })
             })
             .collect();

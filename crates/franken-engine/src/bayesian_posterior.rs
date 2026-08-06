@@ -11,12 +11,13 @@
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9C.2 (Bayesian decision
 //! loop), 9B.2 (conformal prediction, e-process, BOCPD).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
+use crate::martingale_decision_ledger::ln_ratio_millionths;
 use crate::runtime_config::BayesianPriorsConfig;
 use crate::security_epoch::SecurityEpoch;
 
@@ -43,6 +44,7 @@ const ELEVATED_CAPABILITY_BREADTH_FLOOR: u32 = 6;
 const HIGH_CAPABILITY_BREADTH_FLOOR: u32 = 11;
 
 const EVIDENCE_HASH_DOMAIN: &[u8] = b"franken-engine.bayesian-posterior.evidence.v1";
+const UPDATER_HASH_DOMAIN: &[u8] = b"franken-engine.bayesian-posterior.updater.v2\0";
 
 // ---------------------------------------------------------------------------
 // RiskState — the state space
@@ -416,7 +418,7 @@ pub struct UpdateResult {
 /// Tracks run-length distribution: probability that the current regime
 /// has lasted for exactly `r` steps.  A spike at r=0 indicates a change
 /// point.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChangePointDetector {
     /// Run-length probabilities (millionths).  Index = run length.
     run_length_probs: Vec<i64>,
@@ -426,10 +428,73 @@ pub struct ChangePointDetector {
     max_run_length: usize,
 }
 
+#[derive(Deserialize)]
+struct ChangePointDetectorState {
+    run_length_probs: Vec<i64>,
+    hazard_rate: i64,
+    max_run_length: usize,
+}
+
+impl<'de> Deserialize<'de> for ChangePointDetector {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let state = ChangePointDetectorState::deserialize(deserializer)?;
+        if !(0..=MILLION).contains(&state.hazard_rate) {
+            return Err(serde::de::Error::custom(format!(
+                "change-point hazard rate must be between 0 and {MILLION}, got {}",
+                state.hazard_rate
+            )));
+        }
+
+        let expected_len = state.max_run_length.checked_add(1).ok_or_else(|| {
+            serde::de::Error::custom("change-point maximum run length is too large")
+        })?;
+        if state.run_length_probs.len() != expected_len {
+            return Err(serde::de::Error::custom(format!(
+                "change-point run-length vector has length {}, expected {expected_len}",
+                state.run_length_probs.len()
+            )));
+        }
+        if let Some((index, probability)) = state
+            .run_length_probs
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, probability)| !(0..=MILLION).contains(probability))
+        {
+            return Err(serde::de::Error::custom(format!(
+                "change-point probability at index {index} must be between 0 and {MILLION}, got {probability}"
+            )));
+        }
+
+        let total: i128 = state.run_length_probs.iter().map(|&p| i128::from(p)).sum();
+        if total != i128::from(MILLION) {
+            return Err(serde::de::Error::custom(format!(
+                "change-point probabilities must sum to {MILLION}, got {total}"
+            )));
+        }
+
+        Ok(Self {
+            run_length_probs: state.run_length_probs,
+            hazard_rate: state.hazard_rate,
+            max_run_length: state.max_run_length,
+        })
+    }
+}
+
 impl ChangePointDetector {
     /// Create a new detector with given hazard rate (millionths).
     pub fn new(hazard_rate_millionths: i64, max_run_length: usize) -> Self {
-        let mut run_length_probs = vec![0i64; max_run_length + 1];
+        assert!(
+            (0..=MILLION).contains(&hazard_rate_millionths),
+            "change-point hazard rate must be between 0 and {MILLION}"
+        );
+        let state_len = max_run_length
+            .checked_add(1)
+            .expect("change-point maximum run length is too large");
+        let mut run_length_probs = vec![0i64; state_len];
         run_length_probs[0] = MILLION; // Start with run length 0.
         Self {
             run_length_probs,
@@ -444,34 +509,41 @@ impl ChangePointDetector {
         let n = self.run_length_probs.len();
         let mut new_probs = vec![0i64; n];
 
+        let scaled_product = |left: i64, right: i64| {
+            let scaled = i128::from(left) * i128::from(right) / i128::from(MILLION);
+            i64::try_from(scaled.max(0)).unwrap_or(i64::MAX)
+        };
+
         // Growth: each existing run length grows by 1.
         let survival_rate = MILLION - self.hazard_rate;
         for r in (0..n).rev() {
-            let growth = self.run_length_probs[r] * survival_rate / MILLION;
-            let weighted = growth * predictive_continuation / MILLION;
+            let growth = scaled_product(self.run_length_probs[r], survival_rate);
+            let weighted = scaled_product(growth, predictive_continuation);
             let target_idx = (r + 1).min(n - 1);
-            new_probs[target_idx] += weighted.max(0);
+            new_probs[target_idx] = new_probs[target_idx].saturating_add(weighted);
         }
 
         // Change point: mass from all run lengths flowing to r=0.
         let mut change_mass: i64 = 0;
         for r in 0..n {
-            let hazard_flow = self.run_length_probs[r] * self.hazard_rate / MILLION;
-            let weighted = hazard_flow * predictive_new / MILLION;
-            change_mass += weighted.max(0);
+            let hazard_flow = scaled_product(self.run_length_probs[r], self.hazard_rate);
+            let weighted = scaled_product(hazard_flow, predictive_new);
+            change_mass = change_mass.saturating_add(weighted);
         }
         new_probs[0] = change_mass;
 
         // Normalize.
-        let total: i64 = new_probs.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
+        let total: i128 = new_probs.iter().map(|&p| i128::from(p)).sum();
         if total > 0 {
             for p in &mut new_probs {
-                *p = *p * MILLION / total;
+                let normalized = i128::from(*p) * i128::from(MILLION) / total;
+                *p = i64::try_from(normalized).expect("normalized probability fits in i64");
             }
-            // Fix remainder (can be negative due to rounding).
-            let remainder = MILLION - new_probs.iter().fold(0i64, |acc, x| acc.saturating_add(*x));
+            // Integer division rounds down, so assign the remaining mass to
+            // the change-point bucket and preserve an exact distribution.
+            let remainder = MILLION - new_probs.iter().sum::<i64>();
             if remainder != 0 {
-                new_probs[0] = (new_probs[0] + remainder).max(0);
+                new_probs[0] = new_probs[0].saturating_add(remainder);
             }
         } else {
             // Degenerate: reset to change point.
@@ -530,7 +602,7 @@ pub struct CalibrationResult {
 /// Maintains a posterior distribution over [`RiskState`] values and
 /// supports sequential evidence updates with cumulative log-likelihood
 /// ratio tracking and Bayesian Online Change Point Detection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BayesianPosteriorUpdater {
     posterior: Posterior,
     /// The configured baseline prior. BOCPD's "new regime" predictive
@@ -539,6 +611,19 @@ pub struct BayesianPosteriorUpdater {
     ///
     /// The serde default preserves the historical behavior for checkpoints
     /// written before this field existed.
+    prior: Posterior,
+    likelihood_model: LikelihoodModel,
+    change_detector: ChangePointDetector,
+    cumulative_llr_millionths: i64,
+    update_count: u64,
+    evidence_hashes: Vec<ContentHash>,
+    extension_id: String,
+    epoch: SecurityEpoch,
+}
+
+#[derive(Deserialize)]
+struct BayesianPosteriorUpdaterState {
+    posterior: Posterior,
     #[serde(default = "Posterior::default_prior")]
     prior: Posterior,
     likelihood_model: LikelihoodModel,
@@ -548,6 +633,51 @@ pub struct BayesianPosteriorUpdater {
     evidence_hashes: Vec<ContentHash>,
     extension_id: String,
     epoch: SecurityEpoch,
+}
+
+impl<'de> Deserialize<'de> for BayesianPosteriorUpdater {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let state = BayesianPosteriorUpdaterState::deserialize(deserializer)?;
+        if !state.posterior.is_valid() {
+            return Err(serde::de::Error::custom(
+                "Bayesian updater posterior must be a valid probability distribution",
+            ));
+        }
+        if !state.prior.is_valid() {
+            return Err(serde::de::Error::custom(
+                "Bayesian updater prior must be a valid probability distribution",
+            ));
+        }
+        if state.extension_id.trim().is_empty() {
+            return Err(serde::de::Error::custom(
+                "Bayesian updater extension_id must be non-blank",
+            ));
+        }
+        let evidence_count = u64::try_from(state.evidence_hashes.len()).map_err(|_| {
+            serde::de::Error::custom("Bayesian updater evidence history is too large")
+        })?;
+        if evidence_count != state.update_count {
+            return Err(serde::de::Error::custom(format!(
+                "Bayesian updater update_count {} does not match evidence history length {evidence_count}",
+                state.update_count
+            )));
+        }
+
+        Ok(Self {
+            posterior: state.posterior,
+            prior: state.prior,
+            likelihood_model: state.likelihood_model,
+            change_detector: state.change_detector,
+            cumulative_llr_millionths: state.cumulative_llr_millionths,
+            update_count: state.update_count,
+            evidence_hashes: state.evidence_hashes,
+            extension_id: state.extension_id,
+            epoch: state.epoch,
+        })
+    }
 }
 
 fn evidence_content_hash(evidence: &Evidence) -> ContentHash {
@@ -568,49 +698,6 @@ fn evidence_content_hash(evidence: &Evidence) -> ContentHash {
     bytes.extend_from_slice(&evidence.denial_rate_millionths.to_be_bytes());
     bytes.extend_from_slice(&evidence.epoch.as_u64().to_be_bytes());
     ContentHash::compute(&bytes)
-}
-
-/// Fixed-point natural logarithm of a ratio, in millionths of nats:
-/// `round-toward-zero of ln(num / den) * 1_000_000`, for `num > 0`,
-/// `den > 0`. Integer-only (no `f64` per the determinism discipline):
-/// normalize `num/den` into `[1, 2)` collecting `k * ln 2`, then evaluate
-/// `ln m = 2 * atanh((m - 1) / (m + 1))` by series. For `m` in `[1, 2)`
-/// the series argument is at most 1/3, so terms decay by at least 1/9 per
-/// step and the truncated tail past z^11 is below one millionth; total
-/// truncation error is a few millionths of a nat (telemetry-grade).
-fn ln_ratio_millionths(num: i64, den: i64) -> i64 {
-    const LN2_MILLIONTHS: u128 = 693_147;
-    debug_assert!(
-        num > 0 && den > 0,
-        "ln_ratio_millionths needs positive inputs"
-    );
-    if num == den {
-        return 0;
-    }
-    if num < den {
-        return -ln_ratio_millionths(den, num);
-    }
-    let a = num as u128;
-    let mut b = den as u128;
-    // Normalize a/b into [1, 2): each doubling of b contributes ln 2.
-    let mut k: u128 = 0;
-    while a >= b * 2 {
-        b *= 2;
-        k += 1;
-    }
-    // z = (a - b) / (a + b) in millionths; z <= 1/3 because a/b < 2.
-    let z = (a - b) * 1_000_000 / (a + b);
-    let z_sq = z * z / 1_000_000;
-    // atanh(z) = z + z^3/3 + z^5/5 + z^7/7 + z^9/9 + z^11/11 + ...
-    let mut power = z;
-    let mut sum = z;
-    for odd in [3u128, 5, 7, 9, 11] {
-        power = power * z_sq / 1_000_000;
-        sum += power / odd;
-    }
-    let ln_m = 2 * sum;
-    let total = k * LN2_MILLIONTHS + ln_m;
-    i64::try_from(total).unwrap_or(i64::MAX)
 }
 
 impl BayesianPosteriorUpdater {
@@ -729,9 +816,14 @@ impl BayesianPosteriorUpdater {
         self.change_detector.reset();
     }
 
-    /// Set the security epoch.
+    /// Raise the security epoch without permitting rollback.
     pub fn set_epoch(&mut self, epoch: SecurityEpoch) {
-        self.epoch = epoch;
+        self.epoch = self.epoch.max(epoch);
+    }
+
+    /// Security epoch currently bound to this updater checkpoint.
+    pub fn epoch(&self) -> SecurityEpoch {
+        self.epoch
     }
 
     /// Check posterior calibration against known ground truth.
@@ -763,14 +855,40 @@ impl BayesianPosteriorUpdater {
 
     /// Content hash of the current state (for checkpoint).
     pub fn content_hash(&self) -> ContentHash {
-        let mut buf = Vec::new();
+        let mut buf = UPDATER_HASH_DOMAIN.to_vec();
+        buf.extend_from_slice(&(self.extension_id.len() as u128).to_be_bytes());
         buf.extend_from_slice(self.extension_id.as_bytes());
+
         buf.extend_from_slice(&self.posterior.p_benign.to_le_bytes());
         buf.extend_from_slice(&self.posterior.p_anomalous.to_le_bytes());
         buf.extend_from_slice(&self.posterior.p_malicious.to_le_bytes());
         buf.extend_from_slice(&self.posterior.p_unknown.to_le_bytes());
+        buf.extend_from_slice(&self.prior.p_benign.to_le_bytes());
+        buf.extend_from_slice(&self.prior.p_anomalous.to_le_bytes());
+        buf.extend_from_slice(&self.prior.p_malicious.to_le_bytes());
+        buf.extend_from_slice(&self.prior.p_unknown.to_le_bytes());
+
+        buf.extend_from_slice(&self.likelihood_model.benign_rate_ceiling.to_le_bytes());
+        buf.extend_from_slice(&self.likelihood_model.anomalous_rate_floor.to_le_bytes());
+        buf.extend_from_slice(&self.likelihood_model.benign_denial_ceiling.to_le_bytes());
+        buf.extend_from_slice(&self.likelihood_model.malicious_denial_floor.to_le_bytes());
+        buf.extend_from_slice(&self.likelihood_model.timing_anomaly_threshold.to_le_bytes());
+        buf.extend_from_slice(&self.likelihood_model.resource_threshold.to_le_bytes());
+
+        buf.extend_from_slice(&(self.change_detector.run_length_probs.len() as u128).to_be_bytes());
+        for probability in &self.change_detector.run_length_probs {
+            buf.extend_from_slice(&probability.to_le_bytes());
+        }
+        buf.extend_from_slice(&self.change_detector.hazard_rate.to_le_bytes());
+        buf.extend_from_slice(&(self.change_detector.max_run_length as u128).to_be_bytes());
+
         buf.extend_from_slice(&self.cumulative_llr_millionths.to_le_bytes());
         buf.extend_from_slice(&self.update_count.to_le_bytes());
+        buf.extend_from_slice(&(self.evidence_hashes.len() as u128).to_be_bytes());
+        for evidence_hash in &self.evidence_hashes {
+            buf.extend_from_slice(evidence_hash.as_bytes());
+        }
+        buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         ContentHash::compute(&buf)
     }
 }
@@ -780,9 +898,35 @@ impl BayesianPosteriorUpdater {
 // ---------------------------------------------------------------------------
 
 /// Store managing posterior updaters for multiple extensions.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UpdaterStore {
     updaters: Vec<BayesianPosteriorUpdater>,
+}
+
+#[derive(Deserialize)]
+struct UpdaterStoreState {
+    updaters: Vec<BayesianPosteriorUpdater>,
+}
+
+impl<'de> Deserialize<'de> for UpdaterStore {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let state = UpdaterStoreState::deserialize(deserializer)?;
+        let mut extension_ids = BTreeSet::new();
+        for updater in &state.updaters {
+            if !extension_ids.insert(updater.extension_id.as_str()) {
+                return Err(serde::de::Error::custom(format!(
+                    "Bayesian updater store contains duplicate extension_id {:?}",
+                    updater.extension_id
+                )));
+            }
+        }
+        Ok(Self {
+            updaters: state.updaters,
+        })
+    }
 }
 
 impl UpdaterStore {
@@ -1214,6 +1358,7 @@ mod tests {
     fn epoch_tracking() {
         let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         updater.set_epoch(SecurityEpoch::from_raw(5));
+        updater.set_epoch(SecurityEpoch::from_raw(2));
         assert_eq!(updater.epoch, SecurityEpoch::from_raw(5));
     }
 
@@ -1222,6 +1367,50 @@ mod tests {
         let u1 = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let u2 = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         assert_eq!(u1.content_hash(), u2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_binds_complete_behavioral_checkpoint_state() {
+        let base = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
+        let base_hash = base.content_hash();
+
+        let mut changed = base.clone();
+        changed.prior = Posterior::uniform();
+        assert_ne!(
+            base_hash,
+            changed.content_hash(),
+            "baseline prior must bind"
+        );
+
+        changed = base.clone();
+        changed.likelihood_model.resource_threshold += 1;
+        assert_ne!(
+            base_hash,
+            changed.content_hash(),
+            "likelihood model must bind"
+        );
+
+        changed = base.clone();
+        changed.change_detector.hazard_rate += 1;
+        assert_ne!(
+            base_hash,
+            changed.content_hash(),
+            "change detector must bind"
+        );
+
+        changed = base.clone();
+        changed
+            .evidence_hashes
+            .push(ContentHash::compute(b"evidence"));
+        assert_ne!(
+            base_hash,
+            changed.content_hash(),
+            "evidence history must bind"
+        );
+
+        changed = base;
+        changed.epoch = SecurityEpoch::from_raw(1);
+        assert_ne!(base_hash, changed.content_hash(), "epoch must bind");
     }
 
     #[test]
@@ -1246,6 +1435,38 @@ mod tests {
         let restored: BayesianPosteriorUpdater =
             serde_json::from_value(json).expect("deserialize legacy updater JSON");
         assert_eq!(restored.prior, Posterior::default_prior());
+    }
+
+    #[test]
+    fn updater_deserialization_rejects_inconsistent_checkpoint_state() {
+        let updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
+        let valid = serde_json::to_value(&updater).expect("updater should serialize");
+
+        let mut invalid_posterior = valid.clone();
+        invalid_posterior["posterior"]["p_benign"] = serde_json::json!(0);
+
+        let mut invalid_prior = valid.clone();
+        invalid_prior["prior"]["p_unknown"] = serde_json::json!(-1);
+
+        let mut blank_extension = valid.clone();
+        blank_extension["extension_id"] = serde_json::json!("  ");
+
+        let mut mismatched_history = valid;
+        mismatched_history["update_count"] = serde_json::json!(1);
+
+        for (checkpoint, expected_error) in [
+            (invalid_posterior, "posterior must be a valid"),
+            (invalid_prior, "prior must be a valid"),
+            (blank_extension, "extension_id must be non-blank"),
+            (mismatched_history, "does not match evidence history"),
+        ] {
+            let error = serde_json::from_value::<BayesianPosteriorUpdater>(checkpoint)
+                .expect_err("inconsistent updater checkpoints must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1330,6 +1551,76 @@ mod tests {
         let restored: ChangePointDetector =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(det, restored);
+    }
+
+    #[test]
+    fn change_detector_deserialization_rejects_invalid_state() {
+        let invalid_states = [
+            (
+                serde_json::json!({
+                    "run_length_probs": [],
+                    "hazard_rate": 50_000,
+                    "max_run_length": 0
+                }),
+                "run-length vector",
+            ),
+            (
+                serde_json::json!({
+                    "run_length_probs": [MILLION],
+                    "hazard_rate": 50_000,
+                    "max_run_length": 1
+                }),
+                "run-length vector",
+            ),
+            (
+                serde_json::json!({
+                    "run_length_probs": [MILLION],
+                    "hazard_rate": MILLION + 1,
+                    "max_run_length": 0
+                }),
+                "hazard rate",
+            ),
+            (
+                serde_json::json!({
+                    "run_length_probs": [-1, MILLION + 1],
+                    "hazard_rate": 50_000,
+                    "max_run_length": 1
+                }),
+                "probability at index",
+            ),
+            (
+                serde_json::json!({
+                    "run_length_probs": [500_000, 400_000],
+                    "hazard_rate": 50_000,
+                    "max_run_length": 1
+                }),
+                "must sum",
+            ),
+        ];
+
+        for (state, expected_error) in invalid_states {
+            let error = serde_json::from_value::<ChangePointDetector>(state)
+                .expect_err("invalid detector state must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn change_detector_large_predictive_weights_do_not_overflow() {
+        let mut detector = ChangePointDetector::new(50_000, 50);
+        let probability = detector.update(i64::MAX, i64::MAX);
+
+        assert!((0..=MILLION).contains(&probability));
+        assert_eq!(detector.run_length_probs.iter().sum::<i64>(), MILLION);
+    }
+
+    #[test]
+    #[should_panic(expected = "change-point maximum run length is too large")]
+    fn change_detector_rejects_overflowing_max_run_length() {
+        let _ = ChangePointDetector::new(50_000, usize::MAX);
     }
 
     // -----------------------------------------------------------------------
@@ -1436,6 +1727,22 @@ mod tests {
         let restored: UpdaterStore =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(store.len(), restored.len());
+    }
+
+    #[test]
+    fn store_deserialization_rejects_duplicate_extension_state() {
+        let mut store = UpdaterStore::new();
+        store.get_or_create("ext-001");
+        let mut json = serde_json::to_value(&store).expect("serialize updater store");
+        let duplicate = json["updaters"][0].clone();
+        json["updaters"]
+            .as_array_mut()
+            .expect("updaters serializes as an array")
+            .push(duplicate);
+
+        let error = serde_json::from_value::<UpdaterStore>(json)
+            .expect_err("duplicate extension state must fail closed");
+        assert!(error.to_string().contains("duplicate extension_id"));
     }
 
     // -----------------------------------------------------------------------
@@ -1571,12 +1878,12 @@ mod tests {
     }
 
     #[test]
-    fn ln_ratio_millionths_is_antisymmetric_and_scale_invariant() {
+    fn ln_ratio_millionths_is_conservative_and_scale_invariant() {
         for (a, b) in [(3i64, 1i64), (17, 4), (1_000_000, 1), (999, 998)] {
+            let reciprocal_sum = ln_ratio_millionths(a, b) + ln_ratio_millionths(b, a);
             assert_eq!(
-                ln_ratio_millionths(a, b),
-                -ln_ratio_millionths(b, a),
-                "antisymmetry for {a}/{b}"
+                reciprocal_sum, -2,
+                "certified conservative reciprocal rounding for {a}/{b}"
             );
         }
         // Likelihoods are millionths-scaled; the scale must cancel.

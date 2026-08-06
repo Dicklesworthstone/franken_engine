@@ -86,6 +86,15 @@ impl ContentHash {
         &self.0
     }
 
+    /// Constant-time comparison for persisted verifier paths.
+    pub fn constant_time_eq(&self, other: &Self) -> bool {
+        let mut diff: u8 = 0;
+        for i in 0..32 {
+            diff |= self.0[i] ^ other.0[i];
+        }
+        diff == 0
+    }
+
     /// Hex representation.
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(64);
@@ -480,6 +489,16 @@ mod tests {
         expected_bytes.copy_from_slice(&expected);
         let hash = ContentHash::compute(&data);
         assert_eq!(hash.as_bytes(), &expected_bytes);
+    }
+
+    #[test]
+    fn content_hash_constant_time_eq_distinguishes_mutation() {
+        let original = ContentHash::compute(b"persisted artifact");
+        let same = ContentHash::compute(b"persisted artifact");
+        let changed = ContentHash::compute(b"persisted artifact changed");
+
+        assert!(original.constant_time_eq(&same));
+        assert!(!original.constant_time_eq(&changed));
     }
 
     #[test]

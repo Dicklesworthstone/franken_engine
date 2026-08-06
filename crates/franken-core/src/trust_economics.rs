@@ -160,11 +160,13 @@ impl SubLoss {
 
     /// Total loss (sum of all sub-categories).
     pub fn total(&self) -> i64 {
-        self.direct_damage
-            .saturating_add(self.operational_disruption)
-            .saturating_add(self.trust_damage)
-            .saturating_add(self.containment_cost)
-            .saturating_add(self.false_action_cost)
+        saturating_i128_to_i64(
+            i128::from(self.direct_damage)
+                + i128::from(self.operational_disruption)
+                + i128::from(self.trust_damage)
+                + i128::from(self.containment_cost)
+                + i128::from(self.false_action_cost),
+        )
     }
 }
 
@@ -211,10 +213,17 @@ mod loss_cell_serde {
         D: Deserializer<'de>,
     {
         let vec: Vec<Cell> = Vec::deserialize(deserializer)?;
-        Ok(vec
-            .into_iter()
-            .map(|c| ((c.state, c.action), c.loss))
-            .collect())
+        let mut entries = BTreeMap::new();
+        for cell in vec {
+            let key = (cell.state, cell.action);
+            if entries.insert(key, cell.loss).is_some() {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate loss cell for state={} action={}",
+                    cell.state, cell.action
+                )));
+            }
+        }
+        Ok(entries)
     }
 }
 
@@ -365,50 +374,91 @@ pub struct StrategyCostAdjustment {
 }
 
 impl AttackerCostModel {
+    fn total_base_cost_i128(&self) -> i128 {
+        [
+            self.discovery_cost,
+            self.development_cost,
+            self.deployment_cost,
+            self.persistence_cost,
+            self.evasion_cost,
+        ]
+        .into_iter()
+        .map(i128::from)
+        .sum()
+    }
+
+    fn adjusted_cost_i128(&self, strategy: &str) -> Option<i128> {
+        let adjustment = self.strategy_adjustments.get(strategy)?;
+        Some(
+            self.total_base_cost_i128()
+                + i128::from(adjustment.discovery_delta)
+                + i128::from(adjustment.development_delta)
+                + i128::from(adjustment.evasion_delta),
+        )
+    }
+
+    /// Whether every base cost component is non-negative and the aggregate
+    /// cost is strictly positive. A negative component is invalid even when
+    /// other components happen to mask it in the aggregate.
+    pub fn has_valid_base_costs(&self) -> bool {
+        [
+            self.discovery_cost,
+            self.development_cost,
+            self.deployment_cost,
+            self.persistence_cost,
+            self.evasion_cost,
+        ]
+        .into_iter()
+        .all(|cost| cost >= 0)
+            && self.total_base_cost_i128() > 0
+    }
+
     /// Total base attack cost (sum of all cost components).
     pub fn total_base_cost(&self) -> i64 {
-        self.discovery_cost
-            .saturating_add(self.development_cost)
-            .saturating_add(self.deployment_cost)
-            .saturating_add(self.persistence_cost)
-            .saturating_add(self.evasion_cost)
+        saturating_i128_to_i64(self.total_base_cost_i128())
     }
 
     /// Adjusted total cost for a named strategy.
     ///
     /// Returns `None` if the strategy is not registered.
     pub fn adjusted_cost(&self, strategy: &str) -> Option<i64> {
-        self.strategy_adjustments.get(strategy).map(|adj| {
-            self.total_base_cost()
-                .saturating_add(adj.discovery_delta)
-                .saturating_add(adj.development_delta)
-                .saturating_add(adj.evasion_delta)
-        })
+        self.adjusted_cost_i128(strategy)
+            .map(saturating_i128_to_i64)
     }
 
     /// Attacker expected ROI in millionths.
     ///
     /// `ROI = (expected_gain - total_cost) * MILLIONTHS / total_cost`.
-    /// Returns `None` if total cost is zero (division guard).
+    /// Returns `None` if any base cost is negative or total cost is zero.
     pub fn expected_roi(&self) -> Option<i64> {
-        let total = self.total_base_cost();
-        if total == 0 {
+        if !self.has_valid_base_costs() {
             return None;
         }
-        let numerator = self.expected_gain.saturating_sub(total);
-        // Use i128 to avoid overflow during multiplication.
-        Some((numerator as i128 * MILLIONTHS as i128 / total as i128) as i64)
+        let total = self.total_base_cost_i128();
+        let numerator = i128::from(self.expected_gain) - total;
+        Some(saturating_i128_to_i64(
+            numerator * i128::from(MILLIONTHS) / total,
+        ))
     }
 
     /// Attacker expected ROI for a specific strategy.
     pub fn strategy_roi(&self, strategy: &str) -> Option<i64> {
-        let total = self.adjusted_cost(strategy)?;
-        if total == 0 {
+        if !self.has_valid_base_costs() {
             return None;
         }
-        let numerator = self.expected_gain.saturating_sub(total);
-        Some((numerator as i128 * MILLIONTHS as i128 / total as i128) as i64)
+        let total = self.adjusted_cost_i128(strategy)?;
+        if total <= 0 {
+            return None;
+        }
+        let numerator = i128::from(self.expected_gain) - total;
+        Some(saturating_i128_to_i64(
+            numerator * i128::from(MILLIONTHS) / total,
+        ))
     }
+}
+
+fn saturating_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 // ---------------------------------------------------------------------------
@@ -603,10 +653,12 @@ pub struct ActionCost {
 impl ActionCost {
     /// Total monetary-equivalent cost (excludes latency, which is temporal).
     pub fn total_monetary_cost(&self) -> i64 {
-        self.resource_consumption
-            .saturating_add(self.collateral_impact)
-            .saturating_add(self.operator_burden)
-            .saturating_add(self.reversibility_cost)
+        saturating_i128_to_i64(
+            i128::from(self.resource_consumption)
+                + i128::from(self.collateral_impact)
+                + i128::from(self.operator_burden)
+                + i128::from(self.reversibility_cost),
+        )
     }
 }
 
@@ -683,7 +735,10 @@ pub struct BlastRadiusEstimate {
 impl BlastRadiusEstimate {
     /// Total number of affected entities across all categories.
     pub fn total_affected_entities(&self) -> usize {
-        self.affected_extensions.len() + self.affected_data.len() + self.affected_nodes.len()
+        self.affected_extensions
+            .len()
+            .saturating_add(self.affected_data.len())
+            .saturating_add(self.affected_nodes.len())
     }
 
     /// Estimated blast radius at time `t_sec` after initial detection.
@@ -691,12 +746,19 @@ impl BlastRadiusEstimate {
     /// Returns base entity count scaled by cascade and growth.
     /// Result in millionths.
     pub fn radius_at_time(&self, t_sec: u64) -> i64 {
-        let base = self.total_affected_entities() as i64 * MILLIONTHS;
-        let growth = self.growth_rate_per_sec.saturating_mul(t_sec as i64);
-        // Scale by cascade probability.
-        let cascade_factor = MILLIONTHS.saturating_add(self.cascade_probability);
-        let total = base.saturating_add(growth);
-        (total as i128 * cascade_factor as i128 / MILLIONTHS as i128) as i64
+        let entity_count = i128::try_from(self.total_affected_entities()).unwrap_or(i128::MAX);
+        let base = entity_count.saturating_mul(i128::from(MILLIONTHS));
+        let growth = i128::from(self.growth_rate_per_sec).saturating_mul(i128::from(t_sec));
+        // Keep this infallible helper bounded even before callers invoke
+        // `validate`; validation still reports an out-of-range probability.
+        let cascade_probability = self.cascade_probability.clamp(0, MILLIONTHS);
+        let cascade_factor = i128::from(MILLIONTHS + cascade_probability);
+        let scaled = base
+            .saturating_add(growth)
+            .max(0)
+            .saturating_mul(cascade_factor)
+            / i128::from(MILLIONTHS);
+        saturating_i128_to_i64(scaled)
     }
 }
 
@@ -744,7 +806,10 @@ pub enum TrustEconomicsError {
     IncompleteLossMatrix { populated: usize, expected: usize },
     /// Cascade probability out of range [0, 1_000_000].
     CascadeProbabilityOutOfRange { value: i64 },
-    /// Attacker cost model has zero total cost (division guard).
+    /// Attacker cost model has zero total cost or a negative base component.
+    ///
+    /// The legacy variant name is retained in the serialized schema; both
+    /// cases make ROI unavailable and fail closed at validation boundaries.
     ZeroAttackerCost,
     /// Asymmetry violation in loss matrix.
     AsymmetryViolation {
@@ -809,7 +874,9 @@ impl TrustEconomicsModelInputs {
             });
         }
 
-        // Check asymmetry invariant.
+        // Check the established all-actions asymmetry invariant. The default
+        // conservative example intentionally violates it for strong
+        // containment actions and therefore is not a validated model input.
         let violations = self.loss_matrix.asymmetry_violations();
         if let Some(v) = violations.first() {
             return Err(TrustEconomicsError::AsymmetryViolation {
@@ -820,7 +887,7 @@ impl TrustEconomicsModelInputs {
         }
 
         // Check attacker cost.
-        if self.attacker_cost.total_base_cost() == 0 {
+        if !self.attacker_cost.has_valid_base_costs() {
             return Err(TrustEconomicsError::ZeroAttackerCost);
         }
 
@@ -1176,6 +1243,18 @@ mod tests {
         assert_eq!(sl.total(), i64::MAX);
     }
 
+    #[test]
+    fn sub_loss_total_saturates_only_after_exact_mixed_sign_sum() {
+        let sl = SubLoss {
+            direct_damage: i64::MAX,
+            operational_disruption: i64::MAX,
+            trust_damage: i64::MIN,
+            containment_cost: 0,
+            false_action_cost: 0,
+        };
+        assert_eq!(sl.total(), i64::MAX - 1);
+    }
+
     // -- DecomposedLossMatrix --
 
     #[test]
@@ -1249,6 +1328,21 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let restored: DecomposedLossMatrix = serde_json::from_str(&json).unwrap();
         assert_eq!(m, restored);
+    }
+
+    #[test]
+    fn loss_matrix_deserialization_rejects_duplicate_cells() {
+        let mut matrix = DecomposedLossMatrix::new(1, "enterprise", "duplicate test");
+        matrix.set(TrueState::Benign, ContainmentAction::Allow, SubLoss::zero());
+        let mut value = serde_json::to_value(&matrix).expect("matrix should serialize");
+        let cells = value["cells"]
+            .as_array_mut()
+            .expect("cells should serialize as an array");
+        cells.push(cells[0].clone());
+
+        let error = serde_json::from_value::<DecomposedLossMatrix>(value)
+            .expect_err("duplicate state/action cells must not be last-write-wins");
+        assert!(error.to_string().contains("duplicate loss cell"));
     }
 
     #[test]
@@ -1404,6 +1498,77 @@ mod tests {
             calibration_source: "test".into(),
         };
         assert_eq!(m.expected_roi(), None);
+    }
+
+    #[test]
+    fn attacker_negative_cost_component_is_invalid_even_if_total_is_positive() {
+        let m = AttackerCostModel {
+            discovery_cost: -1,
+            development_cost: 2,
+            deployment_cost: 0,
+            persistence_cost: 0,
+            evasion_cost: 0,
+            expected_gain: 10_000_000,
+            strategy_adjustments: BTreeMap::new(),
+            version: 1,
+            calibration_source: "test".into(),
+        };
+        assert!(!m.has_valid_base_costs());
+        assert_eq!(m.expected_roi(), None);
+    }
+
+    #[test]
+    fn attacker_roi_saturates_instead_of_wrapping() {
+        let mut m = AttackerCostModel {
+            discovery_cost: 1,
+            development_cost: 0,
+            deployment_cost: 0,
+            persistence_cost: 0,
+            evasion_cost: 0,
+            expected_gain: i64::MAX,
+            strategy_adjustments: BTreeMap::new(),
+            version: 1,
+            calibration_source: "test".into(),
+        };
+        assert_eq!(m.expected_roi(), Some(i64::MAX));
+
+        m.expected_gain = i64::MIN;
+        assert_eq!(m.expected_roi(), Some(i64::MIN));
+    }
+
+    #[test]
+    fn attacker_roi_uses_unsaturated_aggregate_cost() {
+        let m = AttackerCostModel {
+            discovery_cost: i64::MAX,
+            development_cost: i64::MAX,
+            deployment_cost: i64::MAX,
+            persistence_cost: i64::MAX,
+            evasion_cost: i64::MAX,
+            expected_gain: i64::MAX,
+            strategy_adjustments: BTreeMap::new(),
+            version: 1,
+            calibration_source: "test".into(),
+        };
+        assert_eq!(m.total_base_cost(), i64::MAX);
+        assert_eq!(m.expected_roi(), Some(-800_000));
+    }
+
+    #[test]
+    fn attacker_strategy_roi_rejects_non_positive_adjusted_cost() {
+        let mut m = sample_attacker_model();
+        let base_cost = m.total_base_cost();
+        m.strategy_adjustments.insert(
+            "invalid".to_string(),
+            StrategyCostAdjustment {
+                strategy_name: "invalid".to_string(),
+                discovery_delta: -base_cost,
+                development_delta: -1,
+                evasion_delta: 0,
+                justification: "test invalid adjusted cost".to_string(),
+            },
+        );
+        assert!(m.adjusted_cost("invalid").is_some_and(|cost| cost < 0));
+        assert_eq!(m.strategy_roi("invalid"), None);
     }
 
     #[test]
@@ -1595,6 +1760,24 @@ mod tests {
         let r0 = br.radius_at_time(0);
         let r10 = br.radius_at_time(10);
         assert!(r10 > r0, "radius should grow with time: r0={r0}, r10={r10}");
+    }
+
+    #[test]
+    fn blast_radius_extremes_saturate_without_signed_cast_wraparound() {
+        let extreme = BlastRadiusEstimate {
+            affected_extensions: ["ext-a".into()].into_iter().collect(),
+            affected_data: BTreeSet::new(),
+            affected_nodes: BTreeSet::new(),
+            cascade_probability: MILLIONTHS,
+            growth_rate_per_sec: i64::MAX,
+        };
+        assert_eq!(extreme.radius_at_time(u64::MAX), i64::MAX);
+
+        let shrinking = BlastRadiusEstimate {
+            growth_rate_per_sec: i64::MIN,
+            ..extreme
+        };
+        assert_eq!(shrinking.radius_at_time(u64::MAX), 0);
     }
 
     #[test]
@@ -1851,6 +2034,18 @@ mod tests {
             reversibility_cost: 400,
         };
         assert_eq!(c.total_monetary_cost(), 1000);
+    }
+
+    #[test]
+    fn action_cost_total_uses_exact_mixed_sign_sum_before_saturation() {
+        let cost = ActionCost {
+            execution_latency_us: 0,
+            resource_consumption: i64::MAX,
+            collateral_impact: i64::MAX,
+            operator_burden: i64::MIN,
+            reversibility_cost: 0,
+        };
+        assert_eq!(cost.total_monetary_cost(), i64::MAX - 1);
     }
 
     // -- Edge cases --

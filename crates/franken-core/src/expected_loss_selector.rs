@@ -31,27 +31,19 @@ use crate::trust_economics::{
 const MILLION: i64 = 1_000_000;
 const RUNTIME_DECISION_SCORING_COMPONENT: &str = "runtime_decision_scoring";
 const ALIEN_TAIL_CONFIDENCE_MILLIONTHS: i64 = 900_000; // 90%
-/// Default elevated p-value threshold (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_ELEVATED_PVALUE_MILLIONTHS: i64 = 100_000; // 10%
-/// Default critical p-value threshold (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_CRITICAL_PVALUE_MILLIONTHS: i64 = 50_000; // 5%
-/// Default elevated regime-shift sigma (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_ELEVATED_REGIME_SHIFT_MILLIONTHS: i64 = 2_500_000; // 2.5 sigma-equivalent
-/// Default critical regime-shift sigma (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_CRITICAL_REGIME_SHIFT_MILLIONTHS: i64 = 4_000_000; // 4.0 sigma-equivalent
 
-fn append_len_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    buf.extend_from_slice(bytes);
-}
+/// Version of the arithmetic used to aggregate posterior-weighted losses.
+pub const EXPECTED_LOSS_ALGORITHM_VERSION: &str = "expected-loss.aggregate-truncation-v1";
 
-fn append_len_prefixed_str(buf: &mut Vec<u8>, value: &str) {
-    append_len_prefixed_bytes(buf, value.as_bytes());
-}
+/// Schema version for serialized runtime decision score artifacts.
+///
+/// Version 2 adds explicit pricing provenance and commits the receipt hash to
+/// the complete artifact rather than a hand-selected subset of fields.
+pub const RUNTIME_DECISION_SCORE_SCHEMA_VERSION: &str = "franken-engine.runtime-decision-score.v2";
+
+const RUNTIME_DECISION_RECEIPT_DOMAIN: &[u8] = b"franken-engine.runtime-decision-score.receipt\0";
+const RUNTIME_DECISION_INPUT_DOMAIN: &[u8] = b"franken-engine.runtime-decision-scoring-input.v1\0";
+const LOSS_MATRIX_HASH_DOMAIN: &[u8] = b"franken-engine.loss-matrix.v2\0";
 
 // ---------------------------------------------------------------------------
 // ContainmentAction — the action space
@@ -121,7 +113,7 @@ pub struct LossEntry {
 
 /// Explicit loss matrix mapping (action, state) → cost.
 ///
-/// Must have entries for all 6×4 = 24 (action, state) pairs.
+/// Must have exactly one entry for every 6×4 = 24 (action, state) pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LossMatrix {
     /// Matrix ID for audit trail.
@@ -133,40 +125,60 @@ pub struct LossMatrix {
 impl LossMatrix {
     /// Create a loss matrix from explicit entries.
     ///
-    /// Panics in debug builds if not all 24 (action, state) pairs are present.
-    /// In release builds, missing pairs return a loss of 0.
+    /// Panics in debug builds unless every pair occurs exactly once. Callers
+    /// accepting deserialized matrices must check [`Self::is_complete`].
     pub fn new(matrix_id: impl Into<String>, entries: Vec<LossEntry>) -> Self {
         let m = Self {
             matrix_id: matrix_id.into(),
             entries,
         };
-        debug_assert!(m.is_complete(), "loss matrix must cover all 24 pairs");
+        debug_assert!(m.has_valid_id(), "loss matrix id must be non-blank");
+        debug_assert!(
+            m.is_complete(),
+            "loss matrix must contain all 24 pairs exactly once"
+        );
         m
     }
 
-    /// Look up the loss for a given (action, state) pair.
-    pub fn loss(&self, action: ContainmentAction, state: RiskState) -> i64 {
-        self.entries
-            .iter()
-            .find(|e| e.action == action && e.state == state)
-            .map(|e| e.loss_millionths)
-            .unwrap_or(0)
+    /// Whether the audit identity is non-blank.
+    pub fn has_valid_id(&self) -> bool {
+        !self.matrix_id.trim().is_empty()
     }
 
-    /// Whether all 24 pairs are present.
-    pub fn is_complete(&self) -> bool {
-        for action in &ContainmentAction::ALL {
-            for state in &RiskState::ALL {
-                if !self
-                    .entries
-                    .iter()
-                    .any(|e| e.action == *action && e.state == *state)
-                {
-                    return false;
-                }
-            }
+    /// Look up the loss for a given (action, state) pair.
+    ///
+    /// Fail-closed: a missing or duplicated pair is undeliverable.
+    pub fn loss(&self, action: ContainmentAction, state: RiskState) -> i64 {
+        let mut matching = self
+            .entries
+            .iter()
+            .filter(|entry| entry.action == action && entry.state == state);
+        let Some(entry) = matching.next() else {
+            return i64::MAX;
+        };
+        if matching.next().is_some() {
+            return i64::MAX;
         }
-        true
+        entry.loss_millionths
+    }
+
+    /// Whether all 24 pairs are present exactly once.
+    pub fn is_complete(&self) -> bool {
+        let expected_pairs = ContainmentAction::ALL.len() * RiskState::ALL.len();
+        if self.entries.len() != expected_pairs {
+            return false;
+        }
+        let mut seen_pairs = 0u128;
+        for entry in &self.entries {
+            let state_index = risk_state_index(entry.state);
+            let pair_index = entry.action.severity() as usize * RiskState::ALL.len() + state_index;
+            let pair_mask = 1u128 << pair_index;
+            if seen_pairs & pair_mask != 0 {
+                return false;
+            }
+            seen_pairs |= pair_mask;
+        }
+        seen_pairs.count_ones() as usize == expected_pairs
     }
 
     /// The "balanced" default loss matrix.
@@ -337,16 +349,19 @@ impl LossMatrix {
     }
 
     /// Content hash of the loss matrix for audit trail.
-    /// Entries sorted by (action, state) for insertion-order independence.
+    /// Entries sorted by (action, state, loss) for insertion-order independence,
+    /// including malformed matrices that contain duplicate pairs.
     pub fn content_hash(&self) -> ContentHash {
-        let mut buf = Vec::new();
-        append_len_prefixed_str(&mut buf, &self.matrix_id);
+        let mut buf = LOSS_MATRIX_HASH_DOMAIN.to_vec();
+        buf.extend_from_slice(&(self.matrix_id.len() as u64).to_le_bytes());
+        buf.extend_from_slice(self.matrix_id.as_bytes());
         let mut sorted: Vec<_> = self.entries.iter().collect();
-        sorted.sort_by(|a, b| {
-            a.action
-                .to_string()
-                .cmp(&b.action.to_string())
-                .then_with(|| a.state.to_string().cmp(&b.state.to_string()))
+        sorted.sort_by_key(|entry| {
+            (
+                entry.action.severity(),
+                risk_state_index(entry.state),
+                entry.loss_millionths,
+            )
         });
         buf.extend_from_slice(&(sorted.len() as u64).to_le_bytes());
         for entry in &sorted {
@@ -359,6 +374,15 @@ impl LossMatrix {
             buf.extend_from_slice(&entry.loss_millionths.to_le_bytes());
         }
         ContentHash::compute(&buf)
+    }
+}
+
+fn risk_state_index(state: RiskState) -> usize {
+    match state {
+        RiskState::Benign => 0,
+        RiskState::Anomalous => 1,
+        RiskState::Malicious => 2,
+        RiskState::Unknown => 3,
     }
 }
 
@@ -432,6 +456,19 @@ pub struct RuntimeDecisionScoringInput {
     pub blocked_actions: BTreeSet<ContainmentAction>,
 }
 
+impl RuntimeDecisionScoringInput {
+    /// Content identity for the complete scoring input used by a receipt.
+    pub fn content_hash(&self) -> Result<ContentHash, RuntimeDecisionScoringError> {
+        let mut preimage = RUNTIME_DECISION_INPUT_DOMAIN.to_vec();
+        serde_json::to_writer(&mut preimage, self).map_err(|error| {
+            RuntimeDecisionScoringError::EvidenceSerialization {
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(ContentHash::compute(&preimage))
+    }
+}
+
 /// Deterministic confidence interval over selected expected-loss estimate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionConfidenceInterval {
@@ -502,6 +539,7 @@ pub struct AlienRiskEnvelope {
 /// Runtime decision scoring artifact with expected-loss + attacker-ROI outputs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeDecisionScore {
+    pub schema_version: String,
     pub trace_id: String,
     pub decision_id: String,
     pub policy_id: String,
@@ -509,7 +547,11 @@ pub struct RuntimeDecisionScore {
     pub policy_version: String,
     pub timestamp_ns: u64,
     pub epoch: SecurityEpoch,
+    /// Content identity of the complete [`RuntimeDecisionScoringInput`].
+    pub scoring_input_hash: ContentHash,
     pub loss_matrix_version: String,
+    pub loss_matrix_hash: ContentHash,
+    pub pricing_algorithm: String,
     pub candidate_actions: Vec<CandidateActionScore>,
     pub selected_action: ContainmentAction,
     pub selected_expected_loss_millionths: i64,
@@ -533,10 +575,43 @@ pub struct RuntimeDecisionScore {
     pub events: Vec<RuntimeDecisionScoreEvent>,
 }
 
+impl RuntimeDecisionScore {
+    /// Recompute the receipt hash over the complete serialized artifact.
+    ///
+    /// The hash field is zeroed while constructing the preimage. All maps and
+    /// sets reachable from this artifact have deterministic ordering, so the
+    /// resulting JSON byte sequence is stable for a given schema version.
+    pub fn recompute_receipt_preimage_hash(
+        &self,
+    ) -> Result<ContentHash, RuntimeDecisionScoringError> {
+        let mut artifact = self.clone();
+        artifact.receipt_preimage_hash = ContentHash::default();
+
+        let mut preimage = RUNTIME_DECISION_RECEIPT_DOMAIN.to_vec();
+        serde_json::to_writer(&mut preimage, &artifact).map_err(|error| {
+            RuntimeDecisionScoringError::EvidenceSerialization {
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(ContentHash::compute(&preimage))
+    }
+
+    /// Verify that the stored receipt hash matches the complete artifact.
+    pub fn verify_receipt_preimage_hash(&self) -> Result<bool, RuntimeDecisionScoringError> {
+        Ok(self
+            .receipt_preimage_hash
+            .constant_time_eq(&self.recompute_receipt_preimage_hash()?))
+    }
+}
+
 /// Runtime scoring errors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeDecisionScoringError {
     MissingField { field: String },
+    InvalidPosterior,
+    InvalidLossMatrixId,
+    IncompleteLossMatrix,
+    EvidenceSerialization { detail: String },
     ZeroAttackerCost,
     AllActionsBlocked,
 }
@@ -545,6 +620,16 @@ impl fmt::Display for RuntimeDecisionScoringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingField { field } => write!(f, "missing required field: {field}"),
+            Self::InvalidPosterior => {
+                f.write_str("posterior is not a valid probability distribution")
+            }
+            Self::InvalidLossMatrixId => f.write_str("loss matrix id must be non-blank"),
+            Self::IncompleteLossMatrix => {
+                f.write_str("loss matrix must contain every action/state pair exactly once")
+            }
+            Self::EvidenceSerialization { detail } => {
+                write!(f, "failed to serialize runtime decision evidence: {detail}")
+            }
             Self::ZeroAttackerCost => write!(f, "attacker cost model has zero total cost"),
             Self::AllActionsBlocked => write!(f, "all candidate actions are blocked by guardrails"),
         }
@@ -585,24 +670,61 @@ impl ExpectedLossSelector {
 
     /// Compute expected losses for all actions given a posterior.
     pub fn expected_losses(&self, posterior: &Posterior) -> BTreeMap<ContainmentAction, i64> {
+        if !posterior.is_valid()
+            || !self.loss_matrix.has_valid_id()
+            || !self.loss_matrix.is_complete()
+        {
+            return ContainmentAction::ALL
+                .iter()
+                .map(|action| (*action, i64::MAX))
+                .collect();
+        }
+
         let mut losses = BTreeMap::new();
         for action in &ContainmentAction::ALL {
-            let mut expected_loss: i64 = 0;
+            let mut weighted_loss_numerator = 0i128;
             for state in &RiskState::ALL {
-                let p = posterior.probability(*state);
-                let l = self.loss_matrix.loss(*action, *state);
-                // E[Loss] += P(s) * L(a,s) / MILLION
-                // Use i128 to prevent overflow: p and l are millionths,
-                // so p * l can exceed i64::MAX for large loss values.
-                expected_loss += (p as i128 * l as i128 / MILLION as i128) as i64;
+                let weighted_loss = i128::from(posterior.probability(*state))
+                    * i128::from(self.loss_matrix.loss(*action, *state));
+                weighted_loss_numerator = weighted_loss_numerator.saturating_add(weighted_loss);
             }
-            losses.insert(*action, expected_loss);
+            // Divide once after summing. Dividing each state independently
+            // discards up to one micro-unit per state and systematically
+            // underprices small positive losses.
+            losses.insert(
+                *action,
+                saturating_i128_to_i64(weighted_loss_numerator / i128::from(MILLION)),
+            );
         }
         losses
     }
 
     /// Select the optimal action (minimum expected loss).
     pub fn select(&mut self, posterior: &Posterior) -> ActionDecision {
+        if !posterior.is_valid()
+            || !self.loss_matrix.has_valid_id()
+            || !self.loss_matrix.is_complete()
+        {
+            let all_expected_losses = ContainmentAction::ALL
+                .iter()
+                .map(|action| (action.to_string(), i64::MAX))
+                .collect();
+            self.decisions_made = self.decisions_made.saturating_add(1);
+            return ActionDecision {
+                action: ContainmentAction::Quarantine,
+                expected_loss_millionths: i64::MAX,
+                runner_up_action: ContainmentAction::Terminate,
+                runner_up_loss_millionths: i64::MAX,
+                explanation: DecisionExplanation {
+                    posterior_snapshot: posterior.clone(),
+                    loss_matrix_id: self.loss_matrix.matrix_id.clone(),
+                    all_expected_losses,
+                    margin_millionths: 0,
+                },
+                epoch: self.epoch,
+            };
+        }
+
         let losses = self.expected_losses(posterior);
 
         // Sort by (expected_loss, severity) for deterministic tie-breaking.
@@ -619,7 +741,7 @@ impl ExpectedLossSelector {
         let all_expected_losses: BTreeMap<String, i64> =
             losses.iter().map(|(a, l)| (a.to_string(), *l)).collect();
 
-        self.decisions_made += 1;
+        self.decisions_made = self.decisions_made.saturating_add(1);
 
         ActionDecision {
             action: best_action,
@@ -643,6 +765,12 @@ impl ExpectedLossSelector {
         input: &RuntimeDecisionScoringInput,
     ) -> Result<RuntimeDecisionScore, RuntimeDecisionScoringError> {
         validate_runtime_scoring_input(input)?;
+        if !self.loss_matrix.has_valid_id() {
+            return Err(RuntimeDecisionScoringError::InvalidLossMatrixId);
+        }
+        if !self.loss_matrix.is_complete() {
+            return Err(RuntimeDecisionScoringError::IncompleteLossMatrix);
+        }
 
         let attacker_roi_millionths = input
             .attacker_cost_model
@@ -743,17 +871,6 @@ impl ExpectedLossSelector {
             ));
         }
 
-        self.decisions_made += 1;
-        let receipt_preimage_hash = compute_runtime_decision_receipt_hash(
-            input,
-            selected,
-            &confidence_interval,
-            &attacker_roi,
-            &fleet_roi_summary,
-            &alien_risk_envelope,
-            alien_floor_gap_steps,
-        );
-
         let mut events =
             build_runtime_decision_events(input, &ranked, selected.0, &fleet_assessments);
         events.push(RuntimeDecisionScoreEvent {
@@ -840,7 +957,8 @@ impl ExpectedLossSelector {
             });
         }
 
-        Ok(RuntimeDecisionScore {
+        let mut score = RuntimeDecisionScore {
+            schema_version: RUNTIME_DECISION_SCORE_SCHEMA_VERSION.to_string(),
             trace_id: input.trace_id.clone(),
             decision_id: input.decision_id.clone(),
             policy_id: input.policy_id.clone(),
@@ -848,7 +966,10 @@ impl ExpectedLossSelector {
             policy_version: input.policy_version.clone(),
             timestamp_ns: input.timestamp_ns,
             epoch: self.epoch,
+            scoring_input_hash: input.content_hash()?,
             loss_matrix_version: self.loss_matrix.matrix_id.clone(),
+            loss_matrix_hash: self.loss_matrix.content_hash(),
+            pricing_algorithm: EXPECTED_LOSS_ALGORITHM_VERSION.to_string(),
             candidate_actions,
             selected_action: selected.0,
             selected_expected_loss_millionths: selected.1,
@@ -861,14 +982,17 @@ impl ExpectedLossSelector {
             sensitivity_deltas,
             alien_risk_envelope,
             alien_floor_gap_steps,
-            receipt_preimage_hash,
+            receipt_preimage_hash: ContentHash::default(),
             events,
-        })
+        };
+        score.receipt_preimage_hash = score.recompute_receipt_preimage_hash()?;
+        self.decisions_made = self.decisions_made.saturating_add(1);
+        Ok(score)
     }
 
-    /// Set the security epoch.
+    /// Raise the security epoch without permitting rollback.
     pub fn set_epoch(&mut self, epoch: SecurityEpoch) {
-        self.epoch = epoch;
+        self.epoch = self.epoch.max(epoch);
     }
 
     /// Number of decisions made.
@@ -915,6 +1039,9 @@ fn validate_runtime_scoring_input(
             field: "policy_version".to_string(),
         });
     }
+    if !input.posterior.is_valid() {
+        return Err(RuntimeDecisionScoringError::InvalidPosterior);
+    }
     Ok(())
 }
 
@@ -923,14 +1050,68 @@ fn state_contributions(
     loss_matrix: &LossMatrix,
     posterior: &Posterior,
 ) -> BTreeMap<String, i64> {
-    RiskState::ALL
+    let mut terms: Vec<(RiskState, i128, i128)> = RiskState::ALL
         .iter()
         .map(|state| {
-            let contribution = (posterior.probability(*state) as i128
-                * loss_matrix.loss(action, *state) as i128
-                / MILLION as i128) as i64;
-            (state.to_string(), contribution)
+            let numerator = i128::from(posterior.probability(*state))
+                * i128::from(loss_matrix.loss(action, *state));
+            (
+                *state,
+                numerator / i128::from(MILLION),
+                numerator % i128::from(MILLION),
+            )
         })
+        .collect();
+
+    let total_numerator = RiskState::ALL.iter().fold(0i128, |sum, state| {
+        sum.saturating_add(
+            i128::from(posterior.probability(*state))
+                * i128::from(loss_matrix.loss(action, *state)),
+        )
+    });
+    let target = total_numerator / i128::from(MILLION);
+    let base_sum = terms
+        .iter()
+        .fold(0i128, |sum, (_, quotient, _)| sum.saturating_add(*quotient));
+    let residual_units = target.saturating_sub(base_sum);
+
+    // Apportion the aggregate truncation residual using a deterministic
+    // largest-remainder rule. This keeps per-state contributions within one
+    // micro-unit of their exact values while making their sum equal the
+    // aggregate expected loss.
+    if residual_units != 0 {
+        let positive = residual_units > 0;
+        let mut ranked: Vec<usize> = (0..terms.len())
+            .filter(|index| {
+                if positive {
+                    terms[*index].2 > 0
+                } else {
+                    terms[*index].2 < 0
+                }
+            })
+            .collect();
+        ranked.sort_by(|left, right| {
+            let remainder_order = if positive {
+                terms[*right].2.cmp(&terms[*left].2)
+            } else {
+                terms[*left].2.cmp(&terms[*right].2)
+            };
+            remainder_order.then_with(|| left.cmp(right))
+        });
+        let adjustment_count = residual_units.unsigned_abs() as usize;
+        debug_assert!(adjustment_count <= ranked.len());
+        for index in ranked.into_iter().take(adjustment_count) {
+            terms[index].1 += if positive { 1 } else { -1 };
+        }
+    }
+
+    debug_assert_eq!(
+        terms.iter().map(|(_, quotient, _)| *quotient).sum::<i128>(),
+        target
+    );
+    terms
+        .into_iter()
+        .map(|(state, contribution, _)| (state.to_string(), saturating_i128_to_i64(contribution)))
         .collect()
 }
 
@@ -1027,60 +1208,6 @@ fn compute_borderline_sensitivity(
     let _ = posterior;
 
     (true, deltas)
-}
-
-fn compute_runtime_decision_receipt_hash(
-    input: &RuntimeDecisionScoringInput,
-    selected: (ContainmentAction, i64),
-    confidence_interval: &DecisionConfidenceInterval,
-    attacker_roi: &AttackerRoiAssessment,
-    fleet_roi_summary: &FleetRoiSummary,
-    alien_risk_envelope: &AlienRiskEnvelope,
-    alien_floor_gap_steps: u32,
-) -> ContentHash {
-    let mut preimage = Vec::new();
-    append_len_prefixed_str(&mut preimage, &input.trace_id);
-    append_len_prefixed_str(&mut preimage, &input.decision_id);
-    append_len_prefixed_str(&mut preimage, &input.policy_id);
-    append_len_prefixed_str(&mut preimage, &input.extension_id);
-    append_len_prefixed_str(&mut preimage, &input.policy_version);
-    preimage.extend_from_slice(&input.timestamp_ns.to_le_bytes());
-    append_len_prefixed_str(&mut preimage, &selected.0.to_string());
-    preimage.extend_from_slice(&selected.1.to_le_bytes());
-    preimage.extend_from_slice(&confidence_interval.lower_millionths.to_le_bytes());
-    preimage.extend_from_slice(&confidence_interval.upper_millionths.to_le_bytes());
-    preimage.extend_from_slice(&attacker_roi.roi_millionths.to_le_bytes());
-    preimage.extend_from_slice(&(fleet_roi_summary.extension_count as u64).to_le_bytes());
-    preimage.extend_from_slice(&fleet_roi_summary.average_roi_millionths.to_le_bytes());
-    preimage.extend_from_slice(&alien_risk_envelope.tail_confidence_millionths.to_le_bytes());
-    preimage.extend_from_slice(&alien_risk_envelope.tail_var_millionths.to_le_bytes());
-    preimage.extend_from_slice(&alien_risk_envelope.tail_cvar_millionths.to_le_bytes());
-    preimage.extend_from_slice(
-        &alien_risk_envelope
-            .conformal_quantile_millionths
-            .to_le_bytes(),
-    );
-    preimage.extend_from_slice(
-        &alien_risk_envelope
-            .conformal_p_value_millionths
-            .to_le_bytes(),
-    );
-    preimage.extend_from_slice(&alien_risk_envelope.e_value_millionths.to_le_bytes());
-    preimage.extend_from_slice(
-        &alien_risk_envelope
-            .regime_shift_score_millionths
-            .to_le_bytes(),
-    );
-    append_len_prefixed_str(&mut preimage, &alien_risk_envelope.alert_level.to_string());
-    match alien_risk_envelope.recommended_floor_action {
-        Some(action) => {
-            preimage.push(1);
-            append_len_prefixed_str(&mut preimage, &action.to_string());
-        }
-        None => preimage.push(0),
-    }
-    preimage.extend_from_slice(&alien_floor_gap_steps.to_le_bytes());
-    ContentHash::compute(&preimage)
 }
 
 fn floor_gap_steps(
@@ -1185,13 +1312,23 @@ fn compute_conformal_roi_monitor(
     quantile_confidence_millionths: i64,
 ) -> (i64, i64, i64) {
     if history_millionths.is_empty() {
-        return (current_roi_millionths, 500_000, 2_000_000);
+        // With no calibration observations there is no evidence that the
+        // current ROI is extreme. Return the neutral conformal p/e pair
+        // instead of manufacturing a twofold e-value from absent data.
+        return (current_roi_millionths, MILLION, MILLION);
     }
 
     let mut sorted = history_millionths.to_vec();
     sorted.sort_unstable();
-    let idx = ((sorted.len() as i64 - 1) * quantile_confidence_millionths / MILLION)
-        .clamp(0, sorted.len() as i64 - 1) as usize;
+    // Nearest-rank empirical quantile: ceil(q * n), converted to a zero-based
+    // index. Using floor((n - 1) * q) understates high quantiles for small
+    // calibration sets (for n=2 and q=.95 it incorrectly selects the minimum).
+    let confidence = quantile_confidence_millionths.clamp(0, MILLION) as u128;
+    let sample_count = sorted.len() as u128;
+    let rank = (sample_count * confidence)
+        .div_ceil(MILLION as u128)
+        .clamp(1, sample_count);
+    let idx = usize::try_from(rank - 1).unwrap_or(sorted.len() - 1);
     let conformal_quantile = sorted[idx];
 
     let greater_or_equal = history_millionths
@@ -1369,6 +1506,20 @@ mod tests {
         Posterior::from_millionths(100, 800, 50, 50)
     }
 
+    fn uniform_loss_matrix(matrix_id: &str, loss_millionths: i64) -> LossMatrix {
+        let entries = ContainmentAction::ALL
+            .iter()
+            .flat_map(|action| {
+                RiskState::ALL.iter().map(move |state| LossEntry {
+                    action: *action,
+                    state: *state,
+                    loss_millionths,
+                })
+            })
+            .collect();
+        LossMatrix::new(matrix_id, entries)
+    }
+
     fn sample_attacker_cost_model() -> AttackerCostModel {
         let mut strategy_adjustments = BTreeMap::new();
         strategy_adjustments.insert(
@@ -1473,8 +1624,23 @@ mod tests {
     #[test]
     fn loss_matrix_content_hash_deterministic() {
         let m1 = LossMatrix::balanced();
-        let m2 = LossMatrix::balanced();
+        let mut m2 = LossMatrix::balanced();
+        m2.entries.reverse();
         assert_eq!(m1.content_hash(), m2.content_hash());
+    }
+
+    #[test]
+    fn malformed_duplicate_order_does_not_change_loss_matrix_hash() {
+        let mut first = LossMatrix::balanced();
+        first.entries[0].loss_millionths = 10;
+        first.entries[1].action = first.entries[0].action;
+        first.entries[1].state = first.entries[0].state;
+        first.entries[1].loss_millionths = 20;
+        let mut second = first.clone();
+        second.entries.swap(0, 1);
+
+        assert!(!first.is_complete());
+        assert_eq!(first.content_hash(), second.content_hash());
     }
 
     #[test]
@@ -1482,6 +1648,24 @@ mod tests {
         let balanced = LossMatrix::balanced();
         let conservative = LossMatrix::conservative();
         assert_ne!(balanced.content_hash(), conservative.content_hash());
+    }
+
+    #[test]
+    fn duplicate_pair_makes_loss_matrix_incomplete() {
+        let mut matrix = LossMatrix::balanced();
+        matrix.entries.push(matrix.entries[0].clone());
+        assert!(!matrix.is_complete());
+        assert_eq!(
+            matrix.loss(ContainmentAction::Allow, RiskState::Benign),
+            i64::MAX
+        );
+    }
+
+    #[test]
+    fn blank_loss_matrix_id_is_invalid() {
+        let mut matrix = LossMatrix::balanced();
+        matrix.matrix_id = " \t ".to_string();
+        assert!(!matrix.has_valid_id());
     }
 
     #[test]
@@ -1574,6 +1758,48 @@ mod tests {
         let s2 = ExpectedLossSelector::balanced();
         let p = uncertain_posterior();
         assert_eq!(s1.expected_losses(&p), s2.expected_losses(&p));
+    }
+
+    #[test]
+    fn expected_losses_divide_after_aggregate_for_subunit_terms() {
+        let posterior = Posterior::uniform();
+        for (matrix_id, per_state_loss, expected) in
+            [("micro-positive", 1, 1), ("micro-negative", -1, -1)]
+        {
+            let selector =
+                ExpectedLossSelector::new(uniform_loss_matrix(matrix_id, per_state_loss));
+            let losses = selector.expected_losses(&posterior);
+            assert!(losses.values().all(|loss| *loss == expected));
+        }
+    }
+
+    #[test]
+    fn invalid_posterior_and_incomplete_matrix_fail_closed_in_selection() {
+        let invalid = Posterior {
+            p_benign: -1,
+            p_anomalous: 0,
+            p_malicious: MILLION + 1,
+            p_unknown: 0,
+        };
+        let mut selector = ExpectedLossSelector::balanced();
+        assert!(
+            selector
+                .expected_losses(&invalid)
+                .values()
+                .all(|loss| *loss == i64::MAX)
+        );
+        let decision = selector.select(&invalid);
+        assert_eq!(decision.action, ContainmentAction::Quarantine);
+        assert_eq!(decision.expected_loss_millionths, i64::MAX);
+
+        let incomplete = LossMatrix {
+            matrix_id: "incomplete".to_string(),
+            entries: Vec::new(),
+        };
+        let mut selector = ExpectedLossSelector::new(incomplete);
+        let decision = selector.select(&Posterior::uniform());
+        assert_eq!(decision.action, ContainmentAction::Quarantine);
+        assert_eq!(decision.expected_loss_millionths, i64::MAX);
     }
 
     // -----------------------------------------------------------------------
@@ -1691,6 +1917,16 @@ mod tests {
     fn epoch_stamped_on_decision() {
         let mut selector = ExpectedLossSelector::balanced();
         selector.set_epoch(SecurityEpoch::from_raw(42));
+        let decision = selector.select(&uncertain_posterior());
+        assert_eq!(decision.epoch, SecurityEpoch::from_raw(42));
+    }
+
+    #[test]
+    fn epoch_update_cannot_roll_back_selector_state() {
+        let mut selector = ExpectedLossSelector::balanced();
+        selector.set_epoch(SecurityEpoch::from_raw(42));
+        selector.set_epoch(SecurityEpoch::from_raw(7));
+
         let decision = selector.select(&uncertain_posterior());
         assert_eq!(decision.epoch, SecurityEpoch::from_raw(42));
     }
@@ -1869,7 +2105,18 @@ mod tests {
         assert_eq!(artifact.policy_version, input.policy_version);
         assert_eq!(artifact.timestamp_ns, input.timestamp_ns);
         assert_eq!(artifact.epoch, SecurityEpoch::from_raw(7));
+        assert_eq!(
+            artifact.schema_version,
+            RUNTIME_DECISION_SCORE_SCHEMA_VERSION
+        );
+        assert_eq!(artifact.scoring_input_hash, input.content_hash().unwrap());
         assert_eq!(artifact.loss_matrix_version, "balanced-v1");
+        assert_eq!(
+            artifact.loss_matrix_hash,
+            LossMatrix::balanced().content_hash()
+        );
+        assert_eq!(artifact.pricing_algorithm, EXPECTED_LOSS_ALGORITHM_VERSION);
+        assert!(artifact.verify_receipt_preimage_hash().unwrap());
         assert_eq!(
             artifact.candidate_actions.len(),
             ContainmentAction::ALL.len()
@@ -2041,6 +2288,33 @@ mod tests {
             .score_runtime_decision(&input)
             .expect_err("all actions blocked should fail");
         assert_eq!(err, RuntimeDecisionScoringError::AllActionsBlocked);
+    }
+
+    #[test]
+    fn runtime_scoring_rejects_invalid_posterior_and_incomplete_matrix() {
+        let mut selector = ExpectedLossSelector::balanced();
+        let mut input = sample_runtime_input(uncertain_posterior());
+        input.posterior = Posterior {
+            p_benign: -1,
+            p_anomalous: 0,
+            p_malicious: MILLION + 1,
+            p_unknown: 0,
+        };
+        assert_eq!(
+            selector.score_runtime_decision(&input).unwrap_err(),
+            RuntimeDecisionScoringError::InvalidPosterior
+        );
+
+        let incomplete = LossMatrix {
+            matrix_id: "incomplete".to_string(),
+            entries: Vec::new(),
+        };
+        let mut selector = ExpectedLossSelector::new(incomplete);
+        let input = sample_runtime_input(uncertain_posterior());
+        assert_eq!(
+            selector.score_runtime_decision(&input).unwrap_err(),
+            RuntimeDecisionScoringError::IncompleteLossMatrix
+        );
     }
 
     #[test]
@@ -2396,6 +2670,12 @@ mod tests {
             RuntimeDecisionScoringError::MissingField {
                 field: "trace_id".to_string(),
             },
+            RuntimeDecisionScoringError::InvalidPosterior,
+            RuntimeDecisionScoringError::InvalidLossMatrixId,
+            RuntimeDecisionScoringError::IncompleteLossMatrix,
+            RuntimeDecisionScoringError::EvidenceSerialization {
+                detail: "writer failed".to_string(),
+            },
             RuntimeDecisionScoringError::ZeroAttackerCost,
             RuntimeDecisionScoringError::AllActionsBlocked,
         ];
@@ -2412,13 +2692,19 @@ mod tests {
             RuntimeDecisionScoringError::MissingField {
                 field: "x".to_string(),
             },
+            RuntimeDecisionScoringError::InvalidPosterior,
+            RuntimeDecisionScoringError::InvalidLossMatrixId,
+            RuntimeDecisionScoringError::IncompleteLossMatrix,
+            RuntimeDecisionScoringError::EvidenceSerialization {
+                detail: "writer failed".to_string(),
+            },
             RuntimeDecisionScoringError::ZeroAttackerCost,
             RuntimeDecisionScoringError::AllActionsBlocked,
         ]
         .iter()
         .map(|e| e.to_string())
         .collect();
-        assert_eq!(strs.len(), 3);
+        assert_eq!(strs.len(), 7);
     }
 
     #[test]
@@ -2516,15 +2802,18 @@ mod tests {
         }
     }
 
-    // -- Enrichment: LossMatrix::loss for missing pair returns 0 --
+    // -- Enrichment: LossMatrix::loss fails closed for a missing pair --
 
     #[test]
-    fn loss_matrix_missing_pair_returns_zero() {
+    fn loss_matrix_missing_pair_is_undeliverable() {
         let matrix = LossMatrix {
             matrix_id: "empty".to_string(),
             entries: vec![],
         };
-        assert_eq!(matrix.loss(ContainmentAction::Allow, RiskState::Benign), 0);
+        assert_eq!(
+            matrix.loss(ContainmentAction::Allow, RiskState::Benign),
+            i64::MAX
+        );
     }
 
     // -- Enrichment: DecisionExplanation serde --
@@ -2709,7 +2998,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_attacker_cost_rejected() {
+    fn zero_and_negative_attacker_costs_are_rejected() {
         let mut selector = ExpectedLossSelector::balanced();
         let mut input = sample_runtime_input(uncertain_posterior());
         input.attacker_cost_model.expected_gain = 0;
@@ -2719,6 +3008,11 @@ mod tests {
         input.attacker_cost_model.persistence_cost = 0;
         input.attacker_cost_model.evasion_cost = 0;
         input.attacker_cost_model.strategy_adjustments.clear();
+        let err = selector.score_runtime_decision(&input).unwrap_err();
+        assert_eq!(err, RuntimeDecisionScoringError::ZeroAttackerCost);
+
+        input.attacker_cost_model.discovery_cost = -1;
+        input.attacker_cost_model.development_cost = 2;
         let err = selector.score_runtime_decision(&input).unwrap_err();
         assert_eq!(err, RuntimeDecisionScoringError::ZeroAttackerCost);
     }
@@ -2759,9 +3053,25 @@ mod tests {
         let mut input = sample_runtime_input(uncertain_posterior());
         input.extension_roi_history_millionths.clear();
         let score = selector.score_runtime_decision(&input).unwrap();
-        assert!((1..=MILLION).contains(&score.alien_risk_envelope.conformal_p_value_millionths));
-        assert!(score.alien_risk_envelope.e_value_millionths >= MILLION);
+        assert_eq!(
+            score.alien_risk_envelope.conformal_p_value_millionths, MILLION,
+            "no calibration history must produce a neutral p-value"
+        );
+        assert_eq!(
+            score.alien_risk_envelope.e_value_millionths, MILLION,
+            "no calibration history must not manufacture evidence"
+        );
         assert_eq!(score.alien_risk_envelope.regime_shift_score_millionths, 0);
+    }
+
+    #[test]
+    fn conformal_quantile_uses_conservative_nearest_rank() {
+        let history = [100_000, 900_000];
+        let (quantile, _, _) = compute_conformal_roi_monitor(&history, 500_000, 950_000);
+        assert_eq!(
+            quantile, 900_000,
+            "the 95th percentile of two samples is the maximum"
+        );
     }
 
     #[test]
@@ -2829,11 +3139,37 @@ mod tests {
     }
 
     #[test]
+    fn state_contributions_apportion_aggregate_rounding_residual() {
+        let mut selector = ExpectedLossSelector::new(uniform_loss_matrix("micro-positive", 1));
+        let input = sample_runtime_input(Posterior::uniform());
+        let score = selector.score_runtime_decision(&input).unwrap();
+        for candidate in &score.candidate_actions {
+            assert_eq!(candidate.expected_loss_millionths, 1);
+            assert_eq!(
+                candidate
+                    .state_contributions_millionths
+                    .values()
+                    .sum::<i64>(),
+                1
+            );
+        }
+
+        let negative_matrix = uniform_loss_matrix("micro-negative", -1);
+        let contributions = state_contributions(
+            ContainmentAction::Allow,
+            &negative_matrix,
+            &Posterior::uniform(),
+        );
+        assert_eq!(contributions.values().sum::<i64>(), -1);
+    }
+
+    #[test]
     fn runtime_decision_scoring_input_serde_roundtrip() {
         let input = sample_runtime_input(uncertain_posterior());
         let json = serde_json::to_string(&input).unwrap();
         let back: RuntimeDecisionScoringInput = serde_json::from_str(&json).unwrap();
         assert_eq!(input, back);
+        assert_eq!(input.content_hash().unwrap(), back.content_hash().unwrap());
     }
 
     #[test]
@@ -2844,6 +3180,7 @@ mod tests {
         let json = serde_json::to_string(&score).unwrap();
         let back: RuntimeDecisionScore = serde_json::from_str(&json).unwrap();
         assert_eq!(score, back);
+        assert!(back.verify_receipt_preimage_hash().unwrap());
     }
 
     #[test]
@@ -2992,6 +3329,28 @@ mod tests {
         let score1 = selector.score_runtime_decision(&input1).unwrap();
         let score2 = selector.score_runtime_decision(&input2).unwrap();
         assert_ne!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
+    }
+
+    #[test]
+    fn receipt_preimage_hash_commits_to_complete_runtime_artifact() {
+        let mut selector = ExpectedLossSelector::balanced();
+        selector.set_epoch(SecurityEpoch::from_raw(7));
+        let score = selector
+            .score_runtime_decision(&sample_runtime_input(uncertain_posterior()))
+            .unwrap();
+        assert!(score.verify_receipt_preimage_hash().unwrap());
+
+        let mut changed = score.clone();
+        changed.candidate_actions[0].expected_loss_millionths += 1;
+        assert!(!changed.verify_receipt_preimage_hash().unwrap());
+
+        let mut changed = score.clone();
+        changed.scoring_input_hash = ContentHash::compute(b"different scoring input");
+        assert!(!changed.verify_receipt_preimage_hash().unwrap());
+
+        let mut changed = score;
+        changed.events[0].outcome.push_str("-tampered");
+        assert!(!changed.verify_receipt_preimage_hash().unwrap());
     }
 
     #[test]

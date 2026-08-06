@@ -211,14 +211,40 @@ fn scoring_error_display_all_actions_blocked() {
 }
 
 #[test]
+fn scoring_error_display_invalid_pricing_inputs() {
+    assert!(
+        RuntimeDecisionScoringError::InvalidPosterior
+            .to_string()
+            .contains("posterior")
+    );
+    assert!(
+        RuntimeDecisionScoringError::InvalidLossMatrixId
+            .to_string()
+            .contains("matrix id")
+    );
+    assert!(
+        RuntimeDecisionScoringError::IncompleteLossMatrix
+            .to_string()
+            .contains("loss matrix")
+    );
+}
+
+#[test]
 fn scoring_error_display_all_unique() {
     let displays: Vec<String> = vec![
         RuntimeDecisionScoringError::MissingField { field: "x".into() }.to_string(),
+        RuntimeDecisionScoringError::InvalidPosterior.to_string(),
+        RuntimeDecisionScoringError::InvalidLossMatrixId.to_string(),
+        RuntimeDecisionScoringError::IncompleteLossMatrix.to_string(),
+        RuntimeDecisionScoringError::EvidenceSerialization {
+            detail: "json writer failed".into(),
+        }
+        .to_string(),
         RuntimeDecisionScoringError::ZeroAttackerCost.to_string(),
         RuntimeDecisionScoringError::AllActionsBlocked.to_string(),
     ];
     let unique: BTreeSet<_> = displays.iter().collect();
-    assert_eq!(unique.len(), 3);
+    assert_eq!(unique.len(), 7);
 }
 
 #[test]
@@ -236,6 +262,12 @@ fn serde_roundtrip_scoring_error_all() {
     for e in [
         RuntimeDecisionScoringError::MissingField {
             field: "trace_id".into(),
+        },
+        RuntimeDecisionScoringError::InvalidPosterior,
+        RuntimeDecisionScoringError::InvalidLossMatrixId,
+        RuntimeDecisionScoringError::IncompleteLossMatrix,
+        RuntimeDecisionScoringError::EvidenceSerialization {
+            detail: "json writer failed".into(),
         },
         RuntimeDecisionScoringError::ZeroAttackerCost,
         RuntimeDecisionScoringError::AllActionsBlocked,

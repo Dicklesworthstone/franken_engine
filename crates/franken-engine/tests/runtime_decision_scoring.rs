@@ -930,6 +930,12 @@ fn all_actions_blocked_error() {
 #[test]
 fn runtime_decision_scoring_error_display_coverage() {
     let errors = [
+        RuntimeDecisionScoringError::InvalidPosterior,
+        RuntimeDecisionScoringError::InvalidLossMatrixId,
+        RuntimeDecisionScoringError::IncompleteLossMatrix,
+        RuntimeDecisionScoringError::EvidenceSerialization {
+            detail: "json writer failed".to_string(),
+        },
         RuntimeDecisionScoringError::ZeroAttackerCost,
         RuntimeDecisionScoringError::AllActionsBlocked,
         RuntimeDecisionScoringError::MissingField {

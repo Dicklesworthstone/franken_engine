@@ -23,8 +23,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::bayesian_posterior::{Posterior, RiskState};
 use frankenengine_engine::expected_loss_selector::{
     ActionDecision, AlienRiskAlertLevel, AlienRiskEnvelope, CandidateActionScore,
-    ContainmentAction, DecisionConfidenceInterval, DecisionExplanation, ExpectedLossSelector,
-    LossEntry, LossMatrix, RuntimeDecisionScore, RuntimeDecisionScoreEvent,
+    ContainmentAction, DecisionConfidenceInterval, DecisionExplanation,
+    EXPECTED_LOSS_ALGORITHM_VERSION, ExpectedLossSelector, LossEntry, LossMatrix,
+    RUNTIME_DECISION_SCORE_SCHEMA_VERSION, RuntimeDecisionScore, RuntimeDecisionScoreEvent,
     RuntimeDecisionScoringError, RuntimeDecisionScoringInput,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -572,6 +573,20 @@ fn runtime_decision_scoring_error_display() {
 
     let e3 = RuntimeDecisionScoringError::AllActionsBlocked;
     assert!(!e3.to_string().is_empty());
+
+    let e4 = RuntimeDecisionScoringError::InvalidPosterior;
+    assert!(e4.to_string().contains("posterior"));
+
+    let e5 = RuntimeDecisionScoringError::InvalidLossMatrixId;
+    assert!(e5.to_string().contains("matrix id"));
+
+    let e6 = RuntimeDecisionScoringError::IncompleteLossMatrix;
+    assert!(e6.to_string().contains("loss matrix"));
+
+    let e7 = RuntimeDecisionScoringError::EvidenceSerialization {
+        detail: "json writer failed".into(),
+    };
+    assert!(e7.to_string().contains("json writer failed"));
 }
 
 #[test]
@@ -579,6 +594,12 @@ fn runtime_decision_scoring_error_serde_round_trip() {
     let errs = vec![
         RuntimeDecisionScoringError::MissingField {
             field: "trace_id".into(),
+        },
+        RuntimeDecisionScoringError::InvalidPosterior,
+        RuntimeDecisionScoringError::InvalidLossMatrixId,
+        RuntimeDecisionScoringError::IncompleteLossMatrix,
+        RuntimeDecisionScoringError::EvidenceSerialization {
+            detail: "json writer failed".into(),
         },
         RuntimeDecisionScoringError::ZeroAttackerCost,
         RuntimeDecisionScoringError::AllActionsBlocked,
@@ -692,6 +713,11 @@ fn runtime_decision_score_serde_round_trip() {
     assert_eq!(back.selected_action, score.selected_action);
     assert_eq!(back.trace_id, score.trace_id);
     assert_eq!(back.receipt_preimage_hash, score.receipt_preimage_hash);
+    assert_eq!(back.schema_version, RUNTIME_DECISION_SCORE_SCHEMA_VERSION);
+    assert_eq!(back.pricing_algorithm, EXPECTED_LOSS_ALGORITHM_VERSION);
+    assert_eq!(back.loss_matrix_hash, LossMatrix::balanced().content_hash());
+    assert_eq!(back.scoring_input_hash, input.content_hash().unwrap());
+    assert!(back.verify_receipt_preimage_hash().unwrap());
 }
 
 // ===========================================================================
@@ -2499,7 +2525,10 @@ fn enrichment_runtime_decision_score_json_fields() {
         "policy_version",
         "timestamp_ns",
         "epoch",
+        "scoring_input_hash",
         "loss_matrix_version",
+        "loss_matrix_hash",
+        "pricing_algorithm",
         "candidate_actions",
         "selected_action",
         "selected_expected_loss_millionths",

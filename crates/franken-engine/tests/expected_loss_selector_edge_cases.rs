@@ -543,6 +543,25 @@ fn error_all_actions_blocked_display() {
 }
 
 #[test]
+fn error_invalid_pricing_inputs_display() {
+    assert!(
+        RuntimeDecisionScoringError::InvalidPosterior
+            .to_string()
+            .contains("posterior")
+    );
+    assert!(
+        RuntimeDecisionScoringError::InvalidLossMatrixId
+            .to_string()
+            .contains("matrix id")
+    );
+    assert!(
+        RuntimeDecisionScoringError::IncompleteLossMatrix
+            .to_string()
+            .contains("loss matrix")
+    );
+}
+
+#[test]
 fn error_std_error() {
     let e: Box<dyn std::error::Error> = Box::new(RuntimeDecisionScoringError::ZeroAttackerCost);
     assert!(!e.to_string().is_empty());
@@ -552,6 +571,12 @@ fn error_std_error() {
 fn error_serde_all() {
     let errors = [
         RuntimeDecisionScoringError::MissingField { field: "x".into() },
+        RuntimeDecisionScoringError::InvalidPosterior,
+        RuntimeDecisionScoringError::InvalidLossMatrixId,
+        RuntimeDecisionScoringError::IncompleteLossMatrix,
+        RuntimeDecisionScoringError::EvidenceSerialization {
+            detail: "json writer failed".into(),
+        },
         RuntimeDecisionScoringError::ZeroAttackerCost,
         RuntimeDecisionScoringError::AllActionsBlocked,
     ];

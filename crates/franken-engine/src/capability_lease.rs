@@ -37,7 +37,7 @@ use crate::security_epoch::SecurityEpoch;
 pub const MILLION: i64 = 1_000_000;
 
 /// Schema version for serialized lease artifacts.
-pub const CAPABILITY_LEASE_SCHEMA_VERSION: &str = "franken-engine.capability-lease.v1";
+pub const CAPABILITY_LEASE_SCHEMA_VERSION: &str = "franken-engine.capability-lease.v2";
 
 /// Component label for telemetry and evidence entries.
 pub const CAPABILITY_LEASE_COMPONENT: &str = "capability_lease";
@@ -73,8 +73,14 @@ impl CapabilityLease {
             lease_id: self.lease_id.clone(),
             detail: message.to_string(),
         };
-        if self.lease_id.is_empty() {
+        if self.lease_id.trim().is_empty() {
             return Err(detail("lease_id must be non-empty"));
+        }
+        if self.extension_id.trim().is_empty() {
+            return Err(detail("extension_id must be non-empty"));
+        }
+        if self.scope.trim().is_empty() {
+            return Err(detail("scope must be non-empty"));
         }
         if self.budget_window_ticks == 0 {
             return Err(detail("budget_window_ticks must be >= 1"));
@@ -116,6 +122,18 @@ pub enum CapabilityLeaseStatus {
     Revoked,
 }
 
+/// Why the manager could not produce a safe risk-price quote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingUnavailableReason {
+    /// The supplied posterior violates its probability-distribution invariant.
+    InvalidPosterior,
+    /// The configured matrix does not cover every action/state pair.
+    IncompleteLossMatrix,
+    /// The Allow quote is negative, missing, or the reserved fail-closed maximum.
+    UndeliverableAllowLoss,
+}
+
 /// Why a use request was denied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
@@ -129,6 +147,11 @@ pub enum DenialReason {
     PerUseCeilingExceeded {
         risk_price_millionths: i64,
         max_expected_loss_millionths: i64,
+    },
+    /// No safe Allow quote can be produced from the pricing inputs.
+    PricingUnavailable {
+        loss_matrix_id: String,
+        reason: PricingUnavailableReason,
     },
     /// The lease was previously revoked.
     LeaseRevoked,
@@ -173,13 +196,18 @@ pub struct LeaseUsageReceipt {
     pub receipt_id: String,
     pub lease_id: String,
     pub extension_id: String,
+    /// Capability granted by the lease.
     pub capability: String,
+    /// Capability named by this use request.
+    pub requested_capability: String,
     pub scope: String,
     pub tick: u64,
     pub p_malicious_millionths: i64,
     /// Risk price quoted for this use (expected loss of Allow).
     pub risk_price_millionths: i64,
     pub decision_kind: String,
+    /// Exact denial evidence; absent for grants, challenges, and revocations.
+    pub denial_reason: Option<DenialReason>,
     pub remaining_budget_millionths: i64,
     pub policy_epoch: u64,
     pub content_hash: ContentHash,
@@ -201,6 +229,51 @@ fn hash_display(preimage: &mut Vec<u8>, value: &dyn std::fmt::Display) {
     preimage.extend_from_slice(rendered.as_bytes());
 }
 
+fn hash_pricing_unavailable_reason(preimage: &mut Vec<u8>, reason: PricingUnavailableReason) {
+    let tag = match reason {
+        PricingUnavailableReason::InvalidPosterior => "invalid_posterior",
+        PricingUnavailableReason::IncompleteLossMatrix => "incomplete_loss_matrix",
+        PricingUnavailableReason::UndeliverableAllowLoss => "undeliverable_allow_loss",
+    };
+    hash_display(preimage, &tag);
+}
+
+fn hash_denial_reason(preimage: &mut Vec<u8>, reason: Option<&DenialReason>) {
+    match reason {
+        None => hash_display(preimage, &"none"),
+        Some(DenialReason::BudgetExhausted {
+            risk_price_millionths,
+            remaining_budget_millionths,
+        }) => {
+            hash_display(preimage, &"budget_exhausted");
+            hash_display(preimage, risk_price_millionths);
+            hash_display(preimage, remaining_budget_millionths);
+        }
+        Some(DenialReason::PerUseCeilingExceeded {
+            risk_price_millionths,
+            max_expected_loss_millionths,
+        }) => {
+            hash_display(preimage, &"per_use_ceiling_exceeded");
+            hash_display(preimage, risk_price_millionths);
+            hash_display(preimage, max_expected_loss_millionths);
+        }
+        Some(DenialReason::PricingUnavailable {
+            loss_matrix_id,
+            reason,
+        }) => {
+            hash_display(preimage, &"pricing_unavailable");
+            hash_display(preimage, loss_matrix_id);
+            hash_pricing_unavailable_reason(preimage, *reason);
+        }
+        Some(DenialReason::LeaseRevoked) => hash_display(preimage, &"lease_revoked"),
+        Some(DenialReason::CapabilityMismatch { requested, leased }) => {
+            hash_display(preimage, &"capability_mismatch");
+            hash_display(preimage, requested);
+            hash_display(preimage, leased);
+        }
+    }
+}
+
 impl LeaseUsageReceipt {
     fn compute_hash(&self) -> ContentHash {
         // Length-prefixed fixed-order preimage (module-local precedent:
@@ -211,13 +284,21 @@ impl LeaseUsageReceipt {
         hash_display(&mut preimage, &self.lease_id);
         hash_display(&mut preimage, &self.extension_id);
         hash_display(&mut preimage, &self.capability);
+        hash_display(&mut preimage, &self.requested_capability);
         hash_display(&mut preimage, &self.scope);
         hash_display(&mut preimage, &self.tick);
         hash_display(&mut preimage, &self.p_malicious_millionths);
         hash_display(&mut preimage, &self.risk_price_millionths);
         hash_display(&mut preimage, &self.decision_kind);
+        hash_denial_reason(&mut preimage, self.denial_reason.as_ref());
         hash_display(&mut preimage, &self.remaining_budget_millionths);
+        hash_display(&mut preimage, &self.policy_epoch);
         ContentHash::compute(&preimage)
+    }
+
+    /// Verify that all durable receipt fields still match the stored hash.
+    pub fn verify_content_hash(&self) -> bool {
+        self.content_hash == self.compute_hash()
     }
 }
 
@@ -375,13 +456,32 @@ impl LeaseManager {
         &self.receipts
     }
 
-    /// Price a use as the expected loss of `Allow` under the posterior.
-    /// Fail-closed: a missing Allow entry prices as `i64::MAX`.
-    pub fn risk_price_millionths(&self, posterior: &Posterior) -> i64 {
-        self.selector
+    fn try_risk_price_millionths(
+        &self,
+        posterior: &Posterior,
+    ) -> Result<i64, PricingUnavailableReason> {
+        if !posterior.is_valid() {
+            return Err(PricingUnavailableReason::InvalidPosterior);
+        }
+        if !self.selector.loss_matrix().is_complete() {
+            return Err(PricingUnavailableReason::IncompleteLossMatrix);
+        }
+        let price = self
+            .selector
             .expected_losses(posterior)
             .get(&ContainmentAction::Allow)
             .copied()
+            .ok_or(PricingUnavailableReason::UndeliverableAllowLoss)?;
+        if price < 0 || price == i64::MAX {
+            return Err(PricingUnavailableReason::UndeliverableAllowLoss);
+        }
+        Ok(price)
+    }
+
+    /// Price a use as the expected loss of `Allow` under the posterior.
+    /// Fail-closed: invalid inputs and undeliverable quotes return `i64::MAX`.
+    pub fn risk_price_millionths(&self, posterior: &Posterior) -> i64 {
+        self.try_risk_price_millionths(posterior)
             .unwrap_or(i64::MAX)
     }
 
@@ -395,7 +495,10 @@ impl LeaseManager {
         posterior: &Posterior,
         tick: u64,
     ) -> Result<LeaseDecision, CapabilityLeaseError> {
-        let risk_price = self.risk_price_millionths(posterior);
+        let risk_quote = self.try_risk_price_millionths(posterior);
+        let risk_price = risk_quote.unwrap_or(i64::MAX);
+        let pricing_unavailable = risk_quote.err();
+        let loss_matrix_id = self.selector.loss_matrix().matrix_id.clone();
         let p_malicious = posterior.p_malicious;
 
         let state =
@@ -426,8 +529,8 @@ impl LeaseManager {
             state.denials = state.denials.saturating_add(1);
             LeaseDecision::Denied {
                 reason: DenialReason::CapabilityMismatch {
-                    requested: format!("{capability:?}"),
-                    leased: format!("{:?}", state.lease.capability),
+                    requested: capability.to_string(),
+                    leased: state.lease.capability.to_string(),
                 },
             }
         } else if p_malicious >= state.lease.revoke_threshold_millionths {
@@ -439,6 +542,14 @@ impl LeaseManager {
             state.challenges = state.challenges.saturating_add(1);
             LeaseDecision::ChallengeRequired {
                 p_malicious_millionths: p_malicious,
+            }
+        } else if let Some(reason) = pricing_unavailable {
+            state.denials = state.denials.saturating_add(1);
+            LeaseDecision::Denied {
+                reason: DenialReason::PricingUnavailable {
+                    loss_matrix_id,
+                    reason,
+                },
             }
         } else if risk_price > state.lease.max_expected_loss_millionths {
             state.denials = state.denials.saturating_add(1);
@@ -468,16 +579,22 @@ impl LeaseManager {
         };
 
         state.receipt_count = state.receipt_count.saturating_add(1);
+        let denial_reason = match &decision {
+            LeaseDecision::Denied { reason } => Some(reason.clone()),
+            _ => None,
+        };
         let mut receipt = LeaseUsageReceipt {
             receipt_id: format!("{}#{}", state.lease.lease_id, state.receipt_count),
             lease_id: state.lease.lease_id.clone(),
             extension_id: state.lease.extension_id.clone(),
-            capability: format!("{:?}", state.lease.capability),
+            capability: state.lease.capability.to_string(),
+            requested_capability: capability.to_string(),
             scope: state.lease.scope.clone(),
             tick,
             p_malicious_millionths: p_malicious,
             risk_price_millionths: risk_price,
             decision_kind: decision.kind().to_string(),
+            denial_reason,
             remaining_budget_millionths: state.remaining_budget_millionths,
             policy_epoch: state.lease.policy_epoch.as_u64(),
             content_hash: ContentHash::compute(b"placeholder"),
@@ -510,7 +627,7 @@ impl LeaseManager {
             .map(|state| LeaseSpendSummary {
                 lease_id: state.lease.lease_id.clone(),
                 extension_id: state.lease.extension_id.clone(),
-                capability: format!("{:?}", state.lease.capability),
+                capability: state.lease.capability.to_string(),
                 scope: state.lease.scope.clone(),
                 status: state.status,
                 spend_total_millionths: state.spend_total_millionths,
@@ -567,11 +684,13 @@ mod tests {
                 lease_id: lease_id.to_string(),
                 extension_id: extension_id.to_string(),
                 capability: "cap".to_string(),
+                requested_capability: "cap".to_string(),
                 scope: "scope".to_string(),
                 tick: 0,
                 p_malicious_millionths: 0,
                 risk_price_millionths: 0,
                 decision_kind: "allow".to_string(),
+                denial_reason: None,
                 remaining_budget_millionths: 0,
                 policy_epoch: 0,
                 content_hash: ContentHash::compute(b"placeholder"),
@@ -583,6 +702,56 @@ mod tests {
             mk("a", "b|c"),
             "lease_id/extension_id field boundary must not collide"
         );
+    }
+
+    #[test]
+    fn lease_receipt_hash_binds_epoch_requested_capability_and_denial_reason() {
+        let base = LeaseUsageReceipt {
+            receipt_id: "l1#1".to_string(),
+            lease_id: "l1".to_string(),
+            extension_id: "ext-alpha".to_string(),
+            capability: "network_egress".to_string(),
+            requested_capability: "network_egress".to_string(),
+            scope: "egress:api.example".to_string(),
+            tick: 7,
+            p_malicious_millionths: 10_000,
+            risk_price_millionths: 1_700_000,
+            decision_kind: "denied".to_string(),
+            denial_reason: Some(DenialReason::BudgetExhausted {
+                risk_price_millionths: 1_700_000,
+                remaining_budget_millionths: 0,
+            }),
+            remaining_budget_millionths: 0,
+            policy_epoch: 3,
+            content_hash: ContentHash::compute(b"placeholder"),
+        };
+        let base_hash = base.compute_hash();
+
+        let mut changed = base.clone();
+        changed.policy_epoch = 4;
+        assert_ne!(base_hash, changed.compute_hash(), "epoch must be bound");
+
+        changed = base.clone();
+        changed.requested_capability = "fs_write".to_string();
+        assert_ne!(
+            base_hash,
+            changed.compute_hash(),
+            "requested capability must be bound"
+        );
+
+        changed = base.clone();
+        changed.denial_reason = Some(DenialReason::LeaseRevoked);
+        assert_ne!(
+            base_hash,
+            changed.compute_hash(),
+            "exact denial reason must be bound"
+        );
+
+        let mut sealed = base;
+        sealed.content_hash = base_hash;
+        assert!(sealed.verify_content_hash());
+        sealed.policy_epoch = 4;
+        assert!(!sealed.verify_content_hash());
     }
 
     fn lease(lease_id: &str) -> CapabilityLease {
@@ -647,9 +816,23 @@ mod tests {
     }
 
     #[test]
-    fn empty_lease_id_rejected() {
-        let mut bad = lease("");
-        bad.lease_id = String::new();
+    fn blank_identity_and_scope_fields_are_rejected() {
+        let mut bad = lease("l1");
+        bad.lease_id = "   ".to_string();
+        assert!(matches!(
+            bad.validate(),
+            Err(CapabilityLeaseError::InvalidLease { .. })
+        ));
+
+        let mut bad = lease("l1");
+        bad.extension_id = "\t".to_string();
+        assert!(matches!(
+            bad.validate(),
+            Err(CapabilityLeaseError::InvalidLease { .. })
+        ));
+
+        let mut bad = lease("l1");
+        bad.scope = "\n".to_string();
         assert!(matches!(
             bad.validate(),
             Err(CapabilityLeaseError::InvalidLease { .. })
@@ -721,6 +904,113 @@ mod tests {
             }
             other => panic!("expected grant, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn incomplete_loss_matrix_is_undeliverable_even_with_maximum_budget() {
+        let matrix: LossMatrix = serde_json::from_value(serde_json::json!({
+            "matrix_id": "incomplete",
+            "entries": []
+        }))
+        .expect("loss matrix JSON should deserialize");
+        let mut permissive_lease = lease("l1");
+        permissive_lease.max_expected_loss_millionths = i64::MAX;
+        permissive_lease.window_budget_millionths = i64::MAX;
+        let mut manager = LeaseManager::new(matrix);
+        manager
+            .register_lease(permissive_lease)
+            .expect("lease should register");
+
+        assert_eq!(manager.risk_price_millionths(&benign_posterior()), i64::MAX);
+        let decision = manager
+            .request_use(
+                "l1",
+                RuntimeCapability::NetworkEgress,
+                &benign_posterior(),
+                1,
+            )
+            .expect("invalid pricing is a denial, not a manager error");
+        assert_eq!(
+            decision,
+            LeaseDecision::Denied {
+                reason: DenialReason::PricingUnavailable {
+                    loss_matrix_id: "incomplete".to_string(),
+                    reason: PricingUnavailableReason::IncompleteLossMatrix,
+                }
+            }
+        );
+        let receipt = &manager.receipts()[0];
+        assert_eq!(receipt.risk_price_millionths, i64::MAX);
+        assert_eq!(
+            receipt.denial_reason,
+            match decision {
+                LeaseDecision::Denied { reason } => Some(reason),
+                _ => None,
+            }
+        );
+        assert!(receipt.verify_content_hash());
+    }
+
+    #[test]
+    fn invalid_posterior_and_negative_allow_quote_fail_closed() {
+        let malformed = Posterior {
+            p_benign: 1_000_001,
+            p_anomalous: 0,
+            p_malicious: 0,
+            p_unknown: -1,
+        };
+        let mut manager = manager_with(lease("invalid-posterior"));
+        let decision = manager
+            .request_use(
+                "invalid-posterior",
+                RuntimeCapability::NetworkEgress,
+                &malformed,
+                1,
+            )
+            .expect("invalid posterior should produce a denial");
+        assert!(matches!(
+            decision,
+            LeaseDecision::Denied {
+                reason: DenialReason::PricingUnavailable {
+                    reason: PricingUnavailableReason::InvalidPosterior,
+                    ..
+                }
+            }
+        ));
+
+        use crate::bayesian_posterior::RiskState;
+        use crate::expected_loss_selector::LossEntry;
+        let entries = ContainmentAction::ALL
+            .iter()
+            .flat_map(|action| {
+                RiskState::ALL.iter().map(move |state| LossEntry {
+                    action: *action,
+                    state: *state,
+                    loss_millionths: -1,
+                })
+            })
+            .collect();
+        let mut manager = LeaseManager::new(LossMatrix::new("negative-allow", entries));
+        manager
+            .register_lease(lease("negative-allow"))
+            .expect("lease should register");
+        let decision = manager
+            .request_use(
+                "negative-allow",
+                RuntimeCapability::NetworkEgress,
+                &benign_posterior(),
+                1,
+            )
+            .expect("negative pricing should produce a denial");
+        assert!(matches!(
+            decision,
+            LeaseDecision::Denied {
+                reason: DenialReason::PricingUnavailable {
+                    reason: PricingUnavailableReason::UndeliverableAllowLoss,
+                    ..
+                }
+            }
+        ));
     }
 
     #[test]
@@ -800,6 +1090,17 @@ mod tests {
                 reason: DenialReason::CapabilityMismatch { .. }
             }
         ));
+        let receipt = &manager.receipts()[0];
+        assert_eq!(receipt.capability, "network_egress");
+        assert_eq!(receipt.requested_capability, "fs_write");
+        assert_eq!(
+            receipt.denial_reason,
+            Some(DenialReason::CapabilityMismatch {
+                requested: "fs_write".to_string(),
+                leased: "network_egress".to_string(),
+            })
+        );
+        assert!(receipt.verify_content_hash());
     }
 
     // ── thresholds ───────────────────────────────────────────────────

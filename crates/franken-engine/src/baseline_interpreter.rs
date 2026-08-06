@@ -8902,7 +8902,8 @@ pub struct InterpreterCore {
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
     /// keyed by the `IoCompletion` macrotask registration sequence (parallel to
     /// `pending_io_callbacks`, which carries closure callbacks). Drained by
-    /// `execute_macrotask_callback` when the macrotask fires.
+    /// `execute_macrotask_callback` when the macrotask fires. Each entry carries
+    /// the ordinary conservative map-entry charge.
     pending_stream_emissions: BTreeMap<u64, PendingStreamEmission>,
     /// Finite `Readable.from` streams keyed by their JS-visible heap object.
     /// Values and IFC labels remain engine-owned while lifecycle events reuse
@@ -11690,6 +11691,7 @@ impl InterpreterCore {
                     .values()
                     .map(Self::estimate_pending_http_task_bytes),
             ))
+            .saturating_add(self.pending_stream_emissions_memory_bytes())
             .saturating_add(self.http_task_in_flight_bytes)
     }
 
@@ -16173,7 +16175,12 @@ impl InterpreterCore {
     }
 
     fn clear_http_execution_state(&mut self) {
-        let registrations: Vec<u64> = self.pending_http_tasks.keys().copied().collect();
+        let registrations: Vec<u64> = self
+            .pending_http_tasks
+            .keys()
+            .chain(self.pending_stream_emissions.keys())
+            .copied()
+            .collect();
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         for registration in registrations {
             self.event_loop.cancel_registration(registration);
@@ -16181,13 +16188,18 @@ impl InterpreterCore {
         let released_promise_bytes =
             previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
         let retained_bytes = self.http_runtime_memory_bytes();
-        let targets: Vec<ObjectId> = self
+        let targets: BTreeSet<ObjectId> = self
             .http_servers
             .keys()
             .chain(self.http_client_requests.keys())
             .chain(self.http_incoming_messages.keys())
             .chain(self.http_server_responses.keys())
             .copied()
+            .chain(
+                self.pending_stream_emissions
+                    .values()
+                    .map(|emission| emission.object_id),
+            )
             .collect();
         self.http_servers.clear();
         self.http_client_requests.clear();
@@ -16195,6 +16207,7 @@ impl InterpreterCore {
         self.http_server_responses.clear();
         self.http_agents.clear();
         self.pending_http_tasks.clear();
+        self.pending_stream_emissions.clear();
         self.http_task_in_flight_bytes = 0;
         for target in targets {
             self.clear_event_listeners(target, None);
@@ -25090,13 +25103,40 @@ impl InterpreterCore {
             crate::closure_model::ClosureHandle(0),
             crate::ifc_artifacts::Label::Public,
         );
-        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+        let next_component_bytes = self
+            .promise_runtime_memory_bytes()
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_promise_bytes, next_component_bytes)
+        {
             self.event_loop.rollback_last_scheduled(seq);
             return Err(error);
         }
-        self.pending_stream_emissions
+        let previous = self
+            .pending_stream_emissions
             .insert(seq, PendingStreamEmission { object_id, phase });
+        debug_assert!(
+            previous.is_none(),
+            "EventLoop registration sequences are unique"
+        );
         Ok(())
+    }
+
+    fn pending_stream_emissions_memory_bytes(&self) -> u64 {
+        u64::try_from(self.pending_stream_emissions.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+    }
+
+    fn remove_pending_stream_emission(
+        &mut self,
+        registration: u64,
+    ) -> Option<PendingStreamEmission> {
+        let emission = self.pending_stream_emissions.remove(&registration)?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        Some(emission)
     }
 
     /// bd-3894s slice (2d): emit one readable-stream phase for an `IncomingMessage`
@@ -44821,9 +44861,8 @@ impl InterpreterCore {
                 // closure — it is identified by its registration sequence and
                 // dispatched here BEFORE the closure-callback path, so the sentinel
                 // `ClosureHandle(0)` it stored is never invoked as a closure.
-                if let Some(emission) = self
-                    .pending_stream_emissions
-                    .remove(&macrotask.registration_seq)
+                if let Some(emission) =
+                    self.remove_pending_stream_emission(macrotask.registration_seq)
                 {
                     return self.drive_stream_emission(emission, module);
                 }
@@ -87900,6 +87939,146 @@ mod async_runtime_tests_current {
     /// listener table is released. Exercised on the module-less event-loop path (the
     /// listener closures are not invoked there — that is proven by the node mock-free
     /// e2e); this asserts the data→end chaining and the cleanup are mechanism-correct.
+    #[test]
+    fn stream_emission_side_table_charge_is_atomic_exact_and_scales_bd_rgx1b() {
+        let mut core = test_interpreter();
+        let first = core
+            .alloc_object_with_properties(&[("body", Value::str("first"))])
+            .expect("first response object");
+        let second = core
+            .alloc_object_with_properties(&[("body", Value::str("second"))])
+            .expect("second response object");
+        let baseline_bytes = core.estimated_memory_bytes();
+        let baseline_event_loop_bytes = core.event_loop.estimated_memory_bytes();
+        let registration_bytes = core
+            .event_loop
+            .projected_io_completion_memory_bytes(&Label::Public)
+            .saturating_sub(baseline_event_loop_bytes);
+        let retained_bytes = registration_bytes.saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+
+        core.config.max_total_memory_bytes = baseline_bytes
+            .saturating_add(retained_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.schedule_stream_emission(first, StreamEventPhase::Data),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(core.pending_stream_emissions.is_empty());
+        assert_eq!(
+            core.event_loop.estimated_memory_bytes(),
+            baseline_event_loop_bytes
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+
+        core.config.max_total_memory_bytes =
+            baseline_bytes.saturating_add(retained_bytes.saturating_mul(2));
+        core.schedule_stream_emission(first, StreamEventPhase::Data)
+            .expect("first exact stream emission charge");
+        core.schedule_stream_emission(second, StreamEventPhase::Data)
+            .expect("second exact stream emission charge");
+        let registrations: Vec<u64> = core.pending_stream_emissions.keys().copied().collect();
+        assert_eq!(registrations.len(), 2);
+        assert_eq!(
+            core.pending_stream_emissions_memory_bytes(),
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_mul(2)
+        );
+        assert_eq!(
+            core.event_loop.estimated_memory_bytes(),
+            baseline_event_loop_bytes.saturating_add(registration_bytes.saturating_mul(2))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline_bytes.saturating_add(retained_bytes.saturating_mul(2))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.clear_http_execution_state();
+        assert!(core.pending_stream_emissions.is_empty());
+        for registration in registrations {
+            assert!(core.event_loop.cancel_registration(registration).is_none());
+        }
+        assert_eq!(
+            core.event_loop.estimated_memory_bytes(),
+            baseline_event_loop_bytes
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn stream_emission_seed_reset_cancels_stale_object_id_task_bd_rgx1b() {
+        let mut core = test_interpreter();
+        let seed = core.capture_execution_seed();
+        let stale_target = core
+            .alloc_object_with_properties(&[("body", Value::str("stale"))])
+            .expect("stale response object");
+        core.insert_event_listener(
+            stale_target,
+            "end",
+            EventListenerRecord {
+                listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::ArrayIsArray,
+                )),
+                once: false,
+            },
+            false,
+        )
+        .expect("stale response listener");
+        core.schedule_stream_emission(stale_target, StreamEventPhase::Data)
+            .expect("stale response emission");
+        let registration = *core
+            .pending_stream_emissions
+            .keys()
+            .next()
+            .expect("stale response registration");
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("seed reset cancels stale stream emission");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("stream emission reset memory delta");
+        assert!(core.pending_stream_emissions.is_empty());
+        assert!(core.event_loop.cancel_registration(registration).is_none());
+        assert!(!core.event_listeners.contains_key(&stale_target));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let reused = core
+            .alloc_object_with_properties(&[("body", Value::str("replacement"))])
+            .expect("replacement response object");
+        assert_eq!(reused, stale_target, "seed reset must reuse the ObjectId");
+        core.insert_event_listener(
+            reused,
+            "end",
+            EventListenerRecord {
+                listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::ArrayIsArray,
+                )),
+                once: false,
+            },
+            false,
+        )
+        .expect("replacement response listener");
+
+        core.run_event_loop_until_idle();
+
+        assert_eq!(core.event_listener_records_for(reused, "end").len(), 1);
+        assert!(core.pending_stream_emissions.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
     #[test]
     fn stream_emission_drives_data_then_end_and_clears_listeners_bd_3894s() {
         let mut core = test_interpreter();

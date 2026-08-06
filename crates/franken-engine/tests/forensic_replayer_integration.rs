@@ -32,7 +32,8 @@ use frankenengine_engine::expected_loss_selector::{
 };
 use frankenengine_engine::forensic_replayer::{
     CounterfactualSpec, DecisionChange, ForensicReplayer, IncidentMetadata, IncidentTrace,
-    ReplayConfig, ReplayDiff, ReplayError, ReplayResult, TraceValidationError, validate_trace,
+    REPLAY_RESULT_SCHEMA_VERSION, ReplayConfig, ReplayDiff, ReplayError, ReplayResult,
+    TraceValidationError, validate_trace,
 };
 use frankenengine_engine::hostcall_telemetry::TelemetryDropCounts;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -96,7 +97,7 @@ fn build_trace_with_id(evidence: Vec<Evidence>, trace_id: &str) -> IncidentTrace
             start_timestamp_ns: 1_000_000,
             end_timestamp_ns: 2_000_000,
             initial_prior: prior,
-            loss_matrix_id: "balanced".to_string(),
+            loss_matrix_id: loss_matrix.matrix_id.clone(),
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
@@ -119,7 +120,7 @@ fn empty_trace() -> IncidentTrace {
             start_timestamp_ns: 0,
             end_timestamp_ns: 0,
             initial_prior: Posterior::default_prior(),
-            loss_matrix_id: "balanced".to_string(),
+            loss_matrix_id: "balanced-v1".to_string(),
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
@@ -210,7 +211,7 @@ fn trace_serde_preserves_content_hash() {
 }
 
 // ===========================================================================
-// Section 3 — TraceValidationError Display all 8 variants
+// Section 3 — TraceValidationError Display all variants
 // ===========================================================================
 
 #[test]
@@ -232,6 +233,35 @@ fn validation_error_display_invalid_posterior() {
     let e = TraceValidationError::InvalidPosterior { step_index: 12 };
     assert!(e.to_string().contains("invalid posterior"));
     assert!(e.to_string().contains("12"));
+}
+
+#[test]
+fn validation_error_display_invalid_initial_pricing_inputs() {
+    assert!(
+        TraceValidationError::InvalidTraceId
+            .to_string()
+            .contains("trace id")
+    );
+    assert!(
+        TraceValidationError::InvalidExtensionId
+            .to_string()
+            .contains("extension id")
+    );
+    assert!(
+        TraceValidationError::InvalidInitialPrior
+            .to_string()
+            .contains("initial prior")
+    );
+    assert!(
+        TraceValidationError::InvalidLossMatrixId
+            .to_string()
+            .contains("matrix id")
+    );
+    assert!(
+        TraceValidationError::IncompleteLossMatrix
+            .to_string()
+            .contains("every action/state pair")
+    );
 }
 
 #[test]
@@ -295,14 +325,46 @@ fn validation_error_display_receipt_integrity_failure() {
 }
 
 #[test]
-fn validation_error_serde_roundtrip_all_eight() {
+fn validation_error_serde_roundtrip_all_variants() {
     let variants: Vec<TraceValidationError> = vec![
+        TraceValidationError::InvalidTraceId,
+        TraceValidationError::InvalidExtensionId,
+        TraceValidationError::LossMatrixIdMismatch {
+            declared: "declared-v1".to_string(),
+            actual: "actual-v1".to_string(),
+        },
+        TraceValidationError::InvalidTimeRange {
+            start_ns: 10,
+            end_ns: 5,
+        },
+        TraceValidationError::NonMonotonicRecordId {
+            record_index: 1,
+            prev_id: 10,
+            current_id: 9,
+        },
         TraceValidationError::NonMonotonicTimestamp {
             record_index: 1,
             prev_ns: 10,
             current_ns: 5,
         },
         TraceValidationError::InvalidPosterior { step_index: 2 },
+        TraceValidationError::EvidenceExtensionMismatch {
+            evidence_index: 3,
+            expected: "ext-001".to_string(),
+            actual: "ext-002".to_string(),
+        },
+        TraceValidationError::TelemetryExtensionMismatch {
+            record_index: 2,
+            record_id: 10,
+            expected: "ext-001".to_string(),
+            actual: "ext-002".to_string(),
+        },
+        TraceValidationError::ReceiptExtensionMismatch {
+            receipt_index: 3,
+            receipt_id: "rcpt-cross".to_string(),
+            expected: "ext-001".to_string(),
+            actual: "ext-002".to_string(),
+        },
         TraceValidationError::DecisionCountMismatch {
             decisions: 3,
             posteriors: 4,
@@ -322,6 +384,9 @@ fn validation_error_serde_roundtrip_all_eight() {
         TraceValidationError::ReceiptIntegrityFailure {
             receipt_id: "rcpt-rt".to_string(),
         },
+        TraceValidationError::InvalidInitialPrior,
+        TraceValidationError::InvalidLossMatrixId,
+        TraceValidationError::IncompleteLossMatrix,
     ];
     for v in &variants {
         let json = serde_json::to_string(v).unwrap();
@@ -462,13 +527,17 @@ fn decision_change_display_identical() {
 }
 
 #[test]
-fn decision_change_display_same_action_different_margin() {
-    let dc = DecisionChange::SameActionDifferentMargin {
+fn decision_change_display_same_action_different_score() {
+    let dc = DecisionChange::SameActionDifferentScore {
+        original_loss: 21_000,
+        counterfactual_loss: 34_000,
         original_margin: 42_000,
         counterfactual_margin: 88_000,
     };
     let s = dc.to_string();
     assert!(s.contains("same action"));
+    assert!(s.contains("21000"));
+    assert!(s.contains("34000"));
     assert!(s.contains("42000"));
     assert!(s.contains("88000"));
 }
@@ -487,10 +556,12 @@ fn decision_change_display_different_action() {
 }
 
 #[test]
-fn decision_change_serde_roundtrip_all_three() {
+fn decision_change_serde_roundtrip_all_five() {
     let variants: Vec<DecisionChange> = vec![
         DecisionChange::Identical,
-        DecisionChange::SameActionDifferentMargin {
+        DecisionChange::SameActionDifferentScore {
+            original_loss: 3,
+            counterfactual_loss: 4,
             original_margin: 1,
             counterfactual_margin: 2,
         },
@@ -499,6 +570,14 @@ fn decision_change_serde_roundtrip_all_three() {
             counterfactual_action: ContainmentAction::Suspend,
             original_loss: 300,
             counterfactual_loss: 100,
+        },
+        DecisionChange::OriginalOnly {
+            original_action: ContainmentAction::Terminate,
+            original_loss: 400,
+        },
+        DecisionChange::CounterfactualOnly {
+            counterfactual_action: ContainmentAction::Challenge,
+            counterfactual_loss: 200,
         },
     ];
     for v in &variants {
@@ -547,12 +626,15 @@ fn replay_error_display_internal() {
 }
 
 #[test]
-fn replay_error_serde_all_three() {
+fn replay_error_serde_all_variants() {
     let variants: Vec<ReplayError> = vec![
         ReplayError::ValidationFailed {
             errors: vec![TraceValidationError::EmptyTrace],
         },
         ReplayError::StepLimitExceeded { limit: 50 },
+        ReplayError::EvidenceSerialization {
+            detail: "json writer failed".to_string(),
+        },
         ReplayError::Internal {
             detail: "test".to_string(),
         },
@@ -883,8 +965,35 @@ fn diff_length_mismatch_reports_extra_as_divergent() {
 
     let diff = replayer.diff(&original, &cf, "3 vs 4 steps");
     assert_eq!(diff.step_changes.len(), 4);
-    // The extra step should count as a divergence.
-    assert!(diff.first_divergence_step.is_some() || diff.action_change_count > 0);
+    assert_eq!(diff.first_divergence_step, Some(3));
+    assert!(matches!(
+        diff.step_changes[3].1,
+        DecisionChange::CounterfactualOnly { .. }
+    ));
+
+    let reverse = replayer.diff(&cf, &original, "4 vs 3 steps");
+    assert_eq!(reverse.step_changes.len(), 4);
+    assert_eq!(reverse.first_divergence_step, Some(3));
+    assert!(matches!(
+        reverse.step_changes[3].1,
+        DecisionChange::OriginalOnly { .. }
+    ));
+}
+
+#[test]
+fn diff_same_action_with_changed_loss_is_not_identical() {
+    let trace = build_trace(vec![benign_evidence()]);
+    let mut replayer = ForensicReplayer::new();
+    let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+    let mut changed = original.clone();
+    changed.steps[0].decision.expected_loss_millionths += 1;
+
+    let diff = replayer.diff(&original, &changed, "changed score");
+    assert!(matches!(
+        diff.step_changes[0].1,
+        DecisionChange::SameActionDifferentScore { .. }
+    ));
+    assert_eq!(diff.first_divergence_step, Some(0));
 }
 
 // ===========================================================================
@@ -899,6 +1008,9 @@ fn replay_result_content_hash_deterministic_across_runs() {
     let r1 = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
     let r2 = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
     assert_eq!(r1.content_hash, r2.content_hash);
+    assert_eq!(r1.schema_version, REPLAY_RESULT_SCHEMA_VERSION);
+    assert_eq!(r1.source_trace_hash, trace.content_hash().unwrap());
+    assert!(r1.verify_content_hash().unwrap());
 }
 
 #[test]
@@ -912,6 +1024,7 @@ fn replay_result_serde_roundtrip() {
     assert_eq!(result, restored);
     assert_eq!(result.content_hash, restored.content_hash);
     assert_eq!(result.trace_id, restored.trace_id);
+    assert!(restored.verify_content_hash().unwrap());
 }
 
 #[test]

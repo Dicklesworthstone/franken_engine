@@ -93,7 +93,7 @@ fn build_trace_with_id(evidence: Vec<Evidence>, trace_id: &str) -> IncidentTrace
             start_timestamp_ns: 1_000_000,
             end_timestamp_ns: 2_000_000,
             initial_prior: prior,
-            loss_matrix_id: "balanced".to_string(),
+            loss_matrix_id: loss_matrix.matrix_id.clone(),
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
@@ -120,7 +120,7 @@ fn empty_trace() -> IncidentTrace {
             start_timestamp_ns: 0,
             end_timestamp_ns: 0,
             initial_prior: Posterior::default_prior(),
-            loss_matrix_id: "balanced".to_string(),
+            loss_matrix_id: "balanced-v1".to_string(),
             annotations: BTreeMap::new(),
         },
         telemetry_log: Vec::new(),
@@ -161,18 +161,50 @@ fn make_replay_step(idx: u64, action: ContainmentAction) -> ReplayStep {
 }
 
 // ===========================================================================
-// Section 1 — TraceValidationError Display uniqueness across all 8 variants
+// Section 1 — TraceValidationError Display uniqueness across all variants
 // ===========================================================================
 
 #[test]
-fn enrichment_trace_validation_error_display_all_eight_unique() {
+fn enrichment_trace_validation_error_display_all_unique() {
     let variants: Vec<TraceValidationError> = vec![
+        TraceValidationError::InvalidTraceId,
+        TraceValidationError::InvalidExtensionId,
+        TraceValidationError::LossMatrixIdMismatch {
+            declared: "declared-v1".to_string(),
+            actual: "actual-v1".to_string(),
+        },
+        TraceValidationError::InvalidTimeRange {
+            start_ns: 10,
+            end_ns: 5,
+        },
+        TraceValidationError::NonMonotonicRecordId {
+            record_index: 9,
+            prev_id: 12,
+            current_id: 11,
+        },
         TraceValidationError::NonMonotonicTimestamp {
             record_index: 10,
             prev_ns: 9999,
             current_ns: 5555,
         },
         TraceValidationError::InvalidPosterior { step_index: 77 },
+        TraceValidationError::EvidenceExtensionMismatch {
+            evidence_index: 88,
+            expected: "ext-001".to_string(),
+            actual: "ext-002".to_string(),
+        },
+        TraceValidationError::TelemetryExtensionMismatch {
+            record_index: 2,
+            record_id: 55,
+            expected: "ext-001".to_string(),
+            actual: "ext-002".to_string(),
+        },
+        TraceValidationError::ReceiptExtensionMismatch {
+            receipt_index: 3,
+            receipt_id: "rcpt-cross".to_string(),
+            expected: "ext-001".to_string(),
+            actual: "ext-002".to_string(),
+        },
         TraceValidationError::DecisionCountMismatch {
             decisions: 11,
             posteriors: 22,
@@ -192,6 +224,9 @@ fn enrichment_trace_validation_error_display_all_eight_unique() {
         TraceValidationError::ReceiptIntegrityFailure {
             receipt_id: "rcpt-unique".to_string(),
         },
+        TraceValidationError::InvalidInitialPrior,
+        TraceValidationError::InvalidLossMatrixId,
+        TraceValidationError::IncompleteLossMatrix,
     ];
     let mut display_set = BTreeSet::new();
     for v in &variants {
@@ -201,8 +236,8 @@ fn enrichment_trace_validation_error_display_all_eight_unique() {
     }
     assert_eq!(
         display_set.len(),
-        8,
-        "all 8 variants must produce distinct Display strings"
+        19,
+        "all 19 variants must produce distinct Display strings"
     );
 }
 
@@ -374,10 +409,12 @@ fn enrichment_trace_validation_error_serde_receipt_integrity_empty_id() {
 // ===========================================================================
 
 #[test]
-fn enrichment_decision_change_display_all_three_unique() {
+fn enrichment_decision_change_display_all_five_unique() {
     let variants: Vec<DecisionChange> = vec![
         DecisionChange::Identical,
-        DecisionChange::SameActionDifferentMargin {
+        DecisionChange::SameActionDifferentScore {
+            original_loss: 3,
+            counterfactual_loss: 4,
             original_margin: 1,
             counterfactual_margin: 2,
         },
@@ -387,6 +424,14 @@ fn enrichment_decision_change_display_all_three_unique() {
             original_loss: 100,
             counterfactual_loss: 200,
         },
+        DecisionChange::OriginalOnly {
+            original_action: ContainmentAction::Suspend,
+            original_loss: 300,
+        },
+        DecisionChange::CounterfactualOnly {
+            counterfactual_action: ContainmentAction::Challenge,
+            counterfactual_loss: 400,
+        },
     ];
     let mut display_set = BTreeSet::new();
     for v in &variants {
@@ -394,8 +439,8 @@ fn enrichment_decision_change_display_all_three_unique() {
     }
     assert_eq!(
         display_set.len(),
-        3,
-        "all 3 DecisionChange variants must have unique Display"
+        5,
+        "all 5 DecisionChange variants must have unique Display"
     );
 }
 
@@ -405,8 +450,10 @@ fn enrichment_decision_change_identical_display_exact() {
 }
 
 #[test]
-fn enrichment_decision_change_same_action_margin_zero() {
-    let dc = DecisionChange::SameActionDifferentMargin {
+fn enrichment_decision_change_same_action_score_zero() {
+    let dc = DecisionChange::SameActionDifferentScore {
+        original_loss: 0,
+        counterfactual_loss: 0,
         original_margin: 0,
         counterfactual_margin: 0,
     };
@@ -416,12 +463,16 @@ fn enrichment_decision_change_same_action_margin_zero() {
 }
 
 #[test]
-fn enrichment_decision_change_same_action_negative_margins() {
-    let dc = DecisionChange::SameActionDifferentMargin {
+fn enrichment_decision_change_same_action_negative_scores() {
+    let dc = DecisionChange::SameActionDifferentScore {
+        original_loss: -750_000,
+        counterfactual_loss: -250_000,
         original_margin: -500_000,
         counterfactual_margin: -100_000,
     };
     let s = dc.to_string();
+    assert!(s.contains("-750000"));
+    assert!(s.contains("-250000"));
     assert!(s.contains("-500000"));
     assert!(s.contains("-100000"));
 }
@@ -462,8 +513,10 @@ fn enrichment_decision_change_serde_identical() {
 }
 
 #[test]
-fn enrichment_decision_change_serde_same_action_large_margins() {
-    let dc = DecisionChange::SameActionDifferentMargin {
+fn enrichment_decision_change_serde_same_action_large_scores() {
+    let dc = DecisionChange::SameActionDifferentScore {
+        original_loss: i64::MIN,
+        counterfactual_loss: i64::MAX,
         original_margin: i64::MAX,
         counterfactual_margin: i64::MIN,
     };
@@ -492,12 +545,15 @@ fn enrichment_decision_change_serde_different_action_all_actions() {
 // ===========================================================================
 
 #[test]
-fn enrichment_replay_error_display_all_three_unique() {
+fn enrichment_replay_error_display_all_unique() {
     let variants: Vec<ReplayError> = vec![
         ReplayError::ValidationFailed {
             errors: vec![TraceValidationError::EmptyTrace],
         },
         ReplayError::StepLimitExceeded { limit: 1 },
+        ReplayError::EvidenceSerialization {
+            detail: "json writer failed".to_string(),
+        },
         ReplayError::Internal {
             detail: "x".to_string(),
         },
@@ -508,8 +564,8 @@ fn enrichment_replay_error_display_all_three_unique() {
     }
     assert_eq!(
         display_set.len(),
-        3,
-        "all 3 ReplayError variants must have unique Display"
+        4,
+        "all 4 ReplayError variants must have unique Display"
     );
 }
 
@@ -517,7 +573,22 @@ fn enrichment_replay_error_display_all_three_unique() {
 fn enrichment_replay_error_validation_failed_multiple_errors() {
     let err = ReplayError::ValidationFailed {
         errors: vec![
+            TraceValidationError::InvalidTraceId,
+            TraceValidationError::InvalidExtensionId,
             TraceValidationError::EmptyTrace,
+            TraceValidationError::LossMatrixIdMismatch {
+                declared: "declared-v1".to_string(),
+                actual: "actual-v1".to_string(),
+            },
+            TraceValidationError::InvalidTimeRange {
+                start_ns: 200,
+                end_ns: 100,
+            },
+            TraceValidationError::NonMonotonicRecordId {
+                record_index: 1,
+                prev_id: 2,
+                current_id: 1,
+            },
             TraceValidationError::InvalidPosterior { step_index: 0 },
             TraceValidationError::DecisionCountMismatch {
                 decisions: 1,
@@ -592,6 +663,23 @@ fn enrichment_replay_error_serde_validation_with_all_error_types() {
                 current_ns: 100,
             },
             TraceValidationError::InvalidPosterior { step_index: 5 },
+            TraceValidationError::EvidenceExtensionMismatch {
+                evidence_index: 6,
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
+            TraceValidationError::TelemetryExtensionMismatch {
+                record_index: 2,
+                record_id: 99,
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
+            TraceValidationError::ReceiptExtensionMismatch {
+                receipt_index: 3,
+                receipt_id: "rcpt-cross".to_string(),
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
             TraceValidationError::DecisionCountMismatch {
                 decisions: 10,
                 posteriors: 8,
@@ -610,6 +698,9 @@ fn enrichment_replay_error_serde_validation_with_all_error_types() {
             TraceValidationError::ReceiptIntegrityFailure {
                 receipt_id: "rcpt-nested".to_string(),
             },
+            TraceValidationError::InvalidInitialPrior,
+            TraceValidationError::InvalidLossMatrixId,
+            TraceValidationError::IncompleteLossMatrix,
         ],
     };
     let json = serde_json::to_string(&err).unwrap();
@@ -1116,7 +1207,9 @@ fn enrichment_replay_diff_clone_equality() {
             (0, DecisionChange::Identical),
             (
                 1,
-                DecisionChange::SameActionDifferentMargin {
+                DecisionChange::SameActionDifferentScore {
+                    original_loss: 5,
+                    counterfactual_loss: 15,
                     original_margin: 10,
                     counterfactual_margin: 20,
                 },

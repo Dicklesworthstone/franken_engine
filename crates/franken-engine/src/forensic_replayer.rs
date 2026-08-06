@@ -10,10 +10,12 @@
 //! Cross-refs: 9A.3 (deterministic replay), 9F.3 (time-travel +
 //! counterfactual replay), 9C.2 (explainable decision loop).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, LikelihoodModel, Posterior, UpdateResult,
@@ -30,11 +32,42 @@ use crate::security_epoch::SecurityEpoch;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Schema identifier for trace content hashing.
-const TRACE_SCHEMA_DEF: &[u8] = b"forensic-trace-schema-v1";
+/// Schema identifier for canonical trace content hashing.
+const TRACE_HASH_DOMAIN: &[u8] = b"franken-engine.forensic-incident-trace.v2\0";
+const REPLAY_INPUT_HASH_DOMAIN: &[u8] = b"franken-engine.forensic-replay-input.v2\0";
+const REPLAY_RESULT_HASH_DOMAIN: &[u8] = b"franken-engine.forensic-replay-result.v2\0";
+
+/// Schema version for serialized replay result artifacts.
+pub const REPLAY_RESULT_SCHEMA_VERSION: &str = "franken-engine.forensic-replay-result.v2";
 
 /// Maximum step count for safety (prevents runaway replays).
 const MAX_REPLAY_STEPS: usize = 1_000_000;
+
+struct Sha256Writer(Sha256);
+
+impl Write for Sha256Writer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn hash_serialized<T: Serialize + ?Sized>(
+    domain: &[u8],
+    value: &T,
+) -> Result<ContentHash, serde_json::Error> {
+    let mut writer = Sha256Writer(Sha256::new());
+    writer.0.update(domain);
+    serde_json::to_writer(&mut writer, value)?;
+    let digest = writer.0.finalize();
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&digest);
+    Ok(ContentHash::from_bytes(bytes))
+}
 
 // ---------------------------------------------------------------------------
 // IncidentMetadata — trace-level metadata
@@ -94,75 +127,40 @@ pub struct IncidentTrace {
     pub likelihood_model: LikelihoodModel,
 }
 
+/// Failure to encode an incident trace for content hashing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IncidentTraceHashError {
+    Serialization { detail: String },
+}
+
+impl fmt::Display for IncidentTraceHashError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Serialization { detail } => {
+                write!(
+                    f,
+                    "failed to serialize incident trace for hashing: {detail}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for IncidentTraceHashError {}
+
 impl IncidentTrace {
-    /// Compute content hash of the trace covering all metadata and log fields.
-    pub fn content_hash(&self) -> ContentHash {
-        let mut buf = Vec::with_capacity(1024);
-        buf.extend_from_slice(TRACE_SCHEMA_DEF);
-        buf.extend_from_slice(self.metadata.trace_id.as_bytes());
-        buf.extend_from_slice(self.metadata.extension_id.as_bytes());
-        buf.extend_from_slice(&self.metadata.start_epoch.as_u64().to_le_bytes());
-        buf.extend_from_slice(&self.metadata.start_timestamp_ns.to_le_bytes());
-        buf.extend_from_slice(&self.metadata.end_timestamp_ns.to_le_bytes());
-        buf.extend_from_slice(self.metadata.loss_matrix_id.as_bytes());
-        // Include initial prior and likelihood model in hash for tamper detection.
-        if let Ok(prior_bytes) = serde_json::to_vec(&self.metadata.initial_prior) {
-            buf.extend_from_slice(&prior_bytes);
-        }
-        if let Ok(model_bytes) = serde_json::to_vec(&self.likelihood_model) {
-            buf.extend_from_slice(&model_bytes);
-        }
-        // Annotations are BTreeMap so iteration is deterministic.
-        for (k, v) in &self.metadata.annotations {
-            buf.extend_from_slice(k.as_bytes());
-            buf.extend_from_slice(v.as_bytes());
-        }
-        // Hash log contents (not just lengths) so evidence tampering is detected.
-        buf.extend_from_slice(&(self.telemetry_log.len() as u64).to_le_bytes());
-        for entry in &self.telemetry_log {
-            if let Ok(bytes) = serde_json::to_vec(entry) {
-                buf.extend_from_slice(&bytes);
+    /// Compute a canonical content hash covering every trace field.
+    ///
+    /// Structured serialization preserves free-form field boundaries and
+    /// fails closed if a future field cannot be represented. Every map in the
+    /// trace graph has deterministic ordering, so identical traces produce
+    /// identical bytes for this schema version.
+    pub fn content_hash(&self) -> Result<ContentHash, IncidentTraceHashError> {
+        hash_serialized(TRACE_HASH_DOMAIN, self).map_err(|error| {
+            IncidentTraceHashError::Serialization {
+                detail: error.to_string(),
             }
-        }
-        // Preserve historical hashes for complete traces while ensuring an
-        // incomplete retained prefix cannot validate under the clean hash.
-        if self.telemetry_drop_counts.any() {
-            buf.extend_from_slice(b"telemetry-drop-counts-v1");
-            buf.extend_from_slice(&self.telemetry_drop_counts.channel_full.to_le_bytes());
-            buf.extend_from_slice(
-                &self
-                    .telemetry_drop_counts
-                    .monotonicity_violation
-                    .to_le_bytes(),
-            );
-            buf.extend_from_slice(&self.telemetry_drop_counts.empty_extension_id.to_le_bytes());
-        }
-        buf.extend_from_slice(&(self.evidence_log.len() as u64).to_le_bytes());
-        for entry in &self.evidence_log {
-            if let Ok(bytes) = serde_json::to_vec(entry) {
-                buf.extend_from_slice(&bytes);
-            }
-        }
-        buf.extend_from_slice(&(self.decision_log.len() as u64).to_le_bytes());
-        for entry in &self.decision_log {
-            if let Ok(bytes) = serde_json::to_vec(entry) {
-                buf.extend_from_slice(&bytes);
-            }
-        }
-        buf.extend_from_slice(&(self.containment_log.len() as u64).to_le_bytes());
-        for entry in &self.containment_log {
-            if let Ok(bytes) = serde_json::to_vec(entry) {
-                buf.extend_from_slice(&bytes);
-            }
-        }
-        buf.extend_from_slice(&(self.posterior_history.len() as u64).to_le_bytes());
-        for entry in &self.posterior_history {
-            if let Ok(bytes) = serde_json::to_vec(entry) {
-                buf.extend_from_slice(&bytes);
-            }
-        }
-        buf.extend_from_slice(self.loss_matrix.content_hash().as_bytes());
-        ContentHash::compute(&buf)
+        })
     }
 
     /// Return a clone of this trace whose telemetry evidence is replaced with
@@ -189,6 +187,26 @@ impl IncidentTrace {
 /// Errors found during trace validation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TraceValidationError {
+    /// The trace lacks a usable audit identity.
+    InvalidTraceId,
+    /// The trace lacks a usable extension identity.
+    InvalidExtensionId,
+    /// The trace's starting prior is not a probability distribution.
+    InvalidInitialPrior,
+    /// The configured loss matrix lacks a usable audit identity.
+    InvalidLossMatrixId,
+    /// The configured loss matrix does not contain every pair exactly once.
+    IncompleteLossMatrix,
+    /// Metadata names a different matrix than the matrix embedded in the trace.
+    LossMatrixIdMismatch { declared: String, actual: String },
+    /// The recording end precedes its start.
+    InvalidTimeRange { start_ns: u64, end_ns: u64 },
+    /// Telemetry record IDs are not strictly increasing.
+    NonMonotonicRecordId {
+        record_index: usize,
+        prev_id: u64,
+        current_id: u64,
+    },
     /// Telemetry timestamps are not monotonically increasing.
     NonMonotonicTimestamp {
         record_index: usize,
@@ -197,6 +215,31 @@ pub enum TraceValidationError {
     },
     /// Posterior does not sum to 1_000_000.
     InvalidPosterior { step_index: u64 },
+    /// The recorded posterior step label does not match its zero-based history position.
+    PosteriorStepIndexMismatch {
+        history_index: usize,
+        declared_step_index: u64,
+    },
+    /// Evidence belongs to a different extension than the incident trace.
+    EvidenceExtensionMismatch {
+        evidence_index: usize,
+        expected: String,
+        actual: String,
+    },
+    /// Telemetry belongs to a different extension than the incident trace.
+    TelemetryExtensionMismatch {
+        record_index: usize,
+        record_id: u64,
+        expected: String,
+        actual: String,
+    },
+    /// A containment receipt targets a different extension than the trace.
+    ReceiptExtensionMismatch {
+        receipt_index: usize,
+        receipt_id: String,
+        expected: String,
+        actual: String,
+    },
     /// Decision count does not match posterior history length.
     DecisionCountMismatch { decisions: usize, posteriors: usize },
     /// Evidence count does not match posterior history length.
@@ -215,6 +258,31 @@ pub enum TraceValidationError {
 impl fmt::Display for TraceValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidTraceId => f.write_str("trace id must be non-blank"),
+            Self::InvalidExtensionId => f.write_str("extension id must be non-blank"),
+            Self::InvalidInitialPrior => {
+                f.write_str("initial prior is not a valid probability distribution")
+            }
+            Self::InvalidLossMatrixId => f.write_str("loss matrix id must be non-blank"),
+            Self::IncompleteLossMatrix => {
+                f.write_str("loss matrix must contain every action/state pair exactly once")
+            }
+            Self::LossMatrixIdMismatch { declared, actual } => write!(
+                f,
+                "metadata loss matrix id {declared:?} does not match embedded matrix id {actual:?}"
+            ),
+            Self::InvalidTimeRange { start_ns, end_ns } => write!(
+                f,
+                "incident end timestamp {end_ns} precedes start timestamp {start_ns}"
+            ),
+            Self::NonMonotonicRecordId {
+                record_index,
+                prev_id,
+                current_id,
+            } => write!(
+                f,
+                "non-monotonic record id at record {record_index}: {prev_id} -> {current_id}"
+            ),
             Self::NonMonotonicTimestamp {
                 record_index,
                 prev_ns,
@@ -228,6 +296,39 @@ impl fmt::Display for TraceValidationError {
             Self::InvalidPosterior { step_index } => {
                 write!(f, "invalid posterior at step {step_index}")
             }
+            Self::PosteriorStepIndexMismatch {
+                history_index,
+                declared_step_index,
+            } => write!(
+                f,
+                "posterior history index {history_index} declares step {declared_step_index}"
+            ),
+            Self::EvidenceExtensionMismatch {
+                evidence_index,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "evidence extension mismatch at index {evidence_index}: expected {expected}, got {actual}"
+            ),
+            Self::TelemetryExtensionMismatch {
+                record_index,
+                record_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "telemetry extension mismatch at index {record_index} (record {record_id}): expected {expected}, got {actual}"
+            ),
+            Self::ReceiptExtensionMismatch {
+                receipt_index,
+                receipt_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "containment receipt extension mismatch at index {receipt_index} ({receipt_id}): expected {expected}, got {actual}"
+            ),
             Self::DecisionCountMismatch {
                 decisions,
                 posteriors,
@@ -314,8 +415,13 @@ pub struct ReplayStep {
 /// The result of replaying a trace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplayResult {
+    pub schema_version: String,
     /// Trace ID being replayed.
     pub trace_id: String,
+    /// Content identity of the complete source incident trace.
+    pub source_trace_hash: ContentHash,
+    /// Content identity of the effective replay configuration and model inputs.
+    pub replay_input_hash: ContentHash,
     /// All replay steps in order.
     pub steps: Vec<ReplayStep>,
     /// Final posterior after all steps.
@@ -332,19 +438,56 @@ pub struct ReplayResult {
     pub content_hash: ContentHash,
 }
 
-impl ReplayResult {
-    /// Compute content hash from steps.
-    fn compute_hash(steps: &[ReplayStep], trace_id: &str) -> ContentHash {
-        let mut buf = Vec::with_capacity(512);
-        buf.extend_from_slice(b"replay-result-v1");
-        buf.extend_from_slice(trace_id.as_bytes());
-        buf.extend_from_slice(&(steps.len() as u64).to_le_bytes());
-        for step in steps {
-            buf.extend_from_slice(&step.step_index.to_le_bytes());
-            buf.extend_from_slice(step.decision.action.to_string().as_bytes());
-            buf.extend_from_slice(&step.decision.expected_loss_millionths.to_le_bytes());
+#[derive(Serialize)]
+struct ReplayResultHashPreimage<'a> {
+    schema_version: &'a str,
+    trace_id: &'a str,
+    source_trace_hash: &'a ContentHash,
+    replay_input_hash: &'a ContentHash,
+    steps: &'a [ReplayStep],
+    final_posterior: &'a Posterior,
+    final_decision: &'a Option<ActionDecision>,
+    final_containment_state: ContainmentState,
+    deterministic: bool,
+    first_divergence_step: Option<u64>,
+    content_hash: ContentHash,
+}
+
+impl<'a> From<&'a ReplayResult> for ReplayResultHashPreimage<'a> {
+    fn from(result: &'a ReplayResult) -> Self {
+        Self {
+            schema_version: &result.schema_version,
+            trace_id: &result.trace_id,
+            source_trace_hash: &result.source_trace_hash,
+            replay_input_hash: &result.replay_input_hash,
+            steps: &result.steps,
+            final_posterior: &result.final_posterior,
+            final_decision: &result.final_decision,
+            final_containment_state: result.final_containment_state,
+            deterministic: result.deterministic,
+            first_divergence_step: result.first_divergence_step,
+            content_hash: ContentHash::default(),
         }
-        ContentHash::compute(&buf)
+    }
+}
+
+impl ReplayResult {
+    /// Recompute the content hash over the complete replay artifact.
+    pub fn recompute_content_hash(&self) -> Result<ContentHash, ReplayError> {
+        hash_serialized(
+            REPLAY_RESULT_HASH_DOMAIN,
+            &ReplayResultHashPreimage::from(self),
+        )
+        .map_err(|error| ReplayError::EvidenceSerialization {
+            detail: error.to_string(),
+        })
+    }
+
+    /// Verify that all serialized replay fields match the stored hash.
+    pub fn verify_content_hash(&self) -> Result<bool, ReplayError> {
+        Ok(self
+            .content_hash
+            .constant_time_eq(&self.recompute_content_hash()?))
     }
 }
 
@@ -409,10 +552,12 @@ impl CounterfactualSpec {
 /// How a decision changed in counterfactual replay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DecisionChange {
-    /// Same action, same or similar expected loss.
+    /// Complete decision semantics match, apart from the replay epoch.
     Identical,
-    /// Same action but different expected loss margin.
-    SameActionDifferentMargin {
+    /// The action is unchanged, but one or more scored decision fields differ.
+    SameActionDifferentScore {
+        original_loss: i64,
+        counterfactual_loss: i64,
         original_margin: i64,
         counterfactual_margin: i64,
     },
@@ -423,19 +568,31 @@ pub enum DecisionChange {
         original_loss: i64,
         counterfactual_loss: i64,
     },
+    /// A step exists only in the original replay.
+    OriginalOnly {
+        original_action: ContainmentAction,
+        original_loss: i64,
+    },
+    /// A step exists only in the counterfactual replay.
+    CounterfactualOnly {
+        counterfactual_action: ContainmentAction,
+        counterfactual_loss: i64,
+    },
 }
 
 impl fmt::Display for DecisionChange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Identical => write!(f, "identical"),
-            Self::SameActionDifferentMargin {
+            Self::SameActionDifferentScore {
+                original_loss,
+                counterfactual_loss,
                 original_margin,
                 counterfactual_margin,
             } => {
                 write!(
                     f,
-                    "same action, margin {original_margin} -> {counterfactual_margin}"
+                    "same action, loss {original_loss} -> {counterfactual_loss}, margin {original_margin} -> {counterfactual_margin}"
                 )
             }
             Self::DifferentAction {
@@ -445,6 +602,13 @@ impl fmt::Display for DecisionChange {
             } => {
                 write!(f, "{original_action} -> {counterfactual_action}")
             }
+            Self::OriginalOnly {
+                original_action, ..
+            } => write!(f, "{original_action} -> absent"),
+            Self::CounterfactualOnly {
+                counterfactual_action,
+                ..
+            } => write!(f, "absent -> {counterfactual_action}"),
         }
     }
 }
@@ -483,6 +647,8 @@ pub enum ReplayError {
     ValidationFailed { errors: Vec<TraceValidationError> },
     /// Replay exceeded maximum step count.
     StepLimitExceeded { limit: usize },
+    /// Replay evidence could not be encoded for hashing.
+    EvidenceSerialization { detail: String },
     /// Internal replay error.
     Internal { detail: String },
 }
@@ -495,6 +661,9 @@ impl fmt::Display for ReplayError {
             }
             Self::StepLimitExceeded { limit } => {
                 write!(f, "replay exceeded step limit: {limit}")
+            }
+            Self::EvidenceSerialization { detail } => {
+                write!(f, "failed to serialize replay evidence: {detail}")
             }
             Self::Internal { detail } => write!(f, "internal replay error: {detail}"),
         }
@@ -509,6 +678,34 @@ impl fmt::Display for ReplayError {
 pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
     let mut errors = Vec::new();
 
+    if trace.metadata.trace_id.trim().is_empty() {
+        errors.push(TraceValidationError::InvalidTraceId);
+    }
+    if trace.metadata.extension_id.trim().is_empty() {
+        errors.push(TraceValidationError::InvalidExtensionId);
+    }
+    if !trace.metadata.initial_prior.is_valid() {
+        errors.push(TraceValidationError::InvalidInitialPrior);
+    }
+    if !trace.loss_matrix.has_valid_id() {
+        errors.push(TraceValidationError::InvalidLossMatrixId);
+    }
+    if !trace.loss_matrix.is_complete() {
+        errors.push(TraceValidationError::IncompleteLossMatrix);
+    }
+    if trace.metadata.loss_matrix_id != trace.loss_matrix.matrix_id {
+        errors.push(TraceValidationError::LossMatrixIdMismatch {
+            declared: trace.metadata.loss_matrix_id.clone(),
+            actual: trace.loss_matrix.matrix_id.clone(),
+        });
+    }
+    if trace.metadata.end_timestamp_ns < trace.metadata.start_timestamp_ns {
+        errors.push(TraceValidationError::InvalidTimeRange {
+            start_ns: trace.metadata.start_timestamp_ns,
+            end_ns: trace.metadata.end_timestamp_ns,
+        });
+    }
+
     if trace.telemetry_drop_counts.any() {
         errors.push(TraceValidationError::IncompleteTelemetry {
             drop_counts: trace.telemetry_drop_counts,
@@ -518,7 +715,6 @@ pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
     // Empty trace check.
     if trace.evidence_log.is_empty() {
         errors.push(TraceValidationError::EmptyTrace);
-        return errors;
     }
 
     // Evidence and posterior history must match.
@@ -537,8 +733,25 @@ pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
         });
     }
 
-    // Monotonic telemetry timestamps.
+    // Telemetry provenance and ordering.
+    for (record_index, record) in trace.telemetry_log.iter().enumerate() {
+        if record.extension_id != trace.metadata.extension_id {
+            errors.push(TraceValidationError::TelemetryExtensionMismatch {
+                record_index,
+                record_id: record.record_id,
+                expected: trace.metadata.extension_id.clone(),
+                actual: record.extension_id.clone(),
+            });
+        }
+    }
     for i in 1..trace.telemetry_log.len() {
+        if trace.telemetry_log[i].record_id <= trace.telemetry_log[i - 1].record_id {
+            errors.push(TraceValidationError::NonMonotonicRecordId {
+                record_index: i,
+                prev_id: trace.telemetry_log[i - 1].record_id,
+                current_id: trace.telemetry_log[i].record_id,
+            });
+        }
         if trace.telemetry_log[i].timestamp_ns < trace.telemetry_log[i - 1].timestamp_ns {
             errors.push(TraceValidationError::NonMonotonicTimestamp {
                 record_index: i,
@@ -549,13 +762,24 @@ pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
     }
 
     // Posterior validity.
-    for (step_idx, posterior) in &trace.posterior_history {
+    for (history_index, (step_idx, posterior)) in trace.posterior_history.iter().enumerate() {
+        if usize::try_from(*step_idx) != Ok(history_index) {
+            errors.push(TraceValidationError::PosteriorStepIndexMismatch {
+                history_index,
+                declared_step_index: *step_idx,
+            });
+        }
         if !posterior.is_valid() {
             errors.push(TraceValidationError::InvalidPosterior {
                 step_index: *step_idx,
             });
         }
     }
+
+    errors.extend(evidence_extension_errors(
+        &trace.metadata.extension_id,
+        &trace.evidence_log,
+    ));
 
     // Telemetry integrity.
     for record in &trace.telemetry_log {
@@ -567,7 +791,15 @@ pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
     }
 
     // Receipt integrity.
-    for receipt in &trace.containment_log {
+    for (receipt_index, receipt) in trace.containment_log.iter().enumerate() {
+        if receipt.target_extension_id != trace.metadata.extension_id {
+            errors.push(TraceValidationError::ReceiptExtensionMismatch {
+                receipt_index,
+                receipt_id: receipt.receipt_id.clone(),
+                expected: trace.metadata.extension_id.clone(),
+                actual: receipt.target_extension_id.clone(),
+            });
+        }
         if !receipt.verify_integrity() {
             errors.push(TraceValidationError::ReceiptIntegrityFailure {
                 receipt_id: receipt.receipt_id.clone(),
@@ -576,6 +808,40 @@ pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
     }
 
     errors
+}
+
+fn evidence_extension_errors(
+    expected_extension_id: &str,
+    evidence: &[Evidence],
+) -> Vec<TraceValidationError> {
+    evidence
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.extension_id != expected_extension_id)
+        .map(
+            |(evidence_index, item)| TraceValidationError::EvidenceExtensionMismatch {
+                evidence_index,
+                expected: expected_extension_id.to_string(),
+                actual: item.extension_id.clone(),
+            },
+        )
+        .collect()
+}
+
+fn validate_trace_for_replay(
+    trace: &IncidentTrace,
+    config: &ReplayConfig,
+) -> Vec<TraceValidationError> {
+    validate_trace(trace)
+        .into_iter()
+        .filter(|error| match error {
+            TraceValidationError::TelemetryIntegrityFailure { .. } => {
+                config.verify_telemetry_integrity
+            }
+            TraceValidationError::ReceiptIntegrityFailure { .. } => config.verify_receipt_integrity,
+            _ => true,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +868,45 @@ struct ReplayInternalInput<'a> {
     loss_matrix: &'a LossMatrix,
     likelihood_model: &'a LikelihoodModel,
     evidence: &'a [Evidence],
+    original_posteriors: Option<&'a [(u64, Posterior)]>,
     original_decisions: Option<&'a [ActionDecision]>,
+}
+
+fn decisions_match_except_epoch(original: &ActionDecision, replayed: &ActionDecision) -> bool {
+    original.action == replayed.action
+        && original.expected_loss_millionths == replayed.expected_loss_millionths
+        && original.runner_up_action == replayed.runner_up_action
+        && original.runner_up_loss_millionths == replayed.runner_up_loss_millionths
+        && original.explanation == replayed.explanation
+}
+
+fn compute_replay_input_hash(
+    epoch: SecurityEpoch,
+    extension_id: &str,
+    input: &ReplayInternalInput<'_>,
+) -> Result<ContentHash, ReplayError> {
+    let effective_input = (
+        epoch,
+        extension_id,
+        input.config,
+        input.prior,
+        input.loss_matrix,
+        input.likelihood_model,
+        input.evidence,
+    );
+    hash_serialized(REPLAY_INPUT_HASH_DOMAIN, &effective_input).map_err(|error| {
+        ReplayError::EvidenceSerialization {
+            detail: error.to_string(),
+        }
+    })
+}
+
+fn replay_step_limit(config: &ReplayConfig) -> usize {
+    if config.max_steps > 0 {
+        config.max_steps.min(MAX_REPLAY_STEPS)
+    } else {
+        MAX_REPLAY_STEPS
+    }
 }
 
 impl ForensicReplayer {
@@ -614,9 +918,9 @@ impl ForensicReplayer {
         }
     }
 
-    /// Set the security epoch.
+    /// Raise the security epoch without permitting rollback.
     pub fn set_epoch(&mut self, epoch: SecurityEpoch) {
-        self.epoch = epoch;
+        self.epoch = self.epoch.max(epoch);
     }
 
     /// Number of replays executed.
@@ -630,8 +934,13 @@ impl ForensicReplayer {
         trace: &IncidentTrace,
         config: &ReplayConfig,
     ) -> Result<ReplayResult, ReplayError> {
+        let max_steps = replay_step_limit(config);
+        if trace.evidence_log.len() > max_steps {
+            return Err(ReplayError::StepLimitExceeded { limit: max_steps });
+        }
+
         // Validate trace.
-        let validation_errors = validate_trace(trace);
+        let validation_errors = validate_trace_for_replay(trace, config);
         if !validation_errors.is_empty() {
             return Err(ReplayError::ValidationFailed {
                 errors: validation_errors,
@@ -646,6 +955,7 @@ impl ForensicReplayer {
                 loss_matrix: &trace.loss_matrix,
                 likelihood_model: &trace.likelihood_model,
                 evidence: &trace.evidence_log,
+                original_posteriors: Some(&trace.posterior_history),
                 original_decisions: Some(&trace.decision_log),
             },
         )
@@ -658,43 +968,44 @@ impl ForensicReplayer {
         config: &ReplayConfig,
         spec: &CounterfactualSpec,
     ) -> Result<ReplayResult, ReplayError> {
-        // Validate trace (skip integrity checks for counterfactual since
-        // we may be modifying evidence).
-        let mut cf_config = config.clone();
-        if !spec.inject_evidence.is_empty() || !spec.skip_evidence_indices.is_empty() {
-            cf_config.verify_telemetry_integrity = false;
+        if trace.evidence_log.len() > MAX_REPLAY_STEPS {
+            return Err(ReplayError::StepLimitExceeded {
+                limit: MAX_REPLAY_STEPS,
+            });
         }
 
-        let non_integrity_errors: Vec<TraceValidationError> = validate_trace(trace)
-            .into_iter()
-            .filter(|e| {
-                !matches!(
-                    e,
-                    TraceValidationError::TelemetryIntegrityFailure { .. }
-                        | TraceValidationError::ReceiptIntegrityFailure { .. }
-                )
-            })
-            .collect();
-
-        // Allow evidence/decision count mismatches in counterfactual mode
-        // since we may be adding/removing evidence.
-        let critical_errors: Vec<TraceValidationError> = non_integrity_errors
-            .into_iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    TraceValidationError::EmptyTrace
-                        | TraceValidationError::IncompleteTelemetry { .. }
-                        | TraceValidationError::NonMonotonicTimestamp { .. }
-                        | TraceValidationError::InvalidPosterior { .. }
-                )
-            })
-            .collect();
+        // Validate the recorded source before applying counterfactual edits.
+        // Skip/inject operations intentionally change the effective evidence
+        // length later; they do not make a pre-existing mismatch between the
+        // source evidence, posterior, and decision histories trustworthy.
+        let critical_errors = validate_trace_for_replay(trace, config);
 
         if !critical_errors.is_empty() {
             return Err(ReplayError::ValidationFailed {
                 errors: critical_errors,
             });
+        }
+
+        // Preflight the effective edited sequence before cloning any evidence.
+        // Out-of-range and duplicate skip indices have no effect.
+        let skipped_count = spec
+            .skip_evidence_indices
+            .iter()
+            .copied()
+            .filter(|index| *index < trace.evidence_log.len())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let effective_steps = trace
+            .evidence_log
+            .len()
+            .saturating_sub(skipped_count)
+            .checked_add(spec.inject_evidence.len())
+            .ok_or_else(|| ReplayError::StepLimitExceeded {
+                limit: replay_step_limit(config),
+            })?;
+        let max_steps = replay_step_limit(config);
+        if effective_steps > max_steps {
+            return Err(ReplayError::StepLimitExceeded { limit: max_steps });
         }
 
         let prior = spec
@@ -710,6 +1021,22 @@ impl ForensicReplayer {
             .clone()
             .unwrap_or_else(|| trace.likelihood_model.clone());
 
+        let mut override_errors = Vec::new();
+        if !prior.is_valid() {
+            override_errors.push(TraceValidationError::InvalidInitialPrior);
+        }
+        if !loss_matrix.has_valid_id() {
+            override_errors.push(TraceValidationError::InvalidLossMatrixId);
+        }
+        if !loss_matrix.is_complete() {
+            override_errors.push(TraceValidationError::IncompleteLossMatrix);
+        }
+        if !override_errors.is_empty() {
+            return Err(ReplayError::ValidationFailed {
+                errors: override_errors,
+            });
+        }
+
         // Build modified evidence sequence.
         let evidence = self.build_counterfactual_evidence(
             &trace.evidence_log,
@@ -722,15 +1049,22 @@ impl ForensicReplayer {
                 errors: vec![TraceValidationError::EmptyTrace],
             });
         }
+        let evidence_errors = evidence_extension_errors(&trace.metadata.extension_id, &evidence);
+        if !evidence_errors.is_empty() {
+            return Err(ReplayError::ValidationFailed {
+                errors: evidence_errors,
+            });
+        }
 
         self.replay_internal(
             trace,
             ReplayInternalInput {
-                config: &cf_config,
+                config,
                 prior: &prior,
                 loss_matrix: &loss_matrix,
                 likelihood_model: &likelihood_model,
                 evidence: &evidence,
+                original_posteriors: None,
                 original_decisions: None,
             },
         )
@@ -754,15 +1088,15 @@ impl ForensicReplayer {
             let cf = &counterfactual.steps[i];
 
             let change = if orig.decision.action == cf.decision.action {
-                if orig.decision.explanation.margin_millionths
-                    == cf.decision.explanation.margin_millionths
-                {
+                if decisions_match_except_epoch(&orig.decision, &cf.decision) {
                     DecisionChange::Identical
                 } else {
                     if first_divergence.is_none() {
                         first_divergence = Some(i as u64);
                     }
-                    DecisionChange::SameActionDifferentMargin {
+                    DecisionChange::SameActionDifferentScore {
+                        original_loss: orig.decision.expected_loss_millionths,
+                        counterfactual_loss: cf.decision.expected_loss_millionths,
                         original_margin: orig.decision.explanation.margin_millionths,
                         counterfactual_margin: cf.decision.explanation.margin_millionths,
                     }
@@ -790,23 +1124,18 @@ impl ForensicReplayer {
             }
             action_change_count += 1;
 
-            if i < counterfactual.steps.len() {
-                step_changes.push((
-                    i as u64,
-                    DecisionChange::DifferentAction {
-                        original_action: original
-                            .final_decision
-                            .as_ref()
-                            .map(|d| d.action)
-                            .unwrap_or(ContainmentAction::Allow),
-                        counterfactual_action: counterfactual.steps[i].decision.action,
-                        original_loss: 0,
-                        counterfactual_loss: counterfactual.steps[i]
-                            .decision
-                            .expected_loss_millionths,
-                    },
-                ));
-            }
+            let change = match (original.steps.get(i), counterfactual.steps.get(i)) {
+                (Some(original_step), None) => DecisionChange::OriginalOnly {
+                    original_action: original_step.decision.action,
+                    original_loss: original_step.decision.expected_loss_millionths,
+                },
+                (None, Some(counterfactual_step)) => DecisionChange::CounterfactualOnly {
+                    counterfactual_action: counterfactual_step.decision.action,
+                    counterfactual_loss: counterfactual_step.decision.expected_loss_millionths,
+                },
+                _ => unreachable!("tail indices must exist in exactly one replay"),
+            };
+            step_changes.push((i as u64, change));
         }
 
         let original_final = original.final_decision.as_ref().map(|d| d.action);
@@ -832,23 +1161,31 @@ impl ForensicReplayer {
         trace: &IncidentTrace,
         input: ReplayInternalInput<'_>,
     ) -> Result<ReplayResult, ReplayError> {
+        let max_steps = replay_step_limit(input.config);
+        if input.evidence.len() > max_steps {
+            return Err(ReplayError::StepLimitExceeded { limit: max_steps });
+        }
+
+        // Bound attacker-controlled evidence before serializing either hash
+        // preimage. The hashes are evidence, not a reason to bypass the replay
+        // resource limit.
+        let source_trace_hash =
+            trace
+                .content_hash()
+                .map_err(|error| ReplayError::EvidenceSerialization {
+                    detail: error.to_string(),
+                })?;
+        let replay_input_hash =
+            compute_replay_input_hash(self.epoch, &trace.metadata.extension_id, &input)?;
         let ReplayInternalInput {
-            config,
+            config: _,
             prior,
             loss_matrix,
             likelihood_model,
             evidence,
+            original_posteriors,
             original_decisions,
         } = input;
-        let max_steps = if config.max_steps > 0 {
-            config.max_steps.min(MAX_REPLAY_STEPS)
-        } else {
-            MAX_REPLAY_STEPS
-        };
-
-        if evidence.len() > max_steps {
-            return Err(ReplayError::StepLimitExceeded { limit: max_steps });
-        }
 
         // Create fresh updater and selector.
         let mut updater = BayesianPosteriorUpdater::with_model(
@@ -869,11 +1206,20 @@ impl ForensicReplayer {
             let update_result = updater.update(ev);
             let decision = selector.select(&update_result.posterior);
 
-            // Check determinism against original.
-            if let Some(orig_decisions) = original_decisions
-                && i < orig_decisions.len()
-                && orig_decisions[i].action != decision.action
-            {
+            // Check the complete recorded posterior and decision semantics.
+            // Epoch is intentionally excluded from decision comparison because
+            // callers may replay the same trace under a newer security epoch.
+            let posterior_matches = original_posteriors.is_none_or(|posteriors| {
+                posteriors.get(i).is_some_and(|(step_index, posterior)| {
+                    *step_index == i as u64 && *posterior == update_result.posterior
+                })
+            });
+            let decision_matches = original_decisions.is_none_or(|decisions| {
+                decisions
+                    .get(i)
+                    .is_some_and(|original| decisions_match_except_epoch(original, &decision))
+            });
+            if !posterior_matches || !decision_matches {
                 deterministic = false;
                 if first_divergence_step.is_none() {
                     first_divergence_step = Some(i as u64);
@@ -894,20 +1240,22 @@ impl ForensicReplayer {
         // Determine final containment state from decisions.
         let final_containment_state = determine_final_state(&steps);
 
-        let content_hash = ReplayResult::compute_hash(&steps, &trace.metadata.trace_id);
-
-        self.replay_count += 1;
-
-        Ok(ReplayResult {
+        let mut result = ReplayResult {
+            schema_version: REPLAY_RESULT_SCHEMA_VERSION.to_string(),
             trace_id: trace.metadata.trace_id.clone(),
+            source_trace_hash,
+            replay_input_hash,
             steps,
             final_posterior,
             final_decision,
             final_containment_state,
             deterministic,
             first_divergence_step,
-            content_hash,
-        })
+            content_hash: ContentHash::default(),
+        };
+        result.content_hash = result.recompute_content_hash()?;
+        self.replay_count = self.replay_count.saturating_add(1);
+        Ok(result)
     }
 
     fn build_counterfactual_evidence(
@@ -916,12 +1264,20 @@ impl ForensicReplayer {
         skip_indices: &[usize],
         inject: &[(usize, Evidence)],
     ) -> Vec<Evidence> {
-        let mut result = Vec::with_capacity(original.len() + inject.len());
-
         // Sort injections by position.
         let mut sorted_inject: Vec<(usize, &Evidence)> =
             inject.iter().map(|(pos, ev)| (*pos, ev)).collect();
         sorted_inject.sort_by_key(|(pos, _)| *pos);
+        let skip_indices: BTreeSet<usize> = skip_indices
+            .iter()
+            .copied()
+            .filter(|index| *index < original.len())
+            .collect();
+        let effective_capacity = original
+            .len()
+            .saturating_sub(skip_indices.len())
+            .saturating_add(inject.len());
+        let mut result = Vec::with_capacity(effective_capacity);
 
         let mut inject_idx = 0;
 
@@ -965,7 +1321,16 @@ fn determine_final_state(steps: &[ReplayStep]) -> ContainmentState {
     let mut state = ContainmentState::Running;
     for step in steps {
         state = match step.decision.action {
-            ContainmentAction::Allow => state, // No change.
+            // The live executor permits Allow to resolve a challenge back to
+            // Running. In every other non-running state Allow is either a
+            // no-op (Running) or an invalid transition, so preserve state.
+            ContainmentAction::Allow => {
+                if state == ContainmentState::Challenged {
+                    ContainmentState::Running
+                } else {
+                    state
+                }
+            }
             ContainmentAction::Challenge => {
                 if state == ContainmentState::Running {
                     ContainmentState::Challenged
@@ -1018,6 +1383,7 @@ mod tests {
     use super::*;
     use crate::bayesian_posterior::LikelihoodModel;
     use crate::capability::RuntimeCapability;
+    use crate::containment_executor::{ContainmentContext, ContainmentExecutor};
     use crate::expected_loss_selector::LossMatrix;
     use crate::hostcall_telemetry::{
         FlowLabel, HostcallResult, HostcallType, RecordInput, RecorderConfig, ResourceDelta,
@@ -1083,7 +1449,7 @@ mod tests {
                 start_timestamp_ns: 1_000_000,
                 end_timestamp_ns: 2_000_000,
                 initial_prior: prior,
-                loss_matrix_id: "balanced".to_string(),
+                loss_matrix_id: loss_matrix.matrix_id.clone(),
                 annotations: BTreeMap::new(),
             },
             telemetry_log: Vec::new(),
@@ -1115,7 +1481,7 @@ mod tests {
                 start_timestamp_ns: 0,
                 end_timestamp_ns: 0,
                 initial_prior: Posterior::default_prior(),
-                loss_matrix_id: "balanced".to_string(),
+                loss_matrix_id: "balanced-v1".to_string(),
                 annotations: BTreeMap::new(),
             },
             telemetry_log: Vec::new(),
@@ -1236,6 +1602,69 @@ mod tests {
     }
 
     #[test]
+    fn replay_integrity_flags_control_validation_for_replay_and_counterfactual() {
+        let mut recorder = TelemetryRecorder::new(RecorderConfig::default());
+        recorder
+            .record(
+                1,
+                RecordInput {
+                    extension_id: "ext-001".to_string(),
+                    hostcall_type: HostcallType::FsRead,
+                    capability_used: RuntimeCapability::FsRead,
+                    arguments_hash: ContentHash::compute(b"integrity-flag-args"),
+                    result_status: HostcallResult::Success,
+                    duration_ns: 1,
+                    resource_delta: ResourceDelta::default(),
+                    flow_label: FlowLabel::new("public", "public"),
+                    decision_id: Some("decision-001".to_string()),
+                },
+            )
+            .expect("telemetry record should fit");
+        let mut trace = build_trace(vec![benign_evidence()]).with_telemetry_recorder(&recorder);
+        trace.telemetry_log[0].duration_ns = 2;
+
+        let mut replayer = ForensicReplayer::new();
+        let default_error = replayer
+            .replay(&trace, &ReplayConfig::default())
+            .expect_err("default replay must verify telemetry integrity");
+        assert!(matches!(
+            default_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|error| matches!(
+                    error,
+                    TraceValidationError::TelemetryIntegrityFailure { .. }
+                ))
+        ));
+
+        let relaxed = ReplayConfig {
+            verify_telemetry_integrity: false,
+            ..ReplayConfig::default()
+        };
+        replayer
+            .replay(&trace, &relaxed)
+            .expect("explicitly disabled telemetry verification should be honored");
+
+        let counterfactual_error = replayer
+            .counterfactual(
+                &trace,
+                &ReplayConfig::default(),
+                &CounterfactualSpec::identity(),
+            )
+            .expect_err("counterfactual replay must honor enabled integrity checks");
+        assert!(matches!(
+            counterfactual_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|error| matches!(
+                    error,
+                    TraceValidationError::TelemetryIntegrityFailure { .. }
+                ))
+        ));
+        replayer
+            .counterfactual(&trace, &relaxed, &CounterfactualSpec::identity())
+            .expect("counterfactual replay should honor an explicit integrity opt-out");
+    }
+
+    #[test]
     fn validate_evidence_count_mismatch() {
         let mut trace = build_trace(vec![benign_evidence()]);
         // Remove a posterior to create mismatch.
@@ -1274,6 +1703,173 @@ mod tests {
             errors
                 .iter()
                 .any(|e| matches!(e, TraceValidationError::InvalidPosterior { .. }))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_shifted_posterior_step_index() {
+        let mut trace = build_trace(vec![benign_evidence()]);
+        trace.posterior_history[0].0 = 1;
+        assert!(validate_trace(&trace).contains(
+            &TraceValidationError::PosteriorStepIndexMismatch {
+                history_index: 0,
+                declared_step_index: 1,
+            }
+        ));
+    }
+
+    #[test]
+    fn replay_rejects_cross_extension_evidence() {
+        let mut trace = build_trace(vec![benign_evidence()]);
+        trace.evidence_log[0].extension_id = "other-extension".to_string();
+
+        let error = ForensicReplayer::new()
+            .replay(&trace, &ReplayConfig::default())
+            .expect_err("cross-extension evidence must not be replayed");
+        assert!(matches!(
+            error,
+            ReplayError::ValidationFailed { errors }
+                if errors.contains(&TraceValidationError::EvidenceExtensionMismatch {
+                    evidence_index: 0,
+                    expected: "ext-001".to_string(),
+                    actual: "other-extension".to_string(),
+                })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_initial_prior_and_loss_matrix() {
+        let mut invalid_prior = build_trace(vec![benign_evidence()]);
+        invalid_prior.metadata.initial_prior = Posterior {
+            p_benign: -1,
+            p_anomalous: 0,
+            p_malicious: 1_000_001,
+            p_unknown: 0,
+        };
+        assert!(
+            validate_trace(&invalid_prior).contains(&TraceValidationError::InvalidInitialPrior)
+        );
+
+        let mut blank_id = build_trace(vec![benign_evidence()]);
+        blank_id.loss_matrix.matrix_id = " \t ".to_string();
+        assert!(validate_trace(&blank_id).contains(&TraceValidationError::InvalidLossMatrixId));
+
+        let mut incomplete = build_trace(vec![benign_evidence()]);
+        let mut matrix_json =
+            serde_json::to_value(&incomplete.loss_matrix).expect("loss matrix should serialize");
+        matrix_json["entries"]
+            .as_array_mut()
+            .expect("loss entries should serialize as an array")
+            .pop();
+        incomplete.loss_matrix =
+            serde_json::from_value(matrix_json).expect("incomplete matrix should deserialize");
+        assert!(validate_trace(&incomplete).contains(&TraceValidationError::IncompleteLossMatrix));
+    }
+
+    #[test]
+    fn validate_rejects_metadata_identity_and_time_contradictions() {
+        let mut trace = build_trace(vec![benign_evidence()]);
+        trace.metadata.trace_id = " \t ".to_string();
+        trace.metadata.extension_id = "\n".to_string();
+        trace.metadata.loss_matrix_id = "conservative-v1".to_string();
+        trace.metadata.start_timestamp_ns = 20;
+        trace.metadata.end_timestamp_ns = 10;
+
+        let errors = validate_trace(&trace);
+        assert!(errors.contains(&TraceValidationError::InvalidTraceId));
+        assert!(errors.contains(&TraceValidationError::InvalidExtensionId));
+        assert!(
+            errors.contains(&TraceValidationError::LossMatrixIdMismatch {
+                declared: "conservative-v1".to_string(),
+                actual: "balanced-v1".to_string(),
+            })
+        );
+        assert!(errors.contains(&TraceValidationError::InvalidTimeRange {
+            start_ns: 20,
+            end_ns: 10,
+        }));
+    }
+
+    #[test]
+    fn validate_rejects_cross_extension_telemetry_and_containment() {
+        let mut recorder = TelemetryRecorder::new(RecorderConfig::default());
+        recorder
+            .record(
+                1,
+                RecordInput {
+                    extension_id: "ext-other".to_string(),
+                    hostcall_type: HostcallType::FsRead,
+                    capability_used: RuntimeCapability::FsRead,
+                    arguments_hash: ContentHash::compute(b"cross-extension-telemetry"),
+                    result_status: HostcallResult::Success,
+                    duration_ns: 1,
+                    resource_delta: ResourceDelta::default(),
+                    flow_label: FlowLabel::new("public", "public"),
+                    decision_id: None,
+                },
+            )
+            .expect("telemetry should record");
+
+        let mut executor = ContainmentExecutor::new();
+        executor.register("ext-other");
+        let receipt = executor
+            .execute(
+                ContainmentAction::Challenge,
+                "ext-other",
+                &ContainmentContext {
+                    decision_id: "cross-extension-decision".to_string(),
+                    timestamp_ns: 1,
+                    ..ContainmentContext::default()
+                },
+            )
+            .expect("containment should execute");
+
+        let mut trace = build_trace(vec![benign_evidence()]).with_telemetry_recorder(&recorder);
+        trace.containment_log.push(receipt.clone());
+        let errors = validate_trace(&trace);
+        assert!(
+            errors.contains(&TraceValidationError::TelemetryExtensionMismatch {
+                record_index: 0,
+                record_id: 0,
+                expected: "ext-001".to_string(),
+                actual: "ext-other".to_string(),
+            })
+        );
+        assert!(
+            errors.contains(&TraceValidationError::ReceiptExtensionMismatch {
+                receipt_index: 0,
+                receipt_id: receipt.receipt_id,
+                expected: "ext-001".to_string(),
+                actual: "ext-other".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_requires_strictly_increasing_telemetry_record_ids() {
+        let input = |suffix: &str| RecordInput {
+            extension_id: "ext-001".to_string(),
+            hostcall_type: HostcallType::FsRead,
+            capability_used: RuntimeCapability::FsRead,
+            arguments_hash: ContentHash::compute(suffix.as_bytes()),
+            result_status: HostcallResult::Success,
+            duration_ns: 1,
+            resource_delta: ResourceDelta::default(),
+            flow_label: FlowLabel::new("public", "public"),
+            decision_id: None,
+        };
+        let mut recorder = TelemetryRecorder::new(RecorderConfig::default());
+        recorder.record(1, input("first")).expect("first record");
+        recorder.record(1, input("second")).expect("second record");
+        let mut trace = build_trace(vec![benign_evidence()]).with_telemetry_recorder(&recorder);
+        trace.telemetry_log.swap(0, 1);
+
+        assert!(
+            validate_trace(&trace).contains(&TraceValidationError::NonMonotonicRecordId {
+                record_index: 1,
+                prev_id: 1,
+                current_id: 0,
+            })
         );
     }
 
@@ -1316,6 +1912,29 @@ mod tests {
                 "decision diverged at step {i}"
             );
         }
+    }
+
+    #[test]
+    fn replay_determinism_checks_posterior_and_full_decision_semantics() {
+        let mut posterior_tampered = build_trace(vec![benign_evidence()]);
+        posterior_tampered.posterior_history[0].1.p_benign -= 1;
+        posterior_tampered.posterior_history[0].1.p_unknown += 1;
+        assert!(posterior_tampered.posterior_history[0].1.is_valid());
+
+        let mut replayer = ForensicReplayer::new();
+        let result = replayer
+            .replay(&posterior_tampered, &ReplayConfig::default())
+            .expect("structurally valid trace should replay");
+        assert!(!result.deterministic);
+        assert_eq!(result.first_divergence_step, Some(0));
+
+        let mut decision_tampered = build_trace(vec![benign_evidence()]);
+        decision_tampered.decision_log[0].expected_loss_millionths += 1;
+        let result = replayer
+            .replay(&decision_tampered, &ReplayConfig::default())
+            .expect("structurally valid trace should replay");
+        assert!(!result.deterministic);
+        assert_eq!(result.first_divergence_step, Some(0));
     }
 
     #[test]
@@ -1393,6 +2012,81 @@ mod tests {
             .replay(&trace, &ReplayConfig::default())
             .expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash, r2.content_hash);
+        assert_eq!(r1.schema_version, REPLAY_RESULT_SCHEMA_VERSION);
+        assert_eq!(
+            r1.source_trace_hash,
+            trace.content_hash().expect("trace should serialize")
+        );
+        assert!(r1.verify_content_hash().expect("result should serialize"));
+    }
+
+    #[test]
+    fn replay_content_hash_rejects_field_tampering() {
+        let trace = build_trace(vec![benign_evidence()]);
+        let mut replayer = ForensicReplayer::new();
+        let result = replayer
+            .replay(&trace, &ReplayConfig::default())
+            .expect("operation should succeed for valid inputs");
+
+        let mut tampered_step = result.clone();
+        tampered_step.steps[0].decision.expected_loss_millionths += 1;
+        assert!(
+            !tampered_step
+                .verify_content_hash()
+                .expect("serialize result")
+        );
+
+        let mut tampered_source = result.clone();
+        tampered_source.source_trace_hash = ContentHash::compute(b"different source");
+        assert!(
+            !tampered_source
+                .verify_content_hash()
+                .expect("serialize result")
+        );
+
+        let mut tampered_input = result.clone();
+        tampered_input.replay_input_hash = ContentHash::compute(b"different input");
+        assert!(
+            !tampered_input
+                .verify_content_hash()
+                .expect("serialize result")
+        );
+
+        let mut tampered_outcome = result.clone();
+        tampered_outcome.deterministic = !tampered_outcome.deterministic;
+        assert!(
+            !tampered_outcome
+                .verify_content_hash()
+                .expect("serialize result")
+        );
+
+        let mut tampered_schema = result;
+        tampered_schema.schema_version.push_str("-tampered");
+        assert!(
+            !tampered_schema
+                .verify_content_hash()
+                .expect("serialize result")
+        );
+    }
+
+    #[test]
+    fn replay_input_hash_binds_the_updater_extension_identity() {
+        let trace = build_trace(vec![benign_evidence()]);
+        let first = ForensicReplayer::new()
+            .replay(&trace, &ReplayConfig::default())
+            .expect("original trace should replay");
+
+        let mut renamed = trace;
+        renamed.metadata.extension_id = "ext-renamed".to_string();
+        for evidence in &mut renamed.evidence_log {
+            evidence.extension_id = "ext-renamed".to_string();
+        }
+        let second = ForensicReplayer::new()
+            .replay(&renamed, &ReplayConfig::default())
+            .expect("consistently renamed trace should replay");
+
+        assert_ne!(first.source_trace_hash, second.source_trace_hash);
+        assert_ne!(first.replay_input_hash, second.replay_input_hash);
     }
 
     // -----------------------------------------------------------------------
@@ -1420,6 +2114,41 @@ mod tests {
         for (i, (o, c)) in original.steps.iter().zip(cf.steps.iter()).enumerate() {
             assert_eq!(o.decision.action, c.decision.action, "step {i}");
         }
+    }
+
+    #[test]
+    fn counterfactual_rejects_mismatched_source_histories_before_editing() {
+        let mut replayer = ForensicReplayer::new();
+        let config = ReplayConfig::default();
+        let spec = CounterfactualSpec::identity();
+
+        let mut missing_decision = build_trace(vec![benign_evidence(), suspicious_evidence()]);
+        missing_decision.decision_log.pop();
+        let decision_error = replayer
+            .counterfactual(&missing_decision, &config, &spec)
+            .expect_err("counterfactual replay must reject a corrupt decision history");
+        assert!(matches!(
+            decision_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|error| matches!(
+                    error,
+                    TraceValidationError::DecisionCountMismatch { .. }
+                ))
+        ));
+
+        let mut missing_evidence = build_trace(vec![benign_evidence(), suspicious_evidence()]);
+        missing_evidence.evidence_log.pop();
+        let evidence_error = replayer
+            .counterfactual(&missing_evidence, &config, &spec)
+            .expect_err("counterfactual replay must reject a corrupt evidence history");
+        assert!(matches!(
+            evidence_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|error| matches!(
+                    error,
+                    TraceValidationError::EvidenceCountMismatch { .. }
+                ))
+        ));
     }
 
     #[test]
@@ -1509,6 +2238,52 @@ mod tests {
     }
 
     #[test]
+    fn counterfactual_step_limit_is_checked_before_building_edited_evidence() {
+        let trace = build_trace(vec![benign_evidence()]);
+        let spec = CounterfactualSpec {
+            inject_evidence: vec![(1, malicious_evidence())],
+            description: "over configured step limit".to_string(),
+            ..CounterfactualSpec::identity()
+        };
+        let config = ReplayConfig {
+            max_steps: 1,
+            ..ReplayConfig::default()
+        };
+
+        let error = ForensicReplayer::new()
+            .counterfactual(&trace, &config, &spec)
+            .expect_err("effective edited sequence exceeds the configured cap");
+        assert_eq!(error, ReplayError::StepLimitExceeded { limit: 1 });
+    }
+
+    #[test]
+    fn counterfactual_rejects_cross_extension_injection() {
+        let trace = build_trace(vec![benign_evidence()]);
+        let mut injected = malicious_evidence();
+        injected.extension_id = "other-extension".to_string();
+        let spec = CounterfactualSpec {
+            inject_evidence: vec![(1, injected)],
+            description: "cross-extension injection".to_string(),
+            ..CounterfactualSpec::identity()
+        };
+
+        let error = ForensicReplayer::new()
+            .counterfactual(&trace, &ReplayConfig::default(), &spec)
+            .expect_err("cross-extension counterfactual evidence must be rejected");
+        assert!(matches!(
+            error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|item| matches!(
+                    item,
+                    TraceValidationError::EvidenceExtensionMismatch {
+                        evidence_index: 1,
+                        ..
+                    }
+                ))
+        ));
+    }
+
+    #[test]
     fn counterfactual_with_different_prior() {
         let evidence = vec![benign_evidence(), suspicious_evidence()];
         let trace = build_trace(evidence);
@@ -1545,6 +2320,45 @@ mod tests {
             cf_final >= orig_final,
             "suspicious prior should escalate: cf={cf_final} vs orig={orig_final}"
         );
+    }
+
+    #[test]
+    fn counterfactual_rejects_invalid_pricing_overrides() {
+        let trace = build_trace(vec![benign_evidence()]);
+        let mut replayer = ForensicReplayer::new();
+        let invalid_prior = Posterior {
+            p_benign: -1,
+            p_anomalous: 0,
+            p_malicious: 1_000_001,
+            p_unknown: 0,
+        };
+        let prior_error = replayer
+            .counterfactual(
+                &trace,
+                &ReplayConfig::default(),
+                &CounterfactualSpec::with_prior(invalid_prior, "invalid prior"),
+            )
+            .expect_err("invalid override prior must fail closed");
+        assert!(matches!(
+            prior_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.contains(&TraceValidationError::InvalidInitialPrior)
+        ));
+
+        let mut invalid_matrix = LossMatrix::balanced();
+        invalid_matrix.matrix_id = "  ".to_string();
+        let matrix_error = replayer
+            .counterfactual(
+                &trace,
+                &ReplayConfig::default(),
+                &CounterfactualSpec::with_loss_matrix(invalid_matrix, "invalid matrix"),
+            )
+            .expect_err("invalid override matrix must fail closed");
+        assert!(matches!(
+            matrix_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.contains(&TraceValidationError::InvalidLossMatrixId)
+        ));
     }
 
     // -----------------------------------------------------------------------
@@ -1662,7 +2476,7 @@ mod tests {
                 start_timestamp_ns: 0,
                 end_timestamp_ns: 0,
                 initial_prior: Posterior::default_prior(),
-                loss_matrix_id: "balanced".to_string(),
+                loss_matrix_id: "balanced-v1".to_string(),
                 annotations: BTreeMap::new(),
             },
             telemetry_log: Vec::new(),
@@ -1799,6 +2613,39 @@ mod tests {
         assert_eq!(determine_final_state(&steps), ContainmentState::Terminated);
     }
 
+    #[test]
+    fn determine_final_state_allow_resolves_challenge() {
+        let make_step = |idx: u64, action: ContainmentAction| ReplayStep {
+            step_index: idx,
+            evidence: benign_evidence(),
+            update_result: UpdateResult {
+                posterior: Posterior::default_prior(),
+                likelihoods: [1_000_000; 4],
+                cumulative_llr_millionths: 0,
+                update_count: idx + 1,
+            },
+            decision: ActionDecision {
+                action,
+                expected_loss_millionths: 0,
+                runner_up_action: ContainmentAction::Sandbox,
+                runner_up_loss_millionths: 1,
+                explanation: crate::expected_loss_selector::DecisionExplanation {
+                    posterior_snapshot: Posterior::default_prior(),
+                    loss_matrix_id: "test".to_string(),
+                    all_expected_losses: BTreeMap::new(),
+                    margin_millionths: 1,
+                },
+                epoch: SecurityEpoch::GENESIS,
+            },
+        };
+
+        let steps = vec![
+            make_step(0, ContainmentAction::Challenge),
+            make_step(1, ContainmentAction::Allow),
+        ];
+        assert_eq!(determine_final_state(&steps), ContainmentState::Running);
+    }
+
     // -----------------------------------------------------------------------
     // Serde roundtrip tests
     // -----------------------------------------------------------------------
@@ -1890,7 +2737,9 @@ mod tests {
                 (0, DecisionChange::Identical),
                 (
                     1,
-                    DecisionChange::SameActionDifferentMargin {
+                    DecisionChange::SameActionDifferentScore {
+                        original_loss: 50,
+                        counterfactual_loss: 75,
                         original_margin: 100,
                         counterfactual_margin: 200,
                     },
@@ -1933,6 +2782,11 @@ mod tests {
     fn replay_error_display() {
         let err = ReplayError::StepLimitExceeded { limit: 42 };
         assert!(err.to_string().contains("42"));
+
+        let err = ReplayError::EvidenceSerialization {
+            detail: "json writer failed".to_string(),
+        };
+        assert!(err.to_string().contains("json writer failed"));
 
         let err = ReplayError::Internal {
             detail: "oops".to_string(),
@@ -2077,6 +2931,23 @@ mod tests {
     }
 
     #[test]
+    fn replayer_epoch_and_counter_cannot_wrap_or_roll_back() {
+        let trace = build_trace(vec![benign_evidence()]);
+        let mut replayer = ForensicReplayer {
+            epoch: SecurityEpoch::GENESIS,
+            replay_count: u64::MAX,
+        };
+        replayer.set_epoch(SecurityEpoch::from_raw(5));
+        replayer.set_epoch(SecurityEpoch::from_raw(2));
+
+        let result = replayer
+            .replay(&trace, &ReplayConfig::default())
+            .expect("valid trace should replay");
+        assert_eq!(result.steps[0].decision.epoch, SecurityEpoch::from_raw(5));
+        assert_eq!(replayer.replay_count(), u64::MAX);
+    }
+
+    #[test]
     fn replayer_default() {
         let replayer = ForensicReplayer::default();
         assert_eq!(replayer.replay_count(), 0);
@@ -2188,12 +3059,51 @@ mod tests {
     #[test]
     fn trace_validation_error_serde_roundtrip() {
         let errors = vec![
+            TraceValidationError::InvalidTraceId,
+            TraceValidationError::InvalidExtensionId,
+            TraceValidationError::InvalidInitialPrior,
+            TraceValidationError::InvalidLossMatrixId,
+            TraceValidationError::IncompleteLossMatrix,
+            TraceValidationError::LossMatrixIdMismatch {
+                declared: "declared-v1".to_string(),
+                actual: "actual-v1".to_string(),
+            },
+            TraceValidationError::InvalidTimeRange {
+                start_ns: 200,
+                end_ns: 100,
+            },
+            TraceValidationError::NonMonotonicRecordId {
+                record_index: 4,
+                prev_id: 9,
+                current_id: 8,
+            },
             TraceValidationError::NonMonotonicTimestamp {
                 record_index: 5,
                 prev_ns: 100,
                 current_ns: 50,
             },
             TraceValidationError::InvalidPosterior { step_index: 3 },
+            TraceValidationError::PosteriorStepIndexMismatch {
+                history_index: 2,
+                declared_step_index: 3,
+            },
+            TraceValidationError::EvidenceExtensionMismatch {
+                evidence_index: 2,
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
+            TraceValidationError::TelemetryExtensionMismatch {
+                record_index: 1,
+                record_id: 42,
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
+            TraceValidationError::ReceiptExtensionMismatch {
+                receipt_index: 1,
+                receipt_id: "r-cross-extension".to_string(),
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
             TraceValidationError::DecisionCountMismatch {
                 decisions: 10,
                 posteriors: 8,
@@ -2220,14 +3130,16 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
-        assert_eq!(errors.len(), 8);
+        assert_eq!(errors.len(), 19);
     }
 
     #[test]
     fn decision_change_serde_roundtrip() {
         let changes = vec![
             DecisionChange::Identical,
-            DecisionChange::SameActionDifferentMargin {
+            DecisionChange::SameActionDifferentScore {
+                original_loss: 25_000,
+                counterfactual_loss: 35_000,
                 original_margin: 100_000,
                 counterfactual_margin: 200_000,
             },
@@ -2237,6 +3149,14 @@ mod tests {
                 original_loss: 50_000,
                 counterfactual_loss: 150_000,
             },
+            DecisionChange::OriginalOnly {
+                original_action: ContainmentAction::Terminate,
+                original_loss: 75_000,
+            },
+            DecisionChange::CounterfactualOnly {
+                counterfactual_action: ContainmentAction::Challenge,
+                counterfactual_loss: 25_000,
+            },
         ];
         for c in &changes {
             let json = serde_json::to_string(c).expect("serialize derived Serialize");
@@ -2244,7 +3164,7 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, restored);
         }
-        assert_eq!(changes.len(), 3);
+        assert_eq!(changes.len(), 5);
     }
 
     #[test]
@@ -2254,6 +3174,9 @@ mod tests {
                 errors: vec![TraceValidationError::EmptyTrace],
             },
             ReplayError::StepLimitExceeded { limit: 1000 },
+            ReplayError::EvidenceSerialization {
+                detail: "json writer failed".to_string(),
+            },
             ReplayError::Internal {
                 detail: "unexpected state".to_string(),
             },
@@ -2264,7 +3187,7 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
-        assert_eq!(errors.len(), 3);
+        assert_eq!(errors.len(), 4);
     }
 
     // -----------------------------------------------------------------------
@@ -2274,12 +3197,20 @@ mod tests {
     #[test]
     fn trace_validation_error_display_uniqueness_btreeset() {
         let variants = [
+            TraceValidationError::InvalidInitialPrior,
+            TraceValidationError::InvalidLossMatrixId,
+            TraceValidationError::IncompleteLossMatrix,
             TraceValidationError::NonMonotonicTimestamp {
                 record_index: 0,
                 prev_ns: 100,
                 current_ns: 50,
             },
             TraceValidationError::InvalidPosterior { step_index: 1 },
+            TraceValidationError::EvidenceExtensionMismatch {
+                evidence_index: 2,
+                expected: "ext-001".to_string(),
+                actual: "ext-002".to_string(),
+            },
             TraceValidationError::DecisionCountMismatch {
                 decisions: 3,
                 posteriors: 2,
@@ -2308,8 +3239,8 @@ mod tests {
         }
         assert_eq!(
             displays.len(),
-            8,
-            "all 8 TraceValidationError variants produce distinct Display strings"
+            12,
+            "all 12 TraceValidationError variants produce distinct Display strings"
         );
     }
 
@@ -2351,9 +3282,39 @@ mod tests {
     #[test]
     fn incident_trace_content_hash_deterministic() {
         let trace = build_trace(vec![benign_evidence()]);
-        let h1 = trace.content_hash();
-        let h2 = trace.content_hash();
+        let h1 = trace.content_hash().expect("trace should serialize");
+        let h2 = trace.content_hash().expect("trace should serialize");
         assert_eq!(h1, h2, "content_hash must be deterministic");
+    }
+
+    #[test]
+    fn incident_trace_hash_preserves_free_form_field_boundaries() {
+        let mut first = build_trace(vec![benign_evidence()]);
+        first.metadata.trace_id = "ab".to_string();
+        first.metadata.extension_id = "c".to_string();
+
+        let mut second = first.clone();
+        second.metadata.trace_id = "a".to_string();
+        second.metadata.extension_id = "bc".to_string();
+
+        assert_ne!(
+            first.content_hash().expect("trace should serialize"),
+            second.content_hash().expect("trace should serialize"),
+            "adjacent free-form fields must not collide in the trace preimage"
+        );
+    }
+
+    #[test]
+    fn incident_trace_hash_error_is_structured() {
+        let error = IncidentTraceHashError::Serialization {
+            detail: "json writer failed".to_string(),
+        };
+        assert!(error.to_string().contains("json writer failed"));
+        let encoded = serde_json::to_string(&error).expect("error should serialize");
+        let decoded: IncidentTraceHashError =
+            serde_json::from_str(&encoded).expect("error should deserialize");
+        assert_eq!(decoded, error);
+        let _: &dyn std::error::Error = &error;
     }
 
     #[test]
@@ -2419,12 +3380,19 @@ mod tests {
     }
 
     #[test]
-    fn decision_change_display_same_action_different_margin_content() {
-        let dc = DecisionChange::SameActionDifferentMargin {
+    fn decision_change_display_same_action_different_score_content() {
+        let dc = DecisionChange::SameActionDifferentScore {
+            original_loss: 25_000,
+            counterfactual_loss: 35_000,
             original_margin: 100_000,
             counterfactual_margin: 200_000,
         };
         let s = dc.to_string();
+        assert!(s.contains("25000"), "should include original loss: {s}");
+        assert!(
+            s.contains("35000"),
+            "should include counterfactual loss: {s}"
+        );
         assert!(s.contains("100000"), "should include original margin: {s}");
         assert!(
             s.contains("200000"),

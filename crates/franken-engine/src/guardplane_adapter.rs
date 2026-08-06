@@ -30,6 +30,7 @@ use crate::runtime_config::RuntimeConfig;
 use crate::security_epoch::SecurityEpoch;
 
 const MILLION: i64 = 1_000_000;
+const UNIFIED_ACTION_BLOCK_THRESHOLD_MILLIONTHS: i64 = 800_000;
 const WITNESS_CONFIDENCE_FLOOR_MILLIONTHS: i64 = 900_000;
 const TRUST_LEVEL_METADATA_KEYS: &[&str] = &[
     "capability_witness.trust_level",
@@ -110,6 +111,15 @@ impl GuardplaneDiagnosticRecord {
             metadata_value: operation.to_string(),
             message: "guardplane adapter state lock was poisoned; recovered inner state"
                 .to_string(),
+        }
+    }
+
+    fn guardrail_update_failed(detail: &str) -> Self {
+        Self {
+            code: "guardplane.guardrail_update_failed".to_string(),
+            metadata_key: "guardrail_errors".to_string(),
+            metadata_value: detail.to_string(),
+            message: "unified guardrail update failed; operation was contained".to_string(),
         }
     }
 }
@@ -308,20 +318,21 @@ impl GuardplaneOperation {
                 callee_name,
                 arg_count,
             } => {
-                let base = match callee_name.as_deref() {
+                let base: i64 = match callee_name.as_deref() {
                     Some("eval") | Some("Function") => 900_000,
                     Some(name) if name.contains("eval") || name.contains("constructor") => 700_000,
                     Some(_) => 125_000,
                     None => 250_000,
                 };
-                (base
-                    + i64::try_from(*arg_count)
+                base.saturating_add(
+                    i64::try_from(*arg_count)
                         .unwrap_or(i64::MAX)
-                        .saturating_mul(20_000))
+                        .saturating_mul(20_000),
+                )
                 .clamp(0, MILLION)
             }
             Self::Allocation { kind, size_hint } => {
-                let base = match kind {
+                let base: i64 = match kind {
                     AllocKind::Object => 80_000,
                     AllocKind::Array => 100_000,
                     AllocKind::Function => 175_000,
@@ -331,7 +342,7 @@ impl GuardplaneOperation {
                 let size_penalty = i64::try_from(*size_hint)
                     .unwrap_or(i64::MAX)
                     .saturating_mul(15_000);
-                (base + size_penalty).clamp(0, MILLION)
+                base.saturating_add(size_penalty).clamp(0, MILLION)
             }
             Self::Import { specifier } => {
                 if specifier.starts_with("node:")
@@ -349,7 +360,7 @@ impl GuardplaneOperation {
     }
 
     fn rate_millionths(&self, operation_index: u64) -> i64 {
-        let base = match self {
+        let base: i64 = match self {
             Self::PropertyAccess { .. } => 40_000_000,
             Self::Call { .. } => 65_000_000,
             Self::Allocation { .. } => 55_000_000,
@@ -358,7 +369,7 @@ impl GuardplaneOperation {
         let burst_penalty = i64::try_from(operation_index.saturating_sub(1))
             .unwrap_or(i64::MAX)
             .saturating_mul(25_000_000);
-        (base + burst_penalty).clamp(0, 600_000_000)
+        base.saturating_add(burst_penalty).clamp(0, 600_000_000)
     }
 
     fn label(&self) -> &'static str {
@@ -429,6 +440,8 @@ impl GuardplaneAdapter {
             context.extension_id.clone(),
         );
         updater.set_epoch(epoch);
+        let mut selector = ExpectedLossSelector::new(loss_matrix);
+        selector.set_epoch(epoch);
 
         // Create unified guardrail registry with martingale substrate
         let mut unified_guardrail_registry = GuardrailRegistry::new();
@@ -442,10 +455,8 @@ impl GuardplaneAdapter {
         action_losses.insert("Suspend".to_string(), 500_000);
         action_losses.insert("Terminate".to_string(), 800_000);
         action_losses.insert("Quarantine".to_string(), 900_000);
-        let expected_loss_matrix = ExpectedLossMatrix::new(
-            action_losses,
-            1_000_000, // 1.0 threshold for blocking actions
-        );
+        let expected_loss_matrix =
+            ExpectedLossMatrix::new(action_losses, UNIFIED_ACTION_BLOCK_THRESHOLD_MILLIONTHS);
 
         // Create stopping threshold: log(1/0.05) ≈ 2.996 in millionths
         let stopping_threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
@@ -472,7 +483,7 @@ impl GuardplaneAdapter {
             epoch,
             state: Mutex::new(GuardplaneAdapterState {
                 updater,
-                selector: ExpectedLossSelector::new(loss_matrix),
+                selector,
                 unified_guardrail_registry,
                 thresholds: ContainmentThresholds::default(),
                 operation_count: 0,
@@ -539,28 +550,39 @@ impl GuardplaneAdapter {
         let posterior_delta_millionths = posterior_delta(&update.posterior);
         let threshold_action = state.thresholds.evaluate(posterior_delta_millionths);
 
-        // Unified substrate decision path (AA.1/AA.2)
-        // Convert evidence to likelihood ratio and feed to martingale
-        let _lr_millionths = self.evidence_to_likelihood_ratio(&evidence);
+        // Unified substrate decision path (AA.1/AA.2).
         let observation_millionths = (evidence.resource_score_millionths
             + evidence.timing_anomaly_millionths
             + evidence.denial_rate_millionths)
             / 3;
 
         // Update unified guardrail registry with observation
-        let _guardrail_errors = state
+        let guardrail_errors = state
             .unified_guardrail_registry
             .update_stream("guardplane-decisions", observation_millionths);
 
-        // Check if unified guardrails are triggered
+        // A failed security-control update is not equivalent to a clean
+        // observation. Record the failure and contain rather than silently
+        // allowing the legacy path to decide alone.
         let unified_blocked_actions = state.unified_guardrail_registry.blocked_actions();
-        let unified_action = if !unified_blocked_actions.is_empty() {
+        let unified_action = if !guardrail_errors.is_empty() {
+            let detail = guardrail_errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            state
+                .diagnostics
+                .push(GuardplaneDiagnosticRecord::guardrail_update_failed(&detail));
+            HookAction::Terminate("unified guardrail update failed closed".to_string())
+        } else if !unified_blocked_actions.is_empty() {
             HookAction::Terminate("unified guardrails triggered".to_string()) // Block if any unified guardrails triggered
         } else {
             HookAction::Allow
         };
 
-        // For now, combine decisions (legacy takes precedence for compatibility)
+        // Derive the legacy action, then combine it with the unified action by
+        // containment severity so neither path can weaken the other.
         let action = hook_action_from_decisions(
             &operation,
             decision.action,
@@ -569,41 +591,7 @@ impl GuardplaneAdapter {
             posterior_delta_millionths,
         );
 
-        // Use stricter of legacy or unified decision
-        let final_action = match (&action, &unified_action) {
-            (HookAction::Terminate(_), _) | (_, HookAction::Terminate(_)) => {
-                if let HookAction::Terminate(reason) = action {
-                    HookAction::Terminate(reason)
-                } else if let HookAction::Terminate(reason) = unified_action {
-                    HookAction::Terminate(reason)
-                } else {
-                    HookAction::Terminate("unknown".to_string())
-                }
-            }
-            (HookAction::Quarantine(_), _) | (_, HookAction::Quarantine(_)) => {
-                if let HookAction::Quarantine(reason) = action {
-                    HookAction::Quarantine(reason)
-                } else if let HookAction::Quarantine(reason) = unified_action {
-                    HookAction::Quarantine(reason)
-                } else {
-                    HookAction::Quarantine("unknown".to_string())
-                }
-            }
-            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
-            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
-            (HookAction::Challenge(_), _) | (_, HookAction::Challenge(_)) => {
-                if let HookAction::Challenge(token) = action {
-                    HookAction::Challenge(token)
-                } else if let HookAction::Challenge(token) = unified_action {
-                    HookAction::Challenge(token)
-                } else {
-                    HookAction::Challenge(ChallengeToken {
-                        token: "unified".to_string(),
-                    })
-                }
-            }
-            _ => HookAction::Allow,
-        };
+        let final_action = stricter_hook_action(action, unified_action);
 
         state.decisions.push(GuardplaneDecisionRecord {
             hook_context: hook_context.clone(),
@@ -619,26 +607,6 @@ impl GuardplaneAdapter {
         });
 
         final_action
-    }
-
-    fn evidence_to_likelihood_ratio(&self, evidence: &Evidence) -> i64 {
-        // Convert evidence scores to likelihood ratio
-        // High resource/timing/denial scores indicate higher risk -> higher LR
-        let total_score = evidence.resource_score_millionths
-            + evidence.timing_anomaly_millionths
-            + evidence.denial_rate_millionths;
-        let average_score = total_score / 3;
-
-        // Map score (0 to 1M) to likelihood ratio (0.1 to 10.0 in millionths)
-        if average_score > 500_000 {
-            // Above average risk -> LR > 1.0
-            let excess = average_score - 500_000;
-            1_000_000 + (excess * 18) / 500_000 // 1.0 to 10.0
-        } else {
-            // Below average risk -> LR < 1.0
-            let deficit = 500_000 - average_score;
-            1_000_000 - (deficit * 900_000) / 500_000 // 0.1 to 1.0
-        }
     }
 
     fn build_evidence(&self, operation: &GuardplaneOperation, operation_index: u64) -> Evidence {
@@ -796,6 +764,25 @@ fn selector_action_rank(action: SelectorContainmentAction) -> u8 {
     }
 }
 
+fn hook_action_rank(action: &HookAction) -> u8 {
+    match action {
+        HookAction::Allow => 0,
+        HookAction::Challenge(_) => 1,
+        HookAction::Sandbox => 2,
+        HookAction::Suspend => 3,
+        HookAction::Terminate(_) => 4,
+        HookAction::Quarantine(_) => 5,
+    }
+}
+
+fn stricter_hook_action(left: HookAction, right: HookAction) -> HookAction {
+    if hook_action_rank(&left) >= hook_action_rank(&right) {
+        left
+    } else {
+        right
+    }
+}
+
 fn threshold_action_to_selector(action: ThresholdContainmentAction) -> SelectorContainmentAction {
     match action {
         ThresholdContainmentAction::Allow => SelectorContainmentAction::Allow,
@@ -894,6 +881,81 @@ mod tests {
         let summary = adapter.summary();
         assert_eq!(summary.decision_count, 1);
         assert_eq!(summary.last_action, Some(HookAction::Allow));
+    }
+
+    #[test]
+    fn expected_loss_decisions_use_the_adapter_epoch() {
+        let epoch = SecurityEpoch::from_raw(41);
+        let adapter = GuardplaneAdapter::from_runtime_config(
+            context_with_metadata(&[]),
+            LossMatrix::balanced(),
+            &RuntimeConfig::default(),
+            epoch,
+        );
+        let decision = adapter
+            .lock_state("test_expected_loss_epoch")
+            .selector
+            .select(&Posterior::default_prior());
+        assert_eq!(decision.epoch, epoch);
+        assert_eq!(
+            adapter
+                .lock_state("test_unified_guardrail_epoch")
+                .unified_guardrail_registry
+                .get("unified-ext:test")
+                .expect("unified guardrail should be registered")
+                .config_epoch(),
+            epoch
+        );
+    }
+
+    #[test]
+    fn extreme_operation_sizes_saturate_guardplane_scores() {
+        let call = GuardplaneOperation::Call {
+            callee_name: None,
+            arg_count: usize::MAX,
+        };
+        let allocation = GuardplaneOperation::Allocation {
+            kind: AllocKind::Array,
+            size_hint: usize::MAX,
+        };
+
+        assert_eq!(call.suspicion_millionths(), MILLION);
+        assert_eq!(allocation.suspicion_millionths(), MILLION);
+        assert_eq!(call.rate_millionths(u64::MAX), 600_000_000);
+    }
+
+    #[test]
+    fn unified_guardrail_terminal_policy_has_reachable_blocked_actions() {
+        let adapter = adapter_with_metadata(&[]);
+        let mut state = adapter.lock_state("test_unified_terminal_policy");
+
+        for _ in 0..5 {
+            let errors = state
+                .unified_guardrail_registry
+                .update_stream("guardplane-decisions", MILLION);
+            assert!(errors.is_empty(), "unexpected guardrail errors: {errors:?}");
+        }
+
+        assert_eq!(
+            state.unified_guardrail_registry.blocked_actions(),
+            BTreeSet::from(["Quarantine".to_string(), "Terminate".to_string()]),
+            "a stopped unified guardrail must have a non-empty terminal policy"
+        );
+    }
+
+    #[test]
+    fn stricter_action_combination_never_downgrades_quarantine() {
+        let quarantine = HookAction::Quarantine("quarantine evidence".to_string());
+        let terminate = HookAction::Terminate("terminate evidence".to_string());
+
+        assert_eq!(
+            stricter_hook_action(quarantine.clone(), terminate.clone()),
+            quarantine
+        );
+        assert_eq!(
+            stricter_hook_action(terminate, quarantine.clone()),
+            quarantine
+        );
     }
 
     #[test]

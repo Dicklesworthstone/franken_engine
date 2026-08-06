@@ -1195,13 +1195,15 @@ impl ExecutionOrchestrator {
             gamma,
         )
         .expect("adaptive router configuration must be valid");
+        let mut loss_selector = ExpectedLossSelector::new(loss_matrix);
+        loss_selector.set_epoch(config.epoch);
         Ok(Self {
             parser: CanonicalEs2020Parser,
             adaptive_router,
             stopping_policies: BTreeMap::new(),
             last_cumulative_llr_by_extension: BTreeMap::new(),
             posterior_updaters: UpdaterStore::new(),
-            loss_selector: ExpectedLossSelector::new(loss_matrix),
+            loss_selector,
             ledger,
             evidence_chain_instance_id,
             evidence_signing_authority,
@@ -1696,10 +1698,10 @@ impl ExecutionOrchestrator {
                 evidence_capability_summary,
                 self.config.epoch,
             );
-            let update_result = self
-                .posterior_updaters
-                .get_or_create(&package.extension_id)
-                .update(&evidence);
+            let epoch = self.config.epoch;
+            let updater = self.posterior_updaters.get_or_create(&package.extension_id);
+            updater.set_epoch(epoch);
+            let update_result = updater.update(&evidence);
             let posterior = update_result.posterior.clone();
             let risk_state = posterior.map_estimate();
 
@@ -6432,6 +6434,14 @@ mod tests {
             .execute(&simple_package())
             .expect("operation should succeed for valid inputs");
         assert_eq!(result.epoch, SecurityEpoch::from_raw(42));
+        assert_eq!(result.action_decision.epoch, SecurityEpoch::from_raw(42));
+        assert_eq!(
+            orch.posterior_updaters
+                .get(&result.extension_id)
+                .expect("execution must create an updater")
+                .epoch(),
+            SecurityEpoch::from_raw(42)
+        );
     }
 
     #[test]

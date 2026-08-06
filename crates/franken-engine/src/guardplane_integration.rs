@@ -62,6 +62,7 @@ const CONFIDENCE_MODERATE_RISK_PENALTY: u32 = 50_000;
 const CONFIDENCE_HIGH_RISK_PENALTY: u32 = 100_000;
 const CONFIDENCE_MODERATE_RISK_FLOOR: u32 = 300_000;
 const CONFIDENCE_HIGH_RISK_FLOOR: u32 = 600_000;
+const RISK_SCORE_MAX: u32 = 1_000_000;
 const POLICY_ALLOCATION_SOFT_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 const LARGE_ALLOCATION_BYTES: u64 = 1024 * 1024;
 const WIDE_CALL_ARG_COUNT: u32 = 16;
@@ -284,6 +285,14 @@ impl fmt::Display for HookAction {
             Self::Terminate => f.write_str("terminate"),
             Self::Quarantine => f.write_str("quarantine"),
         }
+    }
+}
+
+fn stricter_guardplane_action(left: HookAction, right: HookAction) -> HookAction {
+    if left.severity_level() >= right.severity_level() {
+        left
+    } else {
+        right
     }
 }
 
@@ -755,6 +764,24 @@ impl BasicGuardplaneAdapter {
         evidence_signing_authority: Option<EvidenceSigningAuthority>,
         evidence_epoch: SecurityEpoch,
     ) -> Result<Self, GuardplaneError> {
+        let thresholds = [
+            ("challenge_threshold", config.challenge_threshold),
+            ("sandbox_threshold", config.sandbox_threshold),
+            ("suspend_threshold", config.suspend_threshold),
+            ("terminate_threshold", config.terminate_threshold),
+        ];
+        if let Some((name, value)) = thresholds.iter().find(|(_, value)| *value > RISK_SCORE_MAX) {
+            return Err(GuardplaneError::ConfigurationError(format!(
+                "{name} must be within [0, {RISK_SCORE_MAX}], got {value}"
+            )));
+        }
+        if !thresholds.windows(2).all(|pair| pair[0].1 <= pair[1].1) {
+            return Err(GuardplaneError::ConfigurationError(
+                "guardplane thresholds must satisfy challenge <= sandbox <= suspend <= terminate"
+                    .to_string(),
+            ));
+        }
+
         if config.emit_evidence
             && config.require_evidence_signature
             && evidence_signing_authority.is_none()
@@ -808,7 +835,7 @@ impl BasicGuardplaneAdapter {
             "unified guardplane integration decisions",
             stopping_threshold,
             expected_loss_matrix,
-            crate::security_epoch::SecurityEpoch::GENESIS,
+            evidence_epoch,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: config.challenge_threshold as i64,
                 high_ratio_millionths: 3_000_000, // 3.0 ratio when above threshold
@@ -825,6 +852,23 @@ impl BasicGuardplaneAdapter {
             evidence_signing_authority,
             evidence_epoch,
         })
+    }
+
+    fn unified_action_for_observation(
+        &mut self,
+        observation_millionths: i64,
+        containment_action: HookAction,
+    ) -> HookAction {
+        let guardrail_errors = self
+            .unified_guardrail_registry
+            .update_stream("integration-decisions", observation_millionths);
+        if !guardrail_errors.is_empty()
+            || !self.unified_guardrail_registry.blocked_actions().is_empty()
+        {
+            containment_action
+        } else {
+            HookAction::Allow
+        }
     }
 
     /// Assess risk for a given operation context.
@@ -985,9 +1029,9 @@ impl BasicGuardplaneAdapter {
         let timestamp = sequence;
 
         let reason = format!(
-            "Risk score {:.3} (threshold {:.3}) → {}",
-            risk.risk_score as f64 / 1_000_000.0,
-            self.config.challenge_threshold as f64 / 1_000_000.0,
+            "Risk score {} (threshold {}) → {}",
+            format_millionths_three_decimals(risk.risk_score),
+            format_millionths_three_decimals(self.config.challenge_threshold),
             action
         );
 
@@ -1052,6 +1096,17 @@ impl BasicGuardplaneAdapter {
         self.decision_sequence = next_sequence;
         Ok(evidence)
     }
+}
+
+fn format_millionths_three_decimals(value: u32) -> String {
+    // Round fixed-point millionths to three decimal places using integers so
+    // signed evidence never depends on platform floating-point formatting.
+    let rounded_thousandths = (u64::from(value) + 500) / 1_000;
+    format!(
+        "{}.{:03}",
+        rounded_thousandths / 1_000,
+        rounded_thousandths % 1_000
+    )
 }
 
 /// bd-jn3uv: deterministic decision_id derivation.
@@ -1137,29 +1192,9 @@ impl InterpreterHook for BasicGuardplaneAdapter {
         let risk = self.assess_risk(&op_context)?;
         let legacy_action = self.determine_action(&risk);
 
-        // Unified substrate decision (AA.1/AA.2)
-        let observation_millionths = risk.risk_score;
-        let _guardrail_errors = self
-            .unified_guardrail_registry
-            .update_stream("integration-decisions", observation_millionths.into());
-
-        // Check if unified guardrails are triggered
-        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
-        let unified_action = if !unified_blocked_actions.is_empty() {
-            HookAction::Terminate // Block if any unified guardrails triggered
-        } else {
-            HookAction::Allow
-        };
-
-        // Combine legacy and unified decisions (stricter wins)
-        let final_action = match (&legacy_action, &unified_action) {
-            (HookAction::Terminate, _) | (_, HookAction::Terminate) => HookAction::Terminate,
-            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
-            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
-            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
-            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
-            _ => HookAction::Allow,
-        };
+        let unified_action =
+            self.unified_action_for_observation(i64::from(risk.risk_score), HookAction::Terminate);
+        let final_action = stricter_guardplane_action(legacy_action, unified_action);
 
         // Generate and store evidence if enabled
         if self.config.emit_evidence {
@@ -1180,27 +1215,9 @@ impl InterpreterHook for BasicGuardplaneAdapter {
         let risk = self.assess_risk(&op_context)?;
         let legacy_action = self.determine_action(&risk);
 
-        // Unified substrate decision (AA.1/AA.2)
-        let observation_millionths = risk.risk_score;
-        let _guardrail_errors = self
-            .unified_guardrail_registry
-            .update_stream("integration-decisions", observation_millionths.into());
-
-        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
-        let unified_action = if !unified_blocked_actions.is_empty() {
-            HookAction::Terminate
-        } else {
-            HookAction::Allow
-        };
-
-        let final_action = match (&legacy_action, &unified_action) {
-            (HookAction::Terminate, _) | (_, HookAction::Terminate) => HookAction::Terminate,
-            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
-            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
-            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
-            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
-            _ => HookAction::Allow,
-        };
+        let unified_action =
+            self.unified_action_for_observation(i64::from(risk.risk_score), HookAction::Terminate);
+        let final_action = stricter_guardplane_action(legacy_action, unified_action);
 
         if self.config.emit_evidence {
             let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
@@ -1222,27 +1239,9 @@ impl InterpreterHook for BasicGuardplaneAdapter {
         let risk = self.assess_risk(&op_context)?;
         let legacy_action = self.determine_action(&risk);
 
-        // Unified substrate decision (AA.1/AA.2)
-        let observation_millionths = risk.risk_score;
-        let _guardrail_errors = self
-            .unified_guardrail_registry
-            .update_stream("integration-decisions", observation_millionths.into());
-
-        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
-        let unified_action = if !unified_blocked_actions.is_empty() {
-            HookAction::Terminate
-        } else {
-            HookAction::Allow
-        };
-
-        let final_action = match (&legacy_action, &unified_action) {
-            (HookAction::Terminate, _) | (_, HookAction::Terminate) => HookAction::Terminate,
-            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
-            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
-            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
-            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
-            _ => HookAction::Allow,
-        };
+        let unified_action =
+            self.unified_action_for_observation(i64::from(risk.risk_score), HookAction::Terminate);
+        let final_action = stricter_guardplane_action(legacy_action, unified_action);
 
         if self.config.emit_evidence {
             let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
@@ -1263,26 +1262,9 @@ impl InterpreterHook for BasicGuardplaneAdapter {
         // Legacy decision path (maintained for compatibility)
         let legacy_action = self.determine_action(&risk);
 
-        // Unified substrate decision (AA.1/AA.2)
-        let observation_millionths = risk.risk_score;
-        let _guardrail_errors = self
-            .unified_guardrail_registry
-            .update_stream("integration-decisions", observation_millionths.into());
-
-        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
-        let unified_action = if !unified_blocked_actions.is_empty() {
-            HookAction::Quarantine
-        } else {
-            HookAction::Allow
-        };
-
-        // Combine decisions (stricter action wins)
-        let final_action = match (legacy_action, unified_action) {
-            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
-            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
-            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
-            _ => HookAction::Allow,
-        };
+        let unified_action =
+            self.unified_action_for_observation(i64::from(risk.risk_score), HookAction::Quarantine);
+        let final_action = stricter_guardplane_action(legacy_action, unified_action);
 
         if self.config.emit_evidence {
             let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
@@ -1334,6 +1316,105 @@ mod tests {
         assert!(!HookAction::Terminate.allows_continuation());
         assert!(HookAction::Terminate.stops_execution());
         assert_eq!(HookAction::Terminate.severity_level(), 4);
+    }
+
+    #[test]
+    fn construction_rejects_out_of_range_thresholds() {
+        let error = BasicGuardplaneAdapter::new(GuardplaneConfig {
+            challenge_threshold: RISK_SCORE_MAX + 1,
+            emit_evidence: false,
+            ..GuardplaneConfig::default()
+        })
+        .expect_err("out-of-range risk thresholds must fail closed");
+
+        assert!(matches!(
+            error,
+            GuardplaneError::ConfigurationError(detail)
+                if detail.contains("challenge_threshold must be within")
+        ));
+    }
+
+    #[test]
+    fn construction_rejects_inverted_threshold_order() {
+        let error = BasicGuardplaneAdapter::new(GuardplaneConfig {
+            challenge_threshold: 400_000,
+            sandbox_threshold: 300_000,
+            emit_evidence: false,
+            ..GuardplaneConfig::default()
+        })
+        .expect_err("inverted containment thresholds must fail closed");
+
+        assert!(matches!(
+            error,
+            GuardplaneError::ConfigurationError(detail)
+                if detail.contains("challenge <= sandbox <= suspend <= terminate")
+        ));
+    }
+
+    #[test]
+    fn signed_reason_fixed_point_formatting_is_deterministic() {
+        assert_eq!(format_millionths_three_decimals(0), "0.000");
+        assert_eq!(format_millionths_three_decimals(999_499), "0.999");
+        assert_eq!(format_millionths_three_decimals(999_500), "1.000");
+        assert_eq!(format_millionths_three_decimals(1_234_499), "1.234");
+        assert_eq!(format_millionths_three_decimals(1_234_500), "1.235");
+    }
+
+    #[test]
+    fn stricter_action_combination_preserves_quarantine() {
+        assert_eq!(
+            stricter_guardplane_action(HookAction::Quarantine, HookAction::Terminate),
+            HookAction::Quarantine
+        );
+        assert_eq!(
+            stricter_guardplane_action(HookAction::Terminate, HookAction::Quarantine),
+            HookAction::Quarantine
+        );
+    }
+
+    #[test]
+    fn unified_guardrail_terminal_policy_is_reachable() {
+        let mut adapter = lab_adapter(GuardplaneConfig::default());
+
+        assert_eq!(
+            adapter.unified_action_for_observation(1_000_000, HookAction::Terminate),
+            HookAction::Allow
+        );
+        assert_eq!(
+            adapter.unified_action_for_observation(1_000_000, HookAction::Terminate),
+            HookAction::Allow
+        );
+        assert_eq!(
+            adapter.unified_action_for_observation(1_000_000, HookAction::Terminate),
+            HookAction::Terminate
+        );
+        assert!(
+            !adapter
+                .unified_guardrail_registry
+                .blocked_actions()
+                .is_empty(),
+            "a stopped guardrail must expose its terminal action policy"
+        );
+    }
+
+    #[test]
+    fn unified_guardrail_uses_the_adapter_evidence_epoch() {
+        let epoch = SecurityEpoch::from_raw(7);
+        let adapter = BasicGuardplaneAdapter::new_for_lab(
+            GuardplaneConfig::default(),
+            lab_authority(),
+            epoch,
+        )
+        .expect("lab adapter should accept a later evidence epoch");
+
+        assert_eq!(
+            adapter
+                .unified_guardrail_registry
+                .get("guardplane-integration")
+                .expect("integration guardrail should be registered")
+                .config_epoch(),
+            epoch
+        );
     }
 
     #[test]

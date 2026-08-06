@@ -47,6 +47,56 @@ use std::fmt;
 #[cfg(test)]
 const MILLION: i64 = 1_000_000;
 
+/// Deterministic fixed-point natural logarithm of a positive ratio.
+///
+/// Returns a conservative lower quantization of `ln(num / den)` in millionths
+/// of nats using integer-only arithmetic. Callers must validate that both
+/// inputs are strictly positive.
+/// Keeping this conversion beside the martingale prevents security evidence
+/// from depending on platform-specific `f64::ln` implementations.
+pub(crate) fn ln_ratio_millionths(num: i64, den: i64) -> i64 {
+    const INTERNAL_SCALE: u128 = 1_000_000_000_000_000_000;
+    const INTERNAL_UNITS_PER_MILLIONTH: u128 = 1_000_000_000_000;
+    const LN2_INTERNAL: u128 = 693_147_180_559_945_309;
+    assert!(num > 0 && den > 0, "log-ratio inputs must be positive");
+    if num == den {
+        return 0;
+    }
+    if num < den {
+        // The positive series is a strict lower approximation whose complete
+        // truncation and fixed-point error is below one micro-nat. Negating
+        // only that quantized value (or subtracting just one) can still round
+        // upward when the omitted tail crosses an integer boundary. Reserve
+        // two micro-nats so the negative result remains a certified lower
+        // bound for every representable ratio.
+        return ln_ratio_millionths(den, num)
+            .saturating_neg()
+            .saturating_sub(2);
+    }
+
+    let numerator = num as u128;
+    let mut denominator = den as u128;
+    let mut powers_of_two = 0u128;
+    while numerator >= denominator * 2 {
+        denominator *= 2;
+        powers_of_two += 1;
+    }
+
+    // For m in [1, 2), ln(m) = 2 * atanh((m - 1) / (m + 1)). The
+    // series argument is at most 1/3, so terms decay by at least 1/9.
+    let z = (numerator - denominator) * INTERNAL_SCALE / (numerator + denominator);
+    let z_squared = z * z / INTERNAL_SCALE;
+    let mut power = z;
+    let mut sum = z;
+    for odd in [3u128, 5, 7, 9, 11] {
+        power = power * z_squared / INTERNAL_SCALE;
+        sum += power / odd;
+    }
+
+    let total_internal = powers_of_two * LN2_INTERNAL + 2 * sum;
+    i64::try_from(total_internal / INTERNAL_UNITS_PER_MILLIONTH).unwrap_or(i64::MAX)
+}
+
 // ---------------------------------------------------------------------------
 // MartingaleState — the running state of the process
 // ---------------------------------------------------------------------------
@@ -117,9 +167,25 @@ impl fmt::Display for StoppingRuleKind {
 /// `log_threshold_millionths` is `log(1/α) * 1_000_000`. For the
 /// common case `α = 0.05`, that is `-log(0.05) ~= 2.995732`, so
 /// `log_threshold_millionths = 2_995_732`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct StoppingThreshold {
-    pub log_threshold_millionths: i64,
+    log_threshold_millionths: i64,
+}
+
+#[derive(Deserialize)]
+struct StoppingThresholdState {
+    log_threshold_millionths: i64,
+}
+
+impl<'de> Deserialize<'de> for StoppingThreshold {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let state = StoppingThresholdState::deserialize(deserializer)?;
+        Self::try_from_log_millionths(state.log_threshold_millionths)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl StoppingThreshold {
@@ -133,6 +199,11 @@ impl StoppingThreshold {
         Ok(Self {
             log_threshold_millionths,
         })
+    }
+
+    /// The configured `log(1/alpha)` boundary in millionths of nats.
+    pub fn log_threshold_millionths(self) -> i64 {
+        self.log_threshold_millionths
     }
 }
 
@@ -191,13 +262,107 @@ impl MartingaleVerdict {
 /// the configured threshold. Once a stop verdict is emitted, the
 /// ledger is "stopped" — subsequent `append` calls return
 /// `MartingaleError::AlreadyStopped` without mutating state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MartingaleLedger {
     threshold: StoppingThreshold,
     epoch: SecurityEpoch,
     state: MartingaleState,
     events: Vec<MartingaleEvent>,
     stopped_at_sequence: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct MartingaleLedgerState {
+    threshold: StoppingThreshold,
+    epoch: SecurityEpoch,
+    state: MartingaleState,
+    events: Vec<MartingaleEvent>,
+    stopped_at_sequence: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for MartingaleLedger {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let serialized = MartingaleLedgerState::deserialize(deserializer)?;
+        let mut expected_state = MartingaleState::initial();
+        let mut expected_stop = None;
+
+        for (index, event) in serialized.events.iter().enumerate() {
+            if expected_stop.is_some() {
+                return Err(serde::de::Error::custom(
+                    "martingale ledger contains events after its stopping verdict",
+                ));
+            }
+
+            let expected_sequence = u64::try_from(index)
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    serde::de::Error::custom("martingale event sequence is too large")
+                })?;
+            if event.sequence != expected_sequence {
+                return Err(serde::de::Error::custom(format!(
+                    "martingale event sequence {} does not match expected {expected_sequence}",
+                    event.sequence
+                )));
+            }
+            if event.epoch != serialized.epoch {
+                return Err(serde::de::Error::custom(format!(
+                    "martingale event {expected_sequence} epoch does not match ledger epoch"
+                )));
+            }
+
+            let next_log_m = expected_state
+                .log_m_millionths
+                .checked_add(event.log_likelihood_ratio_millionths)
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "martingale event {expected_sequence} overflows the log accumulator"
+                    ))
+                })?;
+            expected_state = MartingaleState {
+                event_count: expected_sequence,
+                log_m_millionths: next_log_m,
+                last_log_likelihood_ratio_millionths: event.log_likelihood_ratio_millionths,
+            };
+            if event.state_after != expected_state {
+                return Err(serde::de::Error::custom(format!(
+                    "martingale event {expected_sequence} has an inconsistent state_after"
+                )));
+            }
+
+            let expected_verdict = derive_verdict(&expected_state, &serialized.threshold);
+            if event.verdict != expected_verdict {
+                return Err(serde::de::Error::custom(format!(
+                    "martingale event {expected_sequence} has an inconsistent verdict"
+                )));
+            }
+            if expected_verdict.is_stop() {
+                expected_stop = Some(expected_sequence);
+            }
+        }
+
+        if serialized.state != expected_state {
+            return Err(serde::de::Error::custom(
+                "martingale ledger final state does not match its event history",
+            ));
+        }
+        if serialized.stopped_at_sequence != expected_stop {
+            return Err(serde::de::Error::custom(
+                "martingale ledger stopped_at_sequence does not match its event history",
+            ));
+        }
+
+        Ok(Self {
+            threshold: serialized.threshold,
+            epoch: serialized.epoch,
+            state: serialized.state,
+            events: serialized.events,
+            stopped_at_sequence: serialized.stopped_at_sequence,
+        })
+    }
 }
 
 impl MartingaleLedger {
@@ -315,7 +480,8 @@ impl MartingaleLedger {
         for event in &self.events {
             let next_log_m = current
                 .log_m_millionths
-                .saturating_add(event.log_likelihood_ratio_millionths);
+                .checked_add(event.log_likelihood_ratio_millionths)
+                .expect("validated martingale event history cannot overflow");
             current = MartingaleState {
                 event_count: event.sequence,
                 log_m_millionths: next_log_m,
@@ -401,6 +567,26 @@ mod tests {
         StoppingThreshold::try_from_log_millionths(2_995_732).unwrap()
     }
 
+    #[test]
+    fn fixed_point_log_ratio_matches_known_values() {
+        assert_eq!(ln_ratio_millionths(1_000_000, 1_000_000), 0);
+        assert_eq!(ln_ratio_millionths(2_000_000, 1_000_000), 693_147);
+        assert_eq!(ln_ratio_millionths(500_000, 1_000_000), -693_149);
+        assert_eq!(ln_ratio_millionths(5_000_000, 1_000_000), 1_609_437);
+        assert_eq!(ln_ratio_millionths(10_000_000, 1_000_000), 2_302_585);
+        assert_eq!(
+            ln_ratio_millionths(2_000_000, 1_000_000) + ln_ratio_millionths(1_000_000, 2_000_000),
+            -2,
+            "reciprocal observations need a certified conservative reserve"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "log-ratio inputs must be positive")]
+    fn fixed_point_log_ratio_rejects_zero_before_normalization() {
+        let _ = ln_ratio_millionths(1, 0);
+    }
+
     // ----- Initial state -----
 
     #[test]
@@ -432,6 +618,15 @@ mod tests {
     fn threshold_rejects_negative() {
         let err = StoppingThreshold::try_from_log_millionths(-1).unwrap_err();
         assert_eq!(err, MartingaleError::NonPositiveThreshold);
+    }
+
+    #[test]
+    fn threshold_deserialization_rejects_nonpositive_boundary() {
+        let error = serde_json::from_value::<StoppingThreshold>(serde_json::json!({
+            "log_threshold_millionths": 0
+        }))
+        .expect_err("serialized thresholds must preserve the constructor invariant");
+        assert!(error.to_string().contains("strictly positive"));
     }
 
     // ----- Append: additive log-update -----
@@ -657,6 +852,55 @@ mod tests {
         let json = serde_json::to_string(&original).expect("serialize");
         let restored: MartingaleLedger = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn ledger_deserialization_rejects_inconsistent_history() {
+        let mut ledger = MartingaleLedger::new(small_threshold(), epoch());
+        ledger.append(123, digest("a"), 1).unwrap();
+        let valid = serde_json::to_value(&ledger).expect("serialize ledger as JSON");
+
+        let mut bad_sequence = valid.clone();
+        bad_sequence["events"][0]["sequence"] = serde_json::json!(2);
+
+        let mut bad_event_state = valid.clone();
+        bad_event_state["events"][0]["state_after"]["log_m_millionths"] = serde_json::json!(124);
+
+        let mut bad_final_state = valid.clone();
+        bad_final_state["state"]["event_count"] = serde_json::json!(0);
+
+        let mut bad_stop = valid;
+        bad_stop["stopped_at_sequence"] = serde_json::json!(1);
+
+        for (checkpoint, expected_error) in [
+            (bad_sequence, "sequence"),
+            (bad_event_state, "state_after"),
+            (bad_final_state, "final state"),
+            (bad_stop, "stopped_at_sequence"),
+        ] {
+            let error = serde_json::from_value::<MartingaleLedger>(checkpoint)
+                .expect_err("inconsistent martingale checkpoints must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn ledger_deserialization_rejects_events_after_stop() {
+        let mut ledger = MartingaleLedger::new(small_threshold(), epoch());
+        ledger.append(3_000_000, digest("stop"), 1).unwrap();
+        let mut invalid = serde_json::to_value(&ledger).expect("serialize ledger as JSON");
+        let duplicate = invalid["events"][0].clone();
+        invalid["events"]
+            .as_array_mut()
+            .expect("events serialize as an array")
+            .push(duplicate);
+
+        let error = serde_json::from_value::<MartingaleLedger>(invalid)
+            .expect_err("events after a stop verdict must be rejected");
+        assert!(error.to_string().contains("after its stopping verdict"));
     }
 
     #[test]

@@ -223,20 +223,21 @@ impl GuardplaneOperation {
                 callee_name,
                 arg_count,
             } => {
-                let base = match callee_name.as_deref() {
+                let base: i64 = match callee_name.as_deref() {
                     Some("eval") | Some("Function") => 900_000,
                     Some(name) if name.contains("eval") || name.contains("constructor") => 700_000,
                     Some(_) => 125_000,
                     None => 250_000,
                 };
-                (base
-                    + i64::try_from(*arg_count)
+                base.saturating_add(
+                    i64::try_from(*arg_count)
                         .unwrap_or(i64::MAX)
-                        .saturating_mul(20_000))
+                        .saturating_mul(20_000),
+                )
                 .clamp(0, MILLION)
             }
             Self::Allocation { kind, size_hint } => {
-                let base = match kind {
+                let base: i64 = match kind {
                     AllocKind::Object => 80_000,
                     AllocKind::Array => 100_000,
                     AllocKind::Function => 175_000,
@@ -246,7 +247,7 @@ impl GuardplaneOperation {
                 let size_penalty = i64::try_from(*size_hint)
                     .unwrap_or(i64::MAX)
                     .saturating_mul(15_000);
-                (base + size_penalty).clamp(0, MILLION)
+                base.saturating_add(size_penalty).clamp(0, MILLION)
             }
             Self::Import { specifier } => {
                 if specifier.starts_with("node:")
@@ -264,7 +265,7 @@ impl GuardplaneOperation {
     }
 
     fn rate_millionths(&self, operation_index: u64) -> i64 {
-        let base = match self {
+        let base: i64 = match self {
             Self::PropertyAccess { .. } => 40_000_000,
             Self::Call { .. } => 65_000_000,
             Self::Allocation { .. } => 55_000_000,
@@ -273,7 +274,7 @@ impl GuardplaneOperation {
         let burst_penalty = i64::try_from(operation_index.saturating_sub(1))
             .unwrap_or(i64::MAX)
             .saturating_mul(25_000_000);
-        (base + burst_penalty).clamp(0, 600_000_000)
+        base.saturating_add(burst_penalty).clamp(0, 600_000_000)
     }
 
     fn label(&self) -> &'static str {
@@ -340,12 +341,14 @@ impl GuardplaneAdapter {
             context.extension_id.clone(),
         );
         updater.set_epoch(epoch);
+        let mut selector = ExpectedLossSelector::new(loss_matrix);
+        selector.set_epoch(epoch);
         Self {
             context,
             epoch,
             state: Mutex::new(GuardplaneAdapterState {
                 updater,
-                selector: ExpectedLossSelector::new(loss_matrix),
+                selector,
                 thresholds: ContainmentThresholds::default(),
                 operation_count: 0,
                 decisions: Vec::new(),
@@ -643,6 +646,40 @@ mod tests {
         let summary = adapter.summary();
         assert_eq!(summary.decision_count, 1);
         assert_eq!(summary.last_action, Some(HookAction::Allow));
+    }
+
+    #[test]
+    fn expected_loss_decisions_use_the_adapter_epoch() {
+        let epoch = SecurityEpoch::from_raw(41);
+        let adapter = GuardplaneAdapter::from_runtime_config(
+            context_with_metadata(&[]),
+            LossMatrix::balanced(),
+            &RuntimeConfig::default(),
+            epoch,
+        );
+        let decision = adapter
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .selector
+            .select(&Posterior::default_prior());
+        assert_eq!(decision.epoch, epoch);
+    }
+
+    #[test]
+    fn extreme_operation_sizes_saturate_guardplane_scores() {
+        let call = GuardplaneOperation::Call {
+            callee_name: None,
+            arg_count: usize::MAX,
+        };
+        let allocation = GuardplaneOperation::Allocation {
+            kind: AllocKind::Array,
+            size_hint: usize::MAX,
+        };
+
+        assert_eq!(call.suspicion_millionths(), MILLION);
+        assert_eq!(allocation.suspicion_millionths(), MILLION);
+        assert_eq!(call.rate_millionths(u64::MAX), 600_000_000);
     }
 
     #[test]

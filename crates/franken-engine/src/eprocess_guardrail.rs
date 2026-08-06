@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
 use crate::martingale_decision_ledger::{
-    MartingaleError, MartingaleLedger, MartingaleVerdict, StoppingThreshold,
+    MartingaleError, MartingaleLedger, MartingaleVerdict, StoppingThreshold, ln_ratio_millionths,
 };
 use crate::security_epoch::SecurityEpoch;
 
@@ -105,7 +105,9 @@ impl fmt::Display for GuardrailState {
 /// likelihood ratio L(observation | H1) / L(observation | H0) as
 /// fixed-point millionths (1_000_000 = 1.0).
 ///
-/// Returns `None` if the observation is outside the valid domain.
+/// Returns `Some` only for a strictly positive ratio. A zero or negative
+/// value has no finite log-space representation in the martingale ledger and
+/// must be reported as `None` rather than silently approximated.
 pub trait LikelihoodRatioFn: fmt::Debug + Send {
     /// Compute the likelihood ratio for a single observation.
     fn ratio(&self, observation_millionths: i64) -> Option<i64>;
@@ -130,11 +132,12 @@ pub struct ThresholdLikelihoodRatio {
 
 impl LikelihoodRatioFn for ThresholdLikelihoodRatio {
     fn ratio(&self, observation_millionths: i64) -> Option<i64> {
-        if observation_millionths >= self.threshold_millionths {
-            Some(self.high_ratio_millionths)
+        let ratio = if observation_millionths >= self.threshold_millionths {
+            self.high_ratio_millionths
         } else {
-            Some(self.low_ratio_millionths)
-        }
+            self.low_ratio_millionths
+        };
+        (ratio > 0).then_some(ratio)
     }
 
     fn family(&self) -> &str {
@@ -154,15 +157,16 @@ pub struct UniversalLikelihoodRatio {
 
 impl LikelihoodRatioFn for UniversalLikelihoodRatio {
     fn ratio(&self, observation_millionths: i64) -> Option<i64> {
-        if self.null_mean_millionths == 0 {
+        if self.null_mean_millionths <= 0 || observation_millionths <= 0 {
             return None;
         }
         // ratio = observation / null_mean, in millionths
         let r = (observation_millionths as i128 * 1_000_000) / self.null_mean_millionths as i128;
-        Some(
-            r.try_into()
-                .unwrap_or(if r > 0 { i64::MAX } else { i64::MIN }),
-        )
+        if r == 0 {
+            None
+        } else {
+            Some(i64::try_from(r).unwrap_or(i64::MAX))
+        }
     }
 
     fn family(&self) -> &str {
@@ -411,21 +415,21 @@ impl EProcessGuardrail {
         }
 
         // Compute likelihood ratio using the pluggable function.
-        let lr = self.lr_fn.ratio(observation_millionths).ok_or_else(|| {
-            GuardrailError::InvalidObservation {
+        // Enforce the trait contract at the security boundary rather than
+        // trusting pluggable implementations. In particular, passing zero to
+        // the integer logarithm would leave its normalization loop unable to
+        // make progress.
+        let lr = self
+            .lr_fn
+            .ratio(observation_millionths)
+            .filter(|ratio| *ratio > 0)
+            .ok_or_else(|| GuardrailError::InvalidObservation {
                 guardrail_id: self.guardrail_id.clone(),
-            }
-        })?;
+            })?;
 
-        // Convert to log space for martingale (ln(lr) * 1_000_000).
-        let log_lr_millionths = if lr <= 0 {
-            // Handle edge case: lr <= 0 means infinite negative log.
-            i64::MIN / 1000 // Prevent overflow in subsequent addition
-        } else {
-            // ln(lr / 1_000_000) * 1_000_000 = (ln(lr) - ln(1_000_000)) * 1_000_000
-            let lr_f64 = lr as f64 / 1_000_000.0;
-            (lr_f64.ln() * 1_000_000.0) as i64
-        };
+        // Convert to log space using the shared deterministic fixed-point
+        // implementation. Likelihood ratios are strictly positive by contract.
+        let log_lr_millionths = ln_ratio_millionths(lr, 1_000_000);
 
         // Create content hash for the observation.
         let payload = format!("observation:{observation_millionths}:lr:{lr}");
@@ -438,7 +442,7 @@ impl EProcessGuardrail {
                 log_lr_millionths,
                 payload_digest,
                 // Use a simple timestamp (real systems would use proper clock).
-                self.observation_count() * 1_000_000_000,
+                self.observation_count().saturating_mul(1_000_000_000),
             )
             .map_err(|source| GuardrailError::MartingaleError {
                 guardrail_id: self.guardrail_id.clone(),
@@ -486,7 +490,7 @@ impl EProcessGuardrail {
             });
         }
 
-        if receipt.authorized_by.is_empty() {
+        if receipt.authorized_by.trim().is_empty() || receipt.epoch < self.config_epoch {
             return Err(GuardrailError::ResetUnauthorized {
                 guardrail_id: self.guardrail_id.clone(),
             });
@@ -495,6 +499,7 @@ impl EProcessGuardrail {
         // Create fresh martingale with same threshold but new epoch.
         let threshold = self.martingale.threshold();
         self.martingale = MartingaleLedger::new(threshold, receipt.epoch);
+        self.config_epoch = receipt.epoch;
         self.state = GuardrailState::Active;
 
         self.events.push(GuardrailEvent::Reset {
@@ -509,6 +514,12 @@ impl EProcessGuardrail {
 
     /// Suspend the guardrail (stops accumulating evidence).
     pub fn suspend(&mut self, reason: impl Into<String>) {
+        // A triggered guardrail may be cleared only by `reset` with an
+        // authorized, non-rollback receipt. Suspending it must not erase its
+        // terminal blocked-action policy or create a resume-based bypass.
+        if self.state != GuardrailState::Active {
+            return;
+        }
         self.state = GuardrailState::Suspended;
         self.events.push(GuardrailEvent::SuspendedEvent {
             guardrail_id: self.guardrail_id.clone(),
@@ -743,6 +754,65 @@ mod tests {
     }
 
     #[test]
+    fn nonpositive_likelihood_ratio_is_rejected_without_mutation() {
+        let mut gr = EProcessGuardrail::new(
+            "invalid-lr",
+            "metric",
+            "null",
+            StoppingThreshold::try_from_log_millionths(1_000_000).unwrap(),
+            ExpectedLossMatrix::new(BTreeMap::new(), 1_000_000),
+            SecurityEpoch::GENESIS,
+            Box::new(ThresholdLikelihoodRatio {
+                threshold_millionths: 0,
+                high_ratio_millionths: 0,
+                low_ratio_millionths: -1,
+            }),
+        );
+
+        assert_eq!(
+            gr.update(1),
+            Err(GuardrailError::InvalidObservation {
+                guardrail_id: "invalid-lr".to_string(),
+            })
+        );
+        assert_eq!(gr.martingale_state().log_m_millionths, 0);
+        assert_eq!(gr.observation_count(), 0);
+        assert!(gr.drain_events().is_empty());
+    }
+
+    #[test]
+    fn pluggable_likelihood_ratio_contract_is_enforced_at_update_boundary() {
+        #[derive(Debug)]
+        struct BrokenLikelihoodRatio;
+
+        impl LikelihoodRatioFn for BrokenLikelihoodRatio {
+            fn ratio(&self, _observation_millionths: i64) -> Option<i64> {
+                Some(0)
+            }
+
+            fn family(&self) -> &str {
+                "broken-test-double"
+            }
+        }
+
+        let mut gr = EProcessGuardrail::new(
+            "broken-plugin",
+            "metric",
+            "null",
+            StoppingThreshold::try_from_log_millionths(1_000_000).unwrap(),
+            ExpectedLossMatrix::new(BTreeMap::new(), 1_000_000),
+            SecurityEpoch::GENESIS,
+            Box::new(BrokenLikelihoodRatio),
+        );
+
+        assert!(matches!(
+            gr.update(1),
+            Err(GuardrailError::InvalidObservation { .. })
+        ));
+        assert_eq!(gr.observation_count(), 0);
+    }
+
+    #[test]
     fn repeated_high_observations_trigger_guardrail() {
         let mut gr = test_guardrail();
         // Need enough high observations to cross log threshold ≈ 2.996
@@ -861,6 +931,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reset_rejects_epoch_rollback_and_advances_config_epoch() {
+        let mut gr = test_guardrail();
+        gr.update(15_000).expect("first trigger update");
+        gr.update(15_000).expect("second trigger update");
+
+        let forward = ResetReceipt {
+            authorized_by: "operator-1".to_string(),
+            rationale: "new policy epoch".to_string(),
+            epoch: SecurityEpoch::from_raw(5),
+        };
+        gr.reset(&forward).expect("forward reset should succeed");
+        assert_eq!(gr.config_epoch(), SecurityEpoch::from_raw(5));
+
+        gr.update(15_000).expect("first retrigger update");
+        gr.update(15_000).expect("second retrigger update");
+        let rollback = ResetReceipt {
+            authorized_by: "operator-1".to_string(),
+            rationale: "stale policy epoch".to_string(),
+            epoch: SecurityEpoch::from_raw(4),
+        };
+        assert!(matches!(
+            gr.reset(&rollback),
+            Err(GuardrailError::ResetUnauthorized { .. })
+        ));
+        assert_eq!(gr.state(), GuardrailState::Triggered);
+        assert_eq!(gr.config_epoch(), SecurityEpoch::from_raw(5));
+    }
+
     // -- Suspend / Resume --
 
     #[test]
@@ -885,6 +984,26 @@ mod tests {
         gr.resume();
         assert_eq!(gr.state(), GuardrailState::Active);
         gr.update(15_000).expect("update should succeed"); // works again
+    }
+
+    #[test]
+    fn suspend_and_resume_cannot_clear_a_triggered_guardrail() {
+        let mut gr = test_guardrail();
+        gr.update(15_000).expect("first trigger update");
+        gr.update(15_000).expect("second trigger update");
+        assert_eq!(gr.state(), GuardrailState::Triggered);
+        let blocked_before = gr.blocked_actions();
+        assert!(!blocked_before.is_empty());
+
+        gr.suspend("attempted maintenance bypass");
+        gr.resume();
+
+        assert_eq!(gr.state(), GuardrailState::Triggered);
+        assert_eq!(gr.blocked_actions(), blocked_before);
+        assert!(matches!(
+            gr.update(15_000),
+            Err(GuardrailError::AlreadyTriggered { .. })
+        ));
     }
 
     // -- Events --
@@ -1360,17 +1479,16 @@ mod tests {
     // -- Enrichment: edge cases, overflow, lifecycle depth --
 
     #[test]
-    fn martingale_log_accumulator_overflow_detected() {
+    fn maximum_representable_ratio_has_bounded_log_contribution() {
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        // Use extremely high threshold so we don't trigger before overflow
+        // Even the largest representable fixed-point ratio has a small finite
+        // log contribution; the guardrail must not manufacture an overflow.
         let threshold =
             StoppingThreshold::try_from_log_millionths(i64::MAX).expect("valid threshold");
 
-        // Use huge likelihood ratio that will cause log accumulator overflow
-        let big_ratio: i64 = i64::MAX; // huge ratio
         let mut gr = EProcessGuardrail::new(
-            "overflow-test",
+            "max-ratio-test",
             "metric",
             "test",
             threshold,
@@ -1378,33 +1496,15 @@ mod tests {
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
-                high_ratio_millionths: big_ratio,
+                high_ratio_millionths: i64::MAX,
                 low_ratio_millionths: 1_000_000,
             }),
         );
 
-        // Eventually this should cause log accumulator overflow in the martingale
-        let result = gr.update(1_000_000);
-        match result {
-            Err(GuardrailError::MartingaleError { source, .. }) => {
-                assert!(matches!(source, MartingaleError::LogAccumulatorOverflow));
-            }
-            _ => {
-                // If we didn't hit overflow immediately, keep trying
-                // (The exact number of iterations depends on the log calculation)
-                let mut attempts = 0;
-                while attempts < 10 {
-                    match gr.update(1_000_000) {
-                        Err(GuardrailError::MartingaleError { source, .. }) => {
-                            assert!(matches!(source, MartingaleError::LogAccumulatorOverflow));
-                            return;
-                        }
-                        Err(_) => break,
-                        Ok(_) => attempts += 1,
-                    }
-                }
-            }
-        }
+        gr.update(1_000_000).expect("maximum ratio is valid");
+        assert_eq!(gr.martingale_state().log_m_millionths, 29_852_761);
+        assert_eq!(gr.observation_count(), 1);
+        assert_eq!(gr.state(), GuardrailState::Active);
     }
 
     #[test]
@@ -1490,14 +1590,19 @@ mod tests {
     }
 
     #[test]
-    fn universal_lr_negative_observation() {
+    fn universal_lr_negative_observation_is_outside_domain() {
         let lr = UniversalLikelihoodRatio {
             null_mean_millionths: 500_000,
         };
-        let ratio = lr
-            .ratio(-250_000)
-            .expect("operation should succeed for valid inputs");
-        assert!(ratio < 0); // negative obs / positive mean = negative ratio
+        assert_eq!(lr.ratio(-250_000), None);
+    }
+
+    #[test]
+    fn universal_lr_rejects_a_ratio_that_quantizes_to_zero() {
+        let lr = UniversalLikelihoodRatio {
+            null_mean_millionths: 2_000_000,
+        };
+        assert_eq!(lr.ratio(1), None);
     }
 
     #[test]
@@ -2370,7 +2475,7 @@ mod tests {
         let lr = UniversalLikelihoodRatio {
             null_mean_millionths: 1_000_000,
         };
-        assert_eq!(lr.ratio(0), Some(0));
+        assert_eq!(lr.ratio(0), None);
     }
 
     #[test]
@@ -2390,11 +2495,7 @@ mod tests {
         let lr = UniversalLikelihoodRatio {
             null_mean_millionths: -500_000,
         };
-        // observation = 1_000_000, ratio = 1M * 1M / -500K = -2M
-        let ratio = lr
-            .ratio(1_000_000)
-            .expect("operation should succeed for valid inputs");
-        assert_eq!(ratio, -2_000_000);
+        assert_eq!(lr.ratio(1_000_000), None);
     }
 
     #[test]
@@ -2979,13 +3080,13 @@ mod tests {
     }
 
     #[test]
-    fn threshold_likelihood_ratio_negative_ratios_conforms_to_contract() {
-        // Test with negative ratios (valid for some domains)
+    fn threshold_likelihood_ratio_negative_ratios_are_outside_domain() {
         let lr = ThresholdLikelihoodRatio {
             threshold_millionths: 0,
             high_ratio_millionths: -500_000,  // -0.5
             low_ratio_millionths: -1_000_000, // -1.0
         };
-        assert_likelihood_ratio_fn_contract(&lr);
+        assert_eq!(lr.ratio(1), None);
+        assert_eq!(lr.ratio(-1), None);
     }
 }

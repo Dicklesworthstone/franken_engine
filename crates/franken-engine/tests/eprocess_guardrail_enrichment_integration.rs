@@ -28,6 +28,9 @@ use frankenengine_engine::martingale_decision_ledger::{
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
+const LOG_E_VALUE_5: i64 = 1_609_437;
+const LOG_E_VALUE_20: i64 = 2_995_732;
+
 // ── helpers ────────────────────────────────────────────────────────────
 
 fn test_loss_matrix() -> ExpectedLossMatrix {
@@ -51,7 +54,7 @@ fn test_guardrail() -> EProcessGuardrail {
         "fnr-guard",
         "false_negative_rate",
         "false-negative rate <= 0.01",
-        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_20).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -409,10 +412,10 @@ fn guardrail_event_serde_roundtrip_resumed() {
 // ── EProcessGuardrail lifecycle ────────────────────────────────────────
 
 #[test]
-fn guardrail_starts_active_with_e_value_one() {
+fn guardrail_starts_at_log_one() {
     let gr = test_guardrail();
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 0);
     assert_eq!(gr.observation_count(), 0);
 }
 
@@ -422,7 +425,7 @@ fn guardrail_update_below_threshold() {
     // observation below threshold => low_ratio = 0.5
     gr.update(5_000).unwrap(); // below 10_000
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.martingale_state().log_m_millionths, 500_000); // 1.0 * 0.5
+    assert_eq!(gr.martingale_state().log_m_millionths, -693_149); // conservative ln(0.5)
     assert_eq!(gr.observation_count(), 1);
 }
 
@@ -432,12 +435,12 @@ fn guardrail_update_triggers() {
         "test",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(), // threshold = 5.0
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(), // ln(5.0)
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
-    // observation above threshold => high_ratio = 5.0, e = 1.0 * 5.0 = 5.0 >= 5.0
+    // A high observation contributes ln(5.0), exactly reaching the boundary.
     gr.update(100_000).unwrap();
     assert_eq!(gr.state(), GuardrailState::Triggered);
 }
@@ -448,7 +451,7 @@ fn guardrail_blocks_action_when_triggered() {
         "test",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -466,7 +469,7 @@ fn guardrail_update_on_triggered_returns_error() {
         "test",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -498,7 +501,7 @@ fn guardrail_reset_from_triggered() {
         "test",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -507,7 +510,7 @@ fn guardrail_reset_from_triggered() {
     assert_eq!(gr.state(), GuardrailState::Triggered);
     gr.reset(&test_receipt()).unwrap();
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 0);
     assert_eq!(gr.observation_count(), 0);
 }
 
@@ -526,7 +529,7 @@ fn guardrail_reset_unauthorized_returns_error() {
         "test",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -568,7 +571,7 @@ fn guardrail_threshold() {
     let gr = test_guardrail();
     assert_eq!(
         gr.threshold(),
-        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap()
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_20).unwrap()
     );
 }
 
@@ -596,7 +599,7 @@ fn registry_is_blocked_when_triggered() {
         "test",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -617,7 +620,7 @@ fn registry_blocked_actions_union() {
         "g1",
         "m",
         "n",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked1,
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -630,7 +633,7 @@ fn registry_blocked_actions_union() {
         "g2",
         "m",
         "n",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked2,
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -651,7 +654,7 @@ fn registry_blocking_guardrails() {
         "g1",
         "m",
         "n",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -669,7 +672,7 @@ fn registry_permitted_actions() {
         "g1",
         "m",
         "n",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -689,7 +692,7 @@ fn registry_update_stream_targets_matching() {
         "g1",
         "stream-a",
         "n",
-        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_20).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -698,7 +701,7 @@ fn registry_update_stream_targets_matching() {
         "g2",
         "stream-b",
         "n",
-        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_20).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -737,7 +740,7 @@ fn registry_reset_all_triggered() {
         "g1",
         "m",
         "n",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),

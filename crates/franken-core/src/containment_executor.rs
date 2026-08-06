@@ -199,6 +199,26 @@ impl SandboxPolicy {
     pub fn is_allowed(&self, capability: &str) -> bool {
         self.allowed_capabilities.iter().any(|c| c == capability)
     }
+
+    /// Semantic content identity of the enforced sandbox policy.
+    /// Capability order and duplicates do not affect `is_allowed`, so the
+    /// preimage sorts and deduplicates them before hashing.
+    pub fn content_hash(&self) -> ContentHash {
+        let mut capabilities = self.allowed_capabilities.clone();
+        capabilities.sort_unstable();
+        capabilities.dedup();
+
+        let mut preimage = b"franken-engine.sandbox-policy.v1\0".to_vec();
+        push_count(&mut preimage, capabilities.len());
+        for capability in capabilities {
+            push_len_prefixed(&mut preimage, capability.as_bytes());
+        }
+        preimage.push(u8::from(self.allow_network));
+        preimage.push(u8::from(self.allow_fs_write));
+        preimage.push(u8::from(self.allow_process_spawn));
+        preimage.extend_from_slice(&self.max_memory_bytes.to_le_bytes());
+        ContentHash::compute(&preimage)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +419,8 @@ impl ContainmentExecutor {
         context: &ContainmentContext,
     ) -> Result<ContainmentReceipt, ContainmentError> {
         let start = std::time::Instant::now();
+        let requested_sandbox_policy_hash = (action == ContainmentAction::Sandbox)
+            .then(|| context.sandbox_policy.content_hash().to_string());
 
         let ext = self
             .extensions
@@ -417,18 +439,41 @@ impl ContainmentExecutor {
         if ext.state == target_state
             && let Some(last) = ext.receipts.last()
             && last.epoch == context.epoch
+            && last.timestamp_ns == context.timestamp_ns
+            && last.evidence_refs == context.evidence_refs
             && last.metadata.get("decision_id").map(String::as_str) == Some(&context.decision_id)
+            && requested_sandbox_policy_hash
+                .as_deref()
+                .is_none_or(|expected| {
+                    last.metadata.get("sandbox_policy_hash").map(String::as_str) == Some(expected)
+                        && ext
+                            .sandbox_policy
+                            .as_ref()
+                            .is_some_and(|policy| policy.content_hash().to_string() == expected)
+                })
         {
             return Ok(last.clone());
         }
 
         // Validate transition.
-        if !is_valid_transition(ext.state, action) {
+        if ext.state != target_state && !is_valid_transition(ext.state, action) {
             return Err(ContainmentError::InvalidTransition {
                 from: ext.state,
                 action,
             });
         }
+
+        // Reserve the next durable identifier before mutating containment
+        // state. Saturating here would reuse `u64::MAX` forever; discovering
+        // exhaustion after applying the action would leave an unreceipted
+        // security transition.
+        let receipt_sequence = self.next_receipt_id;
+        let next_receipt_id =
+            receipt_sequence
+                .checked_add(1)
+                .ok_or_else(|| ContainmentError::Internal {
+                    detail: "containment receipt id space exhausted".to_string(),
+                })?;
 
         // Execute action.
         let cooperative = !matches!(
@@ -473,8 +518,8 @@ impl ContainmentExecutor {
         ext.state = new_state;
 
         // Build receipt.
-        let receipt_id = format!("cr-{:08x}", self.next_receipt_id);
-        self.next_receipt_id = self.next_receipt_id.saturating_add(1);
+        let receipt_id = format!("cr-{receipt_sequence:08x}");
+        self.next_receipt_id = next_receipt_id;
 
         let mut receipt = ContainmentReceipt {
             receipt_id,
@@ -483,7 +528,7 @@ impl ContainmentExecutor {
             previous_state,
             new_state,
             timestamp_ns: context.timestamp_ns,
-            duration_ns: start.elapsed().as_nanos() as u64,
+            duration_ns: u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX),
             success: true,
             cooperative,
             evidence_refs: context.evidence_refs.clone(),
@@ -495,6 +540,11 @@ impl ContainmentExecutor {
         receipt
             .metadata
             .insert("decision_id".to_string(), context.decision_id.clone());
+        if let Some(policy_hash) = requested_sandbox_policy_hash {
+            receipt
+                .metadata
+                .insert("sandbox_policy_hash".to_string(), policy_hash);
+        }
 
         // Compute content hash (duration_ns deliberately excluded for
         // deterministic replay — see canonical_bytes() doc comment).
@@ -575,6 +625,14 @@ impl ContainmentExecutor {
             });
         }
 
+        let receipt_sequence = self.next_receipt_id;
+        let next_receipt_id =
+            receipt_sequence
+                .checked_add(1)
+                .ok_or_else(|| ContainmentError::Internal {
+                    detail: "containment receipt id space exhausted".to_string(),
+                })?;
+
         let previous_state = ext.state;
         // Resume to Sandboxed (not Running) if the extension had an active
         // sandbox policy when it was suspended, to prevent sandbox escape.
@@ -585,8 +643,8 @@ impl ContainmentExecutor {
         };
         ext.state = resume_target;
 
-        let receipt_id = format!("cr-{:08x}", self.next_receipt_id);
-        self.next_receipt_id = self.next_receipt_id.saturating_add(1);
+        let receipt_id = format!("cr-{receipt_sequence:08x}");
+        self.next_receipt_id = next_receipt_id;
 
         let mut receipt = ContainmentReceipt {
             receipt_id,
@@ -595,7 +653,7 @@ impl ContainmentExecutor {
             previous_state,
             new_state: resume_target,
             timestamp_ns: context.timestamp_ns,
-            duration_ns: start.elapsed().as_nanos() as u64,
+            duration_ns: u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX),
             success: true,
             cooperative: true,
             evidence_refs: context.evidence_refs.clone(),
@@ -828,6 +886,29 @@ mod tests {
         assert_eq!(policy, restored);
     }
 
+    #[test]
+    fn sandbox_policy_hash_is_semantic_and_binds_authority() {
+        let base = SandboxPolicy {
+            allowed_capabilities: vec!["fs-read".to_string(), "console".to_string()],
+            ..SandboxPolicy::default()
+        };
+        let reordered = SandboxPolicy {
+            allowed_capabilities: vec![
+                "console".to_string(),
+                "fs-read".to_string(),
+                "console".to_string(),
+            ],
+            ..SandboxPolicy::default()
+        };
+        assert_eq!(base.content_hash(), reordered.content_hash());
+
+        let expanded = SandboxPolicy {
+            allow_network: true,
+            ..base.clone()
+        };
+        assert_ne!(base.content_hash(), expanded.content_hash());
+    }
+
     // -----------------------------------------------------------------------
     // Executor — registration and state
     // -----------------------------------------------------------------------
@@ -1042,6 +1123,61 @@ mod tests {
     }
 
     #[test]
+    fn changed_evidence_cannot_reuse_a_same_decision_receipt() {
+        let mut executor = setup_executor();
+        let first_context = test_context();
+        let first = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &first_context)
+            .expect("initial sandbox should succeed");
+
+        let mut enriched_context = first_context;
+        enriched_context
+            .evidence_refs
+            .push("ev-newly-linked".to_string());
+        let enriched = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &enriched_context)
+            .expect("changed evidence must emit a fresh receipt");
+
+        assert_ne!(first.receipt_id, enriched.receipt_id);
+        assert_eq!(enriched.evidence_refs, enriched_context.evidence_refs);
+    }
+
+    #[test]
+    fn same_target_action_with_new_decision_emits_fresh_receipt() {
+        let mut executor = setup_executor();
+        let first_context = test_context();
+        let first = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &first_context)
+            .expect("initial sandbox should succeed");
+
+        let mut second_context = first_context;
+        second_context.decision_id = "decision-002".to_string();
+        second_context.timestamp_ns = second_context.timestamp_ns.saturating_add(1);
+        second_context.sandbox_policy.allow_network = true;
+        let second = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &second_context)
+            .expect("a new decision must receive fresh same-state evidence");
+
+        assert_ne!(first.receipt_id, second.receipt_id);
+        assert_eq!(second.previous_state, ContainmentState::Sandboxed);
+        assert_eq!(second.new_state, ContainmentState::Sandboxed);
+        let expected_policy_hash = second_context.sandbox_policy.content_hash().to_string();
+        assert_eq!(
+            second
+                .metadata
+                .get("sandbox_policy_hash")
+                .map(String::as_str),
+            Some(expected_policy_hash.as_str())
+        );
+        assert!(
+            executor
+                .sandbox_policy("ext-001")
+                .is_some_and(|policy| policy.allow_network)
+        );
+        assert_eq!(executor.receipts("ext-001").len(), 2);
+    }
+
+    #[test]
     fn idempotent_terminate() {
         let mut executor = setup_executor();
         let ctx = test_context();
@@ -1055,6 +1191,25 @@ mod tests {
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
             .unwrap();
         assert_eq!(r1.receipt_id, r2.receipt_id);
+    }
+
+    #[test]
+    fn receipt_id_exhaustion_fails_before_containment_mutation() {
+        let mut executor = setup_executor();
+        executor.next_receipt_id = u64::MAX;
+
+        let error = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &test_context())
+            .expect_err("an exhausted receipt counter must fail closed");
+
+        assert!(matches!(
+            error,
+            ContainmentError::Internal { detail }
+                if detail == "containment receipt id space exhausted"
+        ));
+        assert_eq!(executor.state("ext-001"), Some(ContainmentState::Running));
+        assert!(executor.receipts("ext-001").is_empty());
+        assert_eq!(executor.next_receipt_id, u64::MAX);
     }
 
     // -----------------------------------------------------------------------
@@ -1185,6 +1340,25 @@ mod tests {
         let ctx = test_context();
         let err = executor.resume("ext-001", &ctx).unwrap_err();
         assert!(matches!(err, ContainmentError::InvalidTransition { .. }));
+    }
+
+    #[test]
+    fn receipt_id_exhaustion_fails_before_resume_mutation() {
+        let mut executor = setup_executor();
+        let context = test_context();
+        executor
+            .execute(ContainmentAction::Suspend, "ext-001", &context)
+            .expect("suspension should succeed before counter exhaustion");
+        executor.next_receipt_id = u64::MAX;
+
+        let error = executor
+            .resume("ext-001", &context)
+            .expect_err("an exhausted receipt counter must prevent resume");
+
+        assert!(matches!(error, ContainmentError::Internal { .. }));
+        assert_eq!(executor.state("ext-001"), Some(ContainmentState::Suspended));
+        assert_eq!(executor.receipts("ext-001").len(), 1);
+        assert_eq!(executor.next_receipt_id, u64::MAX);
     }
 
     // -----------------------------------------------------------------------

@@ -3,7 +3,7 @@
 //! Integration tests for the `eprocess_guardrail` module.
 //!
 //! These tests exercise the public API from outside the crate, covering
-//! guardrail construction, e-value accumulation, threshold triggering,
+//! guardrail construction, log-martingale accumulation, threshold triggering,
 //! reset/suspend/resume lifecycle, GuardrailRegistry operations,
 //! error conditions, Display impls, serde round-trips, and deterministic
 //! replay guarantees.
@@ -29,6 +29,10 @@ use frankenengine_engine::eprocess_guardrail::{
 };
 use frankenengine_engine::martingale_decision_ledger::StoppingThreshold;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+
+const LOG_E_VALUE_5: i64 = 1_609_437;
+const LOG_E_VALUE_20: i64 = 2_995_732;
+const LOG_E_VALUE_100: i64 = 4_605_170;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,14 +80,14 @@ fn make_receipt(auth: &str, rationale: &str) -> ResetReceipt {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn new_guardrail_starts_active_with_e_value_one() {
-    let gr = threshold_guardrail("g1", "metric", 20_000_000, &["low"]);
+fn new_guardrail_starts_at_log_one() {
+    let gr = threshold_guardrail("g1", "metric", LOG_E_VALUE_20, &["low"]);
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000); // 1.0
+    assert_eq!(gr.martingale_state().log_m_millionths, 0); // ln(1.0)
     assert_eq!(gr.observation_count(), 0);
     assert_eq!(
         gr.threshold(),
-        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap()
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_20).unwrap()
     );
     assert_eq!(gr.config_epoch(), SecurityEpoch::GENESIS);
     assert_eq!(gr.guardrail_id, "g1");
@@ -91,58 +95,58 @@ fn new_guardrail_starts_active_with_e_value_one() {
 }
 
 #[test]
-fn blocked_actions_set_populated_at_construction() {
-    let gr = threshold_guardrail("g1", "m", 20_000_000, &["low", "medium"]);
-    let blocked = gr.blocked_actions();
-    assert!(blocked.contains("low"));
-    assert!(blocked.contains("medium"));
-    assert!(!blocked.contains("high"));
+fn configured_actions_do_not_block_before_trigger() {
+    let gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low", "medium"]);
+    assert!(
+        gr.blocked_actions().is_empty(),
+        "terminal policy must not block actions while the guardrail is active"
+    );
 }
 
 // ---------------------------------------------------------------------------
-// 2. E-value accumulation
+// 2. Log-martingale accumulation
 // ---------------------------------------------------------------------------
 
 #[test]
-fn below_threshold_observation_shrinks_e_value() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+fn below_threshold_observation_decreases_log_martingale() {
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     // obs = 5000 < threshold 10000 -> lr = 0.5
-    // e_new = 1.0 * 0.5 = 0.5 (500_000 millionths)
+    // log(M_1) = ln(0.5).
     gr.update(5_000).unwrap();
-    assert_eq!(gr.martingale_state().log_m_millionths, 500_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, -693_149);
     assert_eq!(gr.state(), GuardrailState::Active);
     assert_eq!(gr.observation_count(), 1);
 }
 
 #[test]
-fn above_threshold_observation_grows_e_value() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+fn above_threshold_observation_increases_log_martingale() {
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     // obs = 15000 >= threshold 10000 -> lr = 5.0
-    // e_new = 1.0 * 5.0 = 5.0 (5_000_000 millionths)
+    // log(M_1) = ln(5.0).
     gr.update(15_000).unwrap();
-    assert_eq!(gr.martingale_state().log_m_millionths, 5_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, LOG_E_VALUE_5);
     assert_eq!(gr.state(), GuardrailState::Active);
 }
 
 #[test]
 fn repeated_high_observations_trigger_guardrail() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
-    gr.update(15_000).unwrap(); // e = 5.0
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
+    gr.update(15_000).unwrap(); // log(M) = ln(5)
     assert_eq!(gr.state(), GuardrailState::Active);
 
-    gr.update(15_000).unwrap(); // e = 25.0 >= 20.0
+    gr.update(15_000).unwrap(); // log(M) = 2 ln(5) > ln(20)
     assert_eq!(gr.state(), GuardrailState::Triggered);
-    assert_eq!(gr.martingale_state().log_m_millionths, 25_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 3_218_874);
 }
 
 #[test]
 fn exact_threshold_triggers() {
-    // Set threshold = 5.0 (5_000_000), so single high obs (lr=5.0) hits exactly.
+    // The deterministic converter maps LR=5.0 to this exact log threshold.
     let mut gr = EProcessGuardrail::new(
         "exact",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["block"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -151,19 +155,19 @@ fn exact_threshold_triggers() {
             low_ratio_millionths: 500_000,
         }),
     );
-    gr.update(15_000).unwrap(); // e = 5.0 == threshold
+    gr.update(15_000).unwrap(); // log(M) = ln(5) == threshold
     assert_eq!(gr.state(), GuardrailState::Triggered);
 }
 
 #[test]
 fn mixed_observations_accumulate_correctly() {
-    let mut gr = threshold_guardrail("g1", "m", 100_000_000, &["low"]);
-    // low: e *= 0.5; high: e *= 5.0
-    gr.update(5_000).unwrap(); // e = 0.5
-    gr.update(15_000).unwrap(); // e = 2.5
-    gr.update(5_000).unwrap(); // e = 1.25
-    gr.update(15_000).unwrap(); // e = 6.25
-    assert_eq!(gr.martingale_state().log_m_millionths, 6_250_000);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_100, &["low"]);
+    gr.update(5_000).unwrap();
+    gr.update(15_000).unwrap();
+    gr.update(5_000).unwrap();
+    gr.update(15_000).unwrap();
+    // ln(0.5) + ln(5) + ln(0.5) + ln(5) = ln(6.25).
+    assert_eq!(gr.martingale_state().log_m_millionths, 1_832_576);
     assert_eq!(gr.observation_count(), 4);
     assert_eq!(gr.state(), GuardrailState::Active);
 }
@@ -174,7 +178,7 @@ fn mixed_observations_accumulate_correctly() {
 
 #[test]
 fn active_guardrail_blocks_nothing() {
-    let gr = threshold_guardrail("g1", "m", 20_000_000, &["low", "medium"]);
+    let gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low", "medium"]);
     assert!(!gr.blocks("low"));
     assert!(!gr.blocks("medium"));
     assert!(!gr.blocks("high"));
@@ -182,7 +186,7 @@ fn active_guardrail_blocks_nothing() {
 
 #[test]
 fn triggered_guardrail_blocks_specified_actions() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low", "medium"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low", "medium"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap(); // triggers
 
@@ -193,7 +197,7 @@ fn triggered_guardrail_blocks_specified_actions() {
 
 #[test]
 fn suspended_guardrail_blocks_nothing() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.suspend("maintenance");
     assert!(!gr.blocks("low"));
 }
@@ -204,7 +208,7 @@ fn suspended_guardrail_blocks_nothing() {
 
 #[test]
 fn update_when_triggered_returns_error() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap(); // triggers
 
@@ -219,7 +223,7 @@ fn update_when_triggered_returns_error() {
 
 #[test]
 fn update_when_suspended_returns_error() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.suspend("test");
 
     let err = gr.update(15_000).unwrap_err();
@@ -233,7 +237,7 @@ fn update_when_suspended_returns_error() {
 
 #[test]
 fn reset_non_triggered_returns_error() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     let receipt = make_receipt("operator", "test");
     let err = gr.reset(&receipt).unwrap_err();
     assert_eq!(
@@ -246,7 +250,7 @@ fn reset_non_triggered_returns_error() {
 
 #[test]
 fn reset_with_empty_auth_returns_error() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap(); // triggers
 
@@ -266,7 +270,7 @@ fn reset_with_empty_auth_returns_error() {
 
 #[test]
 fn reset_triggered_guardrail_restores_active() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap(); // triggers
 
@@ -274,13 +278,13 @@ fn reset_triggered_guardrail_restores_active() {
     gr.reset(&receipt).unwrap();
 
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000); // reset to 1.0
+    assert_eq!(gr.martingale_state().log_m_millionths, 0); // reset to ln(1.0)
     assert_eq!(gr.observation_count(), 0);
 }
 
 #[test]
 fn can_accumulate_after_reset() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap(); // triggers
 
@@ -289,7 +293,7 @@ fn can_accumulate_after_reset() {
 
     // Should accept new observations.
     gr.update(15_000).unwrap();
-    assert_eq!(gr.martingale_state().log_m_millionths, 5_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, LOG_E_VALUE_5);
     assert_eq!(gr.observation_count(), 1);
 }
 
@@ -299,20 +303,20 @@ fn can_accumulate_after_reset() {
 
 #[test]
 fn suspend_then_resume_restores_active() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
-    gr.update(15_000).unwrap(); // e = 5.0
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
+    gr.update(15_000).unwrap(); // log(M) = ln(5)
     gr.suspend("maintenance");
     assert_eq!(gr.state(), GuardrailState::Suspended);
 
     gr.resume();
     assert_eq!(gr.state(), GuardrailState::Active);
-    // e-value preserved across suspend/resume.
-    assert_eq!(gr.martingale_state().log_m_millionths, 5_000_000);
+    // Log-martingale state is preserved across suspend/resume.
+    assert_eq!(gr.martingale_state().log_m_millionths, LOG_E_VALUE_5);
 }
 
 #[test]
 fn resume_when_not_suspended_is_no_op() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.resume(); // no-op, already Active
     assert_eq!(gr.state(), GuardrailState::Active);
 }
@@ -322,8 +326,8 @@ fn resume_when_not_suspended_is_no_op() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn update_emits_e_value_updated_event() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+fn update_emits_martingale_updated_event() {
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(5_000).unwrap();
 
     let events = gr.drain_events();
@@ -338,7 +342,7 @@ fn update_emits_e_value_updated_event() {
         } => {
             assert_eq!(guardrail_id, "g1");
             assert_eq!(*observation, 5_000);
-            assert_eq!(*log_likelihood_ratio, 500_000);
+            assert_eq!(*log_likelihood_ratio, -693_149);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -346,7 +350,7 @@ fn update_emits_e_value_updated_event() {
 
 #[test]
 fn trigger_emits_triggered_event() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low", "medium"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low", "medium"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap(); // triggers
 
@@ -369,7 +373,7 @@ fn trigger_emits_triggered_event() {
 
 #[test]
 fn reset_emits_reset_event() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(15_000).unwrap();
     gr.update(15_000).unwrap();
     gr.drain_events(); // clear
@@ -397,7 +401,7 @@ fn reset_emits_reset_event() {
 
 #[test]
 fn suspend_emits_suspended_event() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.suspend("maintenance window");
 
     let events = gr.drain_events();
@@ -416,7 +420,7 @@ fn suspend_emits_suspended_event() {
 
 #[test]
 fn resume_emits_resumed_event() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.suspend("test");
     gr.drain_events(); // clear
 
@@ -428,7 +432,7 @@ fn resume_emits_resumed_event() {
 
 #[test]
 fn drain_events_clears_buffer() {
-    let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
     gr.update(5_000).unwrap();
     let events1 = gr.drain_events();
     assert_eq!(events1.len(), 1);
@@ -497,21 +501,21 @@ fn universal_lr_guardrail_triggers() {
         "univ",
         "metric",
         "null",
-        StoppingThreshold::try_from_log_millionths(4_000_000).unwrap(), // threshold = 4.0
+        StoppingThreshold::try_from_log_millionths(1_386_294).unwrap(), // ln(4.0)
         blocked_loss_matrix(&["action"]),
         SecurityEpoch::GENESIS,
         Box::new(UniversalLikelihoodRatio {
             null_mean_millionths: 500_000, // 0.5
         }),
     );
-    // obs=1.0, ratio=2.0, e=2.0
+    // obs=1.0, ratio=2.0, log(M)=ln(2)
     gr.update(1_000_000).unwrap();
-    assert_eq!(gr.martingale_state().log_m_millionths, 2_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 693_147);
     assert_eq!(gr.state(), GuardrailState::Active);
 
-    // obs=1.0, ratio=2.0, e=4.0 >= threshold
+    // A second ratio=2.0 update reaches log(M)=ln(4).
     gr.update(1_000_000).unwrap();
-    assert_eq!(gr.martingale_state().log_m_millionths, 4_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 1_386_294);
     assert_eq!(gr.state(), GuardrailState::Triggered);
 }
 
@@ -531,8 +535,8 @@ fn empty_registry() {
 #[test]
 fn registry_add_and_len() {
     let mut registry = GuardrailRegistry::new();
-    registry.add(threshold_guardrail("g1", "m1", 20_000_000, &["low"]));
-    registry.add(threshold_guardrail("g2", "m2", 20_000_000, &["medium"]));
+    registry.add(threshold_guardrail("g1", "m1", LOG_E_VALUE_20, &["low"]));
+    registry.add(threshold_guardrail("g2", "m2", LOG_E_VALUE_20, &["medium"]));
     assert_eq!(registry.len(), 2);
     assert!(!registry.is_empty());
 }
@@ -540,7 +544,7 @@ fn registry_add_and_len() {
 #[test]
 fn registry_get_and_get_mut() {
     let mut registry = GuardrailRegistry::new();
-    registry.add(threshold_guardrail("g1", "m1", 20_000_000, &["low"]));
+    registry.add(threshold_guardrail("g1", "m1", LOG_E_VALUE_20, &["low"]));
 
     assert!(registry.get("g1").is_some());
     assert!(registry.get("nonexistent").is_none());
@@ -552,12 +556,12 @@ fn registry_get_and_get_mut() {
 fn registry_blocked_actions_union() {
     let mut registry = GuardrailRegistry::new();
 
-    // gr1 triggers immediately (threshold=5, lr=10x)
+    // gr1 triggers immediately (log threshold ln(5), LR=10x)
     let mut gr1 = EProcessGuardrail::new(
         "gr1",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["low"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -573,7 +577,7 @@ fn registry_blocked_actions_union() {
         "gr2",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["medium"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -600,7 +604,7 @@ fn registry_is_blocked() {
         "gr1",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["low"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -623,7 +627,7 @@ fn registry_blocking_guardrails() {
         "gr1",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["low"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -649,7 +653,7 @@ fn registry_permitted_actions() {
         "gr1",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["low"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -672,8 +676,13 @@ fn registry_permitted_actions() {
 #[test]
 fn registry_update_stream_targets_matching() {
     let mut registry = GuardrailRegistry::new();
-    registry.add(threshold_guardrail("g1", "fnr", 100_000_000, &["low"]));
-    registry.add(threshold_guardrail("g2", "fpr", 100_000_000, &["medium"]));
+    registry.add(threshold_guardrail("g1", "fnr", LOG_E_VALUE_100, &["low"]));
+    registry.add(threshold_guardrail(
+        "g2",
+        "fpr",
+        LOG_E_VALUE_100,
+        &["medium"],
+    ));
 
     let errors = registry.update_stream("fnr", 15_000);
     assert!(errors.is_empty());
@@ -684,7 +693,7 @@ fn registry_update_stream_targets_matching() {
 #[test]
 fn registry_update_stream_skips_non_active() {
     let mut registry = GuardrailRegistry::new();
-    let mut gr = threshold_guardrail("g1", "fnr", 20_000_000, &["low"]);
+    let mut gr = threshold_guardrail("g1", "fnr", LOG_E_VALUE_20, &["low"]);
     gr.suspend("test");
     registry.add(gr);
 
@@ -701,7 +710,7 @@ fn registry_reset_all() {
         "gr1",
         "m",
         "null",
-        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        StoppingThreshold::try_from_log_millionths(LOG_E_VALUE_5).unwrap(),
         blocked_loss_matrix(&["low"]),
         SecurityEpoch::GENESIS,
         Box::new(ThresholdLikelihoodRatio {
@@ -712,7 +721,7 @@ fn registry_reset_all() {
     );
     gr1.update(1_000_000).unwrap(); // triggers
 
-    let gr2 = threshold_guardrail("gr2", "m2", 100_000_000, &["medium"]); // active
+    let gr2 = threshold_guardrail("gr2", "m2", LOG_E_VALUE_100, &["medium"]); // active
 
     registry.add(gr1);
     registry.add(gr2);
@@ -730,8 +739,13 @@ fn registry_reset_all() {
 #[test]
 fn registry_drain_all_events() {
     let mut registry = GuardrailRegistry::new();
-    registry.add(threshold_guardrail("g1", "fnr", 100_000_000, &["low"]));
-    registry.add(threshold_guardrail("g2", "fpr", 100_000_000, &["medium"]));
+    registry.add(threshold_guardrail("g1", "fnr", LOG_E_VALUE_100, &["low"]));
+    registry.add(threshold_guardrail(
+        "g2",
+        "fpr",
+        LOG_E_VALUE_100,
+        &["medium"],
+    ));
 
     registry.update_stream("fnr", 15_000);
     registry.update_stream("fpr", 5_000);
@@ -798,7 +812,7 @@ fn guardrail_error_display_all_variants() {
             source: frankenengine_engine::martingale_decision_ledger::MartingaleError::LogAccumulatorOverflow,
         }
         .to_string(),
-        "e-value overflow for guardrail 'g1'"
+        "martingale error for guardrail 'g1': log(M_n) accumulator would overflow i64"
     );
 }
 
@@ -940,7 +954,7 @@ fn deterministic_replay_same_trigger_point() {
     let observations = vec![5_000i64, 15_000, 5_000, 15_000, 15_000, 15_000];
 
     let run = |obs: &[i64]| -> (u64, i64, GuardrailState) {
-        let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+        let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
         for &o in obs {
             if gr.state() == GuardrailState::Triggered {
                 break;
@@ -964,7 +978,7 @@ fn deterministic_replay_same_trigger_point() {
 #[test]
 fn deterministic_replay_events_identical() {
     let run = || -> Vec<GuardrailEvent> {
-        let mut gr = threshold_guardrail("g1", "m", 20_000_000, &["low"]);
+        let mut gr = threshold_guardrail("g1", "m", LOG_E_VALUE_20, &["low"]);
         gr.update(15_000).unwrap();
         gr.update(15_000).unwrap();
         gr.drain_events()

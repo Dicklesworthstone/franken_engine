@@ -2683,7 +2683,7 @@ fn frankenctl_run_without_out_still_prints_json() {
     let json = parse_stdout_json(&output);
     assert_eq!(
         json["schema_version"].as_str(),
-        Some("franken-engine.frankenctl.v1")
+        Some("franken-engine.frankenctl.run.v2")
     );
     assert_eq!(json["extension_id"].as_str(), Some("ext-noout"));
     assert!(json["trace_id"].as_str().is_some());

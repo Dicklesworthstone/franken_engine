@@ -3389,6 +3389,89 @@ fn frankenctl_run_output_has_execution_fields() {
     let _ = fs::remove_file(source_path);
 }
 
+/// bd-drb55: `frankenctl run` must persist the sealed IR4 witness in its
+/// report, self-consistently linked to the executed IR3 and bound into the
+/// signed evidence chain. No-mock: this drives the real binary end to end.
+#[test]
+fn frankenctl_run_report_carries_sealed_ir4_witness() {
+    let source_path = temp_path("frankenctl_run_ir4_witness", "js");
+    let report_path = temp_path("frankenctl_run_ir4_witness_report", "json");
+    write_source(
+        &source_path,
+        "let total = 0; for (let i = 1; i <= 4; i = i + 1) { total = total + i; } total;\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path.to_str().unwrap(),
+            "--extension-id",
+            "ext-ir4-witness",
+            "--out",
+            report_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run should execute");
+
+    assert!(
+        output.status.success(),
+        "run failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for json in [
+        parse_stdout_json(&output),
+        serde_json::from_slice(&fs::read(&report_path).expect("report should be written"))
+            .expect("report should parse as json"),
+    ] {
+        let witness: frankenengine_engine::ir_contract::Ir4Module =
+            serde_json::from_value(json["ir4_witness"].clone())
+                .expect("report ir4_witness must deserialize as Ir4Module");
+
+        // The report-level hash matches the recomputed content hash of the
+        // embedded witness, so a report cannot carry a mismatched pair.
+        assert_eq!(
+            json["ir4_witness_hash"].as_str(),
+            Some(witness.content_hash().to_hex().as_str()),
+        );
+
+        // Linkage self-verifies: header source hash matches executed IR3 hash
+        // and the event trace is strictly monotonic.
+        frankenengine_engine::ir_contract::verify_ir4_linkage(&witness, &witness.executed_ir3_hash)
+            .expect("persisted witness must pass linkage verification");
+
+        assert_eq!(witness.outcome.as_str(), "completed");
+        assert_eq!(
+            Some(witness.instructions_executed),
+            json["instructions_executed"].as_u64(),
+        );
+        assert!(witness.instructions_executed > 0);
+
+        // The interpreter's event trace flows through the seal: every
+        // successful run records a terminal ExecutionCompleted witness event,
+        // so a seal that dropped events would fail here.
+        assert_eq!(
+            witness
+                .events
+                .last()
+                .expect("successful runs always record witness events")
+                .kind,
+            frankenengine_engine::ir_contract::WitnessEventKind::ExecutionCompleted,
+        );
+
+        // The signed evidence chain binds the same witness hash, making
+        // report-level witness swaps detectable through the receipt path.
+        assert_eq!(
+            json["evidence_chain_artifact"]["entries"][0]["metadata"]["ir4_witness_hash"].as_str(),
+            Some(witness.content_hash().to_hex().as_str()),
+        );
+    }
+
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(report_path);
+}
+
 #[test]
 fn frankenctl_benchmark_run_emits_minimal_artifact_bundle() {
     let output_dir = temp_dir("frankenctl_benchmark_run_bundle");

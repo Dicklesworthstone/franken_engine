@@ -1,8 +1,10 @@
 //! Baseline interpreter skeleton for the current execution-profile contract.
 //!
-//! Consumes `Ir3Module` and produces execution results with `Ir4Module`
-//! witness artifacts.  The baseline interpreter is the canonical execution
-//! path — all optimized paths must prove equivalence against it (per 9F.1).
+//! Consumes `Ir3Module` and produces execution results carrying the witness
+//! events and hostcall decisions that `ExecutionOrchestrator::execute` seals
+//! into the `Ir4Module` witness (bd-drb55).  The baseline interpreter is the
+//! canonical execution path — all optimized paths must prove equivalence
+//! against it (per 9F.1).
 //!
 //! Two execution profiles are exposed today:
 //! - **baseline_deterministic_profile**: conservative budgets for

@@ -59,65 +59,27 @@ fn run_frankenctl() -> String {
     String::from_utf8(output.stdout).expect("frankenctl stdout must be valid UTF-8")
 }
 
-fn normalize_fresh_runtime_evidence_identity(actual: &str) -> Value {
-    let mut parsed: Value = serde_json::from_str(actual).expect("run output must be JSON");
-    let source_hash = parsed["source_ingestion"]["original_source_hash"]
+/// Parse the run report and assert the current output contract. The report
+/// schema is `franken-engine.frankenctl.run.v2`; it deliberately omits a
+/// top-level `evidence_verification_identity` (bd-8yhg4 — verifiers resolve
+/// the receipt signer through their own registry), and fixed inputs produce
+/// byte-identical output, so no per-run normalization is required.
+fn parse_run_report_current_contract(actual: &str) -> Value {
+    let parsed: Value = serde_json::from_str(actual).expect("run output must be JSON");
+    assert_eq!(
+        parsed["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.run.v2"),
+        "run report schema drifted; update this test alongside the CLI"
+    );
+    assert!(
+        parsed.get("evidence_verification_identity").is_none(),
+        "run report must not carry a self-authenticating trust root"
+    );
+    parsed["source_ingestion"]["original_source_hash"]
         .as_str()
         .expect("run output must carry the source hash")
         .strip_prefix("sha256:")
-        .expect("source hash must use the sha256 prefix")
-        .to_string();
-    let identity = parsed["evidence_verification_identity"]
-        .as_object_mut()
-        .expect("run output must carry an evidence verification identity");
-    let producer_id = identity["producer_id"]
-        .as_str()
-        .expect("runtime producer id must be a string");
-    assert!(
-        producer_id.starts_with(&format!("frankenctl.run:{source_hash}:")),
-        "runtime producer id must bind the source hash"
-    );
-    let verification_key = identity["verification_key"]
-        .as_object()
-        .and_then(|value| value.get("inner"))
-        .and_then(Value::as_array)
-        .expect("runtime verification key must use the canonical wire form");
-    assert_eq!(verification_key.len(), 32);
-    assert!(
-        verification_key
-            .iter()
-            .any(|byte| byte.as_u64().is_some_and(|byte| byte != 0)),
-        "runtime verification key must not be all zero"
-    );
-    let provenance = identity["key_provenance"]
-        .as_object_mut()
-        .expect("runtime identity must carry key provenance");
-    assert_eq!(provenance["authority_class"], "runtime");
-    assert_eq!(provenance["activation_epoch"], 0);
-    assert_eq!(provenance["rotation_sequence"], 1);
-    assert!(!provenance.contains_key("previous_key_id"));
-    let key_id = provenance["key_id"]
-        .as_str()
-        .expect("runtime key id must be a string");
-    assert!(
-        key_id
-            .strip_prefix("ed25519:")
-            .is_some_and(|digest| digest.len() == 64),
-        "runtime key id must be a domain-separated SHA-256 identifier"
-    );
-    provenance.insert(
-        "key_id".to_string(),
-        Value::String("[RUNTIME_KEY_ID]".to_string()),
-    );
-
-    identity.insert(
-        "producer_id".to_string(),
-        Value::String("[RUNTIME_PRODUCER_ID]".to_string()),
-    );
-    identity.insert(
-        "verification_key".to_string(),
-        Value::String("[RUNTIME_VERIFICATION_KEY]".to_string()),
-    );
+        .expect("source hash must use the sha256 prefix");
     parsed
 }
 
@@ -126,7 +88,7 @@ fn frankenctl_run_output_matches_golden_after_capacity_hint_sweep() {
     let start = Instant::now();
 
     let actual = run_frankenctl();
-    let normalized = normalize_fresh_runtime_evidence_identity(&actual);
+    let normalized = parse_run_report_current_contract(&actual);
 
     insta::assert_snapshot!(
         "frankenctl_run_output_after_capacity_hint_sweep",
@@ -137,8 +99,8 @@ fn frankenctl_run_output_matches_golden_after_capacity_hint_sweep() {
     let second = run_frankenctl();
     assert_eq!(
         normalized,
-        normalize_fresh_runtime_evidence_identity(&second),
-        "frankenctl run output must be stable apart from fresh runtime authority"
+        parse_run_report_current_contract(&second),
+        "frankenctl run output must be byte-identical across runs for fixed inputs"
     );
 
     assert!(

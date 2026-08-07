@@ -52,7 +52,7 @@ use crate::guardplane_adapter::{
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{ClearanceClass, DeclassificationReceipt, Label};
 use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord, IfcProvenanceIndex};
-use crate::ir_contract::{Ir0Module, Ir3Module};
+use crate::ir_contract::{ExecutionOutcome, Ir0Module, Ir3Module, Ir4Module, verify_ir4_linkage};
 use crate::lowering_pipeline::{
     AmbientAuthorityGrant, Ir2FlowProofArtifact, LoweringContext, LoweringEvent,
     LoweringPipelineError, LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
@@ -347,6 +347,14 @@ pub struct OrchestratorResult {
     // needs for end-to-end interpreter-state inspection.
     pub nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace,
 
+    // IR4 WitnessIR (bd-drb55): the sealed post-execution witness linking the
+    // exact executed IR3 content hash to the interpreter's witness-event and
+    // hostcall-decision transcripts. Sealed and linkage-verified only on the
+    // success path; failed executions deliberately never certify a complete
+    // witness (their performed-effect prefix is retained separately via
+    // `last_failed_host_effect_journal`).
+    pub ir4_witness: Ir4Module,
+
     // Epoch
     pub epoch: SecurityEpoch,
 }
@@ -586,6 +594,7 @@ struct EvidenceRecordInput<'a> {
     exec: &'a ExecutionResult,
     update: &'a UpdateResult,
     ir3_schedule_cost: Option<TropicalWeight>,
+    ir4_witness_hash: ContentHash,
     adaptive_router_summary: Option<&'a RouterSummary>,
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
     guardplane_report: Option<&'a GuardplaneHookReport>,
@@ -720,6 +729,12 @@ pub enum OrchestratorError {
     },
     EmptySource,
     EmptyExtensionId,
+    /// The post-execution IR4 witness failed linkage verification against the
+    /// executed IR3 (bd-drb55). Fail-closed: a run whose witness cannot be
+    /// verified is not published as a success.
+    WitnessSealing {
+        detail: String,
+    },
     PreparedExecutionContextMismatch {
         reserved_extension_id: String,
         requested_extension_id: String,
@@ -766,6 +781,9 @@ impl fmt::Display for OrchestratorError {
             ),
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
+            Self::WitnessSealing { detail } => {
+                write!(f, "ir4 witness sealing failed: {detail}")
+            }
             Self::PreparedExecutionContextMismatch {
                 reserved_extension_id,
                 requested_extension_id,
@@ -1691,6 +1709,12 @@ impl ExecutionOrchestrator {
             let instructions_executed = exec_result.instructions_executed;
             let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
 
+            // Step 6.5 (bd-drb55): seal and verify the IR4 witness against the
+            // exact executed IR3 before any downstream phase can observe this
+            // run as successful.
+            let ir4_witness =
+                Self::seal_ir4_witness(&lowering_output.ir3, &source_label, &exec_result)?;
+
             // Step 7: Assess risk.
             let evidence = Self::build_evidence(
                 package,
@@ -1750,6 +1774,7 @@ impl ExecutionOrchestrator {
                 exec: &exec_result,
                 update: &update_result,
                 ir3_schedule_cost,
+                ir4_witness_hash: ir4_witness.content_hash(),
                 adaptive_router_summary: adaptive_router_summary.as_ref(),
                 optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
                 guardplane_report: guardplane_report.as_ref(),
@@ -1822,6 +1847,7 @@ impl ExecutionOrchestrator {
                 host_effect_transcript,
                 host_effect_journal: host_effect_journal_entries,
                 nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
+                ir4_witness,
                 epoch: self.config.epoch,
             })
         })();
@@ -2200,6 +2226,50 @@ impl ExecutionOrchestrator {
         Ok((routed, report))
     }
 
+    /// Seal the post-execution IR4 witness (bd-drb55): bind the interpreter's
+    /// witness-event and hostcall-decision transcripts to the exact executed
+    /// IR3 content hash and verify linkage before the witness is published.
+    ///
+    /// Sealing happens only on the success path. A failed execution never
+    /// certifies a complete witness; its performed-effect prefix is retained
+    /// separately in `last_failed_host_effect_journal`.
+    fn seal_ir4_witness(
+        ir3: &Ir3Module,
+        source_label: &str,
+        exec: &ExecutionResult,
+    ) -> Result<Ir4Module, OrchestratorError> {
+        let ir3_hash = ir3.content_hash();
+        let mut witness = Ir4Module::new(ir3_hash, source_label);
+        // The interpreter returned `Ok`, so the program ran to completion;
+        // uncaught exceptions, timeouts, and cancellation all surface as
+        // `Err(InterpreterError)` and never reach this seal.
+        witness.outcome = ExecutionOutcome::Completed;
+        witness.events = exec.witness_events.clone();
+        witness.hostcall_decisions = exec.hostcall_decisions.clone();
+        witness.instructions_executed = exec.instructions_executed;
+        // Logical ticks, not wall-clock: the interpreter stamps every witness
+        // event with `timestamp_tick = instructions_executed`, so the executed
+        // instruction count is the run's tick duration.
+        witness.duration_ticks = exec.instructions_executed;
+        if let Some(spec) = &ir3.specialization {
+            // The live path has no LinkageId registry; identify the active
+            // specialization by the content hash of its canonical linkage so
+            // the id is self-verifying against the executed IR3.
+            witness.active_specialization_ids = vec![
+                ContentHash::compute(&crate::deterministic_serde::encode_value(
+                    &spec.canonical_value(),
+                ))
+                .to_hex(),
+            ];
+        }
+        verify_ir4_linkage(&witness, &ir3_hash).map_err(|err| {
+            OrchestratorError::WitnessSealing {
+                detail: err.to_string(),
+            }
+        })?;
+        Ok(witness)
+    }
+
     fn guardplane_adapter_for_package(
         &self,
         package: &ExtensionPackage,
@@ -2552,6 +2622,7 @@ impl ExecutionOrchestrator {
             exec,
             update,
             ir3_schedule_cost,
+            ir4_witness_hash,
             adaptive_router_summary,
             optimal_stopping_certificate,
             guardplane_report,
@@ -2637,6 +2708,9 @@ impl ExecutionOrchestrator {
         if let Some(cost) = ir3_schedule_cost {
             builder = builder.meta("ir3_schedule_cost".to_string(), cost.0.to_string());
         }
+        // bd-drb55: bind the sealed IR4 witness into the signed evidence
+        // chain so witness tampering is detectable through the receipt path.
+        builder = builder.meta("ir4_witness_hash".to_string(), ir4_witness_hash.to_hex());
         if let Some(summary) = adaptive_router_summary {
             builder = builder.meta(
                 "adaptive_router_regime".to_string(),

@@ -40,6 +40,9 @@ use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::ifc_artifacts::{
     DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
+use frankenengine_engine::ir_contract::{ExecutionOutcome, Ir0Module, verify_ir4_linkage};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -2085,4 +2088,171 @@ fn stopping_policies_isolated_per_extension_across_executions() {
     // Both should have 2 observations for their respective extension
     assert_eq!(cert_a.observations_before_stop, 2);
     assert_eq!(cert_b.observations_before_stop, 2);
+}
+
+// =========================================================================
+// Section 37: IR4 WitnessIR sealed on the live execution path (bd-drb55)
+// =========================================================================
+
+/// Independently recompute the IR3 the orchestrator executed for a plain-JS
+/// script package: same source, same script-goal source label, and a fresh
+/// lowering context. The IR3 content hash must not depend on trace identity,
+/// so dummy trace/decision ids are deliberate — if the hash ever starts
+/// depending on them, this helper's caller fails and surfaces that drift.
+fn recompute_script_ir3_hash(
+    extension_id: &str,
+    source: &str,
+) -> frankenengine_engine::hash_tiers::ContentHash {
+    let source_label = format!("ext:{extension_id}");
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse_with_options(
+            ParserSource {
+                label: source_label.clone(),
+                text: source.to_string(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("independent parse should succeed");
+    let ir0 = Ir0Module::from_syntax_tree(tree, &source_label);
+    let ctx = LoweringContext::new("recompute-trace", "recompute-decision", "default-policy");
+    let output = lower_ir0_to_ir3(&ir0, &ctx).expect("independent lowering should succeed");
+    output.ir3.content_hash()
+}
+
+#[test]
+fn ir4_witness_sealed_on_live_execution_path() {
+    let mut orch = default_orch();
+    let result = execute_simple(&mut orch);
+    let witness = &result.ir4_witness;
+
+    assert_eq!(witness.outcome, ExecutionOutcome::Completed);
+    assert_eq!(witness.instructions_executed, result.instructions_executed);
+    assert!(witness.instructions_executed > 0);
+    assert_eq!(witness.duration_ticks, result.instructions_executed);
+    // The interpreter's event trace flows through the seal: every successful
+    // run records a terminal ExecutionCompleted witness event, so a seal
+    // that dropped events would fail here.
+    let last_event = witness
+        .events
+        .last()
+        .expect("successful runs always record witness events");
+    assert_eq!(
+        last_event.kind,
+        frankenengine_engine::ir_contract::WitnessEventKind::ExecutionCompleted
+    );
+    // Self-consistent linkage: header source hash matches the executed IR3
+    // hash and the event trace is strictly monotonic.
+    verify_ir4_linkage(witness, &witness.executed_ir3_hash)
+        .expect("sealed witness must verify against its own executed IR3 hash");
+}
+
+#[test]
+fn ir4_witness_links_to_independently_recomputed_ir3() {
+    let mut orch = default_orch();
+    let result = orch
+        .execute(&simple_package(
+            "ext-ir4-link",
+            "const a = 40; const b = 2; a + b;",
+        ))
+        .expect("execute should succeed");
+    let independent_ir3_hash =
+        recompute_script_ir3_hash("ext-ir4-link", "const a = 40; const b = 2; a + b;");
+    verify_ir4_linkage(&result.ir4_witness, &independent_ir3_hash)
+        .expect("witness must link to the IR3 recomputed independently from the same source");
+}
+
+#[test]
+fn ir4_witness_hash_bound_into_signed_evidence_chain() {
+    let mut orch = default_orch();
+    let result = execute_simple(&mut orch);
+    let bound_hash = result.evidence_entries[0]
+        .metadata
+        .get("ir4_witness_hash")
+        .expect("evidence entry must bind the sealed witness hash");
+    assert_eq!(bound_hash, &result.ir4_witness.content_hash().to_hex());
+}
+
+#[test]
+fn ir4_witness_tamper_is_rejected_by_linkage_verification() {
+    let mut orch = default_orch();
+    let result = orch
+        .execute(&simple_package("ext-ir4-tamper", "1 + 1"))
+        .expect("execute should succeed");
+    let ir3_hash = result.ir4_witness.executed_ir3_hash;
+
+    // Tamper 1: re-anchor the witness to a different IR3.
+    let mut retargeted = result.ir4_witness.clone();
+    retargeted.executed_ir3_hash =
+        frankenengine_engine::hash_tiers::ContentHash::compute(b"forged-ir3");
+    assert!(verify_ir4_linkage(&retargeted, &ir3_hash).is_err());
+
+    // Tamper 2: strip the header linkage.
+    let mut stripped = result.ir4_witness.clone();
+    stripped.header.source_hash = None;
+    assert!(verify_ir4_linkage(&stripped, &ir3_hash).is_err());
+
+    // Tamper 3: splice a non-monotonic event into the trace (event forgery).
+    let mut spliced = result.ir4_witness.clone();
+    spliced
+        .events
+        .push(frankenengine_engine::ir_contract::WitnessEvent {
+            seq: 0,
+            kind: frankenengine_engine::ir_contract::WitnessEventKind::ExecutionCompleted,
+            instruction_index: 0,
+            payload_hash: frankenengine_engine::hash_tiers::ContentHash::compute(b"spliced"),
+            timestamp_tick: 0,
+        });
+    spliced
+        .events
+        .push(frankenengine_engine::ir_contract::WitnessEvent {
+            seq: 0,
+            kind: frankenengine_engine::ir_contract::WitnessEventKind::ExecutionCompleted,
+            instruction_index: 0,
+            payload_hash: frankenengine_engine::hash_tiers::ContentHash::compute(b"spliced-2"),
+            timestamp_tick: 0,
+        });
+    assert!(verify_ir4_linkage(&spliced, &ir3_hash).is_err());
+
+    // Discrimination limit, pinned deliberately: a CONSISTENTLY forged
+    // witness (executed hash and header re-anchored together) self-verifies,
+    // so self-linkage alone cannot catch anchor forgery. Only verification
+    // against the independently recomputed IR3 hash rejects it — which is
+    // why `ir4_witness_links_to_independently_recomputed_ir3` exists and
+    // must never be weakened to a self-check.
+    let mut consistent_forgery = result.ir4_witness.clone();
+    let forged = frankenengine_engine::hash_tiers::ContentHash::compute(b"consistent-forgery");
+    consistent_forgery.executed_ir3_hash = forged;
+    consistent_forgery.header.source_hash = Some(forged);
+    assert!(verify_ir4_linkage(&consistent_forgery, &forged).is_ok());
+    assert!(verify_ir4_linkage(&consistent_forgery, &ir3_hash).is_err());
+}
+
+#[test]
+fn ir4_witness_is_deterministic_across_fresh_orchestrators() {
+    let mut orch_a = default_orch();
+    let mut orch_b = default_orch();
+    let package = simple_package(
+        "ext-ir4-determ",
+        "let s = 0; for (let i = 0; i < 3; i = i + 1) { s = s + i; } s;",
+    );
+    let witness_a = orch_a.execute(&package).expect("run a").ir4_witness;
+    let witness_b = orch_b.execute(&package).expect("run b").ir4_witness;
+    assert_eq!(
+        witness_a.content_hash(),
+        witness_b.content_hash(),
+        "sealed witness must be byte-identical for identical fixed inputs"
+    );
+}
+
+#[test]
+fn ir4_witness_serialization_round_trips() {
+    let mut orch = default_orch();
+    let result = execute_simple(&mut orch);
+    let json = serde_json::to_string(&result.ir4_witness).expect("witness serializes");
+    let restored: frankenengine_engine::ir_contract::Ir4Module =
+        serde_json::from_str(&json).expect("witness deserializes");
+    assert_eq!(restored, result.ir4_witness);
+    assert_eq!(restored.content_hash(), result.ir4_witness.content_hash());
 }

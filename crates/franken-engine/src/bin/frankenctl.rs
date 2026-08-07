@@ -61,7 +61,7 @@ use frankenengine_engine::fleet_trace_total_order::{
     FleetTraceNode, flatten_to_events, merge_fleet_traces, node_id_from_session,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir4Module};
 use frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode;
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
@@ -961,6 +961,12 @@ struct RunCommandOutput {
     evidence_ledger_id: String,
     evidence_chain_head: String,
     evidence_chain_artifact: EvidenceChainArtifact,
+    // bd-drb55: the sealed post-execution IR4 witness and its content hash.
+    // The hash is also bound into the signed evidence chain (meta key
+    // `ir4_witness_hash`), so report-level witness tampering is detectable
+    // against the receipt path.
+    ir4_witness_hash: String,
+    ir4_witness: Ir4Module,
     console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
 }
@@ -4386,6 +4392,8 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         evidence_ledger_id,
         evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
         evidence_chain_artifact,
+        ir4_witness_hash: result.ir4_witness.content_hash().to_hex(),
+        ir4_witness: result.ir4_witness.clone(),
         console_output: result.console_output.clone(),
         observability_mode: default_capture_observability_mode(),
     };

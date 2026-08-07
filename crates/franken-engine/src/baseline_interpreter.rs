@@ -26838,8 +26838,7 @@ impl InterpreterCore {
             .saturating_add(self.symbol_state_memory_bytes());
         self.reset_execution_state_from_seed(&seed)?;
         self.apply_seed_surface_memory_delta(previous_seed_surface_bytes)?;
-        if repeat_execute && false {
-            // NEGATIVE DRILL 2: naive predicate repair without the clear contract
+        if repeat_execute {
             self.reset_repeat_execution_state()?;
         }
         // perf: hot path - avoid double clone of source_label
@@ -98974,7 +98973,9 @@ mod tests {
             "module namespace must not alias process.argv"
         );
         assert_eq!(
-            core.heap[argv_id.0 as usize].properties.get_exact(&leak_key),
+            core.heap[argv_id.0 as usize]
+                .properties
+                .get_exact(&leak_key),
             None,
             "the module export must not leak into process.argv"
         );

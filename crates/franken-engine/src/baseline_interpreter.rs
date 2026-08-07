@@ -26805,13 +26805,28 @@ impl InterpreterCore {
 
     fn prepare_execution_inner(&mut self, module: &Ir3Module) -> Result<String, InterpreterError> {
         let current_seed = self.capture_execution_seed();
-        let seed = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
-            (Some(previous_pre_run), Some(previous_post_run))
-                if std::rc::Rc::ptr_eq(&current_seed, previous_post_run) =>
-            {
-                previous_pre_run.clone()
-            }
-            _ => current_seed,
+        // Repeat-execute detection is epoch-based, not Rc-identity-based:
+        // `capture_execution_seed` always allocates a fresh Rc, so the former
+        // `Rc::ptr_eq(&current_seed, previous_post_run)` comparison could
+        // never fire and the restore-previous-pre-run-seed path was
+        // unreachable (bd-bgq16). The post-run seed is still `Lazy` at the
+        // current epoch exactly when no seed-surface write (registers, heap,
+        // prototypes, symbols) happened since the previous `execute`
+        // returned; any caller mutation in between materializes it and
+        // advances the epoch, routing through the fresh-seed path below.
+        let repeat_execute = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
+            (Some(_), Some(previous_post_run)) => matches!(
+                &*previous_post_run.borrow(),
+                ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch
+            ),
+            _ => false,
+        };
+        let seed = if repeat_execute {
+            self.last_pre_run_seed
+                .clone()
+                .expect("repeat_execute requires a previous pre-run seed")
+        } else {
+            current_seed
         };
         self.last_pre_run_seed = Some(seed.clone());
         self.top_level_await_resumption_contexts.clear();
@@ -26823,6 +26838,10 @@ impl InterpreterCore {
             .saturating_add(self.symbol_state_memory_bytes());
         self.reset_execution_state_from_seed(&seed)?;
         self.apply_seed_surface_memory_delta(previous_seed_surface_bytes)?;
+        if repeat_execute && false {
+            // NEGATIVE DRILL 2: naive predicate repair without the clear contract
+            self.reset_repeat_execution_state()?;
+        }
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
         self.ensure_module_record(module, &entry_specifier)?;
@@ -26834,6 +26853,91 @@ impl InterpreterCore {
         self.push_event("execution_started", "ok", None);
 
         Ok(module.header.source_label.clone())
+    }
+
+    /// Complete the repeat-execute restore contract (bd-bgq16). The seed
+    /// restore in `prepare_execution_inner` rolled registers/heap/prototypes/
+    /// symbols back to the previous run's pre-run state, so every piece of
+    /// execution state the previous run produced — in particular every table
+    /// that holds or is keyed by heap `ObjectId`s — must be dropped before
+    /// `ensure_module_record` / `inject_runtime_globals` allocate again.
+    /// Keeping any of it alive aliases rolled-back ids: the stale entry
+    /// module record's `namespace_object` names an id past the restored heap
+    /// end, and the first post-restore allocation (`process.argv`) would
+    /// receive that id, letting later `ExportBinding` writes mutate `argv`
+    /// through the aliased namespace.
+    ///
+    /// Register IFC labels are deliberately NOT reset: `set_register_label`
+    /// does not advance the seed epoch, so a caller-written label is
+    /// indistinguishable here from a run-written one; retaining labels can
+    /// only over-taint, never under-taint.
+    fn reset_repeat_execution_state(&mut self) -> Result<(), InterpreterError> {
+        // Dispatch-local state. The previous run parked `ip` on its final
+        // `Halt`; without this reset a repeat execute re-halts immediately
+        // and returns the stale r0 (the false positive the old repeat test
+        // could not see).
+        self.ip = 0;
+        self.register_base = 0;
+        self.call_stack.clear();
+        self.catch_frames.clear();
+        self.pending_exception = None;
+        self.pending_exception_label = Label::Public;
+        self.pending_hostcall_result_label = None;
+        self.pending_return = None;
+        self.suspended_abrupt_completions.clear();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
+        self.pending_captures.clear();
+        self.scope_chain = ScopeChain::new();
+        self.runtime_name_references.clear();
+        self.module_reentrant_call_depth = 0;
+        self.active_foreign_module_call_depth = 0;
+        // A repeat run replays the previous run's budget and trace domain
+        // from zero; both accumulate across `execute` calls otherwise.
+        self.instructions_executed = 0;
+        self.nondeterminism_trace = NondeterminismTrace::new(&self.trace_id);
+
+        // Execution stores produced by the rolled-back run. The restored
+        // pre-run registers and heap cannot reference these: closures,
+        // iterator states, generators, promises, timers, and module records
+        // only come into existence during execution, and any caller mutation
+        // between runs routes through the non-repeat fresh-seed path.
+        self.iterators.clear();
+        self.closures.clear();
+        self.closure_module_origins.clear();
+        self.closure_generated_function_artifacts.clear();
+        self.generators.clear();
+        self.generator_yielded = false;
+        self.generator_resume_dst = None;
+        self.generator_result_label = Label::Public;
+        self.async_functions.clear();
+        self.async_generators.clear();
+        self.async_resumption_contexts.clear();
+        self.promise_store = crate::promise_model::PromiseStore::new();
+        self.event_loop = crate::promise_model::EventLoop::new();
+        self.promise_combinators.clear();
+        self.promise_combinator_watchers.clear();
+        self.promise_in_flight_task_bytes = 0;
+        self.next_timer_id = 0;
+        self.active_timers.clear();
+        self.pending_timer_tasks.clear();
+        self.unref_timer_ids.clear();
+        self.pending_stream_emissions.clear();
+
+        // Heap-ObjectId-keyed tables not covered by the seed surfaces or by
+        // the execution-local clears in `reset_execution_state_from_seed`.
+        self.weakmap_storage.clear();
+        self.gc_remembered_set.clear();
+        self.module_state.modules.clear();
+        self.module_state.retained_program_bytes = 0;
+        self.active_cjs_context = None;
+
+        // The clears above released many independently-charged memory
+        // components; resynchronize the estimate from live state so the
+        // exactness invariant (`estimated == recompute`) holds by
+        // construction at this boundary.
+        self.sync_estimated_memory_bytes()?;
+        Ok(())
     }
 
     fn run_top_level_execution(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
@@ -98749,47 +98853,135 @@ mod tests {
 
     #[test]
     fn reexecution_restores_initial_register_seed_without_runtime_leakage() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::Call {
-                    callee: 3,
-                    args: RegRange { start: 1, count: 1 },
-                    dst: 0,
-                },
-                Ir3Instruction::Halt,
-                Ir3Instruction::LoadInt { dst: 1, value: 10 },
-                Ir3Instruction::Add {
-                    dst: 2,
-                    lhs: 0,
-                    rhs: 1,
-                },
-                Ir3Instruction::Return { value: 2 },
-            ],
-            vec![Ir3FunctionDesc {
-                entry: 2,
-                arity: 1,
-                frame_size: 3,
-                name: Some("add_ten".to_string()),
-                is_generator: false,
-                rest_param_index: None,
-            }],
-        );
+        // The program both reads AND overwrites its seeded input register, so
+        // a repeat execute reproduces the first result only if the pre-run
+        // seed is genuinely restored and dispatch re-runs from ip 0. The
+        // previous version of this test never mutated its input, so it kept
+        // passing while the repeat-execute path was unreachable and the
+        // second run stayed parked at the prior Halt (bd-bgq16).
+        let m = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 4, value: 10 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 4,
+            },
+            Ir3Instruction::Add {
+                dst: 1,
+                lhs: 1,
+                rhs: 4,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::Halt,
+        ]);
 
         let mut config = test_quickjs_config();
         config.instruction_budget = 1000;
         let mut core = InterpreterCore::new(config, "test");
         core.set_reg(1, Value::Int(5));
-        core.set_reg(3, Value::Function(0));
 
-        let first = core
-            .execute(&m)
-            .expect("operation should succeed for valid inputs");
+        let first = core.execute(&m).expect("first run should succeed");
         assert_eq!(first.value, Value::Int(15));
+        assert_eq!(
+            first.console_output.len(),
+            1,
+            "first run must actually dispatch the program body"
+        );
 
-        let second = core
-            .execute(&m)
-            .expect("operation should succeed for valid inputs");
+        let second = core.execute(&m).expect("repeat run should succeed");
+        // Without the pre-run seed restore the surviving r1 == 15 yields 25.
         assert_eq!(second.value, Value::Int(15));
+        // A run parked at the prior Halt returns run 1's r0 (also 15) but
+        // dispatches nothing, so its per-run console drain stays empty. This
+        // side-effect observation is what the pre-bd-bgq16 version of this
+        // test lacked, which is why it kept passing while the repeat path
+        // was dead.
+        assert_eq!(
+            second.console_output.len(),
+            1,
+            "repeat run must re-dispatch the full program, not resume at Halt"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn repeat_execute_reallocates_module_namespace_without_argv_aliasing_bd_bgq16() {
+        // The entry namespace ObjectId is allocated by `ensure_module_record`
+        // AFTER the pre-run seed is captured. A repeat execute rolls the heap
+        // back to the pre-run state, so a surviving module record would name
+        // a heap id that the restored heap hands to the first post-restore
+        // allocation — `process.argv` in `inject_runtime_globals` — letting
+        // the second run's ExportBinding mutate argv through the aliased
+        // namespace id (bd-bgq16).
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 42 },
+                Ir3Instruction::ExportBinding {
+                    name_pool_index: 0,
+                    src: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["leak".to_string()],
+        );
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        core.execute(&m).expect("first run should succeed");
+        core.execute(&m).expect("repeat run should succeed");
+
+        let record = core
+            .module_state
+            .modules
+            .get("test")
+            .expect("repeat run must re-register the entry module record");
+        let namespace_id = record.namespace_object;
+        let leak_key = JsString::from("leak");
+        assert_eq!(
+            core.heap[namespace_id.0 as usize]
+                .properties
+                .get_exact(&leak_key),
+            Some(&Value::Int(42)),
+            "the export must land on the freshly allocated namespace object"
+        );
+
+        // Walk process.argv through the injected scope-chain global and prove
+        // the export did not alias into it.
+        let process_binding = core
+            .scope_chain
+            .frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.bindings.get("process"))
+            .expect("process global must exist after execution");
+        let Value::Object(process_id) = process_binding.state.borrow().value.clone() else {
+            panic!("process global must be heap-backed");
+        };
+        let Some(&Value::Object(argv_id)) = core.heap[process_id.0 as usize]
+            .properties
+            .get_exact(&JsString::from("argv"))
+        else {
+            panic!("process.argv must be heap-backed");
+        };
+        assert_ne!(
+            argv_id, namespace_id,
+            "module namespace must not alias process.argv"
+        );
+        assert_eq!(
+            core.heap[argv_id.0 as usize].properties.get_exact(&leak_key),
+            None,
+            "the module export must not leak into process.argv"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

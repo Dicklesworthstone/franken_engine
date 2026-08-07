@@ -53,6 +53,29 @@
       "interpretation": "Date locale implementations exist in HostCall dispatch, but the primitive/object JavaScript property route does not expose them."
     },
     {
+      "authority_id": "engine.baseline.internal-date-locale-provider",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "// Locale-aware date formatting implementation (bd-1j1wy)",
+      "end_anchor": "#[cfg(test)]\nmod active_builtin_regressions {",
+      "sha256": "2b7163621ef6c42f76ec72cb54fe8e7f91f0584f270ca33f45bb79c6038f0921",
+      "required_markers": [
+        "struct LocaleData",
+        "\"en-US\" => LocaleData",
+        "\"en-GB\" => LocaleData",
+        "\"ja-JP\" => LocaleData",
+        "Self::get_locale_data(\"en-US\")",
+        "fn format_date_with_locale(",
+        "fn format_timestamp_with_locale("
+      ],
+      "forbidden_markers": [
+        "icu",
+        "tzdb",
+        "chrono"
+      ],
+      "interpretation": "The internal-only Date provider is a hand-authored three-locale table with simplified UTC-like arithmetic and en-US fallback."
+    },
+    {
       "authority_id": "engine.baseline.internal-locale-case-hostcalls",
       "repository": "franken_engine",
       "path": "crates/franken-engine/src/baseline_interpreter.rs",
@@ -85,6 +108,43 @@
         "locale_arg"
       ],
       "interpretation": "The exposed method uses deterministic lexicographic comparison and consumes only the first argument."
+    },
+    {
+      "authority_id": "engine.baseline.number-property-route",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "    fn number_property_value(key: &str) -> Value {",
+      "end_anchor": "    fn promise_property_value(key: &str) -> Value {",
+      "sha256": "32c284ca4c6ded5b7e8b75ca1d85a80298e37713b5a52de78c28a855fc58d988",
+      "required_markers": [
+        "\"toFixed\" => Value::BuiltinFunction",
+        "\"toString\" => Value::BuiltinFunction",
+        "\"valueOf\" => Value::BuiltinFunction",
+        "_ => Value::Undefined"
+      ],
+      "forbidden_markers": [
+        "\"toLocaleString\" =>"
+      ],
+      "interpretation": "Primitive Number property resolution exposes three non-locale methods and returns undefined for toLocaleString."
+    },
+    {
+      "authority_id": "engine.baseline.runtime-global-injection",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "    fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {",
+      "end_anchor": "    fn inject_runtime_global_binding(",
+      "sha256": "8906e3fff8c60af83f4cafa03b049d4f2bf748dbf7868c302f3eaa78efdec9c4",
+      "required_markers": [
+        "\"Promise\"",
+        "\"Math\"",
+        "\"Date\"",
+        "\"Function\"",
+        "\"console\""
+      ],
+      "forbidden_markers": [
+        "\"Intl\""
+      ],
+      "interpretation": "Fresh realms inject supported globals explicitly and do not inject an Intl binding."
     },
     {
       "authority_id": "engine.baseline.string-property-route",
@@ -142,9 +202,9 @@
       "path": "crates/franken-engine/src/bin/frankenctl.rs",
       "start_anchor": "fn execute_run(args: RunArgs) -> Result<i32, String> {",
       "end_anchor": "fn load_and_bind_data_contract(",
-      "sha256": "ace742ebe2ccb1c967e469fe1dbf59c41265b703b80a232465a504ee0ec9ef67",
+      "sha256": "35c21169128f35e807d2039cc06387d2d71260e3e46eb874ffec98d4c63ad45f",
       "required_markers": [
-        "ExecutionOrchestrator::new",
+        "ExecutionOrchestrator::try_new_with_runtime_authority",
         ".execute(&package)",
         "console_output"
       ],
@@ -208,11 +268,13 @@
       "repository": "franken_node",
       "path": "crates/franken-node/src/ops/engine_dispatcher.rs",
       "start_anchor": "    fn run_engine_native_guarded(",
-      "end_anchor": "        use std::fs;",
-      "sha256": "ef096e1c0fc872c5479f578530cd82c42761845a716fd60bd299d2edbf25a257",
+      "end_anchor": "    fn build_host_effect_ledger(",
+      "sha256": "dc6552c6bb0f56c31e1998fa0b32365745d86d501fed9ef59ba9d8e59854079d",
       "required_markers": [
         "frankenengine_extension_host",
-        "NativeEngineCancellation"
+        "NativeEngineCancellation",
+        "ExecutionOrchestrator::try_new_with_runtime_config_and_authority",
+        "orchestrator.execute(&package)"
       ],
       "forbidden_markers": [
         "Intl",
@@ -342,6 +404,7 @@
       "ga_preservation_rule": "Preserve public absence and non-credit status until the canonical route is intentionally implemented.",
       "authority_ids": [
         "engine.baseline.internal-date-locale-hostcalls",
+        "engine.baseline.internal-date-locale-provider",
         "engine.tests.internal-date-locale"
       ],
       "probe_ids": [
@@ -385,6 +448,7 @@
       "ga_preservation_rule": "Preserve public absence and non-credit status until the canonical route is intentionally implemented.",
       "authority_ids": [
         "engine.baseline.internal-date-locale-hostcalls",
+        "engine.baseline.internal-date-locale-provider",
         "engine.tests.internal-date-locale"
       ],
       "probe_ids": [
@@ -428,6 +492,7 @@
       "ga_preservation_rule": "Preserve public absence and non-credit status until the canonical route is intentionally implemented.",
       "authority_ids": [
         "engine.baseline.internal-date-locale-hostcalls",
+        "engine.baseline.internal-date-locale-provider",
         "engine.tests.internal-date-locale"
       ],
       "probe_ids": [
@@ -473,6 +538,7 @@
       "ga_preservation_rule": "Preserve this negative-control observation until Date method routing intentionally changes; then require an explicit migration.",
       "authority_ids": [
         "engine.baseline.internal-date-locale-hostcalls",
+        "engine.baseline.internal-date-locale-provider",
         "engine.frankenctl.production-route"
       ],
       "probe_ids": [
@@ -513,7 +579,7 @@
       "preservation_relation": "preserve_absence",
       "ga_preservation_rule": "GA must not claim or accidentally expose a partial Intl namespace without a versioned migration.",
       "authority_ids": [
-        "engine.baseline.string-property-route",
+        "engine.baseline.runtime-global-injection",
         "engine.docs.ecma262-score-boundary",
         "node.dispatch.native-engine-route"
       ],
@@ -555,7 +621,7 @@
       "preservation_relation": "preserve_absence",
       "ga_preservation_rule": "GA must not claim NumberFormat or locale number formatting until a complete reviewed route lands.",
       "authority_ids": [
-        "engine.baseline.string-property-route",
+        "engine.baseline.number-property-route",
         "node.dispatch.native-engine-route"
       ],
       "probe_ids": [

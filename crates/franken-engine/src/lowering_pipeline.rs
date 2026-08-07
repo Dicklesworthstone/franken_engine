@@ -4627,20 +4627,29 @@ fn lower_statement_to_ir1_with_flow(
                 });
             }
 
-            // Return is a non-throw completion: a close failure replaces the
-            // return value, while a successful close lets EndFinally resume it.
-            // Close before EnterFinally so a replacing failure does not leave a
-            // stale FinallyMode::Return on the runtime stack.
+            // Return is a non-throw completion: a successful close lets
+            // EndFinally resume the suspended return value, while a close
+            // failure replaces it (the exception unwind truncates the finally
+            // frame holding the return). EnterFinally MUST be the first
+            // instruction at this label: the Return unwind edge jumps to the
+            // frame's finally_target and `enter_finally_frame` claims the
+            // pending completion only when `pending_finally_entry.target ==
+            // self.ip`. Any instruction between the label and EnterFinally
+            // advances `ip` past the target, downgrades the finalizer to
+            // FinallyMode::Normal, and silently drops the return completion —
+            // execution then falls through the loop and a later `return`
+            // clobbers the suspended value (bd-s94p8: engine returned "0:1"
+            // where Node and franken-core return "7:1").
             ops.push(Ir1Op::Label {
                 id: return_close_label,
             });
+            ops.push(Ir1Op::EnterFinally);
             ops.push(Ir1Op::LoadBinding {
                 binding_id: iterator_binding_id,
             });
             ops.push(Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Return,
             });
-            ops.push(Ir1Op::EnterFinally);
             ops.push(Ir1Op::EndFinally);
 
             ops.push(Ir1Op::Label {
@@ -33828,15 +33837,19 @@ mod tests {
             .iter()
             .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
             .expect("return close handler");
+        // EnterFinally must sit exactly at the return-close target: the
+        // pending-completion ownership check compares the unwind target to the
+        // EnterFinally ip, so a close emitted before EnterFinally silently
+        // drops the suspended return value (bd-s94p8).
         assert!(matches!(
-            ir1.ops.get(return_handler + 2),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Return
-            })
+            ir1.ops.get(return_handler + 1),
+            Some(Ir1Op::EnterFinally)
         ));
         assert!(matches!(
             ir1.ops.get(return_handler + 3),
-            Some(Ir1Op::EnterFinally)
+            Some(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Return
+            })
         ));
         assert!(matches!(
             ir1.ops.get(return_handler + 4),

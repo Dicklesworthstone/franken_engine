@@ -59,13 +59,20 @@ fn run_frankenctl() -> String {
     String::from_utf8(output.stdout).expect("frankenctl stdout must be valid UTF-8")
 }
 
-/// Parse the run report and assert the current output contract. The report
-/// schema is `franken-engine.frankenctl.run.v2`; it deliberately omits a
-/// top-level `evidence_verification_identity` (bd-8yhg4 — verifiers resolve
-/// the receipt signer through their own registry), and fixed inputs produce
-/// byte-identical output, so no per-run normalization is required.
+/// Parse the run report, assert the current output contract, and normalize
+/// every field derived from the per-invocation runtime signing authority.
+///
+/// The report schema is `franken-engine.frankenctl.run.v2`; it deliberately
+/// omits a top-level `evidence_verification_identity` (bd-8yhg4 — verifiers
+/// resolve the receipt signer through their own registry) and instead embeds
+/// the signed evidence chain. The signing key is freshly generated per
+/// invocation, so the chain artifact and the ids/hashes derived from it are
+/// the only legitimately unstable output; everything else (including the
+/// sealed IR4 witness, bd-drb55) must be identical across runs for fixed
+/// inputs. Chain integrity itself is enforced by `verify_genesis` inside the
+/// CLI and by the bd-8yhg4 exact-chain test, not by this snapshot.
 fn parse_run_report_current_contract(actual: &str) -> Value {
-    let parsed: Value = serde_json::from_str(actual).expect("run output must be JSON");
+    let mut parsed: Value = serde_json::from_str(actual).expect("run output must be JSON");
     assert_eq!(
         parsed["schema_version"].as_str(),
         Some("franken-engine.frankenctl.run.v2"),
@@ -80,6 +87,21 @@ fn parse_run_report_current_contract(actual: &str) -> Value {
         .expect("run output must carry the source hash")
         .strip_prefix("sha256:")
         .expect("source hash must use the sha256 prefix");
+    let obj = parsed
+        .as_object_mut()
+        .expect("run output must be a JSON object");
+    for (field, placeholder) in [
+        ("evidence_chain_artifact", "[FRESH_AUTHORITY_CHAIN]"),
+        ("evidence_chain_instance_id", "[FRESH_AUTHORITY_ID]"),
+        ("evidence_ledger_id", "[FRESH_AUTHORITY_ID]"),
+        ("evidence_chain_head", "[FRESH_AUTHORITY_HASH]"),
+    ] {
+        assert!(
+            obj.contains_key(field),
+            "run report must carry `{field}`; the schema drifted"
+        );
+        obj.insert(field.to_string(), Value::String(placeholder.to_string()));
+    }
     parsed
 }
 
@@ -100,7 +122,7 @@ fn frankenctl_run_output_matches_golden_after_capacity_hint_sweep() {
     assert_eq!(
         normalized,
         parse_run_report_current_contract(&second),
-        "frankenctl run output must be byte-identical across runs for fixed inputs"
+        "frankenctl run output must be stable apart from fresh runtime authority"
     );
 
     assert!(

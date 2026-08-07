@@ -634,10 +634,6 @@ mod tests {
 
         let required_constant_time_calls = [
             (
-                "fleet_convergence.rs",
-                "self.signature.constant_time_eq(&expected)",
-            ),
-            (
                 "translation_validation.rs",
                 "self.signature.constant_time_eq(&expected)",
             ),
@@ -659,10 +655,24 @@ mod tests {
         // construction and fail-closed), not by `constant_time_eq`. Assert the
         // issuer path keeps going through that verifier rather than a byte
         // comparison, so this guard still covers the issuer signature.
-        let required_ed25519_verifier_calls = [(
-            "proof_schema.rs",
-            "verify_signature(verification_key, &preimage, &signature)",
-        )];
+        // `fleet_convergence.rs`'s containment-receipt signature likewise
+        // migrated (2026-08-05, "require trusted convergence receipt
+        // authority") from the symmetric keyed hash to registry-verified
+        // detached Ed25519 signatures. The timing-safety invariant is now
+        // enforced by the Ed25519 verifier behind
+        // `verify_detached(signature, &self.signing_preimage(), self.epoch)`;
+        // assert that call shape so this guard keeps covering the receipt
+        // path (bd-vpxgj).
+        let required_ed25519_verifier_calls = [
+            (
+                "proof_schema.rs",
+                "verify_signature(verification_key, &preimage, &signature)",
+            ),
+            (
+                "fleet_convergence.rs",
+                "verify_detached(signature, &self.signing_preimage(), self.epoch)",
+            ),
+        ];
 
         for (name, expected_call) in required_constant_time_calls {
             let source = checked_sources

@@ -3143,10 +3143,18 @@ mod tests {
         let mut manifest = GoldenLedgerManifest::new();
         manifest.add(&ledger);
 
-        // Create a tampered version.
+        // Create a tampered version. The tamper must stay validation-legal so
+        // reseal succeeds: franken-evidence >= 0.3.5 rejects a chosen action
+        // that is absent from expected_loss_by_action, so mirror the renamed
+        // action into the loss map with the entry's chosen loss (bd-vpxgj).
         let mut tampered = ledger;
         tampered.entries[0].action_name = "tampered".to_string();
         tampered.entries[0].ledger_entry.action = "tampered".to_string();
+        let chosen_loss = tampered.entries[0].ledger_entry.chosen_expected_loss;
+        tampered.entries[0]
+            .ledger_entry
+            .expected_loss_by_action
+            .insert("tampered".to_string(), chosen_loss);
         reseal_entry_sequence(&mut tampered.entries).expect("tampered entries must reseal");
         tampered.corpus_hash = tampered.compute_corpus_hash()?;
 

@@ -3925,11 +3925,18 @@ impl WitnessPublicationPipeline {
         let chosen_loss = if action == "revoke" { 5_000 } else { 50_000 };
         let alt_loss = if action == "revoke" { 200_000 } else { 100_000 };
         let decision_id = format!("{action}:{}", artifact.publication_id);
+        // The evidence entry records the publish/revoke DECISION, which is
+        // made at the pipeline's epoch. The witness's own (possibly older)
+        // epoch travels inside the witness payload/content hash. The ledger
+        // is pinned to the pipeline epoch (`for_runtime_authority`), so
+        // stamping entries with `artifact.witness.epoch` fails validation
+        // for any witness not minted at exactly the pipeline epoch and
+        // predates the authority's activation epoch (bd-vpxgj).
         let mut builder = EvidenceEntryBuilder::new_with_runtime_authority(
             format!("trace:{}", artifact.publication_id),
             decision_id,
             self.config.policy_id.clone(),
-            artifact.witness.epoch,
+            self.current_epoch,
             DecisionType::CapabilityDecision,
             &self.evidence_authority,
         )

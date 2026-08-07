@@ -291,6 +291,21 @@ impl CanonicalEvidenceEntry {
             .into_iter()
             .map(|error| format!("ledger_entry: {error}"))
             .collect();
+        // Non-finite feature weights must fail closed before hashing:
+        // serde_json maps NaN/Inf/-Inf all to JSON `null`, so a non-finite
+        // weight would collapse distinct entries onto one artifact_hash and
+        // break chain injectivity (bd-zjkyu). The in-repo standalone
+        // control-plane twin validates this, but the published
+        // `franken-evidence` crate used under the default
+        // `asupersync-integration` feature (<= 0.3.9) does not, so enforce it
+        // at this boundary too (bd-vpxgj).
+        for (name, weight) in &self.ledger_entry.top_features {
+            if !weight.is_finite() {
+                errors.push(format!(
+                    "ledger_entry: top_feature weight for '{name}' must be finite, got {weight}"
+                ));
+            }
+        }
         if self.action_name != self.ledger_entry.action {
             errors.push(format!(
                 "action_name {:?} does not match ledger_entry.action {:?}",

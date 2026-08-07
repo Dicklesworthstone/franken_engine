@@ -4641,7 +4641,12 @@ mod tests {
         )
         .expect("rotation successor");
 
-        let mut backdated_ledger = InMemoryLedger::new();
+        // This test's identities are Runtime-class (rotation semantics under
+        // test are the runtime trust chain). The test-only `new()` constructor
+        // became lab-scoped in the schema-v2 authority split and rejects
+        // runtime identities, so build an unpinned RUNTIME-surface ledger
+        // directly (bd-vpxgj).
+        let mut backdated_ledger = InMemoryLedger::empty_for_epoch(None, false);
         backdated_ledger
             .authorize_signing_identity(&root)
             .expect("backdated-test root registration");
@@ -4674,7 +4679,7 @@ mod tests {
             "a rotation must not retroactively invalidate accepted predecessor evidence"
         );
 
-        let mut ledger = InMemoryLedger::new();
+        let mut ledger = InMemoryLedger::empty_for_epoch(None, false);
         ledger
             .authorize_signing_identity(&root)
             .expect("root registration");

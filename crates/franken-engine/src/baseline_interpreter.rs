@@ -60310,7 +60310,11 @@ impl InterpreterCore {
                 Ok(Value::Float(f64::NAN.into()))
             }
 
-            // Locale-aware date formatting implementation (bd-1j1wy)
+            // Locale-aware Date hostcall arms (bd-1j1wy). Keep this comment
+            // textually distinct from the module-tail provider-section header:
+            // the intl surface contract anchors an authority slice on that
+            // exact header string and fails closed on duplicate matches
+            // (bd-vpxgj).
             "builtin:DatePrototypeToLocaleString" => {
                 let this_val = self.read_reg(args.start)?;
                 let locale_arg = if args.count > 0 {

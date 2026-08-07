@@ -3130,7 +3130,7 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
-        assert_eq!(errors.len(), 19);
+        assert_eq!(errors.len(), 20);
     }
 
     #[test]

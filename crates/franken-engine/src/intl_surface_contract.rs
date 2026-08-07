@@ -1613,7 +1613,10 @@ fn authority_specs() -> Vec<AuthoritySpec> {
             required_markers: &[
                 "frankenengine_extension_host",
                 "NativeEngineCancellation",
-                "ExecutionOrchestrator::new_with_runtime_config_and_ambient_authority_grant",
+                // Renamed in the schema-v2 Runtime/Lab evidence-authority
+                // split (dedd88284): the supervised native path now threads an
+                // explicit runtime evidence authority (bd-vpxgj).
+                "ExecutionOrchestrator::try_new_with_runtime_config_and_authority",
                 "orchestrator.execute(&package)",
             ],
             forbidden_markers: &["Intl", "localeCompare"],

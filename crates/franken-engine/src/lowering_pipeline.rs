@@ -29457,19 +29457,42 @@ mod tests {
 
     #[test]
     fn net_require_shadow_does_not_gain_builtin_provenance_bd_7qwej() {
-        let tree = crate::parser_api_stability::parse_script(
+        // Contract (aligned with the crypto bd-2z157 and http bd-d0n7u shadow
+        // tests): a lexically shadowed `require` is the user's own value, so
+        // the call lowers with generic call semantics. What it must NEVER do
+        // is confirm a net module alias — no `builtin:Net*` hostcall may be
+        // emitted, and no ambient authority is granted. This test previously
+        // expected an AmbientAuthorityViolation, which contradicted the
+        // shadow-aware contract that landed with bd-2z157 and had been
+        // failing since (bd-vpxgj).
+        let ops = lower_script_source_ops(
             "const require = () => null;\n\
              const net = require('net');\n\
              net.isIP('127.0.0.1');\n",
-        )
-        .expect("parse script");
-        let ir0 = Ir0Module::from_syntax_tree(tree, "net_shadowed_require_bd_7qwej.js");
-        let error = lower_ir0_to_ir1(&ir0)
-            .expect_err("a shadowed require must not acquire net builtin provenance");
-        assert!(matches!(
-            error,
-            LoweringPipelineError::AmbientAuthorityViolation { .. }
-        ));
+            "net_shadowed_require_bd_7qwej.js",
+        );
+        for capability in [
+            "builtin:NetIsIP",
+            "builtin:NetIsIPv4",
+            "builtin:NetIsIPv6",
+            "builtin:NetCreateServer",
+            "builtin:NetConnect",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, capability),
+                0,
+                "a shadowed require must not acquire {capability} provenance"
+            );
+        }
+        assert_eq!(
+            count_hostcall_deep(&ops, "module:require"),
+            0,
+            "a shadowed require call must not lower to the module-load hostcall"
+        );
+        assert!(
+            ops_deep_match(&ops, &|op| matches!(op, Ir1Op::CallMethod { .. })),
+            "the shadowed alias must retain generic method-call semantics"
+        );
     }
 
     #[test]

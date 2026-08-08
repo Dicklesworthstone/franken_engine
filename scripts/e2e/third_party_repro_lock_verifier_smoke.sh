@@ -264,7 +264,7 @@ PY
       && jq -e '
         .replay.command_sequence == [
           "./scripts/run_replay_coverage_metric_gate.sh ci",
-          "cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
+          "cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_deterministic_with_fixed_inputs"
         ]
         and (.commands.verification | contains("&& rch exec -- env"))
         and (.commands.verification | contains("RUSTFLAGS="))

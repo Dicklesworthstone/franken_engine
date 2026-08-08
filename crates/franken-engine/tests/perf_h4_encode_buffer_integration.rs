@@ -41,7 +41,7 @@ use frankenengine_engine::parser_api_stability::parse_script;
 
 /// Scalar source that drives the full parse→lower→encode pipeline through
 /// `frankenctl compile`. The companion within-run test
-/// `frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs`
+/// `frankenctl_compile_and_run_artifacts_are_deterministic_with_fixed_inputs`
 /// in `deterministic_replay_integration.rs` proves byte-stability for one
 /// invocation pair; here we add the cross-build snapshot lock H4.7 asks for.
 const COMPILE_SOURCE: &str = "const a = 7;\n\

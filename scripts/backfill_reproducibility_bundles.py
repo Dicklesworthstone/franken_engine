@@ -95,10 +95,10 @@ OBSERVED_CLAIMS = [
         "claim_id": "FE-CLAIM-013",
         "claim_scope": "replay",
         "original_artifact_path": "scripts/run_replay_coverage_metric_gate.sh",
-        "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs",
+        "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_deterministic_with_fixed_inputs",
         "replay_commands": [
             "./scripts/run_replay_coverage_metric_gate.sh ci",
-            "cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
+            "cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_deterministic_with_fixed_inputs"
         ]
     },
     {

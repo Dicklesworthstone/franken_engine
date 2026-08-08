@@ -80,13 +80,29 @@ fn budget() -> ResourceBudget {
     ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 1_000)
 }
 
+// bd-cqdgz: trust exactly the deterministic publisher key this file's signed
+// fixtures use, so create_delegate_cell admits them under the current
+// config-aware trust policy (bd-50uma). Production defaults still trust none.
+fn trusted_host_config() -> frankenengine_extension_host::ExtensionHostConfig {
+    let trust_chain_ref = base_manifest(&[Capability::FsRead])
+        .trust_chain_ref
+        .expect("signed fixture manifest carries a trust chain ref");
+    frankenengine_extension_host::ExtensionHostConfig {
+        trusted_publisher_keys: std::collections::BTreeMap::from([(
+            trust_chain_ref.clone(),
+            trust_chain_ref,
+        )]),
+        ..frankenengine_extension_host::ExtensionHostConfig::default()
+    }
+}
+
 fn factory() -> DelegateCellFactory {
     DelegateCellFactory {
         sink_policy: HostcallSinkPolicy::default(),
         cancellation_config: CancellationConfig::default(),
         policy: DelegateCellPolicy::default(),
         decision_signing_key: DecisionSigningKey::new([0xE1; 32]),
-        host_config: frankenengine_extension_host::ExtensionHostConfig::default(),
+        host_config: trusted_host_config(),
     }
 }
 

@@ -4101,7 +4101,8 @@ mod tests {
             let cancellation = CancellationToken::new();
             cancellation.cancel();
             let router =
-                ExecutionOrchestrator::lane_router_for_execution(&package, Some(&cancellation));
+                ExecutionOrchestrator::lane_router_for_execution(&package, Some(&cancellation))
+                    .expect("lane router should build for the cancel-loop package");
             let error = router
                 .execute(&module, "bd-61y6z-trace", Some(lane))
                 .expect_err("the cancelled jump loop must drain");

@@ -4257,6 +4257,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         extension_id: args.extension_id.clone(),
         source,
         source_file: Some(source_label.clone()),
+        module_root: None,
         capabilities,
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata: BTreeMap::new(),

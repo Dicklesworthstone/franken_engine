@@ -777,10 +777,26 @@ mod tests {
                 r#""use strict"; let existing_bd_0k19b = 0; let caught = false; try { for ([existing_bd_0k19b, missing_destructure_bd_0k19b] of [[4, 5]]) {} } catch (error) { caught = true; } existing_bd_0k19b + ":" + caught;"#,
                 "4:true",
             ),
+            // INTENTIONAL SECURITY DIVERGENCE (bd-hv3mn): a sloppy
+            // Function-constructor body's implicit global stays contained in
+            // the generated realm (be416d778 "harden generated realm
+            // isolation") and never becomes a realm global visible to outer
+            // code. Node v20.19.4 and Bun 1.3.14 both leak the implicit
+            // global to the realm and then resolve the strict destructuring
+            // store at store time, printing `2:false:number` for this source
+            // (the old expectation here, `true:1`, matched NEITHER donor nor
+            // this engine — it was red from birth). The contained contract
+            // pinned instead: generated code executes and returns values
+            // (`2`), the strict store on the still-unresolved outer name
+            // throws (`true`), and the generated implicit global is never
+            // observable outside (`undefined`). Do not "fix" this toward
+            // donor behavior without an explicit decision to weaken generated
+            // realm isolation; the differential-oracle taxonomy class for
+            // this case is `intentional_security_divergence`.
             (
-                "destructuring freezes its target before a default initializer",
-                r#""use strict"; let caught = false; let make = Function("default_created_bd_0k19b = 1; return 2;"); try { for ([default_created_bd_0k19b = make()] of [[undefined]]) {} } catch (error) { caught = true; } caught + ":" + default_created_bd_0k19b;"#,
-                "true:1",
+                "generated-realm implicit global stays contained (bd-hv3mn)",
+                r#""use strict"; let caught = false; let make = Function("default_created_bd_0k19b = 1; return 2;"); let ret = make(); try { for ([default_created_bd_0k19b = make()] of [[undefined]]) {} } catch (error) { caught = true; } ret + ":" + caught + ":" + typeof default_created_bd_0k19b;"#,
+                "2:true:undefined",
             ),
             (
                 "empty destructuring runs neither default nor put",

@@ -22,6 +22,7 @@ use crate::hash_tiers::ContentHash;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+use crate::evidence_ordering::{sort_candidates, sort_constraints, sort_witnesses};
 use crate::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
 };
@@ -1081,6 +1082,55 @@ impl EvidenceEntry {
         &self.signed_envelope
     }
 
+    /// Whether this entry carries a computed identity and a non-sentinel
+    /// signature (bd-ui8di).
+    ///
+    /// A freshly built entry is sealed; a builder-internal or explicitly
+    /// unsealed entry is not. Post-seal normalization consults this to decide
+    /// whether a content change would invalidate an existing seal.
+    pub fn is_sealed(&self) -> bool {
+        !self.entry_id.is_empty()
+            && !self.evidence_hash.is_empty()
+            && self.signed_envelope.signature != Signature::from_bytes(SIGNATURE_SENTINEL)
+    }
+
+    /// Clear the sealed identity so a mutated entry fails closed at admission
+    /// until it is re-sealed by an authorized signer (bd-ui8di).
+    ///
+    /// Content-derived identifiers and the producer signature are reset to
+    /// their pre-seal (empty / sentinel) state. The remaining envelope
+    /// provenance is left in place so a subsequent `sign_with_identity` can
+    /// re-seal against the same producer. An unsealed entry cannot be admitted
+    /// (`validate_public_provenance` rejects the sentinel signature).
+    pub fn unseal(&mut self) {
+        self.entry_id.clear();
+        self.evidence_hash.clear();
+        self.signed_envelope.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+    }
+
+    /// Canonical ordering fingerprint of the content lists, used to detect
+    /// whether an in-place normalization actually changed the entry (bd-ui8di).
+    pub(crate) fn canonical_content_fingerprint(&self) -> Vec<u8> {
+        let mut fingerprint = Vec::new();
+        for candidate in &self.candidates {
+            fingerprint.extend_from_slice(candidate.action_name.as_bytes());
+            fingerprint.push(0);
+            fingerprint.extend_from_slice(&candidate.expected_loss_millionths.to_le_bytes());
+            fingerprint.push(0);
+        }
+        fingerprint.push(1);
+        for constraint in &self.constraints {
+            fingerprint.extend_from_slice(constraint.constraint_id.as_bytes());
+            fingerprint.push(0);
+        }
+        fingerprint.push(1);
+        for witness in &self.witnesses {
+            fingerprint.extend_from_slice(witness.witness_id.as_bytes());
+            fingerprint.push(0);
+        }
+        fingerprint
+    }
+
     /// Verify this entry against an externally trusted producer identity.
     ///
     /// The identity must come from an authenticated registry or recorded-run
@@ -1756,20 +1806,28 @@ impl EvidenceEntryBuilder {
             epoch_id: self.epoch_id,
             timestamp_ns: self.timestamp_ns,
             decision_type: self.decision_type,
+            // bd-ui8di: seal over the SINGLE canonical order that
+            // `evidence_ordering` validates against. Sorting candidates by
+            // `action_name` alone (the prior builder behavior) could seal an
+            // entry that then failed `validate_entry_ordering`, whose key is
+            // `(action_name, expected_loss_millionths)`. Normalizing with the
+            // exact canonical comparator before content IDs and the signature
+            // are derived keeps a freshly built entry both canonical and
+            // correctly sealed.
             candidates: {
                 let mut c = self.candidates;
-                c.sort_by(|a, b| a.action_name.cmp(&b.action_name));
+                sort_candidates(&mut c);
                 c
             },
             constraints: {
                 let mut c = self.constraints;
-                c.sort_by(|a, b| a.constraint_id.cmp(&b.constraint_id));
+                sort_constraints(&mut c);
                 c
             },
             chosen_action,
             witnesses: {
                 let mut w = self.witnesses;
-                w.sort_by(|a, b| a.witness_id.cmp(&b.witness_id));
+                sort_witnesses(&mut w);
                 w
             },
             evidence_hash: String::new(),
@@ -4294,6 +4352,140 @@ mod tests {
 
         ledger.emit(sample_entry()).expect("emit");
         assert_eq!(ledger.len(), 1);
+    }
+
+    // -- bd-ui8di: canonicalize + schema-check before sealing/admission --
+
+    /// The builder must seal over the SAME canonical order the ordering
+    /// validator enforces, even when two candidates share an action_name but
+    /// differ in expected_loss. Sorting by action_name alone would seal an
+    /// entry that then failed `validate_entry_ordering`.
+    #[test]
+    fn build_canonicalizes_equal_action_names_by_expected_loss_bd_ui8di() {
+        let entry = EvidenceEntryBuilder::new(
+            "trace-ui8di-order",
+            "decision-ui8di-order",
+            "policy-v1",
+            SecurityEpoch::from_raw(5),
+            DecisionType::SecurityAction,
+        )
+        // Same action_name, inserted high-loss first: the canonical key
+        // (action_name, expected_loss) must reorder these ascending.
+        .candidate(CandidateAction::new("sandbox", 900_000))
+        .candidate(CandidateAction::new("sandbox", 100_000))
+        .candidate(CandidateAction::new("allow", 500_000))
+        .chosen(ChosenAction {
+            action_name: "sandbox".to_string(),
+            expected_loss_millionths: 100_000,
+            rationale: "canonical ordering fixture".to_string(),
+        })
+        .build()
+        .expect("build canonical entry");
+
+        let losses: Vec<(&str, i64)> = entry
+            .candidates
+            .iter()
+            .map(|c| (c.action_name.as_str(), c.expected_loss_millionths))
+            .collect();
+        assert_eq!(
+            losses,
+            vec![("allow", 500_000), ("sandbox", 100_000), ("sandbox", 900_000)],
+            "candidates must be canonical by (action_name, expected_loss)"
+        );
+
+        // The sealed entry must satisfy the canonical ordering validator and
+        // pass ledger admission unchanged.
+        crate::evidence_ordering::validate_entry_ordering(
+            &entry,
+            &crate::evidence_ordering::SizeBounds::default(),
+        )
+        .expect("built entry must already be canonically ordered");
+        let mut ledger = InMemoryLedger::new();
+        ledger.emit(entry).expect("canonical built entry must admit");
+    }
+
+    /// A freshly built entry is already normalized: re-normalizing it must be a
+    /// no-op that leaves the seal (entry_id, hash, signature) intact and
+    /// admissible — signature/hash stability after canonicalization.
+    #[test]
+    fn normalize_is_noop_on_freshly_built_entry_bd_ui8di() {
+        let entry = sample_entry();
+        let sealed_id = entry.entry_id.clone();
+        let sealed_hash = entry.evidence_hash.clone();
+        let sealed_sig = entry.signed_envelope().signature.clone();
+
+        let mut normalized = entry.clone();
+        let result = crate::evidence_ordering::normalize_entry(
+            &mut normalized,
+            &crate::evidence_ordering::SizeBounds::default(),
+        );
+        assert!(
+            !result.resealing_required,
+            "normalizing an already-canonical sealed entry must not unseal it"
+        );
+        assert_eq!(normalized.entry_id, sealed_id);
+        assert_eq!(normalized.evidence_hash, sealed_hash);
+        assert_eq!(normalized.signed_envelope().signature, sealed_sig);
+        assert!(normalized.is_sealed());
+
+        let mut ledger = InMemoryLedger::new();
+        ledger
+            .emit(normalized)
+            .expect("re-normalized canonical entry must still admit");
+    }
+
+    /// Normalizing an entry whose sealed lists are NOT canonical mutates the
+    /// content, which must unseal it (resealing_required) and cause admission
+    /// to fail closed rather than accept a mutated body under a stale seal.
+    #[test]
+    fn normalize_unseals_mutated_sealed_entry_and_admission_fails_closed_bd_ui8di() {
+        let mut entry = sample_entry();
+        assert!(entry.is_sealed());
+        // Force a non-canonical order on the already-sealed entry (the exact
+        // post-build mutation the bd-26i contract forbids).
+        entry.candidates.reverse();
+        entry.candidates.push(CandidateAction::new("sandbox", 999_999));
+
+        let mut ledger = InMemoryLedger::new();
+        let stale_admit = ledger.emit(entry.clone());
+        assert!(
+            stale_admit.is_err(),
+            "a mutated-but-still-sealed entry must never be admitted"
+        );
+
+        let result = crate::evidence_ordering::normalize_entry(
+            &mut entry,
+            &crate::evidence_ordering::SizeBounds::default(),
+        );
+        assert!(
+            result.resealing_required,
+            "normalizing a mutated sealed entry must report resealing_required"
+        );
+        assert!(!entry.is_sealed(), "the mutated entry must be unsealed");
+        let mut ledger = InMemoryLedger::new();
+        assert!(
+            ledger.emit(entry).is_err(),
+            "an unsealed entry must fail closed at admission until re-sealed"
+        );
+    }
+
+    /// A future schema major/minor must be rejected at admission before any
+    /// content or signature check. Schema compatibility is enforced, not just
+    /// defined.
+    #[test]
+    fn incompatible_future_schema_rejected_at_admission_bd_ui8di() {
+        for future in [SchemaVersion::new(3, 0, 0), SchemaVersion::new(2, 1, 0)] {
+            let mut entry = sample_entry();
+            entry.schema_version = future;
+            let mut ledger = InMemoryLedger::new();
+            assert!(
+                matches!(
+                    ledger.emit(entry),
+                    Err(LedgerError::IncompatibleSchema { .. })
+                ),
+                "future schema {future} must be rejected at admission"
+            );
+        }
     }
 
     #[test]

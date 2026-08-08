@@ -164,13 +164,27 @@ pub struct NormalizationResult {
     pub truncations: Vec<TruncationMarker>,
     /// Number of duplicate witnesses removed.
     pub duplicates_removed: usize,
+    /// True when normalization mutated an already-sealed entry and therefore
+    /// unsealed it (bd-ui8di). The caller MUST re-seal with an authorized
+    /// signer before the entry can be admitted; an unsealed entry fails closed
+    /// at ledger admission. False when the entry was unsealed on entry (the
+    /// canonical normalize-before-seal path) or normalization was a no-op.
+    pub resealing_required: bool,
 }
 
 /// Normalize an evidence entry in place: sort, deduplicate, truncate.
 ///
-/// This is the normalization pass that should be run before emission.
+/// This is the normalization pass that should be run BEFORE sealing (the
+/// bd-26i normalize-before-serialize contract). Running it on an already
+/// sealed entry that it then mutates would silently invalidate the entry's
+/// content-derived identity and signature; to keep the seal honest, this pass
+/// detects that case, unseals the entry, and reports `resealing_required` so
+/// the mutated entry fails closed at admission until an authorized signer
+/// re-seals it (bd-ui8di).
 pub fn normalize_entry(entry: &mut EvidenceEntry, bounds: &SizeBounds) -> NormalizationResult {
     let mut truncations = Vec::new();
+    let was_sealed = entry.is_sealed();
+    let fingerprint_before = entry.canonical_content_fingerprint();
 
     // 1. Sort all lists canonically.
     sort_candidates(&mut entry.candidates);
@@ -213,9 +227,20 @@ pub fn normalize_entry(entry: &mut EvidenceEntry, bounds: &SizeBounds) -> Normal
         entry.constraints.truncate(bounds.max_constraints);
     }
 
+    // bd-ui8di: if normalization changed the content of an already-sealed
+    // entry, the sealed entry_id / evidence_hash / signature no longer match
+    // the entry. Unseal so admission fails closed rather than silently
+    // accepting a mutated body under a stale seal.
+    let resealing_required =
+        was_sealed && entry.canonical_content_fingerprint() != fingerprint_before;
+    if resealing_required {
+        entry.unseal();
+    }
+
     NormalizationResult {
         truncations,
         duplicates_removed,
+        resealing_required,
     }
 }
 
@@ -1393,6 +1418,7 @@ mod tests {
         let result = NormalizationResult {
             truncations: vec![],
             duplicates_removed: 0,
+            resealing_required: false,
         };
         let debug = format!("{result:?}");
         assert!(debug.contains("NormalizationResult"));
@@ -1475,6 +1501,7 @@ mod tests {
                 policy: "top-K by witness_id".to_string(),
             }],
             duplicates_removed: 5,
+            resealing_required: false,
         };
         let mut cloned = original.clone();
         cloned.duplicates_removed = 999;
@@ -2449,6 +2476,7 @@ mod tests {
                 policy: "p".to_string(),
             }],
             duplicates_removed: 3,
+            resealing_required: false,
         };
         let b = a.clone();
         assert_eq!(a.duplicates_removed, b.duplicates_removed);

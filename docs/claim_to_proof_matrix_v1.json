@@ -57,7 +57,7 @@
       "freshness_tier": "standard",
       "freshness_tier_rationale": "replay coverage over the declared high-severity inventory; the inventory is a stable contract, and the gate is a full cargo test rather than a doc check",
       "owning_bead": "bd-2488a",
-      "reason": "Replay APIs, counterfactual replay engine support, and declared security-critical replay coverage are now backed by executable gates and fixed-input byte-identical CLI artifact proof.",
+      "reason": "Replay APIs, counterfactual replay engine support, and declared security-critical replay coverage are now backed by executable gates and a fixed-input CLI determinism proof (compile artifacts byte-identical; run artifacts identical modulo the per-invocation runtime signing authority).",
       "source_path": "README.md",
       "source_span": {
         "end_line": 138,
@@ -180,7 +180,7 @@
       "downgrade_text": "Target: frankenctl CLI surfaces with smoke workflow pending current run artifacts.",
       "freshness_days": 30,
       "freshness_tier": "volatile",
-      "freshness_tier_rationale": "the CLI workflow smoke; frankenctl's surface changes with nearly every operator-facing feature, and the smoke asserts byte-identical output",
+      "freshness_tier_rationale": "the CLI workflow smoke; frankenctl's surface changes with nearly every operator-facing feature, and the smoke exercises the documented compile/verify/run/replay path end to end",
       "owning_bead": "bd-3tsah",
       "reason": "README points at an executable smoke workflow and artifact contract for the documented CLI path.",
       "source_path": "README.md",
@@ -304,19 +304,19 @@
       "claim_scope": "replay",
       "claim_text": "100% deterministic replay coverage for declared security-critical allow/deny/escalation decisions.",
       "decision": "allow_observed",
-      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions with live end-to-end byte-identical artifact proof.",
+      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions with live end-to-end fixed-input artifact determinism proof.",
       "freshness_days": 90,
       "freshness_tier": "standard",
       "freshness_tier_rationale": "replay coverage plus fixed-input CLI byte-identity; same stable replay contract as FE-CLAIM-003 and it shares bd-2488a",
       "owning_bead": "bd-2488a",
-      "reason": "Replay coverage gate now fails closed unless the declared allow/deny/escalate security-critical inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields; the shipped frankenctl compile/run integration test proves fixed-input artifacts are byte-identical.",
+      "reason": "Replay coverage gate now fails closed unless the declared allow/deny/escalate security-critical inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields; the shipped frankenctl compile/run integration test proves fixed-input compile artifacts are byte-identical and run artifacts identical modulo the per-invocation runtime signing authority (the sealed IR4 witness is byte-identical).",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 60,
         "must_contain": "`100%` deterministic replay coverage",
         "start_line": 60
       },
-      "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
+      "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_deterministic_with_fixed_inputs"
     },
     {
       "actual_wording_state": "observed",

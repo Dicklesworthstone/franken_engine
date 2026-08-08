@@ -142,8 +142,39 @@ fn execute_real_trace_fixture(trace_id: &str) -> ExecutionResult {
         .expect("real trace fixture should execute")
 }
 
+/// Normalize the four run-report fields derived from the per-invocation
+/// runtime signing authority (bd-8yhg4 mints a fresh Ed25519 key per CLI
+/// invocation, so the embedded evidence chain and the ids/hashes derived
+/// from it are the only legitimately unstable report content — bd-gmslv).
+/// Everything else, including the sealed IR4 witness (bd-drb55), must be
+/// byte-identical across runs for fixed inputs. Chain integrity itself is
+/// enforced by `verify_genesis` inside the CLI and the bd-8yhg4 test.
+fn normalize_run_signing_authority(bytes: &[u8]) -> serde_json::Value {
+    let mut parsed: serde_json::Value =
+        serde_json::from_slice(bytes).expect("run output must parse as JSON");
+    let obj = parsed
+        .as_object_mut()
+        .expect("run output must be a JSON object");
+    for (field, placeholder) in [
+        ("evidence_chain_artifact", "[FRESH_AUTHORITY_CHAIN]"),
+        ("evidence_chain_instance_id", "[FRESH_AUTHORITY_ID]"),
+        ("evidence_ledger_id", "[FRESH_AUTHORITY_ID]"),
+        ("evidence_chain_head", "[FRESH_AUTHORITY_HASH]"),
+    ] {
+        assert!(
+            obj.contains_key(field),
+            "run report must carry `{field}`; the schema drifted"
+        );
+        obj.insert(
+            field.to_string(),
+            serde_json::Value::String(placeholder.to_string()),
+        );
+    }
+    parsed
+}
+
 #[test]
-fn frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs() {
+fn frankenctl_compile_and_run_artifacts_are_deterministic_with_fixed_inputs() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let source_path = temp.path().join("decision.js");
     let compile_artifact_path = temp.path().join("compile-artifact.json");
@@ -191,11 +222,39 @@ fn frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs() {
     let run_second = run_frankenctl_report(&source_path, &run_report_path);
     assert_command_success(&run_second, "frankenctl run second");
     let run_report_second = fs::read(&run_report_path).expect("second run report should exist");
-    assert_eq!(run_stdout_first, run_second.stdout);
-    assert_eq!(run_report_first, run_report_second);
+    // Run determinism contract (bd-gmslv): identical modulo the fresh
+    // per-invocation signing authority. The compile artifact above is fully
+    // byte-identical; the run report's authority-derived fields legitimately
+    // differ per invocation and are normalized before comparison.
+    assert_eq!(
+        normalize_run_signing_authority(&run_stdout_first),
+        normalize_run_signing_authority(&run_second.stdout),
+        "run stdout must be identical modulo per-invocation signing authority"
+    );
+    assert_eq!(
+        normalize_run_signing_authority(&run_report_first),
+        normalize_run_signing_authority(&run_report_second),
+        "run report must be identical modulo per-invocation signing authority"
+    );
 
     let run_json: serde_json::Value =
         serde_json::from_slice(&run_report_first).expect("run report should parse");
+    let run_json_second: serde_json::Value =
+        serde_json::from_slice(&run_report_second).expect("second run report should parse");
+    // The sealed IR4 witness sits deliberately outside the fresh-authority
+    // surface (bd-drb55): it must be exactly identical across runs, without
+    // any normalization.
+    assert_eq!(run_json["ir4_witness"], run_json_second["ir4_witness"]);
+    assert_eq!(
+        run_json["ir4_witness_hash"],
+        run_json_second["ir4_witness_hash"],
+    );
+    assert!(
+        run_json["ir4_witness_hash"]
+            .as_str()
+            .is_some_and(|hash| !hash.is_empty()),
+        "run report must carry the sealed witness hash"
+    );
     assert_eq!(run_json["trace_id"].as_str(), Some("frankenctl-run:0"));
     assert_eq!(
         run_json["decision_id"].as_str(),

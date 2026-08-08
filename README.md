@@ -124,7 +124,7 @@ FrankenEngine is a from-scratch Rust execution substrate where security, replay,
 
 - a native baseline interpreter with `baseline_deterministic_profile`, `baseline_throughput_profile`, and an `adaptive_profile_router` for policy-driven lane selection;
 - a probabilistic guardplane that updates Bayesian risk and crosses e-process boundaries to trigger `allow / challenge / sandbox / suspend / terminate / quarantine`;
-- deterministic replay over a declared high-severity allow/deny/escalate inventory, plus byte-identical fixed-input `frankenctl compile` / `frankenctl run` artifacts proven in the CLI integration test;
+- deterministic replay over a declared high-severity allow/deny/escalate inventory, plus a fixed-input CLI determinism proof: `frankenctl compile` artifacts are byte-identical and `frankenctl run` artifacts are identical modulo the per-invocation runtime signing authority (the sealed IR4 witness is byte-identical);
 - a binding **claim-to-proof matrix** that refuses to let documentation get ahead of the evidence.
 
 ### Where Each Capability Stands Today
@@ -135,7 +135,7 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 |---|---|---|
 | Native execution profiles (`baseline_deterministic_profile`, `baseline_throughput_profile`, `adaptive_profile_router`) | OBSERVED | Live in tree, exercised by the CLI smoke and the RGC execution-profile gate. |
 | Probabilistic guardplane (Bayesian + e-process boundaries) | OBSERVED | Backed by live decision artifacts; demonstrated in `examples/live_guardplane_decision_example.rs`. |
-| Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + byte-identical fixed-input `compile`/`run` artifacts in CLI integration tests. |
+| Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + fixed-input CLI determinism proof (`compile` byte-identical; `run` identical modulo per-invocation signing authority). |
 | Cryptographic decision receipts with transparency-log + MMR proofs (signing OBSERVED; TEE attestation is HYPOTHESIS — simulated by default) | OBSERVED (signing + transparency log) · HYPOTHESIS (TEE) | Receipt-only proof handle (`bd-cixqu.1.1`) and transparency log + MMR inclusion/consistency proofs (`bd-cixqu.1.2`) are live, cross-referenced and content-addressed by `scripts/run_rgc_signed_decision_receipt.sh` + replay wrapper (`bd-cixqu.1.4`). TEE attestation policy (`bd-cixqu.1.3`) is simulated-by-default — no hardware root of trust, the `tee-real-sdk` SDK path is unwired (`tee_live_quote.rs`) — so it stays HYPOTHESIS (`FE-CLAIM-004-TEE`). |
 | Fleet immune system / quarantine propagation convergence SLO | OBSERVED | Fleet convergence harness with N-node testing (`bd-cixqu.2.1`), bounded SLO declaration and gate (`bd-cixqu.2.2`), quarantine de-escalation primitive (`bd-cixqu.2.3`), and partition fault profiles (`bd-cixqu.2.4`) provide live convergence evidence. |
 | Capability-typed ambient-authority rejection on selected hostcall/import edges (the end-to-end TS-to-IR contract is TARGETED) | OBSERVED (selected edges) · TARGETED (end-to-end) | Effect-set IR2 annotation (`bd-cixqu.3.1`), lowering-side rejection of ambient-authority calls on the shipped hostcall/import edges (`bd-cixqu.3.2`), 16-scenario red-team negative corpus (`bd-cixqu.3.3`), and `scripts/run_rgc_capability_typed_compile_time.sh` + replay wrapper (`bd-cixqu.3.4`). The end-to-end compile-time TS-to-IR contract over *all* ambient constructs remains TARGETED (`FE-CLAIM-006`; see *Threat Model* and *Module System & Compatibility Matrix*). |
@@ -367,7 +367,7 @@ Tracing one invocation end-to-end is the fastest way to see how every subsystem 
                  ┌──────────────────────────────────────────┐
                  │ 8.  Execution report emitted             │
                  │     ./artifacts/demo.run.json            │
-                 │     · byte-identical for fixed inputs    │
+                 │     · deterministic for fixed inputs     │
                  │     · CLI smoke verifies via diff        │
                  └──────────────────────────────────────────┘
 ```
@@ -1399,7 +1399,7 @@ Honest comparison across six JavaScript / WebAssembly runtimes targeting differe
 | Dimension | FrankenEngine | Node.js | Bun | Deno | Cloudflare Workers / Workerd | wasmtime |
 |---|---|---|---|---|---|---|
 | Core execution ownership | Native Rust baseline interpreter + profile router | V8 embedding | JavaScriptCore + Zig runtime | V8 + Rust core | V8 isolates + C++/Rust runtime | Native Rust Wasm engine |
-| Deterministic replay for high-severity decisions | Built into the runtime for the declared allow/deny/escalate inventory; fixed-input `frankenctl compile`/`run` artifacts are byte-identical in the shipped CLI integration test | External tooling only | External tooling only | External tooling only | Trace replay via runtime tooling (workerd); not a high-severity-inventory contract | Deterministic execution by spec, but no high-severity decision inventory or evidence-bundle contract |
+| Deterministic replay for high-severity decisions | Built into the runtime for the declared allow/deny/escalate inventory; fixed-input `frankenctl compile` artifacts are byte-identical and `run` artifacts identical modulo per-invocation signing authority in the shipped CLI integration test | External tooling only | External tooling only | External tooling only | Trace replay via runtime tooling (workerd); not a high-severity-inventory contract | Deterministic execution by spec, but no high-severity decision inventory or evidence-bundle contract |
 | Probabilistic containment policy | Built-in guardplane (Bayesian + e-process) | Not default runtime behavior | Not default runtime behavior | Permission prompts; not probabilistic | Per-request isolate boundaries; not probabilistic | N/A (host-defined) |
 | Cryptographic decision receipts | Signed receipts + transparency-log/MMR proofs OBSERVED; TEE attestation HYPOTHESIS (`FE-CLAIM-004-TEE`) | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive |
 | Fleet quarantine convergence model | OBSERVED (fleet convergence SLO with bounded timeouts; de-escalation via signed re-admission decisions) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
@@ -2226,7 +2226,7 @@ Through explicit expected-loss matrices, sequential testing boundaries, calibrat
 
 ### 6. What does deterministic replay guarantee exactly?
 
-Identical replay from fixed code, policy, model snapshot, evidence stream, and randomness transcript. The replay-coverage gate fails closed unless the declared high-severity allow/deny/escalate inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields. Fixed-input `frankenctl compile` and `frankenctl run` artifacts are byte-identical in the shipped CLI integration test.
+Identical replay from fixed code, policy, model snapshot, evidence stream, and randomness transcript. The replay-coverage gate fails closed unless the declared high-severity allow/deny/escalate inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields. Fixed-input `frankenctl compile` artifacts are byte-identical in the shipped CLI integration test; `frankenctl run` artifacts are identical modulo the per-invocation runtime signing authority (the sealed IR4 witness and all execution content are byte-identical).
 
 ### 7. Can I verify your benchmark claims independently?
 

@@ -1322,11 +1322,31 @@ impl ExtensionLifecycleManager {
             .map(|pending| pending.cancel_token.as_str())
     }
 
+    /// Validate and store a manifest against the production default trust
+    /// policy (no trusted publisher roots). Signed supply-chain manifests are
+    /// rejected unless the operator supplies configured trust roots via
+    /// [`set_validated_manifest_with_config`].
     pub fn set_validated_manifest(
         &mut self,
         manifest: ExtensionManifest,
     ) -> Result<(), ManifestValidationError> {
-        validate_manifest(&manifest)?;
+        self.set_validated_manifest_with_config(manifest, &ExtensionHostConfig::default())
+    }
+
+    /// Validate and store a manifest against an explicit host trust policy
+    /// (bd-50uma).
+    ///
+    /// This is the config-aware admission path: a signed supply-chain manifest
+    /// whose `trust_chain_ref` resolves to a configured trusted publisher key
+    /// is admitted; everything the default policy rejects is still rejected.
+    /// The default-config delegation in [`set_validated_manifest`] keeps
+    /// production strictness unchanged for callers that do not configure roots.
+    pub fn set_validated_manifest_with_config(
+        &mut self,
+        manifest: ExtensionManifest,
+        config: &ExtensionHostConfig,
+    ) -> Result<(), ManifestValidationError> {
+        validate_manifest_with_config(&manifest, config)?;
         self.validated_manifest = Some(manifest);
         Ok(())
     }
@@ -5616,7 +5636,19 @@ impl From<CapabilityEscrowError> for DelegateCellError {
 }
 
 impl DelegateCellManifest {
+    /// Validate against the production default trust policy (no trusted roots).
     pub fn validate(&self) -> Result<(), DelegateCellError> {
+        self.validate_with_config(&ExtensionHostConfig::default())
+    }
+
+    /// Validate the delegate manifest and its base manifest against an explicit
+    /// host trust policy (bd-50uma). The default-config delegation in
+    /// [`validate`](Self::validate) preserves production strictness for callers
+    /// that do not configure publisher trust roots.
+    pub fn validate_with_config(
+        &self,
+        config: &ExtensionHostConfig,
+    ) -> Result<(), DelegateCellError> {
         if self.delegator_id.trim().is_empty() {
             return Err(DelegateCellError::InvalidDelegatorId);
         }
@@ -5628,7 +5660,7 @@ impl DelegateCellManifest {
         if self.base_manifest.capabilities.is_empty() {
             return Err(DelegateCellError::MissingCapabilities);
         }
-        validate_manifest(&self.base_manifest)?;
+        validate_manifest_with_config(&self.base_manifest, config)?;
         Ok(())
     }
 }
@@ -6634,6 +6666,13 @@ pub struct DelegateCellFactory {
     pub cancellation_config: CancellationConfig,
     pub policy: DelegateCellPolicy,
     pub decision_signing_key: DecisionSigningKey,
+    /// Host trust policy applied when admitting a delegate's base manifest
+    /// (bd-50uma). Defaults (via serde) to the production no-trusted-roots
+    /// policy, so a factory constructed without it keeps the strict default:
+    /// signed supply-chain manifests are rejected unless the operator
+    /// configures the publisher's trust root here.
+    #[serde(default)]
+    pub host_config: ExtensionHostConfig,
 }
 
 impl DelegateCellFactory {
@@ -6644,6 +6683,10 @@ impl DelegateCellFactory {
             cancellation_config: CancellationConfig::default(),
             policy: DelegateCellPolicy::default(),
             decision_signing_key: DecisionSigningKey::test_key(),
+            // bd-50uma: trust the deterministic test publisher so delegate
+            // fixtures admit their signed base manifests; production factories
+            // default (via serde) to the strict no-trusted-roots policy.
+            host_config: test_trusted_host_config(),
         }
     }
 
@@ -6660,7 +6703,7 @@ impl DelegateCellFactory {
         if delegate_id.trim().is_empty() {
             return Err(DelegateCellError::InvalidDelegateId);
         }
-        manifest.validate()?;
+        manifest.validate_with_config(&self.host_config)?;
         validate_delegate_budget(&budget)?;
 
         let mut lifecycle_manager = ExtensionLifecycleManager::new(
@@ -6669,7 +6712,10 @@ impl DelegateCellFactory {
             budget_policy,
             self.cancellation_config,
         );
-        lifecycle_manager.set_validated_manifest(manifest.base_manifest.clone())?;
+        lifecycle_manager.set_validated_manifest_with_config(
+            manifest.base_manifest.clone(),
+            &self.host_config,
+        )?;
         lifecycle_manager.apply_transition(
             LifecycleTransition::Validate,
             created_at_ns.saturating_add(1),
@@ -6823,6 +6869,20 @@ fn create_test_signed_manifest_fixture(
             .to_vec(),
     );
     manifest
+}
+
+/// Host config that trusts exactly the deterministic publisher key
+/// [`with_test_signed_supply_chain_provenance`] signs with (bd-50uma). This is
+/// the "current configured trust-root policy" the lifecycle and delegate
+/// fixtures validate against — production defaults still trust no roots.
+#[cfg(test)]
+fn test_trusted_host_config() -> ExtensionHostConfig {
+    let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+    let trust_chain_ref = bytes_to_hex(&signing_key.verifying_key().to_bytes());
+    ExtensionHostConfig {
+        trusted_publisher_keys: BTreeMap::from([(trust_chain_ref.clone(), trust_chain_ref)]),
+        ..ExtensionHostConfig::default()
+    }
 }
 
 #[cfg(test)]
@@ -7304,7 +7364,7 @@ mod lifecycle_tests {
             CancellationConfig::default(),
         );
         manager
-            .set_validated_manifest(lifecycle_manifest())
+            .set_validated_manifest_with_config(lifecycle_manifest(), &test_trusted_host_config())
             .expect("validated manifest");
         let cx = context();
         manager
@@ -7511,7 +7571,7 @@ mod lifecycle_tests {
             CancellationConfig::default(),
         );
         first
-            .set_validated_manifest(lifecycle_manifest())
+            .set_validated_manifest_with_config(lifecycle_manifest(), &test_trusted_host_config())
             .expect("manifest");
         for (transition, ts) in sequence {
             first
@@ -7531,7 +7591,7 @@ mod lifecycle_tests {
             CancellationConfig::default(),
         );
         second
-            .set_validated_manifest(lifecycle_manifest())
+            .set_validated_manifest_with_config(lifecycle_manifest(), &test_trusted_host_config())
             .expect("manifest");
         for (transition, ts) in sequence {
             second
@@ -7556,7 +7616,7 @@ mod lifecycle_tests {
             CancellationConfig::default(),
         );
         manager
-            .set_validated_manifest(lifecycle_manifest())
+            .set_validated_manifest_with_config(lifecycle_manifest(), &test_trusted_host_config())
             .expect("manifest");
         manager
             .apply_transition(LifecycleTransition::Validate, 10, &cx)
@@ -8304,6 +8364,50 @@ mod delegate_cell_tests {
     fn load_guardplane_policy_actions_runner_script() -> String {
         std::fs::read_to_string("../../scripts/run_guardplane_policy_actions_suite.sh")
             .expect("read guardplane policy actions runner")
+    }
+
+    /// bd-50uma: production strictness is preserved — the default factory
+    /// (no configured trust roots) still rejects a signed delegate manifest,
+    /// while the config-aware path admits it. The fix adds a capability; it
+    /// does not weaken the default.
+    #[test]
+    fn default_factory_rejects_signed_delegate_manifest_bd_50uma() {
+        let default_factory = DelegateCellFactory {
+            host_config: ExtensionHostConfig::default(),
+            ..DelegateCellFactory::test_default()
+        };
+        let rejected = default_factory.create_delegate_cell(
+            "delegate-untrusted",
+            delegate_manifest(&[Capability::FsRead], 1_000_000),
+            ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 100),
+            BudgetExhaustionPolicy::Suspend,
+            10,
+            &lifecycle_context(),
+        );
+        assert!(
+            matches!(
+                rejected.err(),
+                Some(DelegateCellError::ManifestValidation(
+                    ManifestValidationError::UntrustedTrustChainRef
+                ))
+            ),
+            "default trust policy must reject a signed delegate manifest with UntrustedTrustChainRef"
+        );
+
+        // The same manifest is admitted once the publisher root is configured.
+        assert!(
+            DelegateCellFactory::test_default()
+                .create_delegate_cell(
+                    "delegate-trusted",
+                    delegate_manifest(&[Capability::FsRead], 1_000_000),
+                    ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 100),
+                    BudgetExhaustionPolicy::Suspend,
+                    10,
+                    &lifecycle_context(),
+                )
+                .is_ok(),
+            "configured trust root must admit the signed delegate manifest"
+        );
     }
 
     #[test]

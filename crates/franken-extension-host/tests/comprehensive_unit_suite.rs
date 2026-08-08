@@ -144,6 +144,7 @@ fn test_delegate_cell_factory() -> DelegateCellFactory {
         cancellation_config: CancellationConfig::default(),
         policy: DelegateCellPolicy::default(),
         decision_signing_key: test_decision_signing_key(),
+        host_config: ExtensionHostConfig::default(),
     }
 }
 

@@ -416,6 +416,7 @@ fn extension_host_root_required_exports_are_live_and_compilable() {
         cancellation_config: CancellationConfig::default(),
         policy: DelegateCellPolicy::default(),
         decision_signing_key,
+        host_config: ExtensionHostConfig::default(),
     };
     let _flow_label = FlowLabel::default();
 

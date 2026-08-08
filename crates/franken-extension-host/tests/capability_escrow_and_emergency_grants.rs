@@ -86,6 +86,7 @@ fn factory() -> DelegateCellFactory {
         cancellation_config: CancellationConfig::default(),
         policy: DelegateCellPolicy::default(),
         decision_signing_key: DecisionSigningKey::new([0xE1; 32]),
+        host_config: frankenengine_extension_host::ExtensionHostConfig::default(),
     }
 }
 

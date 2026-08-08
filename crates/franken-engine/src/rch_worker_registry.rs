@@ -316,10 +316,9 @@ impl RchWorkerRegistry {
     pub fn get_all_pool_stats(&self) -> BTreeMap<WorkerPlatform, WorkerPoolStats> {
         let mut stats = BTreeMap::new();
 
-        for &platform in &[WorkerPlatform::MacOSArm64] {
-            if let Ok(platform_stats) = self.get_pool_stats(platform) {
-                stats.insert(platform, platform_stats);
-            }
+        let platform = WorkerPlatform::MacOSArm64;
+        if let Ok(platform_stats) = self.get_pool_stats(platform) {
+            stats.insert(platform, platform_stats);
         }
 
         stats

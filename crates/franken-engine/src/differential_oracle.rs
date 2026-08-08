@@ -1509,19 +1509,21 @@ impl FrankenCoreBackendError {
 /// completion value, exact UTF-16 code units when (and only when) the value is
 /// a lone-surrogate string that the rendered projection cannot represent, and
 /// the completion's IFC label (bd-2vzgi, bd-ur3tk.17).
+/// Successful franken-core evaluation: rendered completion value, exact
+/// UTF-16 units when the value is a lone-surrogate string, the completion's
+/// IFC label, and the captured console transcript.
+type FrankenCoreEvaluation = (
+    String,
+    Option<Vec<u16>>,
+    CoreIfcLabel,
+    Vec<CoreConsoleEntry>,
+);
+
 fn eval_with_franken_core(
     source: &str,
     instruction_budget: Option<u64>,
     memory_budget_override: Option<EngineMemoryBudget>,
-) -> Result<
-    (
-        String,
-        Option<Vec<u16>>,
-        CoreIfcLabel,
-        Vec<CoreConsoleEntry>,
-    ),
-    FrankenCoreBackendError,
-> {
+) -> Result<FrankenCoreEvaluation, FrankenCoreBackendError> {
     let normalized = source.trim();
     if normalized.is_empty() {
         return Err(FrankenCoreBackendError {

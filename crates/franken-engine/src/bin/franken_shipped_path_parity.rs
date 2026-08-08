@@ -1123,6 +1123,7 @@ fn run_library_run(specimen: &ParitySpecimen, source_path: &Path) -> InvocationR
         extension_id: format!("{}-library", specimen.specimen_id),
         source: prepared.prepared_source,
         source_file: None,
+        module_root: None,
         capabilities: Vec::new(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata,

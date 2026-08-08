@@ -118,6 +118,7 @@ fn emit_bundle(contract: DataContract, source: &str) -> TrustedCertificateBundle
             extension_id: EXTENSION_ID.to_string(),
             source: source.to_string(),
             source_file: Some(INPUT_PATH.to_string()),
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),

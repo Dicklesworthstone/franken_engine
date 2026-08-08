@@ -97,6 +97,7 @@ fn process_package(source: &str) -> ExtensionPackage {
         extension_id: "bd-x85a7-process-bridge".to_string(),
         source: source.to_string(),
         source_file: None,
+        module_root: None,
         capabilities: vec!["process_spawn".to_string()],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),

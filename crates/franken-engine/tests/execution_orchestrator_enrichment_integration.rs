@@ -36,6 +36,7 @@ fn simple_package(id: &str, source: &str) -> ExtensionPackage {
         extension_id: id.into(),
         source: source.into(),
         source_file: None,
+        module_root: None,
         capabilities: vec![],
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
@@ -213,6 +214,7 @@ fn enrichment_package_json_fields() {
 fn enrichment_package_source_file_json() {
     let pkg = ExtensionPackage {
         source_file: Some("app.js".into()),
+        module_root: None,
         ..simple_package("ext-1", "42")
     };
     let json = serde_json::to_string(&pkg).unwrap();
@@ -230,6 +232,7 @@ fn enrichment_package_serde_roundtrip() {
         extension_id: "ext-1".into(),
         source: "var x = 1;".into(),
         source_file: Some("index.js".into()),
+        module_root: None,
         capabilities: vec!["net".into(), "fs".into()],
         version: "2.0.0".into(),
         metadata: {
@@ -664,6 +667,7 @@ fn enrichment_ts_source_file_triggers_normalization() {
         extension_id: "ts-ext".into(),
         source: "const x: number = 42;".into(),
         source_file: Some("app.ts".into()),
+        module_root: None,
         capabilities: vec![],
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
@@ -680,6 +684,7 @@ fn enrichment_js_source_file_no_normalization() {
         extension_id: "js-ext".into(),
         source: "42".into(),
         source_file: Some("app.js".into()),
+        module_root: None,
         capabilities: vec![],
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
@@ -711,6 +716,7 @@ fn enrichment_package_with_capabilities_executes() {
         extension_id: "cap-ext".into(),
         source: "42".into(),
         source_file: None,
+        module_root: None,
         capabilities: vec!["net".into(), "fs".into(), "crypto".into()],
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
@@ -739,6 +745,7 @@ fn enrichment_package_with_metadata_executes() {
         extension_id: "meta-ext".into(),
         source: "42".into(),
         source_file: None,
+        module_root: None,
         capabilities: vec![],
         version: "3.0.0".into(),
         metadata: meta,

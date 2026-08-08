@@ -46,6 +46,7 @@ fn create_test_package(id: &str, source: &str) -> ExtensionPackage {
         extension_id: id.to_string(),
         source: source.to_string(),
         source_file: None,
+        module_root: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),

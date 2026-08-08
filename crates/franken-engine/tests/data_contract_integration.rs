@@ -573,6 +573,7 @@ fn ingress_package() -> ExtensionPackage {
         extension_id: "ext-integration-e8".to_string(),
         source: INGRESS_SOURCE.to_string(),
         source_file: Some("fixtures/agent.js".to_string()),
+        module_root: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),

@@ -62,6 +62,7 @@ fn package() -> ExtensionPackage {
         extension_id: EXTENSION_ID.to_string(),
         source: HOSTCALL_LOOP_SOURCE.to_string(),
         source_file: Some("fixtures/e9_hostcall_loop.js".to_string()),
+        module_root: None,
         capabilities: vec!["console".to_string()],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),

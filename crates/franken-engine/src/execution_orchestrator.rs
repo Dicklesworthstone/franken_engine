@@ -2153,13 +2153,14 @@ impl ExecutionOrchestrator {
         // the entrypoint is a misconfiguration that would silently re-anchor
         // relative imports somewhere unrelated.
         if let Some(declared) = package.module_root.as_deref() {
-            let canonical_root = std::path::Path::new(declared).canonicalize().map_err(
-                |error| OrchestratorError::InvalidModuleRoot {
-                    detail: format!(
-                        "declared module_root `{declared}` cannot be canonicalized: {error}"
-                    ),
-                },
-            )?;
+            let canonical_root =
+                std::path::Path::new(declared)
+                    .canonicalize()
+                    .map_err(|error| OrchestratorError::InvalidModuleRoot {
+                        detail: format!(
+                            "declared module_root `{declared}` cannot be canonicalized: {error}"
+                        ),
+                    })?;
             if let Some(parent) = package
                 .source_file
                 .as_deref()

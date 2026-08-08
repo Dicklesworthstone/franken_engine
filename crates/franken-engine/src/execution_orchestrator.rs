@@ -4042,6 +4042,7 @@ mod tests {
             extension_id: "test-ext-1".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             // Grant the two execution-time capabilities every test here needs
             // just to dispatch VM instructions and allocate heap objects. The
             // orchestrator turns these strings into `RuntimeCapability` grants
@@ -4145,6 +4146,7 @@ mod tests {
             extension_id: extension_id.to_string(),
             source: source.to_string(),
             source_file: None,
+            module_root: None,
             capabilities: execution_capabilities(),
             version: "1.0.0".to_string(),
             metadata: metadata
@@ -4952,6 +4954,7 @@ mod tests {
             extension_id: "ext-1".to_string(),
             source: "".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -4967,6 +4970,7 @@ mod tests {
             extension_id: "".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -5009,6 +5013,7 @@ mod tests {
             extension_id: "ext-serde".to_string(),
             source: "1+2".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec!["fs_read".to_string(), "net".to_string()],
             version: "2.0.0".to_string(),
             metadata: {
@@ -5384,6 +5389,7 @@ mod tests {
             extension_id: "host-error-finalization".to_string(),
             source: "require('fs').readFileSync('input.txt');".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5510,6 +5516,7 @@ mod tests {
             extension_id: "unsupported-recorder".to_string(),
             source: "require('fs').writeFileSync('out.txt', 'must not run');".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5565,6 +5572,7 @@ mod tests {
                      require('fs').readFileSync('out.txt');\n"
                 .to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5656,6 +5664,7 @@ mod tests {
                      });\n"
                 .to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5756,6 +5765,7 @@ mod tests {
                      }\n"
             .to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5828,6 +5838,7 @@ mod tests {
                      fs.readFileSync('out.txt');\n"
                 .to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5903,6 +5914,7 @@ mod tests {
                      fs.readFileSync('out.txt', 'utf8');\n"
                 .to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -5968,6 +5980,7 @@ mod tests {
             extension_id: scratch_label.to_string(),
             source: source.to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -6090,6 +6103,7 @@ mod tests {
                      fsp.readFile('out.txt');\n"
                 .to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -6223,6 +6237,7 @@ mod tests {
             extension_id: "ext-ws".to_string(),
             source: "  \t\n  ".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -6238,6 +6253,7 @@ mod tests {
             extension_id: "   ".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -6612,6 +6628,7 @@ mod tests {
             extension_id: "ext-cap".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "vm_dispatch".to_string(),
                 "heap_allocate".to_string(),
@@ -6701,6 +6718,7 @@ mod tests {
             extension_id: "ext-many".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "fs_read".to_string(),
                 "fs_write".to_string(),
@@ -7559,6 +7577,7 @@ mod tests {
             extension_id: "ext-caps".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![
                 "fs_read".to_string(),
                 "fs".to_string(),
@@ -7714,6 +7733,7 @@ mod tests {
             extension_id: "id-1".to_string(),
             source: "1".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec!["net".to_string()],
             version: "0.1.0".to_string(),
             metadata: {
@@ -7768,6 +7788,7 @@ mod tests {
             extension_id: "ext-large-meta".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata,
@@ -7933,6 +7954,7 @@ mod tests {
             extension_id: "ext-ver".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: execution_capabilities(),
             version: "7.3.1".to_string(),
             metadata: BTreeMap::new(),
@@ -7986,6 +8008,7 @@ mod tests {
             extension_id: "ext-\u{00e9}\u{00f1}\u{00fc}".to_string(),
             source: "42".to_string(),
             source_file: None,
+            module_root: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),

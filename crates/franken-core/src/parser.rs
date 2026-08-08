@@ -2038,21 +2038,26 @@ impl CanonicalEs2020Parser {
         I: ParserInput,
     {
         match input.into_source() {
-            Ok(source) => match parse_source(&source.text, &source.label, goal, options) {
-                Ok(tree) => {
-                    let event_ir = ParseEventIr::from_parse_source(
-                        &tree,
-                        &source.text,
-                        source.label,
-                        options.mode,
-                    );
-                    (Ok(tree), event_ir)
+            // Tree AND event-IR construction share one provisioned stack:
+            // the event-IR builder recurses over the tree with the same
+            // depth profile as the descent (bd-47ae4).
+            Ok(source) => with_provisioned_parse_stack(options, || {
+                match parse_source_on_current_stack(&source.text, &source.label, goal, options) {
+                    Ok(tree) => {
+                        let event_ir = ParseEventIr::from_parse_source(
+                            &tree,
+                            &source.text,
+                            source.label,
+                            options.mode,
+                        );
+                        (Ok(tree), event_ir)
+                    }
+                    Err(error) => {
+                        let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
+                        (Err(error), event_ir)
+                    }
                 }
-                Err(error) => {
-                    let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
-                    (Err(error), event_ir)
-                }
-            },
+            }),
             Err(error) => {
                 let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
                 (Err(error), event_ir)
@@ -2075,27 +2080,33 @@ impl CanonicalEs2020Parser {
         I: ParserInput,
     {
         match input.into_source() {
-            Ok(source) => match parse_source(&source.text, &source.label, goal, options) {
-                Ok(tree) => {
-                    let event_ir = ParseEventIr::from_parse_source(
-                        &tree,
-                        &source.text,
-                        source.label.clone(),
-                        options.mode,
-                    );
-                    let materialized = event_ir.materialize_with_tree(&tree, Some(&source.text));
-                    (Ok(tree), event_ir, materialized)
+            // Tree, event-IR, and witness materialization share one
+            // provisioned stack: both walkers recurse over the tree with the
+            // same depth profile as the descent (bd-47ae4).
+            Ok(source) => with_provisioned_parse_stack(options, || {
+                match parse_source_on_current_stack(&source.text, &source.label, goal, options) {
+                    Ok(tree) => {
+                        let event_ir = ParseEventIr::from_parse_source(
+                            &tree,
+                            &source.text,
+                            source.label.clone(),
+                            options.mode,
+                        );
+                        let materialized =
+                            event_ir.materialize_with_tree(&tree, Some(&source.text));
+                        (Ok(tree), event_ir, materialized)
+                    }
+                    Err(error) => {
+                        let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
+                        let materialized = Err(ParseEventMaterializationError::new(
+                            ParseEventMaterializationErrorCode::ParseFailedEventStream,
+                            "cannot materialize AST for failed parse".to_string(),
+                            None,
+                        ));
+                        (Err(error), event_ir, materialized)
+                    }
                 }
-                Err(error) => {
-                    let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
-                    let materialized = Err(ParseEventMaterializationError::new(
-                        ParseEventMaterializationErrorCode::ParseFailedEventStream,
-                        "cannot materialize AST for failed parse".to_string(),
-                        None,
-                    ));
-                    (Err(error), event_ir, materialized)
-                }
-            },
+            }),
             Err(error) => {
                 let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
                 let materialized = Err(ParseEventMaterializationError::new(
@@ -4700,7 +4711,77 @@ fn has_use_strict_directive(mut source: &str) -> bool {
     }
 }
 
+/// Conservative native-stack bound per recursion level for the recursive
+/// descent. Debug builds accumulate several parser frames per statement
+/// level; the depth-64 wrapped do/if/do-while chain empirically exhausts a
+/// 1 MiB thread under debug codegen, i.e. more than 16 KiB per level
+/// (bd-47ae4).
+const PARSE_STACK_BYTES_PER_RECURSION_LEVEL: usize = 64 * 1024;
+
+/// Fixed headroom for lexing, logical-line scanning, and the frames below
+/// the statement recursion.
+const PARSE_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Run parse-shaped recursive work with a native stack provisioned from the
+/// declared recursion budget (bd-47ae4).
+///
+/// The `max_recursion_depth` guard returns a recoverable [`ParseError`], but
+/// only if it is reached BEFORE the OS stack overflows. Callers routinely run
+/// the parser on small stacks (test-harness worker threads default to 2 MiB),
+/// where a within-budget chain aborted the whole process with SIGABRT —
+/// fail-open at the process boundary. Executing the work on a dedicated
+/// scoped thread sized from the budget makes the guard, not the OS, the
+/// terminating authority regardless of the caller's stack. The event-IR and
+/// witness materializers recurse over the produced tree with the same depth
+/// profile, so entry points wrap tree + event-IR construction in ONE
+/// provisioned scope rather than only the descent. If the thread cannot be
+/// spawned the work degrades to the caller's stack, which is exactly the
+/// pre-fix behavior.
+fn with_provisioned_parse_stack<T, F>(options: &ParserOptions, run: F) -> T
+where
+    T: Send,
+    F: FnOnce() -> T + Send,
+{
+    let budget_depth = usize::try_from(options.budget.max_recursion_depth).unwrap_or(usize::MAX);
+    let stack_bytes = PARSE_STACK_BASE_BYTES
+        .saturating_add(budget_depth.saturating_mul(PARSE_STACK_BYTES_PER_RECURSION_LEVEL));
+    // The slot lets the closure survive a failed spawn (Builder::spawn_scoped
+    // consumes its argument even on error); the mutex is uncontended — only
+    // one of the two arms ever takes it.
+    let run_slot = std::sync::Mutex::new(Some(run));
+    let take_and_run = || {
+        (run_slot
+            .lock()
+            .expect("parse closure slot is never poisoned")
+            .take()
+            .expect("parse closure is consumed exactly once"))()
+    };
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .name("franken-core-parse".to_string())
+            .stack_size(stack_bytes)
+            .spawn_scoped(scope, take_and_run)
+        {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            Err(_) => take_and_run(),
+        }
+    })
+}
+
 fn parse_source(
+    text: &str,
+    source_label: &str,
+    goal: ParseGoal,
+    options: &ParserOptions,
+) -> ParseResult<SyntaxTree> {
+    with_provisioned_parse_stack(options, || {
+        parse_source_on_current_stack(text, source_label, goal, options)
+    })
+}
+
+fn parse_source_on_current_stack(
     text: &str,
     source_label: &str,
     goal: ParseGoal,
@@ -17173,6 +17254,68 @@ mod tests {
                 .body
                 .len(),
             2
+        );
+    }
+
+    /// bd-47ae4: the recursion budget must be backed by provisioned stack —
+    /// a within-budget chain must parse even when the CALLER runs on a tiny
+    /// thread stack (the class that SIGABRTed 1–2 MiB harness threads).
+    #[test]
+    fn wrapped_do_while_parses_from_a_tiny_caller_stack_bd_47ae4() {
+        let depth = 64usize;
+        let source = format!(
+            "{}do x()\n{}while (true) y();",
+            "do if (true) ".repeat(depth.saturating_sub(1)),
+            "while (false)\n".repeat(depth)
+        );
+        let handle = std::thread::Builder::new()
+            .name("bd-47ae4-tiny-caller".to_string())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                CanonicalEs2020Parser
+                    .parse(source.as_str(), ParseGoal::Script)
+                    .expect("a within-budget chain must parse regardless of caller stack")
+                    .body
+                    .len()
+            })
+            .expect("tiny caller thread should spawn");
+        assert_eq!(handle.join().expect("caller thread must not abort"), 2);
+    }
+
+    /// bd-47ae4: a chain beyond a tight recursion budget must fail closed
+    /// with the recoverable budget error, never a native stack abort.
+    /// (Depth 16 keeps the budget-limited segment rescans cheap while still
+    /// exceeding the depth-8 budget.)
+    #[test]
+    fn tight_recursion_budget_fails_closed_not_abort_bd_47ae4() {
+        let depth = 16usize;
+        let source = format!(
+            "{}do x()\n{}while (true) y();",
+            "do if (true) ".repeat(depth.saturating_sub(1)),
+            "while (false)\n".repeat(depth)
+        );
+        let options = ParserOptions {
+            budget: ParserBudget {
+                max_recursion_depth: 8,
+                ..ParserBudget::default()
+            },
+            ..ParserOptions::default()
+        };
+        let error = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "bd-47ae4-tight.js".to_string(),
+                    text: source,
+                },
+                ParseGoal::Script,
+                &options,
+            )
+            .expect_err("a chain beyond the tight budget must be rejected");
+        assert_eq!(error.code, ParseErrorCode::BudgetExceeded);
+        assert!(
+            error.message.contains("statement nesting budget exceeded"),
+            "unexpected rejection: {}",
+            error.message
         );
     }
 

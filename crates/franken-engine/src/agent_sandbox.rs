@@ -412,6 +412,7 @@ impl AgentSandboxManifest {
             extension_id: self.agent_id.clone(),
             source,
             source_file,
+            module_root: None,
             capabilities,
             version: engine_version.to_string(),
             metadata: self.guardplane_metadata()?,

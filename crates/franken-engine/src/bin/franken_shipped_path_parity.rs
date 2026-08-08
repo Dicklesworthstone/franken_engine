@@ -1424,6 +1424,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::EvidenceCompressionKraft { .. }
         | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::WitnessSealing { .. }
+        | OrchestratorError::InvalidModuleRoot { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
         OrchestratorError::PostCellFailure(_) => {

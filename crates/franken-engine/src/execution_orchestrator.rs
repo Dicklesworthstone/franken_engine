@@ -217,6 +217,17 @@ pub struct ExtensionPackage {
     /// Optional source file path or label used for TS detection (e.g. "app.ts").
     #[serde(default)]
     pub source_file: Option<String>,
+    /// Optional explicit module-resolution containment root (bd-8mgzb).
+    ///
+    /// When set, relative imports are contained to this directory instead of
+    /// the entrypoint file's parent, so a nested entrypoint may import from
+    /// ancestor directories that are still inside the declared root. The
+    /// embedder asserts trust in exactly this directory: it must exist and
+    /// the entrypoint's parent must live inside it, otherwise execution
+    /// fails closed before any code runs. Absent means the fail-closed
+    /// default — containment at the entrypoint file's parent.
+    #[serde(default)]
+    pub module_root: Option<String>,
     /// Declared capabilities.
     pub capabilities: Vec<String>,
     /// Extension version.
@@ -735,6 +746,13 @@ pub enum OrchestratorError {
     WitnessSealing {
         detail: String,
     },
+    /// The package declared a `module_root` that does not exist or does not
+    /// contain the entrypoint (bd-8mgzb). Fail-closed before any code runs:
+    /// a bad containment declaration must never silently re-anchor relative
+    /// imports.
+    InvalidModuleRoot {
+        detail: String,
+    },
     PreparedExecutionContextMismatch {
         reserved_extension_id: String,
         requested_extension_id: String,
@@ -783,6 +801,9 @@ impl fmt::Display for OrchestratorError {
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
             Self::WitnessSealing { detail } => {
                 write!(f, "ir4 witness sealing failed: {detail}")
+            }
+            Self::InvalidModuleRoot { detail } => {
+                write!(f, "invalid module root: {detail}")
             }
             Self::PreparedExecutionContextMismatch {
                 reserved_extension_id,
@@ -2122,11 +2143,49 @@ impl ExecutionOrchestrator {
 
     fn module_root_for_execution(
         package: &ExtensionPackage,
-    ) -> Option<(String, Option<std::path::PathBuf>)> {
-        let parent = package
+    ) -> Result<Option<(String, Option<std::path::PathBuf>)>, OrchestratorError> {
+        // bd-8mgzb: an explicitly declared containment root replaces the
+        // entrypoint-parent default, letting nested entrypoints import from
+        // ancestor directories that are still inside the trusted root. The
+        // declaration is validated fail-closed BEFORE any code runs: the
+        // root must exist, and the entrypoint's parent (when it exists on
+        // disk) must live inside it — a declared root that does not contain
+        // the entrypoint is a misconfiguration that would silently re-anchor
+        // relative imports somewhere unrelated.
+        if let Some(declared) = package.module_root.as_deref() {
+            let canonical_root = std::path::Path::new(declared).canonicalize().map_err(
+                |error| OrchestratorError::InvalidModuleRoot {
+                    detail: format!(
+                        "declared module_root `{declared}` cannot be canonicalized: {error}"
+                    ),
+                },
+            )?;
+            if let Some(parent) = package
+                .source_file
+                .as_deref()
+                .and_then(|path| std::path::Path::new(path).parent())
+                && !parent.as_os_str().is_empty()
+                && let Ok(canonical_parent) = parent.canonicalize()
+                && !canonical_parent.starts_with(&canonical_root)
+            {
+                return Err(OrchestratorError::InvalidModuleRoot {
+                    detail: format!(
+                        "entrypoint parent `{}` is outside the declared module_root `{}`",
+                        canonical_parent.display(),
+                        canonical_root.display()
+                    ),
+                });
+            }
+            return Ok(Some((declared.to_string(), Some(canonical_root))));
+        }
+
+        let Some(parent) = package
             .source_file
             .as_deref()
-            .and_then(|path| std::path::Path::new(path).parent())?;
+            .and_then(|path| std::path::Path::new(path).parent())
+        else {
+            return Ok(None);
+        };
         let root = if parent.as_os_str().is_empty() {
             std::path::Path::new(".")
         } else {
@@ -2141,13 +2200,13 @@ impl ExecutionOrchestrator {
         // the interpreter still canonicalizes and fails closed if resolution
         // is actually attempted.
         let canonical_root = root.canonicalize().ok();
-        Some((root_string, canonical_root))
+        Ok(Some((root_string, canonical_root)))
     }
 
     fn lane_router_for_execution(
         package: &ExtensionPackage,
         cancellation_token: Option<&CancellationToken>,
-    ) -> LaneRouter {
+    ) -> Result<LaneRouter, OrchestratorError> {
         // Console is granted by default because orchestrated console output is
         // capture-only: it lands in `OrchestratorResult::console_output` and the
         // evidence stream, never an ambient host sink. Requiring packages to
@@ -2165,7 +2224,7 @@ impl ExecutionOrchestrator {
                 .filter_map(|s| RuntimeCapability::from_tag_str(s)),
         );
 
-        let module_root = Self::module_root_for_execution(package);
+        let module_root = Self::module_root_for_execution(package)?;
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
@@ -2185,7 +2244,7 @@ impl ExecutionOrchestrator {
             v8_config.canonical_module_root = canonical_root;
         }
 
-        LaneRouter::with_configs(quickjs_config, v8_config)
+        Ok(LaneRouter::with_configs(quickjs_config, v8_config))
     }
 
     fn phase_execute(
@@ -2204,7 +2263,7 @@ impl ExecutionOrchestrator {
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
         let mut lane_router =
-            Self::lane_router_for_execution(package, self.cancellation_token.as_ref());
+            Self::lane_router_for_execution(package, self.cancellation_token.as_ref())?;
         // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
         // real host effects through the algebraic-effects stack.

@@ -2216,3 +2216,197 @@ fn source_ingestion_hashes_deterministic_across_runs() {
         r2.source_ingestion.normalized_source_hash
     );
 }
+
+// =========================================================================
+// bd-8mgzb: declared module-root contract for nested entrypoints
+// =========================================================================
+
+/// A nested entrypoint importing from an ancestor directory INSIDE the
+/// declared root must resolve (the franken_node tc::path::0004 shape).
+#[test]
+fn declared_module_root_allows_nested_entrypoint_parent_import_bd_8mgzb() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).expect("nested dir");
+    std::fs::write(
+        root.path().join("_support.mjs"),
+        "export const v = \"support-ok\";\n",
+    )
+    .expect("support module");
+    let entry = nested.join("entry.mjs");
+    std::fs::write(
+        &entry,
+        "import { v } from \"../_support.mjs\";\nconsole.log(v);\n",
+    )
+    .expect("entry module");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package(
+            "ext-module-root-parent-import",
+            &std::fs::read_to_string(&entry).expect("read entry"),
+        );
+        package.source_file = Some(entry.display().to_string());
+        package.module_root = Some(root.path().display().to_string());
+
+        let result = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .unwrap_or_else(|error| {
+                panic!("{lane:?} parent import within declared root failed: {error}")
+            });
+        assert_eq!(result.console_output.len(), 1, "{lane:?}");
+        assert_eq!(result.console_output[0].message, "support-ok", "{lane:?}");
+    }
+}
+
+/// Non-escape regression: WITHOUT a declared root the same layout keeps the
+/// fail-closed entrypoint-parent containment.
+#[test]
+fn default_module_root_still_refuses_parent_import_bd_8mgzb() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).expect("nested dir");
+    std::fs::write(
+        root.path().join("_support.mjs"),
+        "export const v = \"support-ok\";\n",
+    )
+    .expect("support module");
+    let entry = nested.join("entry.mjs");
+    std::fs::write(
+        &entry,
+        "import { v } from \"../_support.mjs\";\nconsole.log(v);\n",
+    )
+    .expect("entry module");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package(
+            "ext-module-root-default-refusal",
+            &std::fs::read_to_string(&entry).expect("read entry"),
+        );
+        package.source_file = Some(entry.display().to_string());
+
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("parent import without a declared root must be refused");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                }) if reason.contains("escapes module root")
+            ),
+            "{lane:?}: unexpected error {error}"
+        );
+    }
+}
+
+/// A declared root widens containment only to itself: imports that escape the
+/// DECLARED root still fail closed, even when the target exists on disk.
+#[test]
+fn declared_module_root_still_refuses_escape_beyond_root_bd_8mgzb() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    std::fs::write(
+        outside.path().join("outside.mjs"),
+        "export const leak = 1;\n",
+    )
+    .expect("outside module");
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).expect("nested dir");
+    let outside_name = outside
+        .path()
+        .file_name()
+        .expect("outside dir name")
+        .to_string_lossy()
+        .into_owned();
+    let entry = nested.join("entry.mjs");
+    std::fs::write(
+        &entry,
+        format!("import {{ leak }} from \"../../{outside_name}/outside.mjs\";\nconsole.log(leak);\n"),
+    )
+    .expect("entry module");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package(
+            "ext-module-root-escape-beyond",
+            &std::fs::read_to_string(&entry).expect("read entry"),
+        );
+        package.source_file = Some(entry.display().to_string());
+        package.module_root = Some(root.path().display().to_string());
+
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("import escaping the declared root must be refused");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                }) if reason.contains("escapes module root")
+            ),
+            "{lane:?}: unexpected error {error}"
+        );
+    }
+}
+
+/// A declared root that does not contain the entrypoint is a fail-closed
+/// misconfiguration, rejected before any code runs.
+#[test]
+fn module_root_not_containing_entrypoint_fails_closed_bd_8mgzb() {
+    let root = tempfile::tempdir().expect("declared root tempdir");
+    let elsewhere = tempfile::tempdir().expect("entry tempdir");
+    let entry = elsewhere.path().join("entry.mjs");
+    std::fs::write(&entry, "42;\n").expect("entry module");
+
+    let mut package = simple_package("ext-module-root-mismatch", "42;");
+    package.source_file = Some(entry.display().to_string());
+    package.module_root = Some(root.path().display().to_string());
+
+    let error = ExecutionOrchestrator::with_defaults()
+        .execute(&package)
+        .expect_err("a declared root that excludes the entrypoint must be refused");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::InvalidModuleRoot { detail }
+                if detail.contains("outside the declared module_root")
+        ),
+        "unexpected error {error}"
+    );
+}
+
+/// A declared root that does not exist is a fail-closed misconfiguration.
+#[test]
+fn nonexistent_module_root_fails_closed_bd_8mgzb() {
+    let mut package = simple_package("ext-module-root-missing", "42;");
+    package.source_file = Some("entry.mjs".to_string());
+    package.module_root = Some("/nonexistent/franken-module-root-bd-8mgzb".to_string());
+
+    let error = ExecutionOrchestrator::with_defaults()
+        .execute(&package)
+        .expect_err("a nonexistent declared root must be refused");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::InvalidModuleRoot { detail }
+                if detail.contains("cannot be canonicalized")
+        ),
+        "unexpected error {error}"
+    );
+}

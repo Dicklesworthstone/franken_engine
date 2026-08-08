@@ -99100,6 +99100,96 @@ mod tests {
         assert!(serde_json::from_str::<RuntimeSymbolState>(malformed_state).is_err());
     }
 
+    /// bd-n8eta.4.5: focused `CapturedInterpreterState` JSON round trip with a
+    /// dynamic Symbol as both a register value and an object own key. Pins
+    /// exact `symbol_state` restoration, the legacy Symbol-free wire staying
+    /// readable, fail-closed rejection of missing/null/unknown symbol state,
+    /// and full state equality (registers + heap incl. the Symbol sidecar
+    /// order) after restore.
+    #[test]
+    fn captured_interpreter_state_symbol_round_trip_bd_n8eta_4_5() {
+        // Legacy Symbol-free wire: no symbol_state field, exact round trip.
+        let mut plain = quickjs_test_core();
+        plain
+            .write_reg(0, Value::Int(7))
+            .expect("plain register should write");
+        plain.arm_state_capture_at_tick(0);
+        plain.check_state_capture_boundary();
+        let plain_state = plain
+            .take_captured_state()
+            .expect("plain state should capture");
+        assert!(!plain_state.contains_symbol_values());
+        let plain_wire = serde_json::to_string(&plain_state).expect("plain state serializes");
+        assert!(!plain_wire.contains("symbol_state"));
+        assert_eq!(
+            serde_json::from_str::<CapturedInterpreterState>(&plain_wire)
+                .expect("legacy Symbol-free wire must stay readable"),
+            plain_state
+        );
+
+        // Dynamic Symbol as value and own key.
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("round-trip")))
+            .expect("dynamic symbol should allocate");
+        let object = core
+            .alloc_object_with_properties(&[("plain", Value::Int(1))])
+            .expect("object should allocate");
+        core.set_symbol_property(object, symbol, BaselineSymbolProperty::Data(Value::Int(5)))
+            .expect("symbol own key should set");
+        core.write_reg(2, Value::Symbol(symbol))
+            .expect("symbol register should write");
+        core.write_reg(3, Value::Object(object))
+            .expect("object register should write");
+        core.arm_state_capture_at_tick(0);
+        core.check_state_capture_boundary();
+        let captured = core
+            .take_captured_state()
+            .expect("symbol-bearing state should capture");
+        assert!(captured.contains_symbol_values());
+
+        let wire = serde_json::to_string(&captured).expect("captured state serializes");
+        assert!(wire.contains("\"symbol_state\""));
+        let restored: CapturedInterpreterState =
+            serde_json::from_str(&wire).expect("captured state deserializes");
+        // Exact restoration: registers, heap (including the Symbol sidecar
+        // and its key order via HeapObject equality), and symbol_state all
+        // participate in PartialEq.
+        assert_eq!(restored, captured);
+        // The round trip is a serialization fixed point.
+        assert_eq!(
+            serde_json::to_string(&restored).expect("re-serializes"),
+            wire
+        );
+
+        // A symbol-bearing wire without symbol_state fails closed.
+        let mut missing: serde_json::Value =
+            serde_json::from_str(&wire).expect("wire re-parses as JSON");
+        missing
+            .as_object_mut()
+            .expect("wire is an object")
+            .remove("symbol_state");
+        let missing_error = serde_json::from_value::<CapturedInterpreterState>(missing)
+            .expect_err("missing symbol_state must be rejected")
+            .to_string();
+        assert!(
+            missing_error.contains("requires symbol_state"),
+            "unexpected rejection message: {missing_error}"
+        );
+
+        // Explicit null is not the same as absent: fail closed.
+        let mut null_state: serde_json::Value =
+            serde_json::from_str(&wire).expect("wire re-parses as JSON");
+        null_state["symbol_state"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<CapturedInterpreterState>(null_state).is_err());
+
+        // Unknown fields inside symbol_state fail closed.
+        let mut unknown: serde_json::Value =
+            serde_json::from_str(&wire).expect("wire re-parses as JSON");
+        unknown["symbol_state"]["surprise"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<CapturedInterpreterState>(unknown).is_err());
+    }
+
     #[test]
     fn symbol_keys_stay_distinct_ordered_and_prototyped_bd_n8eta_4_2() {
         let mut core = quickjs_test_core();

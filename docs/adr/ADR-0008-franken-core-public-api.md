@@ -620,9 +620,12 @@ Implementation ownership is deliberately split:
 | `bd-n8eta.4.4` | typed property-hook boundary; separate owner-reviewed lane |
 | `bd-n8eta.4.5` | Node/Bun donor matrix, cross-lane proof, and DISC-013 closeout |
 
-This is a versioned API approval, not a premature conformance claim. The
-baseline interpreter row remains `pending_graduation` until the version,
-implementation, and parity children are green.
+This is a versioned API approval, not a premature conformance claim. All five
+children are closed as of 2026-08-08 (bd-n8eta.4.5 landed the executable
+Node/Bun/engine/core donor matrix and the focused `CapturedInterpreterState`
+Symbol round trip), so the baseline interpreter row has graduated; the
+remaining ACCEPTED residuals are enumerated in DISC-013
+(`crates/franken-engine/tests/ECMA262_DISCREPANCIES.md`).
 
 ## Approved Versioned Evolution: Exact UTF-16 Runtime Property Keys
 

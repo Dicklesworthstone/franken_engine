@@ -276,7 +276,7 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-013: Own-property enumeration carriers require explicit ECMAScript order
 
-- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining engine-baseline Symbol-key gap and later cross-lane closeout
+- **Status:** RESOLVED for executable Symbol own keys in both baselines with cross-lane donor closeout (bd-n8eta.4.5); ACCEPTED only for the enumerated core-surface and Proxy-trap-routing residuals below
 - **ES2020 ref:** §9.1.11 (`[[OwnPropertyKeys]]`), plus callers such as
   `Object.keys`, `Object.values`, `Object.entries`, `Reflect.ownKeys`,
   `for...in`, and `JSON.stringify`
@@ -318,10 +318,30 @@ test reports, not buried in const sets (see DISC-005 below).
   `0.7.0`; `bd-t9n3s` propagates it into core `0.8.0`. Core deliberately skips
   `0.6.0` and `0.7.0` because those numbers identify the incompatible engine
   wires and rejects them rather than treating them as historical core schemas.
-- **Remaining symptom:** The engine's string-key-only executable baseline
-  carrier still does not model executable Symbol keys; core already carries
-  typed `Value::Symbol` / `RuntimePropertyKey::Symbol` identities, and the
-  descriptor object model does as well.
+- **Resolved (bd-n8eta.4.2/4.4/4.5):** Both executable baselines now carry
+  typed Symbol own keys (`RuntimePropertyKey::Symbol` over the shared
+  `OrderedStringMap` Symbol sidecar), with typed dual-lane property hooks and
+  the executable Node/Bun/engine/core donor matrix
+  (`tests/differential_oracle_integration.rs::symbol_own_key_donor_matrix_bd_n8eta_4_5`)
+  proving on live donors: mixed integer/string/Symbol own-key order, Symbol
+  exclusion from keys/getOwnPropertyNames/for-in/values/entries/JSON,
+  inclusion in getOwnPropertySymbols/Reflect.ownKeys/assign/spread, update
+  stability, string and Symbol delete + re-add append, Proxy ownKeys typed
+  identity (string alias vs Symbol, same-description distinct Symbols,
+  duplicate rejection), and defineProperty data→accessor position retention.
+  The focused `CapturedInterpreterState` JSON round trip
+  (`captured_interpreter_state_symbol_round_trip_bd_n8eta_4_5`) pins exact
+  `symbol_state` restoration, legacy Symbol-free readability, and fail-closed
+  missing/null/unknown-state rejection.
+- **Remaining ACCEPTED residuals:** (a) franken-core's executable lane has no
+  Proxy, no `Object.defineProperty`, no `console.*` source lowering, and no
+  `Array.prototype.push`/`join`, so the Proxy and accessor-conversion matrix
+  rows are donor+engine only and core lockstep rows use console-free,
+  while-loop sources; (b) the engine's `Object.keys`/`values`/`entries`/
+  `getOwnPropertyNames`/for-in/JSON read own keys directly and do not route
+  through a Proxy `ownKeys` trap (only Reflect.ownKeys,
+  getOwnPropertySymbols, assign, and spread are proxy-aware); (c) the
+  time-travel `InterpreterStateSnapshot::from_captured` drops `symbol_state`.
   Invoking accessor getters from value-consuming builtins such as
   `Object.values` is a separate continuation/descriptor-execution gap rather
   than an own-key order carrier gap. Legacy string-only hooks and the stable
@@ -338,16 +358,18 @@ test reports, not buried in const sets (see DISC-005 below).
   reject lone-surrogate querystring components before lossy encoding: engine
   exposes donor-compatible `URIError`/`ERR_INVALID_URI`, while core retains
   `InterpreterError::TypeError`; U+FFFD percent-encodes normally in both.
-- **Rationale for the remaining ACCEPTED scope:** Complete `[[OwnPropertyKeys]]`
-  coverage still needs the engine's explicit executable Symbol-key
-  representation and compatible wire semantics, followed by cross-lane donor
-  closeout. Keeping that residual explicit avoids overstating string-key order
-  as full Symbol conformance.
+- **Rationale for the remaining ACCEPTED scope:** The Symbol own-key carrier
+  and its cross-lane donor closeout are done; the residuals are missing core
+  executable surfaces and the engine's non-trap-routed own-key readers, both
+  enumerable and tracked, not order-carrier gaps. Keeping them explicit avoids
+  overstating the matrix as full Proxy/builtin conformance.
 - **Tracking beads:** bd-qporw (original decision), bd-n8eta (runtime repair),
   bd-n8eta.1 (descriptor-model slice), bd-n8eta.2 (baseline data-property slice),
   bd-n8eta.3 (core mixed data/accessor order), bd-n8eta.4 (baseline Symbol keys),
+  bd-n8eta.4.2 (engine typed own keys), bd-n8eta.4.4 (typed property hooks),
+  bd-n8eta.4.5 (donor matrix + closeout),
   bd-b12xs, bd-b12xs.4, bd-b12xs.5, bd-b12xs.6
-- **Reviewed:** 2026-07-17
+- **Reviewed:** 2026-08-08
 - **Next review:** 2026-10-15
 
 ## Resolved divergences

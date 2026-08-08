@@ -156,3 +156,350 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
                 .contains("frankenengine-core path dependency executed"))
     );
 }
+
+// =========================================================================
+// bd-n8eta.4.5: executable Symbol own-key donor matrix
+// =========================================================================
+
+/// Run one matrix case through the real differential oracle and return the
+/// parsed report. `node` is resolved with `/usr/bin` prefixed onto PATH so
+/// the probe reaches real Node rather than a bun-provided shim.
+fn run_symbol_matrix_case(case_id: &str, source: &str) -> serde_json::Value {
+    let source_path = temp_path(&format!("sym_matrix_{case_id}"), "js");
+    let report_path = temp_path(&format!("sym_matrix_{case_id}_report"), "json");
+    fs::write(&source_path, source).expect("matrix source should write");
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .env("PATH", format!("/usr/bin:{inherited_path}"))
+        .args([
+            "differential-oracle",
+            "run",
+            "--input",
+            source_path.to_str().expect("source path should be utf8"),
+            "--case-id",
+            case_id,
+            "--timeout-ms",
+            "15000",
+            "--out",
+            report_path.to_str().expect("report path should be utf8"),
+        ])
+        .output()
+        .expect("differential-oracle run should execute");
+    // The CLI exit code reflects the OVERALL verdict across every comparison
+    // mode (0 consensus / 3 divergence / 4 insufficient data). A matrix case
+    // asserts specific per-mode agreement below, so any report-emitting exit
+    // is acceptable here; only usage/io failures (1, 2) abort.
+    assert!(
+        matches!(output.status.code(), Some(0 | 3 | 4)),
+        "oracle run failed for {case_id} (exit {:?}): {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(
+        fs::read(&report_path)
+            .expect("oracle report should exist")
+            .as_slice(),
+    )
+    .expect("oracle report should parse");
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(report_path);
+    report
+}
+
+fn matrix_backend<'a>(report: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    report["backends"]
+        .as_array()
+        .expect("backends should be an array")
+        .iter()
+        .find(|entry| entry["backend"].as_str() == Some(name))
+        .unwrap_or_else(|| panic!("report should carry a {name} receipt"))
+}
+
+/// Donor-observing case: real Node, real Bun, and the engine lane must all
+/// print exactly `expected` (console is the shared observable), and the
+/// oracle's `exact_stdout` canonicalization must place all three in a single
+/// agreement group.
+fn assert_donor_consensus(case_id: &str, source: &str, expected: &str) {
+    let report = run_symbol_matrix_case(case_id, source);
+    for backend in ["node_lts", "bun_stable", "franken_engine"] {
+        let receipt = matrix_backend(&report, backend);
+        assert_eq!(
+            receipt["status"].as_str(),
+            Some("completed"),
+            "{case_id}: {backend} must complete (diagnostics: {:?}, stderr: {:?})",
+            receipt["diagnostics"],
+            receipt["stderr"]
+        );
+        assert_eq!(
+            receipt["stdout"].as_str(),
+            Some(format!("{expected}\n").as_str()),
+            "{case_id}: {backend} stdout mismatch"
+        );
+    }
+    let comparisons = report["canonicalization"]["comparisons"]
+        .as_array()
+        .expect("comparisons should be an array");
+    let exact_stdout = comparisons
+        .iter()
+        .find(|comparison| comparison["mode"].as_str() == Some("exact_stdout"))
+        .expect("exact_stdout comparison should exist");
+    let engine_group = exact_stdout["groups"]
+        .as_array()
+        .expect("groups should be an array")
+        .iter()
+        .find(|group| {
+            group["backends"]
+                .as_array()
+                .is_some_and(|backends| backends.iter().any(|b| b == "franken_engine"))
+        })
+        .expect("engine should appear in an exact_stdout group");
+    for donor in ["node_lts", "bun_stable"] {
+        assert!(
+            engine_group["backends"]
+                .as_array()
+                .is_some_and(|backends| backends.iter().any(|b| b == donor)),
+            "{case_id}: {donor} must share the engine's exact_stdout group"
+        );
+    }
+}
+
+/// Engine/core lockstep case: both in-process lanes must complete with the
+/// same completion value, and the oracle's `structured_value` canonicalization
+/// must place them in a single agreement group.
+fn assert_engine_core_lockstep(case_id: &str, source: &str, expected: &str) {
+    let report = run_symbol_matrix_case(case_id, source);
+    for backend in ["franken_engine", "franken_core"] {
+        let receipt = matrix_backend(&report, backend);
+        assert_eq!(
+            receipt["status"].as_str(),
+            Some("completed"),
+            "{case_id}: {backend} must complete (diagnostics: {:?}, stderr: {:?})",
+            receipt["diagnostics"],
+            receipt["stderr"]
+        );
+        assert_eq!(
+            receipt["value"].as_str(),
+            Some(expected),
+            "{case_id}: {backend} completion value mismatch"
+        );
+    }
+    let comparisons = report["canonicalization"]["comparisons"]
+        .as_array()
+        .expect("comparisons should be an array");
+    let structured = comparisons
+        .iter()
+        .find(|comparison| comparison["mode"].as_str() == Some("structured_value"))
+        .expect("structured_value comparison should exist");
+    let engine_group = structured["groups"]
+        .as_array()
+        .expect("groups should be an array")
+        .iter()
+        .find(|group| {
+            group["backends"]
+                .as_array()
+                .is_some_and(|backends| backends.iter().any(|b| b == "franken_engine"))
+        })
+        .expect("engine should appear in a structured_value group");
+    assert!(
+        engine_group["backends"]
+            .as_array()
+            .is_some_and(|backends| backends.iter().any(|b| b == "franken_core")),
+        "{case_id}: franken_core must share the engine's structured_value group"
+    );
+}
+
+/// bd-n8eta.4.5: the executable Node/Bun/engine/core Symbol own-key donor
+/// matrix. Donor-observing cases prove Node + Bun + engine parity through the
+/// shared console observable; the console-free twins prove engine/core
+/// lockstep on the same semantics via completion values (franken-core cannot
+/// lower `console.*` source yet, and it has no executable Proxy or
+/// `Object.defineProperty`, so the Proxy and accessor-conversion rows are
+/// donor+engine only — see ECMA262_DISCREPANCIES.md DISC-013 for the pinned
+/// scope).
+#[test]
+fn symbol_own_key_donor_matrix_bd_n8eta_4_5() {
+    // Row 1: ES2020 own-key order (integer-like ascending, then strings and
+    // Symbols in insertion order); keys/getOwnPropertyNames/for-in exclude
+    // Symbols; getOwnPropertySymbols preserves creation order (observed via
+    // values); same-description Symbols stay distinct; Reflect.ownKeys
+    // counts the complete mixed set.
+    assert_donor_consensus(
+        "sym-order-donor",
+        r##"const s1 = Symbol("alpha");
+const s2 = Symbol("alpha");
+const o = { b: 1 };
+o[s1] = 2;
+o["10"] = 3;
+o.a = 4;
+o[s2] = 5;
+o["2"] = 6;
+const keys = Object.keys(o).join("|");
+const names = Object.getOwnPropertyNames(o).join("|");
+const forin = [];
+for (const k in o) { forin.push(k); }
+const syms = Object.getOwnPropertySymbols(o);
+const symVals = [];
+for (const s of syms) { symVals.push(o[s]); }
+const distinct = syms[0] !== syms[1];
+const total = Reflect.ownKeys(o).length;
+console.log(keys + "#" + names + "#" + forin.join("|") + "#" + symVals.join("|") + "#" + distinct + "#" + total);
+"##,
+        "2|10|b|a#2|10|b|a#2|10|b|a#2|5#true#6",
+    );
+    assert_engine_core_lockstep(
+        "sym-order-core",
+        r##"const s1 = Symbol("alpha");
+const s2 = Symbol("alpha");
+const o = { b: 1 };
+o[s1] = 2;
+o["10"] = 3;
+o.a = 4;
+o[s2] = 5;
+o["2"] = 6;
+const keys = Object.keys(o);
+let acc = "";
+let i = 0;
+while (i < keys.length) { acc = acc + "|" + keys[i]; i = i + 1; }
+const names = Object.getOwnPropertyNames(o);
+acc = acc + "#";
+i = 0;
+while (i < names.length) { acc = acc + "|" + names[i]; i = i + 1; }
+let forin = "";
+for (const k in o) { forin = forin + "|" + k; }
+const syms = Object.getOwnPropertySymbols(o);
+let symVals = "";
+i = 0;
+while (i < syms.length) { symVals = symVals + "|" + o[syms[i]]; i = i + 1; }
+acc + "#" + forin + "#" + symVals + "#" + (syms[0] !== syms[1]) + "#" + Reflect.ownKeys(o).length;
+"##,
+        "|2|10|b|a#|2|10|b|a#|2|10|b|a#|2|5#true#6",
+    );
+    // Row 2: updates retain own-key position; string and Symbol delete +
+    // re-add both append to the tail of their respective segments.
+    assert_donor_consensus(
+        "sym-delete-readd-donor",
+        r##"const sk = Symbol("k");
+const st = Symbol("t");
+const o = {};
+o.x = 1;
+o[sk] = 2;
+o.y = 3;
+o.x = 10;
+const before = Object.keys(o).join("|");
+delete o.x;
+o.x = 11;
+const after = Object.keys(o).join("|");
+o[st] = 1;
+delete o[sk];
+o[sk] = 9;
+const syms = Object.getOwnPropertySymbols(o);
+const symVals = [];
+for (const s of syms) { symVals.push(o[s]); }
+console.log(before + "#" + after + "#" + symVals.join("|") + "#" + o.x + "#" + o[sk]);
+"##,
+        "x|y#y|x#1|9#11#9",
+    );
+    assert_engine_core_lockstep(
+        "sym-delete-readd-core",
+        r##"const sk = Symbol("k");
+const st = Symbol("t");
+const o = {};
+o.x = 1;
+o[sk] = 2;
+o.y = 3;
+o.x = 10;
+const keysBefore = Object.keys(o);
+let before = "";
+let i = 0;
+while (i < keysBefore.length) { before = before + "|" + keysBefore[i]; i = i + 1; }
+delete o.x;
+o.x = 11;
+const keysAfter = Object.keys(o);
+let after = "";
+i = 0;
+while (i < keysAfter.length) { after = after + "|" + keysAfter[i]; i = i + 1; }
+o[st] = 1;
+delete o[sk];
+o[sk] = 9;
+const syms = Object.getOwnPropertySymbols(o);
+let symVals = "";
+i = 0;
+while (i < syms.length) { symVals = symVals + "|" + o[syms[i]]; i = i + 1; }
+before + "#" + after + "#" + symVals + "#" + o.x + "#" + o[sk];
+"##,
+        "|x|y#|y|x#|1|9#11#9",
+    );
+    // Row 3: JSON.stringify / Object.values / Object.entries exclude Symbol
+    // keys; object spread and Object.assign include enumerable Symbol keys.
+    assert_donor_consensus(
+        "sym-exclusion-inclusion-donor",
+        r##"const s = Symbol("s");
+const src = { a: 1, b: 3 };
+src[s] = 2;
+const j = JSON.stringify(src);
+const vals = Object.values(src).join("|");
+const ents = [];
+for (const e of Object.entries(src)) { ents.push(e[0] + ":" + e[1]); }
+const spread = { ...src };
+const assigned = Object.assign({}, src);
+console.log(j + "#" + vals + "#" + ents.join("|") + "#" + (spread[s] === 2) + "#" + (assigned[s] === 2));
+"##,
+        "{\"a\":1,\"b\":3}#1|3#a:1|b:3#true#true",
+    );
+    assert_engine_core_lockstep(
+        "sym-exclusion-inclusion-core",
+        r##"const s = Symbol("s");
+const src = { a: 1, b: 3 };
+src[s] = 2;
+const j = JSON.stringify(src);
+const vals = Object.values(src);
+let acc = "";
+let i = 0;
+while (i < vals.length) { acc = acc + "|" + vals[i]; i = i + 1; }
+const spread = { ...src };
+const assigned = Object.assign({}, src);
+j + "#" + acc + "#" + (spread[s] === 2) + "#" + (assigned[s] === 2);
+"##,
+        "{\"a\":1,\"b\":3}#|1|3#true#true",
+    );
+    // Row 4 (donor + engine only; franken-core has no executable Proxy):
+    // Proxy ownKeys preserves typed identity — a string alias like
+    // "Symbol(14)" stays a string, trap-returned Symbols keep their exact
+    // identity, same-description Symbols stay distinct — and duplicate
+    // identical keys in the trap result are rejected with a TypeError.
+    assert_donor_consensus(
+        "sym-proxy-identity-donor",
+        r##"const p1 = Symbol("p");
+const p2 = Symbol("p");
+const target = {};
+target[p1] = 1;
+target.q = 2;
+const handler = { ownKeys() { return ["q", "Symbol(14)", p1, p2]; } };
+const p = new Proxy(target, handler);
+const ks = Reflect.ownKeys(p);
+let dup = "no";
+try { Reflect.ownKeys(new Proxy({}, { ownKeys() { return [p1, p1]; } })); } catch (e) { dup = "TypeError"; }
+console.log((typeof ks[1]) + "#" + (typeof ks[2]) + "#" + (ks[2] === p1) + "#" + (ks[3] === p2) + "#" + (ks[2] === ks[3]) + "#" + ks.length + "#" + dup);
+"##,
+        "string#symbol#true#true#false#4#TypeError",
+    );
+    // Row 5 (donor + engine only; franken-core has no executable
+    // Object.defineProperty): converting a data property to an accessor
+    // via defineProperty retains the key's own-key position for string and
+    // Symbol keys, and the accessor is invoked on read.
+    assert_donor_consensus(
+        "sym-accessor-conversion-donor",
+        r##"const sa = Symbol("acc");
+const o = {};
+o.a = 1;
+o[sa] = 2;
+o.b = 3;
+Object.defineProperty(o, "a", { get() { return 42; }, enumerable: true, configurable: true });
+Object.defineProperty(o, sa, { get() { return 43; }, enumerable: true, configurable: true });
+const syms = Object.getOwnPropertySymbols(o);
+console.log(Object.keys(o).join("|") + "#" + syms.length + "#" + (syms[0] === sa) + "#" + o.a + "#" + o[sa]);
+"##,
+        "a|b#1#true#42#43",
+    );
+}

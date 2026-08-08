@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 
 use frankenengine_core::baseline_interpreter::{
+    ConsoleEntry as CoreConsoleEntry, ConsoleLevel as CoreConsoleLevel,
     InterpreterConfig as CoreInterpreterConfig, InterpreterError as CoreInterpreterError,
     QuickJsLane as CoreQuickJsLane, Value as CoreValue,
 };
@@ -1233,6 +1234,24 @@ fn render_console_streams(
     (stdout, stderr)
 }
 
+/// Core-lane twin of [`render_console_streams`]: franken-core's console types
+/// are a distinct mirror of the engine's, so the same routing is spelled out
+/// against the core enums to keep both in-process lanes' observable streams
+/// apples-to-apples with the `node -e` / `bun -e` subprocess lanes.
+fn render_core_console_streams(entries: &[CoreConsoleEntry]) -> (String, String) {
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for entry in entries {
+        let target = match entry.level {
+            CoreConsoleLevel::Log | CoreConsoleLevel::Info => &mut stdout,
+            CoreConsoleLevel::Warn | CoreConsoleLevel::Error => &mut stderr,
+        };
+        target.push_str(&entry.message);
+        target.push('\n');
+    }
+    (stdout, stderr)
+}
+
 /// Bytes of headroom granted per heap object when an operator raises the engine
 /// heap-object budget via `--engine-memory-budget`. The interpreter's per-object
 /// base footprint estimate is 64 bytes; 1 KiB/object covers objects carrying
@@ -1352,8 +1371,15 @@ fn run_franken_core_backend(
         ));
     }
     match eval_with_franken_core(source, instruction_budget, memory_budget_override) {
-        Ok((value, value_wtf16, completion_label)) => {
-            let stdout = value.clone();
+        Ok((value, value_wtf16, completion_label, console_output)) => {
+            // Mirror the franken-engine lane: the observable stream is what
+            // the program printed through `console.*`, exactly like the
+            // `node -e` / `bun -e` subprocess lanes. The prior synthesis of
+            // stdout from the completion value made `exact_stdout` report a
+            // false divergence for every console-free source with a non-empty
+            // completion value (bd-n8eta.4.5); the completion `value` is
+            // retained as supplementary detail.
+            let (stdout, stderr) = render_core_console_streams(&console_output);
             let mut diagnostics = vec![
                 "frankenengine-core path dependency executed in-process through parser/lowering/QuickJsLane".to_string(),
             ];
@@ -1377,9 +1403,9 @@ fn run_franken_core_backend(
                 completion_label: Some(completion_label),
                 value_wtf16,
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
-                stderr_sha256: sha256_hex(b""),
+                stderr_sha256: sha256_hex(stderr.as_bytes()),
                 stdout,
-                stderr: String::new(),
+                stderr,
                 diagnostics,
             })
         }
@@ -1487,7 +1513,15 @@ fn eval_with_franken_core(
     source: &str,
     instruction_budget: Option<u64>,
     memory_budget_override: Option<EngineMemoryBudget>,
-) -> Result<(String, Option<Vec<u16>>, CoreIfcLabel), FrankenCoreBackendError> {
+) -> Result<
+    (
+        String,
+        Option<Vec<u16>>,
+        CoreIfcLabel,
+        Vec<CoreConsoleEntry>,
+    ),
+    FrankenCoreBackendError,
+> {
     let normalized = source.trim();
     if normalized.is_empty() {
         return Err(FrankenCoreBackendError {
@@ -1563,6 +1597,7 @@ fn eval_with_franken_core(
         result.value.to_string(),
         value_wtf16,
         result.completion_label,
+        result.console_output,
     ))
 }
 
@@ -2260,8 +2295,8 @@ fn canonical_structured_value(
         return (None, None);
     };
     // Exact code units ride along only when the structured value IS the
-    // completion value — taken directly, or via a stdout line that mirrors it
-    // (the franken-core lane surfaces the completion value as its stdout) —
+    // completion value — taken directly (both in-process lanes fall back to
+    // it for console-free sources), or via a stdout line that mirrors it —
     // never attached to unrelated console output (bd-2vzgi).
     let wtf16 = match (&receipt.value_wtf16, &receipt.value) {
         (Some(units), Some(value)) if source == value => Some(units.clone()),

@@ -123,17 +123,23 @@ enum audit found only the engine differential oracle as a workspace consumer;
 its fallback match remains source-compatible, while `franken_node` has no
 direct core-IR match or construction site.
 
-## Active Parity Exception: Executable Symbol Keys
+## Graduated Parity Exception: Executable Symbol Keys (closed 2026-08-08)
 
-`bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned
-evolution in ADR-0008. Both descriptor object models already have typed Symbol
-identities and correct `[[OwnPropertyKeys]]` order, but their executable
-baseline heaps are not at parity: franken-core has no executable Symbol value,
-while franken-engine uses heap objects and projects computed Symbol keys to
-strings.
+`bd-n8eta.4.1` recorded a wire-additive but Rust-source-breaking versioned
+evolution in ADR-0008. All five evidence children below are now closed: both
+executable baseline heaps carry typed Symbol values and own keys over the
+shared ordered sidecar, typed property hooks are live in both lanes, and
+`bd-n8eta.4.5` landed the executable Node/Bun/engine/core donor matrix
+(`tests/differential_oracle_integration.rs::symbol_own_key_donor_matrix_bd_n8eta_4_5`)
+plus the focused `CapturedInterpreterState` Symbol round-trip test. DISC-013
+records the remaining ACCEPTED residuals (core lacks executable Proxy /
+defineProperty / console lowering / Array push+join; engine own-key readers
+other than Reflect.ownKeys / getOwnPropertySymbols / assign / spread do not
+route through Proxy `ownKeys`; the time-travel snapshot drops
+`symbol_state`) — those are missing-surface gaps, not order-carrier parity
+gaps.
 
-The parity row therefore remains `pending_graduation`. Evidence must land in
-this order:
+The evidence landed in this order:
 
 | Bead | Required evidence |
 | --- | --- |

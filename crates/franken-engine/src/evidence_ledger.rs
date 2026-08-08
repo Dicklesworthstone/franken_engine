@@ -4389,7 +4389,11 @@ mod tests {
             .collect();
         assert_eq!(
             losses,
-            vec![("allow", 500_000), ("sandbox", 100_000), ("sandbox", 900_000)],
+            vec![
+                ("allow", 500_000),
+                ("sandbox", 100_000),
+                ("sandbox", 900_000)
+            ],
             "candidates must be canonical by (action_name, expected_loss)"
         );
 
@@ -4401,7 +4405,9 @@ mod tests {
         )
         .expect("built entry must already be canonically ordered");
         let mut ledger = InMemoryLedger::new();
-        ledger.emit(entry).expect("canonical built entry must admit");
+        ledger
+            .emit(entry)
+            .expect("canonical built entry must admit");
     }
 
     /// A freshly built entry is already normalized: re-normalizing it must be a
@@ -4444,7 +4450,9 @@ mod tests {
         // Force a non-canonical order on the already-sealed entry (the exact
         // post-build mutation the bd-26i contract forbids).
         entry.candidates.reverse();
-        entry.candidates.push(CandidateAction::new("sandbox", 999_999));
+        entry
+            .candidates
+            .push(CandidateAction::new("sandbox", 999_999));
 
         let mut ledger = InMemoryLedger::new();
         let stale_admit = ledger.emit(entry.clone());

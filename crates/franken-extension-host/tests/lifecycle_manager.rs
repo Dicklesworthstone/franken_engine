@@ -9,6 +9,22 @@ use std::collections::BTreeSet;
 
 /// Create proper Ed25519 signed manifest for lifecycle manager integration tests
 /// Replaces fake signatures with deterministic Ed25519 provenance
+// bd-cqdgz: trust the deterministic publisher of this file's signed fixture so
+// set_validated_manifest_with_config admits it under the config-aware trust
+// policy (bd-50uma). Production defaults still trust no roots.
+fn trusted_config() -> frankenengine_extension_host::ExtensionHostConfig {
+    let trust_chain_ref = manifest()
+        .trust_chain_ref
+        .expect("signed fixture manifest carries a trust chain ref");
+    frankenengine_extension_host::ExtensionHostConfig {
+        trusted_publisher_keys: std::collections::BTreeMap::from([(
+            trust_chain_ref.clone(),
+            trust_chain_ref,
+        )]),
+        ..frankenengine_extension_host::ExtensionHostConfig::default()
+    }
+}
+
 fn manifest() -> ExtensionManifest {
     // Use deterministic key for lifecycle manager integration tests
     let key_seed = {
@@ -62,7 +78,7 @@ fn integration_full_lifecycle_with_structured_events() {
         CancellationConfig::default(),
     );
     manager
-        .set_validated_manifest(manifest())
+        .set_validated_manifest_with_config(manifest(), &trusted_config())
         .expect("manifest");
     manager
         .apply_transition(LifecycleTransition::Validate, 10, &cx)
@@ -106,7 +122,7 @@ fn integration_budget_exhaustion_triggers_containment() {
         CancellationConfig::default(),
     );
     manager
-        .set_validated_manifest(manifest())
+        .set_validated_manifest_with_config(manifest(), &trusted_config())
         .expect("manifest");
     manager
         .apply_transition(LifecycleTransition::Validate, 10, &cx)

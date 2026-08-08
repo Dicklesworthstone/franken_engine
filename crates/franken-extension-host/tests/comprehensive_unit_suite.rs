@@ -117,8 +117,13 @@ fn manager_with_manifest(
 ) -> ExtensionLifecycleManager {
     let mut mgr =
         ExtensionLifecycleManager::new(ext_id, budget, policy, CancellationConfig::default());
-    mgr.set_validated_manifest(valid_manifest())
-        .expect("manifest should validate");
+    // bd-cqdgz: admit the signed fixture manifest against a config that trusts
+    // its publisher (bd-50uma); the default policy trusts no roots.
+    mgr.set_validated_manifest_with_config(
+        valid_manifest(),
+        &trusted_config_for(&valid_manifest()),
+    )
+    .expect("manifest should validate");
     mgr
 }
 
@@ -138,29 +143,17 @@ fn test_declassification_gateway() -> DeclassificationGateway {
     DeclassificationGateway::with_default_contracts(test_decision_signing_key())
 }
 
-// bd-cqdgz: trust exactly the deterministic publisher key this file's signed
-// fixtures use, so create_delegate_cell admits them under the current
-// config-aware trust policy (bd-50uma). Production defaults still trust none.
-fn trusted_host_config() -> ExtensionHostConfig {
-    let trust_chain_ref = signed_manifest()
-        .trust_chain_ref
-        .expect("signed fixture manifest carries a trust chain ref");
-    ExtensionHostConfig {
-        trusted_publisher_keys: std::collections::BTreeMap::from([(
-            trust_chain_ref.clone(),
-            trust_chain_ref,
-        )]),
-        ..ExtensionHostConfig::default()
-    }
-}
-
 fn test_delegate_cell_factory() -> DelegateCellFactory {
     DelegateCellFactory {
         sink_policy: HostcallSinkPolicy::default(),
         cancellation_config: CancellationConfig::default(),
         policy: DelegateCellPolicy::default(),
         decision_signing_key: test_decision_signing_key(),
-        host_config: trusted_host_config(),
+        // bd-cqdgz: trust the deterministic publisher of the signed base
+        // manifest these fixtures use, so create_delegate_cell admits them
+        // under the config-aware trust policy (bd-50uma). Production defaults
+        // still trust no roots.
+        host_config: trusted_config_for(&valid_manifest()),
     }
 }
 
@@ -428,7 +421,9 @@ fn with_computed_content_hash_fills_hash() {
 fn validate_manifest_with_context_valid() {
     let m = valid_manifest();
     let ctx = manifest_ctx();
-    let report = validate_manifest_with_context(&m, &ctx);
+    // bd-cqdgz: validate the signed fixture against a config that trusts its
+    // publisher (bd-50uma); the default policy trusts no roots.
+    let report = validate_manifest_with_context_and_config(&m, &ctx, &trusted_config_for(&m));
     assert!(report.error.is_none());
     assert_eq!(report.event.outcome, "pass");
 }
@@ -450,7 +445,8 @@ fn validate_manifest_with_context_invalid_produces_event() {
 fn validation_report_into_result() {
     let m = valid_manifest();
     let ctx = manifest_ctx();
-    let report = validate_manifest_with_context(&m, &ctx);
+    // bd-cqdgz: config-aware validation of the signed fixture (bd-50uma).
+    let report = validate_manifest_with_context_and_config(&m, &ctx, &trusted_config_for(&m));
     assert!(report.into_result().is_ok());
 }
 
@@ -1367,7 +1363,12 @@ fn delegate_cell_manifest_validation() {
         delegator_id: "parent".to_string(),
         max_lifetime_ns: 60_000_000_000,
     };
-    assert!(manifest.validate().is_ok());
+    // bd-cqdgz: validate against the trusted publisher config (bd-50uma).
+    assert!(
+        manifest
+            .validate_with_config(&trusted_config_for(&valid_manifest()))
+            .is_ok()
+    );
 }
 
 #[test]

@@ -10,6 +10,22 @@ use std::collections::BTreeSet;
 
 /// Create proper Ed25519 signed manifest for lifecycle edge case tests
 /// Replaces fake signatures with deterministic Ed25519 provenance
+// bd-cqdgz: trust the deterministic publisher of this file's signed fixture so
+// set_validated_manifest_with_config admits it under the config-aware trust
+// policy (bd-50uma). Production defaults still trust no roots.
+fn trusted_config() -> frankenengine_extension_host::ExtensionHostConfig {
+    let trust_chain_ref = manifest()
+        .trust_chain_ref
+        .expect("signed fixture manifest carries a trust chain ref");
+    frankenengine_extension_host::ExtensionHostConfig {
+        trusted_publisher_keys: std::collections::BTreeMap::from([(
+            trust_chain_ref.clone(),
+            trust_chain_ref,
+        )]),
+        ..frankenengine_extension_host::ExtensionHostConfig::default()
+    }
+}
+
 fn manifest() -> ExtensionManifest {
     // Use deterministic key for lifecycle edge tests
     let key_seed = {
@@ -69,7 +85,8 @@ fn manager_at_state(state: ExtensionState) -> ExtensionLifecycleManager {
         BudgetExhaustionPolicy::Suspend,
         CancellationConfig::default(),
     );
-    m.set_validated_manifest(manifest()).expect("manifest");
+    m.set_validated_manifest_with_config(manifest(), &trusted_config())
+        .expect("manifest");
 
     let steps: &[(LifecycleTransition, u64)] = match state {
         ExtensionState::Unloaded => &[],
@@ -428,7 +445,8 @@ fn budget_exhaustion_with_suspend_policy_suspends_from_running() {
         BudgetExhaustionPolicy::Suspend,
         CancellationConfig::default(),
     );
-    m.set_validated_manifest(manifest()).expect("manifest");
+    m.set_validated_manifest_with_config(manifest(), &trusted_config())
+        .expect("manifest");
     // SAFETY: Valid lifecycle transition sequence in test - Validate should succeed after setting manifest.
     m.apply_transition(LifecycleTransition::Validate, 10, &cx)
         .unwrap();
@@ -462,7 +480,8 @@ fn budget_exhaustion_with_terminate_policy_terminates() {
         BudgetExhaustionPolicy::Terminate,
         CancellationConfig::default(),
     );
-    m.set_validated_manifest(manifest()).expect("manifest");
+    m.set_validated_manifest_with_config(manifest(), &trusted_config())
+        .expect("manifest");
     m.apply_transition(LifecycleTransition::Validate, 10, &cx)
         .unwrap();
     m.apply_transition(LifecycleTransition::Load, 20, &cx)
@@ -487,7 +506,8 @@ fn cpu_budget_exhaustion_triggers_containment() {
         BudgetExhaustionPolicy::Terminate,
         CancellationConfig::default(),
     );
-    m.set_validated_manifest(manifest()).expect("manifest");
+    m.set_validated_manifest_with_config(manifest(), &trusted_config())
+        .expect("manifest");
     m.apply_transition(LifecycleTransition::Validate, 10, &cx)
         .unwrap();
     m.apply_transition(LifecycleTransition::Load, 20, &cx)
@@ -514,7 +534,8 @@ fn memory_budget_exhaustion_triggers_containment() {
         BudgetExhaustionPolicy::Suspend,
         CancellationConfig::default(),
     );
-    m.set_validated_manifest(manifest()).expect("manifest");
+    m.set_validated_manifest_with_config(manifest(), &trusted_config())
+        .expect("manifest");
     m.apply_transition(LifecycleTransition::Validate, 10, &cx)
         .unwrap();
     m.apply_transition(LifecycleTransition::Load, 20, &cx)

@@ -138,13 +138,29 @@ fn test_declassification_gateway() -> DeclassificationGateway {
     DeclassificationGateway::with_default_contracts(test_decision_signing_key())
 }
 
+// bd-cqdgz: trust exactly the deterministic publisher key this file's signed
+// fixtures use, so create_delegate_cell admits them under the current
+// config-aware trust policy (bd-50uma). Production defaults still trust none.
+fn trusted_host_config() -> ExtensionHostConfig {
+    let trust_chain_ref = signed_manifest()
+        .trust_chain_ref
+        .expect("signed fixture manifest carries a trust chain ref");
+    ExtensionHostConfig {
+        trusted_publisher_keys: std::collections::BTreeMap::from([(
+            trust_chain_ref.clone(),
+            trust_chain_ref,
+        )]),
+        ..ExtensionHostConfig::default()
+    }
+}
+
 fn test_delegate_cell_factory() -> DelegateCellFactory {
     DelegateCellFactory {
         sink_policy: HostcallSinkPolicy::default(),
         cancellation_config: CancellationConfig::default(),
         policy: DelegateCellPolicy::default(),
         decision_signing_key: test_decision_signing_key(),
-        host_config: ExtensionHostConfig::default(),
+        host_config: trusted_host_config(),
     }
 }
 

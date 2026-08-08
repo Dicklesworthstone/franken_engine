@@ -53,6 +53,7 @@ fn create_test_package(id: &str, source: &str) -> ExtensionPackage {
         capabilities: vec![
             "builtin:JsonParse".to_string(),
             "builtin:JsonStringify".to_string(),
+            "builtin:Error".to_string(),
         ],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -361,15 +362,12 @@ fn metamorphic_determinism_error_handling() {
             "try_catch",
             "try { JSON.parse('{\"valid\": true}'); } catch (e) { 'error'; }",
         ),
-        // KNOWN GAP (bd-8y64t): reading `e.message` off a caught Error is
-        // rejected at lowering on the orchestrator path — thrown-value labels
-        // are deliberately fail-high TopSecret and the completion sink has
-        // Internal clearance. Until that precision/policy decision lands, the
-        // catch arm here observes only literals so the determinism relation
-        // stays executable; a `.message` read is pinned red by bd-8y64t.
+        // bd-8y64t landed Error-family exception precision: an unshadowed
+        // `new Error("literal")` no longer poisons the catch binding, so the
+        // canonical `.message` read is exercised for real here.
         (
             "throw_custom",
-            "try { throw new Error('test'); } catch (e) { 'threw'; }",
+            "try { throw new Error('test'); } catch (e) { e.message; }",
         ),
         (
             "type_error",

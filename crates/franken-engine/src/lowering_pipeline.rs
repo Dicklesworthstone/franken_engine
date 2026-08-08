@@ -23735,6 +23735,25 @@ fn hostcall_exception_is_operand_derived(capability: &str, inputs: &[FlowValue])
         | "builtin:Int32Array"
         | "builtin:Uint32Array"
         | "builtin:DataView" => inputs.iter().all(|value| value.shape.is_closed()),
+        // Unshadowed native Error-family constructors are finite engine
+        // implementations for primitive arguments: stringifying a primitive
+        // message never invokes guest coercion, so the only exceptional
+        // outcomes are engine-owned (allocation) and operand-derived. Object
+        // arguments — including an options/cause bag — keep the fail-high
+        // default because ToString / property reads on them can run guest
+        // code whose thrown values are not summarized here (bd-8y64t: this
+        // is what lets `try { throw new Error("m") } catch (e) { e.message }`
+        // reach the completion sink instead of poisoning the catch binding
+        // with TopSecret).
+        "builtin:Error"
+        | "builtin:TypeError"
+        | "builtin:RangeError"
+        | "builtin:ReferenceError"
+        | "builtin:SyntaxError"
+        | "builtin:EvalError"
+        | "builtin:URIError" => inputs
+            .iter()
+            .all(|value| value.shape == FlowValueShape::Primitive),
         // Buffer.from and Buffer.alloc/allocUnsafe have a closed exception
         // contract only for direct primitive arguments. Object arguments can
         // expose mutable array-like or backing-store state whose provenance is

@@ -2435,3 +2435,65 @@ fn nonexistent_module_root_fails_closed_bd_8mgzb() {
         "unexpected error {error}"
     );
 }
+
+// =========================================================================
+// bd-8y64t: Error-family constructor exception precision
+// =========================================================================
+
+/// The canonical error-handling pattern must reach the completion sink: an
+/// unshadowed `new Error("literal")` is a finite engine builtin for primitive
+/// arguments, so it no longer poisons the catch binding with TopSecret.
+#[test]
+fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let mut package = simple_package(
+        "ext-8y64t-positive",
+        r#"let caught = false; try { throw new Error("test"); } catch (e) { caught = e.message; } caught;"#,
+    );
+    // The builtin hostcall is separately capability-gated; the IFC precision
+    // under test is orthogonal to the grant (frankenctl's run path grants the
+    // builtin set by default).
+    package.capabilities = vec!["builtin:Error".to_string()];
+    let result = orch
+        .execute(&package)
+        .expect("catch(e){e.message} must execute on the orchestrator path");
+    assert_eq!(result.execution_value, "test");
+}
+
+/// An object argument can invoke guest coercion (user toString) whose thrown
+/// values are not summarized, so the fail-high contract must survive.
+#[test]
+fn error_constructor_object_argument_stays_fail_high_bd_8y64t() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let error = orch
+        .execute(&simple_package(
+            "ext-8y64t-object-arg",
+            r#"let m = "x"; try { throw new Error({ toString() { return "sneaky"; } }); } catch (e) { m = typeof e.message; } m;"#,
+        ))
+        .expect_err("object-argument Error construction must stay fail-high");
+    assert!(
+        matches!(error.primary_error(), OrchestratorError::Lowering(_)),
+        "expected a lowering flow denial, got {error}"
+    );
+    assert!(
+        error.to_string().contains("unauthorized flow"),
+        "expected an unauthorized-flow denial, got {error}"
+    );
+}
+
+/// A lexically shadowed `Error` is user code, not the engine builtin: the
+/// audited contract must not apply and the catch binding stays fail-high.
+#[test]
+fn shadowed_error_constructor_stays_fail_high_bd_8y64t() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let error = orch
+        .execute(&simple_package(
+            "ext-8y64t-shadowed",
+            r#"let Error = function (message) { this.message = message; }; let m = "x"; try { throw new Error("test"); } catch (e) { m = e.message; } m;"#,
+        ))
+        .expect_err("shadowed Error construction must stay fail-high");
+    assert!(
+        error.to_string().contains("unauthorized flow"),
+        "expected an unauthorized-flow denial, got {error}"
+    );
+}

@@ -1706,6 +1706,219 @@ mod tests {
         assert!(!engine.is_complete());
     }
 
+    // ── bd-buocz: fail-closed structural validation + content-bound IDs ──
+
+    /// A well-formed dense/monotonic finalised trace (and the empty finalised
+    /// trace) must still validate — the hardening must not reject honest traces.
+    #[test]
+    fn validate_accepts_wellformed_trace_bd_buocz() {
+        let mut trace = NondeterminismTrace::new("ok");
+        trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "clk");
+        trace.capture(NondeterminismSource::ResourceCheck, vec![2], 10, "budget");
+        trace.capture(NondeterminismSource::LaneSelectionRandom, vec![3], 20, "router");
+        trace.finalise(30);
+        trace.validate_for_replay().expect("wellformed trace validates");
+
+        let mut empty = NondeterminismTrace::new("empty");
+        empty.finalise(0);
+        empty
+            .validate_for_replay()
+            .expect("empty finalised trace validates");
+    }
+
+    fn wellformed_pair_bd_buocz() -> NondeterminismTrace {
+        let mut trace = NondeterminismTrace::new("adv");
+        trace.capture(NondeterminismSource::TimerRead, vec![1], 100, "clk");
+        trace.capture(NondeterminismSource::TimerRead, vec![2], 200, "clk");
+        trace.finalise(300);
+        trace.validate_for_replay().expect("base trace is valid");
+        trace
+    }
+
+    #[test]
+    fn validate_rejects_gapped_sequence_bd_buocz() {
+        let mut trace = wellformed_pair_bd_buocz();
+        trace.events[1].sequence = 5; // gap: position 1 no longer declares 1
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::NonContiguousSequence {
+                position: 1,
+                declared: 5,
+                expected: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_sequence_bd_buocz() {
+        let mut trace = wellformed_pair_bd_buocz();
+        trace.events[1].sequence = 0; // duplicate of position 0
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::NonContiguousSequence { position: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_reordered_sequence_bd_buocz() {
+        let mut trace = wellformed_pair_bd_buocz();
+        trace.events.swap(0, 1); // vector[0] now declares sequence 1
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::NonContiguousSequence {
+                position: 0,
+                declared: 1,
+                expected: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_next_sequence_mismatch_bd_buocz() {
+        let mut trace = wellformed_pair_bd_buocz();
+        trace.next_sequence = 99; // forged finalisation counter
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::NextSequenceMismatch {
+                next_sequence: 99,
+                event_count: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_regressing_virtual_ts_bd_buocz() {
+        let mut trace = wellformed_pair_bd_buocz();
+        trace.events[1].virtual_ts = 50; // regresses below previous (100)
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::NonMonotonicVirtualTimestamp {
+                sequence: 1,
+                virtual_ts: 50,
+                previous: 100
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_out_of_window_virtual_ts_bd_buocz() {
+        let mut trace = NondeterminismTrace::new("oob");
+        trace.capture(NondeterminismSource::TimerRead, vec![1], 100, "clk");
+        trace.finalise(50); // event vts 100 exceeds capture end 50
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::VirtualTimestampOutOfBounds {
+                sequence: 0,
+                virtual_ts: 100,
+                capture_started_vts: 0,
+                capture_ended_vts: 50
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_inverted_finalisation_bounds_bd_buocz() {
+        let mut trace = NondeterminismTrace::new("inverted");
+        trace.capture_started_vts = 200;
+        trace.finalise(100); // ended before started
+        assert!(matches!(
+            trace.validate_for_replay(),
+            Err(ReplayError::InvalidFinalisationBounds {
+                capture_started_vts: 200,
+                capture_ended_vts: 100
+            })
+        ));
+    }
+
+    /// A forged trace must be refused at the ReplayEngine consume boundary too,
+    /// not merely by a direct validate call.
+    #[test]
+    fn replay_next_refuses_forged_trace_bd_buocz() {
+        let mut trace = wellformed_pair_bd_buocz();
+        trace.events.swap(0, 1);
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        let result = engine.replay_next(NondeterminismSource::TimerRead, &[2]);
+        assert!(matches!(
+            result,
+            Err(ReplayError::NonContiguousSequence { .. })
+        ));
+    }
+
+    #[test]
+    fn trace_event_id_binds_value_and_component_bd_buocz() {
+        let base = TraceEvent {
+            sequence: 0,
+            source: NondeterminismSource::TimerRead,
+            value: vec![1, 2, 3],
+            virtual_ts: 100,
+            component: "clock".to_string(),
+        };
+        let same = base.clone();
+        let diff_value = TraceEvent {
+            value: vec![1, 2, 4],
+            ..base.clone()
+        };
+        let diff_component = TraceEvent {
+            component: "timer".to_string(),
+            ..base.clone()
+        };
+        assert_eq!(base.derive_id(), same.derive_id(), "identical events share id");
+        assert_ne!(
+            base.derive_id(),
+            diff_value.derive_id(),
+            "value must be content-bound"
+        );
+        assert_ne!(
+            base.derive_id(),
+            diff_component.derive_id(),
+            "component must be content-bound"
+        );
+    }
+
+    #[test]
+    fn trace_id_binds_event_content_and_order_bd_buocz() {
+        // Same session id and event COUNT, different payloads: must NOT collide.
+        let mut a = NondeterminismTrace::new("collide");
+        a.capture(NondeterminismSource::TimerRead, vec![1], 10, "clk");
+        let mut b = NondeterminismTrace::new("collide");
+        b.capture(NondeterminismSource::TimerRead, vec![2], 10, "clk");
+        assert_ne!(
+            a.derive_id(),
+            b.derive_id(),
+            "distinct event payloads must yield distinct trace ids"
+        );
+
+        // Same events, different order: must NOT collide.
+        let mut c = NondeterminismTrace::new("order");
+        c.capture(NondeterminismSource::TimerRead, vec![1], 10, "clk");
+        c.capture(NondeterminismSource::ResourceCheck, vec![2], 20, "budget");
+        let mut d = NondeterminismTrace::new("order");
+        d.capture(NondeterminismSource::ResourceCheck, vec![2], 10, "budget");
+        d.capture(NondeterminismSource::TimerRead, vec![1], 20, "clk");
+        assert_ne!(
+            c.derive_id(),
+            d.derive_id(),
+            "reordered events must yield distinct trace ids"
+        );
+    }
+
+    #[test]
+    fn replay_engine_id_binds_trace_content_bd_buocz() {
+        let mut a = NondeterminismTrace::new("s");
+        a.capture(NondeterminismSource::TimerRead, vec![1], 10, "clk");
+        a.finalise(20);
+        let mut b = NondeterminismTrace::new("s");
+        b.capture(NondeterminismSource::TimerRead, vec![9], 10, "clk");
+        b.finalise(20);
+        let ea = ReplayEngine::new(a, ReplayMode::Strict);
+        let eb = ReplayEngine::new(b, ReplayMode::Strict);
+        assert_ne!(
+            ea.derive_id(),
+            eb.derive_id(),
+            "replay engines over distinct traces must not collide"
+        );
+    }
+
     #[test]
     fn replay_exact_match() {
         let mut trace = NondeterminismTrace::new("s1");

@@ -27788,7 +27788,94 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Install the ambient runtime globals as a single failure-atomic
+    /// transaction (bd-en0uq).
+    ///
+    /// The inner routine allocates several heap objects before installing
+    /// their scope/realm bindings, and any allocation or memory-accounting
+    /// step can refuse under a tight budget. Without a transaction a
+    /// mid-sequence refusal would leave earlier heap objects charged but
+    /// unreachable (their names never installed), and a retry would allocate
+    /// duplicates. Snapshot the exact state the injection can mutate — the
+    /// heap length, the live-memory estimate, the current scope frame's
+    /// bindings, and the realm dynamic-global map — and restore all four on
+    /// any failure so the observable state (and a subsequent retry) starts
+    /// from the pre-injection point. No external reference to these scope or
+    /// realm cells exists yet at execution setup, so restoring detached-clone
+    /// snapshots preserves the correct value state.
     fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {
+        let heap_checkpoint = self.heap.len();
+        let memory_checkpoint = self.estimated_memory_bytes;
+        let scope_checkpoint = self.snapshot_current_scope_frame_bindings()?;
+        let realm_checkpoint = self.snapshot_realm_dynamic_globals()?;
+
+        match self.inject_runtime_globals_inner() {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.rollback_runtime_globals(
+                    heap_checkpoint,
+                    memory_checkpoint,
+                    scope_checkpoint,
+                    realm_checkpoint,
+                );
+                Err(err)
+            }
+        }
+    }
+
+    /// Detached-clone snapshot of the current (innermost) scope frame's
+    /// bindings: fresh cells carrying the same value/initialized state, so a
+    /// later restore is unaffected by in-place mutations to the live cells.
+    fn snapshot_current_scope_frame_bindings(
+        &self,
+    ) -> Result<BTreeMap<String, ScopeBinding>, InterpreterError> {
+        let frame = self
+            .scope_chain
+            .frames
+            .last()
+            .ok_or(InterpreterError::InternalError {
+                details: "scope chain unexpectedly empty".to_string(),
+            })?;
+        let mut snapshot = BTreeMap::new();
+        for (name, binding) in &frame.bindings {
+            snapshot.insert(name.clone(), binding.detached_clone()?);
+        }
+        Ok(snapshot)
+    }
+
+    /// Detached-clone snapshot of the realm dynamic-global map.
+    fn snapshot_realm_dynamic_globals(
+        &self,
+    ) -> Result<BTreeMap<String, ScopeBinding>, InterpreterError> {
+        let mut snapshot = BTreeMap::new();
+        for (name, binding) in &self.realm_dynamic_globals {
+            snapshot.insert(name.clone(), binding.detached_clone()?);
+        }
+        Ok(snapshot)
+    }
+
+    /// Restore the four state components a runtime-global injection can touch
+    /// to a pre-injection snapshot, then pin the live-memory estimate. The
+    /// heap truncation drops every object allocated during the failed attempt;
+    /// the scope-frame and realm-map restores drop any partially installed
+    /// bindings; the estimate is reset last so it stays consistent with the
+    /// restored components (equal to a full recompute at the checkpoint).
+    fn rollback_runtime_globals(
+        &mut self,
+        heap_checkpoint: usize,
+        memory_checkpoint: u64,
+        scope_checkpoint: BTreeMap<String, ScopeBinding>,
+        realm_checkpoint: BTreeMap<String, ScopeBinding>,
+    ) {
+        self.rollback_heap_to_len(heap_checkpoint);
+        if let Some(frame) = self.scope_chain.frames.last_mut() {
+            frame.bindings = scope_checkpoint;
+        }
+        self.realm_dynamic_globals = realm_checkpoint;
+        self.estimated_memory_bytes = memory_checkpoint;
+    }
+
+    fn inject_runtime_globals_inner(&mut self) -> Result<(), InterpreterError> {
         let argv = Value::Object(self.alloc_array_from_values(&[])?);
         let env = Value::Object(self.alloc_object_with_properties(&[])?);
         // bd-qmy52/bd-y30zw: `platform` and `pid` are benign process-SHAPE
@@ -103118,6 +103205,113 @@ mod tests {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn bd_en0uq_inject_runtime_globals_is_failure_atomic_under_memory_refusal() {
+        // A clean injection under an unbounded budget establishes the target
+        // heap growth, memory total, and realm identities.
+        let mut success = InterpreterCore::new(test_quickjs_config(), "bd-en0uq-success");
+        let entry_heap = success.heap_size();
+        let entry_mem = success.estimated_memory_bytes();
+        success.config.max_total_memory_bytes = u64::MAX;
+        success
+            .inject_runtime_globals()
+            .expect("injection fits under an unbounded budget");
+        let success_heap = success.heap_size();
+        let success_total = success.estimated_memory_bytes();
+        assert!(success_heap > entry_heap, "injection must allocate globals");
+        assert_eq!(
+            success.estimated_memory_bytes(),
+            success.recompute_estimated_memory_bytes(),
+            "a clean injection must leave consistent accounting"
+        );
+        let realm_identity = |core: &mut InterpreterCore| {
+            ["Promise", "Math", "Date"].map(|name| {
+                core.load_runtime_name(name, false)
+                    .expect("seeded realm global")
+            })
+        };
+        let seeded = realm_identity(&mut success);
+
+        // Repeated successful preparation preserves the realm ObjectId/callable
+        // backing identity (guarded seeds) and never duplicates a seed.
+        success
+            .inject_runtime_globals()
+            .expect("repeated successful injection");
+        assert_eq!(
+            realm_identity(&mut success),
+            seeded,
+            "realm identity churned"
+        );
+        assert_eq!(success.realm_dynamic_globals.len(), 3);
+
+        // Force a refusal at graduated budgets between the pre-injection
+        // estimate and the successful total. Every budget below the total must
+        // refuse, and each refusal must be atomic: no heap object, realm
+        // binding, or accounting drift survives, and the estimate stays
+        // consistent with a full recompute. A retry at full budget then
+        // succeeds with no duplicated allocations.
+        let step = ((success_total - entry_mem) / 12).max(1);
+        let mut budget = entry_mem;
+        let mut refusals = 0u32;
+        while budget < success_total {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "bd-en0uq-refuse");
+            let core_entry_heap = core.heap_size();
+            let core_entry_mem = core.estimated_memory_bytes();
+            core.config.max_total_memory_bytes = budget;
+            let outcome = core.inject_runtime_globals();
+            if outcome.is_ok() {
+                // The exact success threshold can land on a step boundary; a
+                // successful injection there is not a failure to exercise.
+                budget = budget.saturating_add(step);
+                continue;
+            }
+            refusals += 1;
+            assert!(
+                matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+                "budget {budget} must refuse for memory, got {outcome:?}"
+            );
+            assert_eq!(
+                core.heap_size(),
+                core_entry_heap,
+                "heap drift after atomic refusal at budget {budget}"
+            );
+            assert!(
+                core.realm_dynamic_globals.is_empty(),
+                "realm-global drift after atomic refusal at budget {budget}"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core_entry_mem,
+                "estimate drift after atomic refusal at budget {budget}"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "estimate inconsistent after atomic refusal at budget {budget}"
+            );
+
+            core.config.max_total_memory_bytes = u64::MAX;
+            core.inject_runtime_globals()
+                .expect("retry after an atomic refusal must succeed");
+            assert_eq!(
+                core.heap_size(),
+                success_heap,
+                "retry must not leak duplicate allocations at budget {budget}"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "retry accounting must be consistent at budget {budget}"
+            );
+            assert_eq!(core.realm_dynamic_globals.len(), 3);
+            budget = budget.saturating_add(step);
+        }
+        assert!(
+            refusals > 0,
+            "the budget sweep must have exercised at least one atomic refusal"
         );
     }
 

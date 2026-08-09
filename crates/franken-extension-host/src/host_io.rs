@@ -432,9 +432,46 @@ struct MutationTarget {
     name: OsString,
 }
 
+/// Upper bound on symlink traversals during a descriptor-relative read
+/// resolution, mirroring the kernel's ELOOP limit for path resolution.
+#[cfg(unix)]
+const READ_SYMLINK_FOLLOW_CAP: usize = 40;
+
+/// Result of a descriptor-relative read-side resolution. Both variants carry
+/// the canonical guest-visible components so `realpath` can render a virtual
+/// path without ever consulting the host pathname again.
+#[cfg(unix)]
+#[derive(Debug)]
+enum ReadTarget {
+    /// The walk ended holding a directory open (the sandbox root itself, or a
+    /// symlink chain ending in `.`/`..`).
+    Directory {
+        fd: OwnedFd,
+        guest_components: Vec<OsString>,
+    },
+    /// The walk ended at a named final entry inside a held parent directory.
+    /// `guest_components` includes `name` as its last element.
+    Entry {
+        parent: OwnedFd,
+        name: OsString,
+        guest_components: Vec<OsString>,
+    },
+}
+
+/// Mutable state of an in-progress descriptor-relative read walk. `dirs`
+/// always retains the duplicated sandbox root at index 0; `names` holds the
+/// guest-visible component for each directory above the root.
+#[cfg(unix)]
+struct ReadWalk {
+    work: std::collections::VecDeque<OsString>,
+    dirs: Vec<OwnedFd>,
+    names: Vec<OsString>,
+    followed_links: usize,
+}
+
 #[cfg(all(test, unix))]
 #[derive(Debug)]
-struct MutationRaceHook {
+struct ResolutionRaceHook {
     trigger_on_resolution: usize,
     resolutions: std::sync::atomic::AtomicUsize,
     resolved: std::sync::Barrier,
@@ -442,7 +479,7 @@ struct MutationRaceHook {
 }
 
 #[cfg(all(test, unix))]
-impl MutationRaceHook {
+impl ResolutionRaceHook {
     fn new(trigger_on_resolution: usize) -> std::sync::Arc<Self> {
         assert!(trigger_on_resolution > 0);
         std::sync::Arc::new(Self {
@@ -487,7 +524,9 @@ pub struct SandboxedHostIo {
     /// `Arc` so cloning the provider does not copy the root set.
     tls_roots: std::sync::Arc<rustls::RootCertStore>,
     #[cfg(all(test, unix))]
-    mutation_race_hook: Option<std::sync::Arc<MutationRaceHook>>,
+    mutation_race_hook: Option<std::sync::Arc<ResolutionRaceHook>>,
+    #[cfg(all(test, unix))]
+    read_race_hook: Option<std::sync::Arc<ResolutionRaceHook>>,
 }
 
 impl SandboxedHostIo {
@@ -535,12 +574,20 @@ impl SandboxedHostIo {
             tls_roots: std::sync::Arc::new(tls_roots),
             #[cfg(all(test, unix))]
             mutation_race_hook: None,
+            #[cfg(all(test, unix))]
+            read_race_hook: None,
         })
     }
 
     #[cfg(all(test, unix))]
-    fn with_mutation_race_hook(mut self, hook: std::sync::Arc<MutationRaceHook>) -> Self {
+    fn with_mutation_race_hook(mut self, hook: std::sync::Arc<ResolutionRaceHook>) -> Self {
         self.mutation_race_hook = Some(hook);
+        self
+    }
+
+    #[cfg(all(test, unix))]
+    fn with_read_race_hook(mut self, hook: std::sync::Arc<ResolutionRaceHook>) -> Self {
+        self.read_race_hook = Some(hook);
         self
     }
 
@@ -640,41 +687,27 @@ impl SandboxedHostIo {
         Ok(joined)
     }
 
-    /// Render a canonical host path as an exact guest-visible virtual absolute
+    /// Render resolved guest-visible components as an exact virtual absolute
     /// path. The physical root is never exposed, and an unrepresentable
     /// component fails explicitly rather than being replaced with U+FFFD.
-    fn guest_absolute_path(&self, real: &Path) -> Result<String, HostIoError> {
-        let relative =
-            real.strip_prefix(&self.root)
-                .map_err(|_| HostIoError::SandboxViolation {
-                    detail: "canonical path is outside the sandbox root".to_string(),
-                })?;
+    #[cfg(unix)]
+    fn render_guest_path(components: &[OsString]) -> Result<String, HostIoError> {
         let mut rendered = String::from("/");
-        for component in relative.components() {
-            match component {
-                Component::Normal(part) => {
-                    let part = part.to_str().ok_or_else(|| HostIoError::Fs {
-                        code: "EINVAL".to_string(),
-                        detail: "realpath result contains a non-UTF-8 path component".to_string(),
-                    })?;
-                    if part.contains('\\') {
-                        return Err(HostIoError::Fs {
-                            code: "EINVAL".to_string(),
-                            detail: "realpath result contains a path component that cannot be represented in the guest path grammar".to_string(),
-                        });
-                    }
-                    if rendered.len() > 1 {
-                        rendered.push('/');
-                    }
-                    rendered.push_str(part);
-                }
-                Component::CurDir => {}
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                    return Err(HostIoError::SandboxViolation {
-                        detail: "canonical path has an invalid relative component".to_string(),
-                    });
-                }
+        for component in components {
+            let part = component.to_str().ok_or_else(|| HostIoError::Fs {
+                code: "EINVAL".to_string(),
+                detail: "realpath result contains a non-UTF-8 path component".to_string(),
+            })?;
+            if part.contains('\\') {
+                return Err(HostIoError::Fs {
+                    code: "EINVAL".to_string(),
+                    detail: "realpath result contains a path component that cannot be represented in the guest path grammar".to_string(),
+                });
             }
+            if rendered.len() > 1 {
+                rendered.push('/');
+            }
+            rendered.push_str(part);
         }
         Ok(rendered)
     }
@@ -697,7 +730,7 @@ impl SandboxedHostIo {
     }
 
     #[cfg(not(unix))]
-    fn mutation_not_implemented(action: &str) -> HostIoError {
+    fn fs_not_implemented(action: &str) -> HostIoError {
         HostIoError::NotImplemented {
             what: format!(
                 "descriptor-relative filesystem {action} is unavailable on this platform"
@@ -716,38 +749,236 @@ impl SandboxedHostIo {
         }
     }
 
-    /// Resolve an existing guest path and prove it remains inside the sandbox.
-    /// `follow_final=false` canonicalizes only the parent so `lstat`/`readlink`
-    /// can inspect a symlink without following its final component.
-    fn existing_path(&self, raw: &str, follow_final: bool) -> Result<PathBuf, HostIoError> {
-        let path = self.confine(raw)?;
-        if follow_final {
-            let real = path
-                .canonicalize()
-                .map_err(|err| Self::fs_error("resolve", raw, err))?;
-            if !real.starts_with(&self.root) {
-                return Err(HostIoError::SandboxViolation {
-                    detail: format!("symlinked path escapes the sandbox root: {raw}"),
+    /// Resolve a guest path for a read-class operation entirely relative to
+    /// the held sandbox root descriptor. Every intermediate component is
+    /// opened with `NOFOLLOW` against the preceding descriptor; symlinks are
+    /// followed only by explicitly reading their target and re-walking it from
+    /// the held descriptors, rejecting any hop that would leave the root. No
+    /// absolute host pathname survives this function, so a concurrent rename
+    /// or symlink swap cannot redirect the post-resolution operation outside
+    /// the sandbox.
+    ///
+    /// `follow_final=false` stops at the final component without following it
+    /// so `lstat`/`readlink` can inspect a symlink itself.
+    #[cfg(unix)]
+    fn read_target(&self, raw: &str, follow_final: bool) -> Result<ReadTarget, HostIoError> {
+        self.confine(raw)?;
+        let work: std::collections::VecDeque<OsString> = Path::new(raw)
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(part) => Some(part.to_owned()),
+                _ => None,
+            })
+            .collect();
+        let root = rustix::io::dup(self.root_fd.as_ref())
+            .map_err(|err| Self::rustix_fs_error("duplicate sandbox root for", raw, err))?;
+        let mut walk = ReadWalk {
+            work,
+            dirs: vec![root],
+            names: Vec::new(),
+            followed_links: 0,
+        };
+        let directory_flags = rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC;
+
+        while let Some(part) = walk.work.pop_front() {
+            if part == OsStr::new(".") {
+                continue;
+            }
+            if part == OsStr::new("..") {
+                if walk.names.pop().is_none() {
+                    return Err(HostIoError::SandboxViolation {
+                        detail: format!("symlinked path escapes the sandbox root: {raw}"),
+                    });
+                }
+                walk.dirs.pop();
+                continue;
+            }
+            let parent = walk
+                .dirs
+                .last()
+                .expect("read walk retains the sandbox root");
+            if walk.work.is_empty() {
+                if follow_final {
+                    let stat =
+                        rustix::fs::statat(parent, &part, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                            .map_err(|err| Self::rustix_fs_error("resolve", raw, err))?;
+                    if rustix::fs::FileType::from_raw_mode(stat.st_mode).is_symlink() {
+                        let target = Self::read_symlink_component(parent, &part, raw)?;
+                        self.queue_symlink_target(&mut walk, &target, raw)?;
+                        continue;
+                    }
+                }
+                let parent = walk.dirs.pop().expect("read walk retains the sandbox root");
+                walk.names.push(part.clone());
+                #[cfg(test)]
+                if let Some(hook) = &self.read_race_hook {
+                    hook.after_resolution();
+                }
+                return Ok(ReadTarget::Entry {
+                    parent,
+                    name: part,
+                    guest_components: walk.names,
                 });
             }
-            return Ok(real);
+            match rustix::fs::openat(parent, &part, directory_flags, rustix::fs::Mode::empty()) {
+                Ok(opened) => {
+                    walk.dirs.push(opened);
+                    walk.names.push(part);
+                }
+                Err(err)
+                    if matches!(err, rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP)
+                        && rustix::fs::statat(
+                            parent,
+                            &part,
+                            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                        )
+                        .is_ok_and(|stat| {
+                            rustix::fs::FileType::from_raw_mode(stat.st_mode).is_symlink()
+                        }) =>
+                {
+                    let target = Self::read_symlink_component(parent, &part, raw)?;
+                    self.queue_symlink_target(&mut walk, &target, raw)?;
+                }
+                Err(err) => {
+                    return Err(Self::rustix_fs_error("resolve parent for", raw, err));
+                }
+            }
         }
 
-        let parent = path.parent().unwrap_or(&self.root);
-        let real_parent = parent
-            .canonicalize()
-            .map_err(|err| Self::fs_error("resolve parent for", raw, err))?;
-        if !real_parent.starts_with(&self.root) {
-            return Err(HostIoError::SandboxViolation {
-                detail: format!("symlinked parent escapes the sandbox root: {raw}"),
+        // Every component was consumed while holding a directory open: the
+        // sandbox root itself, or a symlink chain ending in `.`/`..`.
+        let fd = walk.dirs.pop().expect("read walk retains the sandbox root");
+        #[cfg(test)]
+        if let Some(hook) = &self.read_race_hook {
+            hook.after_resolution();
+        }
+        Ok(ReadTarget::Directory {
+            fd,
+            guest_components: walk.names,
+        })
+    }
+
+    /// Read the stored target of an in-sandbox symlink component relative to
+    /// its held parent descriptor.
+    #[cfg(unix)]
+    fn read_symlink_component(
+        parent: &OwnedFd,
+        name: &OsStr,
+        raw: &str,
+    ) -> Result<PathBuf, HostIoError> {
+        use std::os::unix::ffi::OsStrExt;
+        let target = rustix::fs::readlinkat(parent, name, Vec::new())
+            .map_err(|err| Self::rustix_fs_error("readlink", raw, err))?;
+        Ok(PathBuf::from(OsStr::from_bytes(target.as_bytes())))
+    }
+
+    /// Queue a symlink target for continued resolution. Relative targets keep
+    /// walking from the current held directory; absolute targets are honored
+    /// only when they lexically re-enter the sandbox root (they restart from
+    /// the held root descriptor) and are rejected otherwise. Depth is bounded
+    /// so link cycles fail closed with `ELOOP`.
+    #[cfg(unix)]
+    fn queue_symlink_target(
+        &self,
+        walk: &mut ReadWalk,
+        target: &Path,
+        raw: &str,
+    ) -> Result<(), HostIoError> {
+        walk.followed_links += 1;
+        if walk.followed_links > READ_SYMLINK_FOLLOW_CAP {
+            return Err(HostIoError::Fs {
+                code: "ELOOP".to_string(),
+                detail: format!("too many levels of symbolic links: {raw}"),
             });
         }
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| HostIoError::SandboxViolation {
-                detail: format!("path resolves to no final component: {raw}"),
-            })?;
-        Ok(real_parent.join(file_name))
+        let relative: PathBuf = if target.has_root() {
+            match target.strip_prefix(&self.root) {
+                Ok(rest) => {
+                    let root = rustix::io::dup(self.root_fd.as_ref()).map_err(|err| {
+                        Self::rustix_fs_error("duplicate sandbox root for", raw, err)
+                    })?;
+                    walk.dirs.clear();
+                    walk.dirs.push(root);
+                    walk.names.clear();
+                    rest.to_path_buf()
+                }
+                Err(_) => {
+                    return Err(HostIoError::SandboxViolation {
+                        detail: format!("symlinked path escapes the sandbox root: {raw}"),
+                    });
+                }
+            }
+        } else {
+            target.to_path_buf()
+        };
+        let mut queued: Vec<OsString> = Vec::new();
+        for component in relative.components() {
+            match component {
+                Component::Normal(part) => queued.push(part.to_owned()),
+                Component::CurDir => {}
+                Component::ParentDir => queued.push(OsString::from("..")),
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(HostIoError::SandboxViolation {
+                        detail: format!("symlinked path escapes the sandbox root: {raw}"),
+                    });
+                }
+            }
+        }
+        for component in queued.into_iter().rev() {
+            walk.work.push_front(component);
+        }
+        Ok(())
+    }
+
+    /// Map a post-resolution reopen failure. `ELOOP` (and `ENOTDIR` when the
+    /// entry is now a symlink) means the final entry was swapped for a symlink
+    /// after resolution; refuse to follow it.
+    #[cfg(unix)]
+    fn read_reopen_error(
+        parent: &OwnedFd,
+        name: &OsStr,
+        action: &str,
+        raw: &str,
+        err: rustix::io::Errno,
+    ) -> HostIoError {
+        if err == rustix::io::Errno::LOOP
+            || (err == rustix::io::Errno::NOTDIR
+                && rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .is_ok_and(|stat| {
+                        rustix::fs::FileType::from_raw_mode(stat.st_mode).is_symlink()
+                    }))
+        {
+            HostIoError::SandboxViolation {
+                detail: format!("refusing to follow a symlink introduced after resolution: {raw}"),
+            }
+        } else {
+            Self::fs_error(action, raw, std::io::Error::from(err))
+        }
+    }
+
+    /// Build the transported metadata shape directly from a descriptor-relative
+    /// `stat` result.
+    #[cfg(unix)]
+    fn stat_metadata_result(stat: &rustix::fs::Stat) -> FsMetadata {
+        let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+        let total_millis =
+            i128::from(stat.st_mtime) * 1000 + i128::from(stat.st_mtime_nsec) / 1_000_000;
+        let modified_millis = i64::try_from(total_millis).unwrap_or(if total_millis > 0 {
+            i64::MAX
+        } else {
+            i64::MIN
+        });
+        FsMetadata {
+            size: u64::try_from(stat.st_size).unwrap_or(0),
+            mode: stat.st_mode,
+            modified_millis,
+            is_file: file_type.is_file(),
+            is_directory: file_type.is_dir(),
+            is_symbolic_link: file_type.is_symlink(),
+        }
     }
 
     /// Resolve a mutation target to a stable parent-directory capability and a
@@ -965,37 +1196,63 @@ impl SandboxedHostIo {
     }
 
     fn fs_read(&self, raw: &str) -> HostIoOutcome {
-        let real = self.existing_path(raw, true)?;
-        let metadata =
-            std::fs::symlink_metadata(&real).map_err(|err| Self::fs_error("stat", raw, err))?;
-        if !metadata.is_file() {
-            return Err(HostIoError::Fs {
-                code: "EISDIR".to_string(),
-                detail: format!("not a regular file: {raw}"),
-            });
+        #[cfg(not(unix))]
+        {
+            let _ = raw;
+            Err(Self::fs_not_implemented("read"))
         }
-        if metadata.len() > self.max_bytes {
-            return Err(HostIoError::Io {
-                detail: format!(
-                    "file {raw} is {} bytes, exceeds the {}-byte read cap",
-                    metadata.len(),
-                    self.max_bytes
-                ),
-            });
+        #[cfg(unix)]
+        {
+            let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, true)? else {
+                return Err(HostIoError::Fs {
+                    code: "EISDIR".to_string(),
+                    detail: format!("not a regular file: {raw}"),
+                });
+            };
+            // NONBLOCK so an entry swapped for a FIFO after resolution errors
+            // on the type check below instead of blocking the host.
+            let descriptor = rustix::fs::openat(
+                &parent,
+                &name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::NONBLOCK
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|err| Self::read_reopen_error(&parent, &name, "open", raw, err))?;
+            let file = std::fs::File::from(descriptor);
+            let metadata = file
+                .metadata()
+                .map_err(|err| Self::fs_error("stat", raw, err))?;
+            if !metadata.is_file() {
+                return Err(HostIoError::Fs {
+                    code: "EISDIR".to_string(),
+                    detail: format!("not a regular file: {raw}"),
+                });
+            }
+            if metadata.len() > self.max_bytes {
+                return Err(HostIoError::Io {
+                    detail: format!(
+                        "file {raw} is {} bytes, exceeds the {}-byte read cap",
+                        metadata.len(),
+                        self.max_bytes
+                    ),
+                });
+            }
+            // Bounded read: cap+1 so a file that grew between stat and read
+            // still fails closed rather than being silently truncated.
+            let mut bytes = Vec::new();
+            file.take(self.max_bytes.saturating_add(1))
+                .read_to_end(&mut bytes)
+                .map_err(|err| Self::fs_error("read", raw, err))?;
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
+                return Err(HostIoError::Io {
+                    detail: format!("file {raw} exceeds the {}-byte read cap", self.max_bytes),
+                });
+            }
+            Ok(HostIoResponse::FsRead { bytes })
         }
-        // Bounded read: cap+1 so a file that grew between stat and read still
-        // fails closed rather than being silently truncated.
-        let file = std::fs::File::open(&real).map_err(|err| Self::fs_error("open", raw, err))?;
-        let mut bytes = Vec::new();
-        file.take(self.max_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|err| Self::fs_error("read", raw, err))?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
-            return Err(HostIoError::Io {
-                detail: format!("file {raw} exceeds the {}-byte read cap", self.max_bytes),
-            });
-        }
-        Ok(HostIoResponse::FsRead { bytes })
     }
 
     fn fs_write(&self, raw: &str, data: &[u8]) -> HostIoOutcome {
@@ -1011,7 +1268,7 @@ impl SandboxedHostIo {
         #[cfg(not(unix))]
         {
             let _ = (raw, data);
-            Err(Self::mutation_not_implemented("write"))
+            Err(Self::fs_not_implemented("write"))
         }
         #[cfg(unix)]
         {
@@ -1042,37 +1299,6 @@ impl SandboxedHostIo {
         Self::fs_argument(arguments, name) == Some("true")
     }
 
-    fn metadata_result(raw: &str, metadata: &std::fs::Metadata) -> Result<FsMetadata, HostIoError> {
-        #[cfg(unix)]
-        let mode = {
-            use std::os::unix::fs::MetadataExt;
-            metadata.mode()
-        };
-        #[cfg(not(unix))]
-        let mode = if metadata.permissions().readonly() {
-            0o444
-        } else {
-            0o666
-        };
-
-        let modified = metadata
-            .modified()
-            .map_err(|err| Self::fs_error("read modification time for", raw, err))?;
-        let modified_millis = match modified.duration_since(std::time::UNIX_EPOCH) {
-            Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
-            Err(err) => -i64::try_from(err.duration().as_millis()).unwrap_or(i64::MAX),
-        };
-        let file_type = metadata.file_type();
-        Ok(FsMetadata {
-            size: metadata.len(),
-            mode,
-            modified_millis,
-            is_file: file_type.is_file(),
-            is_directory: file_type.is_dir(),
-            is_symbolic_link: file_type.is_symlink(),
-        })
-    }
-
     fn fs_meta(
         &self,
         operation: FsOperation,
@@ -1098,7 +1324,7 @@ impl SandboxedHostIo {
                 }
                 #[cfg(not(unix))]
                 {
-                    return Err(Self::mutation_not_implemented("append"));
+                    return Err(Self::fs_not_implemented("append"));
                 }
                 #[cfg(unix)]
                 {
@@ -1116,19 +1342,30 @@ impl SandboxedHostIo {
                     FsMetaResult::Unsigned(u64::try_from(data.len()).unwrap_or(u64::MAX))
                 }
             }
-            FsOperation::Exists => match self.existing_path(raw, true) {
-                Ok(_) => FsMetaResult::Bool(true),
-                Err(HostIoError::Fs { code, .. }) if code == "ENOENT" || code == "ENOTDIR" => {
-                    FsMetaResult::Bool(false)
+            FsOperation::Exists => {
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::fs_not_implemented("exists"));
                 }
-                Err(err) => return Err(err),
-            },
+                #[cfg(unix)]
+                {
+                    match self.read_target(raw, true) {
+                        Ok(_) => FsMetaResult::Bool(true),
+                        Err(HostIoError::Fs { code, .. })
+                            if code == "ENOENT" || code == "ENOTDIR" =>
+                        {
+                            FsMetaResult::Bool(false)
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+            }
             FsOperation::Mkdir => {
                 let recursive = Self::fs_flag(arguments, "recursive");
                 #[cfg(not(unix))]
                 {
                     let _ = recursive;
-                    return Err(Self::mutation_not_implemented("mkdir"));
+                    return Err(Self::fs_not_implemented("mkdir"));
                 }
                 #[cfg(unix)]
                 {
@@ -1138,41 +1375,93 @@ impl SandboxedHostIo {
                 }
             }
             FsOperation::ReadDir => {
-                let directory = self.existing_path(raw, true)?;
-                let with_file_types = Self::fs_flag(arguments, "with_file_types");
-                let mut names = Vec::new();
-                let mut entries = Vec::new();
-                let directory_entries = std::fs::read_dir(&directory)
-                    .map_err(|err| Self::fs_error("readdir", raw, err))?;
-                for entry in directory_entries {
-                    let entry = entry.map_err(|err| Self::fs_error("readdir entry", raw, err))?;
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if with_file_types {
-                        let metadata = std::fs::symlink_metadata(entry.path())
-                            .map_err(|err| Self::fs_error("stat readdir entry", raw, err))?;
-                        let file_type = metadata.file_type();
-                        entries.push(FsDirEntry {
-                            name,
-                            is_file: file_type.is_file(),
-                            is_directory: file_type.is_dir(),
-                            is_symbolic_link: file_type.is_symlink(),
-                        });
-                    } else {
-                        names.push(name);
-                    }
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::fs_not_implemented("readdir"));
                 }
-                if with_file_types {
-                    FsMetaResult::DirEntries(entries)
-                } else {
-                    FsMetaResult::Strings(names)
+                #[cfg(unix)]
+                {
+                    let with_file_types = Self::fs_flag(arguments, "with_file_types");
+                    let directory = match self.read_target(raw, true)? {
+                        ReadTarget::Directory { fd, .. } => fd,
+                        ReadTarget::Entry { parent, name, .. } => rustix::fs::openat(
+                            &parent,
+                            &name,
+                            rustix::fs::OFlags::RDONLY
+                                | rustix::fs::OFlags::DIRECTORY
+                                | rustix::fs::OFlags::NOFOLLOW
+                                | rustix::fs::OFlags::CLOEXEC,
+                            rustix::fs::Mode::empty(),
+                        )
+                        .map_err(|err| {
+                            Self::read_reopen_error(&parent, &name, "readdir", raw, err)
+                        })?,
+                    };
+                    let mut names = Vec::new();
+                    let mut entries = Vec::new();
+                    let mut directory_entries = rustix::fs::Dir::read_from(&directory)
+                        .map_err(|err| Self::fs_error("readdir", raw, std::io::Error::from(err)))?;
+                    while let Some(entry) = directory_entries.read() {
+                        let entry = entry.map_err(|err| {
+                            Self::fs_error("readdir entry", raw, std::io::Error::from(err))
+                        })?;
+                        let file_name = entry.file_name();
+                        if matches!(file_name.to_bytes(), b"." | b"..") {
+                            continue;
+                        }
+                        let name = String::from_utf8_lossy(file_name.to_bytes()).into_owned();
+                        if with_file_types {
+                            let stat = rustix::fs::statat(
+                                &directory,
+                                file_name,
+                                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                            )
+                            .map_err(|err| {
+                                Self::fs_error("stat readdir entry", raw, std::io::Error::from(err))
+                            })?;
+                            let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+                            entries.push(FsDirEntry {
+                                name,
+                                is_file: file_type.is_file(),
+                                is_directory: file_type.is_dir(),
+                                is_symbolic_link: file_type.is_symlink(),
+                            });
+                        } else {
+                            names.push(name);
+                        }
+                    }
+                    if with_file_types {
+                        FsMetaResult::DirEntries(entries)
+                    } else {
+                        FsMetaResult::Strings(names)
+                    }
                 }
             }
             FsOperation::Stat | FsOperation::Lstat => {
-                let follow_final = operation == FsOperation::Stat;
-                let target = self.existing_path(raw, follow_final)?;
-                let metadata = std::fs::symlink_metadata(&target)
-                    .map_err(|err| Self::fs_error(operation.as_str(), raw, err))?;
-                FsMetaResult::Metadata(Self::metadata_result(raw, &metadata)?)
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::fs_not_implemented(operation.as_str()));
+                }
+                #[cfg(unix)]
+                {
+                    let follow_final = operation == FsOperation::Stat;
+                    let stat = match self.read_target(raw, follow_final)? {
+                        ReadTarget::Directory { fd, .. } => {
+                            rustix::fs::fstat(&fd).map_err(|err| {
+                                Self::fs_error(operation.as_str(), raw, std::io::Error::from(err))
+                            })?
+                        }
+                        ReadTarget::Entry { parent, name, .. } => rustix::fs::statat(
+                            &parent,
+                            &name,
+                            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                        )
+                        .map_err(|err| {
+                            Self::fs_error(operation.as_str(), raw, std::io::Error::from(err))
+                        })?,
+                    };
+                    FsMetaResult::Metadata(Self::stat_metadata_result(&stat))
+                }
             }
             FsOperation::Symlink => {
                 let link_raw = arguments.first().ok_or_else(|| HostIoError::Fs {
@@ -1199,15 +1488,29 @@ impl SandboxedHostIo {
                 }
                 #[cfg(not(unix))]
                 {
-                    return Err(Self::mutation_not_implemented("symlink"));
+                    return Err(Self::fs_not_implemented("symlink"));
                 }
                 FsMetaResult::Unit
             }
             FsOperation::ReadLink => {
-                let target = self.existing_path(raw, false)?;
-                let link = std::fs::read_link(&target)
-                    .map_err(|err| Self::fs_error("readlink", raw, err))?;
-                FsMetaResult::String(link.to_string_lossy().into_owned())
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::fs_not_implemented("readlink"));
+                }
+                #[cfg(unix)]
+                {
+                    let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, false)?
+                    else {
+                        return Err(HostIoError::SandboxViolation {
+                            detail: format!("path resolves to no final component: {raw}"),
+                        });
+                    };
+                    let link =
+                        rustix::fs::readlinkat(&parent, &name, Vec::new()).map_err(|err| {
+                            Self::fs_error("readlink", raw, std::io::Error::from(err))
+                        })?;
+                    FsMetaResult::String(String::from_utf8_lossy(link.as_bytes()).into_owned())
+                }
             }
             FsOperation::Rename | FsOperation::CopyFile => {
                 let destination_raw = arguments.first().ok_or_else(|| HostIoError::Fs {
@@ -1217,7 +1520,7 @@ impl SandboxedHostIo {
                 #[cfg(not(unix))]
                 {
                     let _ = destination_raw;
-                    return Err(Self::mutation_not_implemented(operation.as_str()));
+                    return Err(Self::fs_not_implemented(operation.as_str()));
                 }
                 #[cfg(unix)]
                 {
@@ -1267,7 +1570,7 @@ impl SandboxedHostIo {
             FsOperation::Unlink => {
                 #[cfg(not(unix))]
                 {
-                    return Err(Self::mutation_not_implemented("unlink"));
+                    return Err(Self::fs_not_implemented("unlink"));
                 }
                 #[cfg(unix)]
                 {
@@ -1287,7 +1590,7 @@ impl SandboxedHostIo {
                 #[cfg(not(unix))]
                 {
                     let _ = (recursive, force);
-                    return Err(Self::mutation_not_implemented("remove"));
+                    return Err(Self::fs_not_implemented("remove"));
                 }
                 #[cfg(unix)]
                 {
@@ -1307,7 +1610,7 @@ impl SandboxedHostIo {
             FsOperation::RemoveDir => {
                 #[cfg(not(unix))]
                 {
-                    return Err(Self::mutation_not_implemented("rmdir"));
+                    return Err(Self::fs_not_implemented("rmdir"));
                 }
                 #[cfg(unix)]
                 {
@@ -1329,7 +1632,7 @@ impl SandboxedHostIo {
                 #[cfg(not(unix))]
                 {
                     let _ = length;
-                    return Err(Self::mutation_not_implemented("truncate"));
+                    return Err(Self::fs_not_implemented("truncate"));
                 }
                 #[cfg(unix)]
                 {
@@ -1346,8 +1649,15 @@ impl SandboxedHostIo {
                 }
             }
             FsOperation::Access => {
-                self.existing_path(raw, true)?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::fs_not_implemented("access"));
+                }
+                #[cfg(unix)]
+                {
+                    self.read_target(raw, true)?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::Chmod => {
                 let mode = arguments
@@ -1372,7 +1682,7 @@ impl SandboxedHostIo {
                 #[cfg(not(unix))]
                 {
                     let _ = mode;
-                    return Err(Self::mutation_not_implemented("chmod"));
+                    return Err(Self::fs_not_implemented("chmod"));
                 }
                 FsMetaResult::Unit
             }
@@ -1394,7 +1704,7 @@ impl SandboxedHostIo {
                 #[cfg(not(unix))]
                 {
                     let _ = modified;
-                    return Err(Self::mutation_not_implemented("utimes"));
+                    return Err(Self::fs_not_implemented("utimes"));
                 }
                 #[cfg(unix)]
                 {
@@ -1411,14 +1721,28 @@ impl SandboxedHostIo {
                 }
             }
             FsOperation::Realpath => {
-                let target = self.existing_path(raw, true)?;
-                FsMetaResult::String(self.guest_absolute_path(&target)?)
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::fs_not_implemented("realpath"));
+                }
+                #[cfg(unix)]
+                {
+                    let guest_components = match self.read_target(raw, true)? {
+                        ReadTarget::Directory {
+                            guest_components, ..
+                        }
+                        | ReadTarget::Entry {
+                            guest_components, ..
+                        } => guest_components,
+                    };
+                    FsMetaResult::String(Self::render_guest_path(&guest_components)?)
+                }
             }
             FsOperation::Mkdtemp => {
                 self.confine(raw)?;
                 #[cfg(not(unix))]
                 {
-                    return Err(Self::mutation_not_implemented("mkdtemp"));
+                    return Err(Self::fs_not_implemented("mkdtemp"));
                 }
                 #[cfg(unix)]
                 {
@@ -2742,7 +3066,7 @@ mod tests {
             case.setup(&outside.path);
             let outside_before = tree_snapshot(&outside.path);
 
-            let hook = MutationRaceHook::new(case.trigger_on_resolution());
+            let hook = ResolutionRaceHook::new(case.trigger_on_resolution());
             let worker_provider = provider
                 .clone()
                 .with_mutation_race_hook(std::sync::Arc::clone(&hook));
@@ -2785,7 +3109,7 @@ mod tests {
             std::fs::write(&outside_target, b"must remain unchanged").expect("seed outside target");
             let outside_before = tree_snapshot(&outside.path);
 
-            let hook = MutationRaceHook::new(case.trigger_on_resolution());
+            let hook = ResolutionRaceHook::new(case.trigger_on_resolution());
             let worker_provider = provider
                 .clone()
                 .with_mutation_race_hook(std::sync::Arc::clone(&hook));
@@ -2813,6 +3137,371 @@ mod tests {
                 "{case:?} followed a raced final symlink outside the sandbox"
             );
         }
+    }
+
+    /// Read-class operations under adversarial rename/symlink races (bd-8ju8m).
+    #[cfg(unix)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ReadRaceCase {
+        Read,
+        Exists,
+        ReadDir,
+        Stat,
+        Lstat,
+        ReadLink,
+        Access,
+        Realpath,
+    }
+
+    #[cfg(unix)]
+    impl ReadRaceCase {
+        const ALL: [Self; 8] = [
+            Self::Read,
+            Self::Exists,
+            Self::ReadDir,
+            Self::Stat,
+            Self::Lstat,
+            Self::ReadLink,
+            Self::Access,
+            Self::Realpath,
+        ];
+
+        fn guest_path(self) -> &'static str {
+            match self {
+                Self::ReadDir => "dir/sub",
+                Self::Lstat | Self::ReadLink => "dir/sub/link",
+                _ => "dir/sub/target.txt",
+            }
+        }
+
+        fn request(self) -> HostIoRequest {
+            match self {
+                Self::Read => HostIoRequest::FsRead {
+                    path: self.guest_path().to_string(),
+                },
+                Self::Exists => Self::meta_request(FsOperation::Exists, self.guest_path()),
+                Self::ReadDir => Self::meta_request(FsOperation::ReadDir, self.guest_path()),
+                Self::Stat => Self::meta_request(FsOperation::Stat, self.guest_path()),
+                Self::Lstat => Self::meta_request(FsOperation::Lstat, self.guest_path()),
+                Self::ReadLink => Self::meta_request(FsOperation::ReadLink, self.guest_path()),
+                Self::Access => Self::meta_request(FsOperation::Access, self.guest_path()),
+                Self::Realpath => Self::meta_request(FsOperation::Realpath, self.guest_path()),
+            }
+        }
+
+        fn meta_request(operation: FsOperation, path: &str) -> HostIoRequest {
+            HostIoRequest::FsMeta {
+                operation,
+                path: path.to_string(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            }
+        }
+
+        /// Physical path of the entry an attacker swaps after resolution.
+        fn raced_final(self, root: &Path) -> PathBuf {
+            root.join(self.guest_path())
+        }
+    }
+
+    #[cfg(unix)]
+    const READ_RACE_INSIDE_BYTES: &[u8] = b"inside bytes";
+    #[cfg(unix)]
+    const READ_RACE_OUTSIDE_BYTES: &[u8] = b"OUTSIDE SECRET CONTENTS!";
+
+    /// Seed the in-sandbox tree `dir/sub/{target.txt, link->target.txt}` and an
+    /// attacker-controlled outside tree with the same entry names plus a marker.
+    #[cfg(unix)]
+    fn read_race_setup(provider: &SandboxedHostIo, outside: &Path) {
+        let sub = provider.root().join("dir").join("sub");
+        std::fs::create_dir_all(&sub).expect("create inside tree");
+        std::fs::write(sub.join("target.txt"), READ_RACE_INSIDE_BYTES).expect("seed inside file");
+        std::os::unix::fs::symlink("target.txt", sub.join("link")).expect("seed inside link");
+
+        let outside_sub = outside.join("sub");
+        std::fs::create_dir_all(&outside_sub).expect("create outside tree");
+        std::fs::write(outside_sub.join("target.txt"), READ_RACE_OUTSIDE_BYTES)
+            .expect("seed outside file");
+        std::os::unix::fs::symlink("outside-target", outside_sub.join("link"))
+            .expect("seed outside link");
+        std::fs::write(outside_sub.join("outside-marker"), READ_RACE_OUTSIDE_BYTES)
+            .expect("seed outside marker");
+    }
+
+    /// After resolution completes, an attacker renames the first path component
+    /// away and drops a symlink to an outside tree in its place. Every read
+    /// must keep operating on the descriptors it resolved and observe only the
+    /// original in-sandbox bytes and metadata.
+    #[cfg(unix)]
+    #[test]
+    fn bd_8ju8m_all_reads_stay_on_resolved_descriptors_after_intermediate_swap() {
+        for case in ReadRaceCase::ALL {
+            let scratch = ScratchDir::new();
+            let outside = ScratchDir::new();
+            let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+            read_race_setup(&provider, &outside.path);
+
+            let hook = ResolutionRaceHook::new(1);
+            let worker_provider = provider
+                .clone()
+                .with_read_race_hook(std::sync::Arc::clone(&hook));
+            let request = case.request();
+            let worker = std::thread::spawn(move || {
+                worker_provider.perform(&request, &[HostIoCapability::FsRead])
+            });
+
+            hook.wait_until_resolved();
+            std::fs::rename(provider.root().join("dir"), provider.root().join("moved"))
+                .expect("rename resolved intermediate directory");
+            std::os::unix::fs::symlink(outside.path.join("sub"), provider.root().join("dir"))
+                .expect("replace intermediate directory with outside symlink");
+            hook.resume();
+
+            let outcome = worker.join().expect("read worker");
+            match case {
+                ReadRaceCase::Read => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsRead {
+                        bytes: READ_RACE_INSIDE_BYTES.to_vec(),
+                    }),
+                    "{case:?} must read the resolved in-sandbox file"
+                ),
+                ReadRaceCase::Exists => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Bool(true),
+                    })
+                ),
+                ReadRaceCase::ReadDir => {
+                    let Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Strings(mut names),
+                    }) = outcome
+                    else {
+                        panic!("{case:?} unexpected outcome after intermediate swap");
+                    };
+                    names.sort();
+                    assert_eq!(
+                        names,
+                        vec!["link".to_string(), "target.txt".to_string()],
+                        "{case:?} must list the resolved in-sandbox directory only"
+                    );
+                }
+                ReadRaceCase::Stat => {
+                    let Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Metadata(metadata),
+                    }) = outcome
+                    else {
+                        panic!("{case:?} unexpected outcome after intermediate swap");
+                    };
+                    assert!(metadata.is_file);
+                    assert_eq!(
+                        metadata.size,
+                        READ_RACE_INSIDE_BYTES.len() as u64,
+                        "{case:?} must report in-sandbox metadata"
+                    );
+                }
+                ReadRaceCase::Lstat => {
+                    let Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Metadata(metadata),
+                    }) = outcome
+                    else {
+                        panic!("{case:?} unexpected outcome after intermediate swap");
+                    };
+                    assert!(metadata.is_symbolic_link);
+                    assert_eq!(
+                        metadata.size,
+                        "target.txt".len() as u64,
+                        "{case:?} must report the resolved in-sandbox link"
+                    );
+                }
+                ReadRaceCase::ReadLink => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::String("target.txt".to_string()),
+                    })
+                ),
+                ReadRaceCase::Access => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Unit,
+                    })
+                ),
+                ReadRaceCase::Realpath => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::String("/dir/sub/target.txt".to_string()),
+                    })
+                ),
+            }
+        }
+    }
+
+    /// After resolution completes, an attacker swaps the final entry itself for
+    /// a symlink pointing outside the sandbox. Reads that reopen the final
+    /// entry must refuse to follow it; reads that already finished resolution
+    /// must not consult the pathname again. No outside bytes or metadata may be
+    /// observed in any case.
+    #[cfg(unix)]
+    #[test]
+    fn bd_8ju8m_all_reads_refuse_final_symlink_swapped_after_resolution() {
+        for case in ReadRaceCase::ALL {
+            let scratch = ScratchDir::new();
+            let outside = ScratchDir::new();
+            let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+            read_race_setup(&provider, &outside.path);
+            let outside_secret = outside.path.join("sub").join("target.txt");
+
+            let hook = ResolutionRaceHook::new(1);
+            let worker_provider = provider
+                .clone()
+                .with_read_race_hook(std::sync::Arc::clone(&hook));
+            let request = case.request();
+            let worker = std::thread::spawn(move || {
+                worker_provider.perform(&request, &[HostIoCapability::FsRead])
+            });
+
+            hook.wait_until_resolved();
+            let raced_final = case.raced_final(provider.root());
+            let mut saved = raced_final.as_os_str().to_owned();
+            saved.push(".before-race");
+            std::fs::rename(&raced_final, PathBuf::from(saved)).expect("save original entry");
+            let swap_target: PathBuf = if case == ReadRaceCase::ReadDir {
+                outside.path.join("sub")
+            } else {
+                outside_secret.clone()
+            };
+            std::os::unix::fs::symlink(&swap_target, &raced_final)
+                .expect("install final outside symlink");
+            hook.resume();
+
+            let outcome = worker.join().expect("read worker");
+            match case {
+                ReadRaceCase::Read | ReadRaceCase::ReadDir => assert!(
+                    matches!(outcome, Err(HostIoError::SandboxViolation { .. })),
+                    "{case:?} must refuse a final symlink swapped in after resolution, got {outcome:?}"
+                ),
+                ReadRaceCase::Stat | ReadRaceCase::Lstat => {
+                    let Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Metadata(metadata),
+                    }) = outcome
+                    else {
+                        panic!("{case:?} unexpected outcome after final swap: inspect for escape");
+                    };
+                    assert!(
+                        metadata.is_symbolic_link,
+                        "{case:?} must not follow the swapped-in symlink"
+                    );
+                    assert!(!metadata.is_file);
+                }
+                ReadRaceCase::ReadLink => {
+                    // readlink never follows: it reports the attacker-authored
+                    // link text, which discloses nothing the attacker did not
+                    // already write.
+                    let Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::String(reported),
+                    }) = outcome
+                    else {
+                        panic!("{case:?} unexpected outcome after final swap");
+                    };
+                    assert_eq!(reported, outside_secret.to_string_lossy());
+                }
+                ReadRaceCase::Exists => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Bool(true),
+                    }),
+                    "{case:?} answered from completed resolution, not the swapped pathname"
+                ),
+                ReadRaceCase::Access => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Unit,
+                    })
+                ),
+                ReadRaceCase::Realpath => assert_eq!(
+                    outcome,
+                    Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::String("/dir/sub/target.txt".to_string()),
+                    }),
+                    "{case:?} renders held-descriptor components, not the swapped pathname"
+                ),
+            }
+        }
+    }
+
+    /// The bounded in-root follow loop preserves documented semantics: chains
+    /// of in-root symlinks (including directory hops and absolute-inside-root
+    /// targets) resolve, while cycles fail closed with ELOOP instead of
+    /// spinning.
+    #[cfg(unix)]
+    #[test]
+    fn bd_8ju8m_in_root_symlink_chains_resolve_and_cycles_fail_closed() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        std::fs::create_dir_all(provider.root().join("real")).expect("create real dir");
+        std::fs::write(provider.root().join("real").join("data.txt"), b"chained")
+            .expect("seed target");
+        // hop -> real (directory symlink), alias -> hop/data.txt (via symlinked dir),
+        // abs -> <root>/real/data.txt (absolute target back inside the root).
+        std::os::unix::fs::symlink("real", provider.root().join("hop")).expect("dir link");
+        std::os::unix::fs::symlink("hop/data.txt", provider.root().join("alias"))
+            .expect("chained link");
+        std::os::unix::fs::symlink(
+            provider.root().join("real").join("data.txt"),
+            provider.root().join("abs"),
+        )
+        .expect("absolute in-root link");
+
+        for path in ["alias", "abs", "hop/data.txt"] {
+            let read = provider
+                .perform(
+                    &HostIoRequest::FsRead {
+                        path: path.to_string(),
+                    },
+                    &[HostIoCapability::FsRead],
+                )
+                .unwrap_or_else(|err| panic!("read through {path}: {err:?}"));
+            assert_eq!(
+                read,
+                HostIoResponse::FsRead {
+                    bytes: b"chained".to_vec(),
+                }
+            );
+        }
+        assert_eq!(
+            sandboxed_realpath(&provider, "alias").expect("realpath through chain"),
+            "/real/data.txt"
+        );
+
+        // A -> B -> A cycle must terminate with ELOOP, not hang or escape.
+        std::os::unix::fs::symlink("cycle-b", provider.root().join("cycle-a")).expect("cycle a");
+        std::os::unix::fs::symlink("cycle-a", provider.root().join("cycle-b")).expect("cycle b");
+        assert!(
+            matches!(
+                provider.perform(
+                    &HostIoRequest::FsRead {
+                        path: "cycle-a".to_string(),
+                    },
+                    &[HostIoCapability::FsRead],
+                ),
+                Err(HostIoError::Fs { code, .. }) if code == "ELOOP"
+            ),
+            "symlink cycles must fail closed with ELOOP"
+        );
+
+        // An in-root symlink whose target climbs above the root must still be
+        // rejected even though every component exists.
+        std::os::unix::fs::symlink("../outside", provider.root().join("climb"))
+            .expect("climbing link");
+        assert!(matches!(
+            provider.perform(
+                &HostIoRequest::FsRead {
+                    path: "climb".to_string(),
+                },
+                &[HostIoCapability::FsRead],
+            ),
+            Err(HostIoError::SandboxViolation { .. })
+        ));
     }
 
     #[test]

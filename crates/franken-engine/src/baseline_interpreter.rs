@@ -9370,6 +9370,56 @@ impl InterpreterCore {
         self.put_realm_runtime_name(name, value)
     }
 
+    /// Execute `delete name` for an identifier without a source lexical
+    /// binding. Sloppy-created realm globals are configurable, so removing one
+    /// succeeds and returns `true`; a genuinely missing name also returns
+    /// `true` without any GetValue. A name that resolves to an environment
+    /// (scope-chain) binding is not a deletable property, so it returns
+    /// `false`, matching `delete` of an environment Reference.
+    fn delete_runtime_name(&mut self, name: &str) -> Result<bool, InterpreterError> {
+        if self.scope_chain.resolve(name).is_some() {
+            return Ok(false);
+        }
+
+        let in_generated_artifact = self.active_generated_function_artifact.is_some();
+        let present = if in_generated_artifact {
+            self.generated_function_realm_globals
+                .as_ref()
+                .is_some_and(|globals| globals.contains_key(name))
+        } else {
+            self.realm_dynamic_globals.contains_key(name)
+        };
+        if !present {
+            // Genuinely missing name: `delete` of an unresolvable Reference is
+            // `true` with no side effect.
+            return Ok(true);
+        }
+
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let previous_generated_realm_global_bytes =
+            self.generated_function_realm_globals_memory_bytes();
+
+        if in_generated_artifact {
+            if let Some(globals) = self.generated_function_realm_globals.as_mut() {
+                globals.remove(name);
+            }
+        } else {
+            self.realm_dynamic_globals.remove(name);
+        }
+
+        self.apply_scope_closure_call_stack_realm_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+            previous_realm_global_bytes,
+            previous_generated_realm_global_bytes,
+        )?;
+        Ok(true)
+    }
+
     fn put_realm_runtime_name(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
         // Write the realm global object directly. If RHS code created or
         // replaced this property after the Reference was captured, it is still
@@ -39084,6 +39134,15 @@ impl InterpreterCore {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
                     self.write_reg(dst, Value::Int(i64::from(reference_token)))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::DeleteName {
+                    dst,
+                    name_pool_index,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let result = self.delete_runtime_name(name.as_ref())?;
+                    self.write_reg(dst, Value::Bool(result))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::StoreScoped {

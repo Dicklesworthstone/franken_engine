@@ -417,6 +417,10 @@ pub enum Ir1Op {
     /// Record whether a dynamic identifier target is resolvable before its
     /// right-hand side is evaluated.
     ResolveNameStatus { name: String, status_id: u32 },
+    /// `delete` of an unqualified identifier that has no source lexical
+    /// binding. Removes a sloppy-created realm global if one exists and pushes
+    /// the boolean result; it never performs GetValue on a missing name.
+    DeleteName { name: String },
     /// Store to a resolved binding.
     StoreBinding { binding_id: BindingId },
     /// Put a value through a dynamically resolved name reference.
@@ -698,6 +702,10 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("resolve_name_status")),
                 ("name", CanonicalValue::str(name.clone())),
                 ("status_id", CanonicalValue::U64(u64::from(*status_id))),
+            ]),
+            Self::DeleteName { name } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("delete_name")),
+                ("name", CanonicalValue::str(name.clone())),
             ]),
             Self::StoreBinding { binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("store_binding")),
@@ -1607,6 +1615,10 @@ pub enum Ir3Instruction {
     },
     /// Record an opaque pre-RHS dynamic-name Reference token in a normal value register.
     ResolveNameStatus { dst: Reg, name_pool_index: u32 },
+    /// `delete` of an unqualified identifier without a source lexical binding:
+    /// remove a sloppy-created realm global if present and write the boolean
+    /// result to `dst`. Performs no GetValue on a genuinely missing name.
+    DeleteName { dst: Reg, name_pool_index: u32 },
     /// Store a value into a variable in the scope chain by name.
     StoreScoped { src: Reg, name_pool_index: u32 },
     /// Put a value through a dynamically resolved name reference.
@@ -2171,6 +2183,17 @@ impl Ir3Instruction {
                 name_pool_index,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("resolve_name_status")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+            ]),
+            Self::DeleteName {
+                dst,
+                name_pool_index,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("delete_name")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
                 (
                     "name_pool_index",

@@ -146,6 +146,7 @@ pub fn classify_op(op: &Ir1Op) -> OpClassification {
         Ir1Op::LoadBinding { .. } => analyzed("load_binding", ANALYZED_VALUE_JOIN),
         Ir1Op::LoadName { .. } => unproven("load_name", UNPROVEN_DYNAMIC_NAME),
         Ir1Op::ResolveNameStatus { .. } => unproven("resolve_name_status", UNPROVEN_DYNAMIC_NAME),
+        Ir1Op::DeleteName { .. } => unproven("delete_name", UNPROVEN_DYNAMIC_NAME),
         Ir1Op::StoreBinding { .. } => analyzed("store_binding", ANALYZED_VALUE_JOIN),
         Ir1Op::PutName { .. } => unproven("put_name", UNPROVEN_DYNAMIC_NAME),
         Ir1Op::PutNameWithStatus { .. } => unproven("put_name_with_status", UNPROVEN_DYNAMIC_NAME),

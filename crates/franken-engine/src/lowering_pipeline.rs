@@ -6769,6 +6769,15 @@ pub fn lower_ir2_to_ir3(
                     name_pool_index,
                 });
             }
+            Ir1Op::DeleteName { name } => {
+                let dst = alloc_register(&mut register_cursor);
+                let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::DeleteName {
+                    dst,
+                    name_pool_index,
+                });
+                value_stack.push(dst);
+            }
             Ir1Op::InitializeBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
                 if scoped_runtime_binding_ids.contains(binding_id) {
@@ -8392,6 +8401,15 @@ pub fn lower_ir2_to_ir3(
                         dst,
                         name_pool_index,
                     });
+                }
+                Ir1Op::DeleteName { name } => {
+                    let dst = alloc_register(&mut fn_reg);
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::DeleteName {
+                        dst,
+                        name_pool_index,
+                    });
+                    fn_value_stack.push(dst);
                 }
                 Ir1Op::InitializeBinding { binding_id } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
@@ -11432,9 +11450,12 @@ fn lower_expression_to_ir1_inner(
                         // unresolvable identifier reference. In sloppy code it
                         // succeeds without attempting a dynamic name load;
                         // strict delete-identifier syntax is rejected earlier.
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Boolean(true),
-                        });
+                        // A sloppy assignment to this name may have created a
+                        // realm global (`x = 1`); `delete x` must remove it and
+                        // still evaluate to `true` (bd-74yvt), so route through
+                        // a name-delete seam rather than an unconditional
+                        // literal `true` that would leave the global resident.
+                        ops.push(Ir1Op::DeleteName { name: name.clone() });
                     }
                     _ => {
                         lower_expression_to_ir1(
@@ -23914,6 +23935,18 @@ fn simulate_ir2_flow_labels(
                 label
             }
             Ir1Op::ResolveNameStatus { .. } => Label::Internal,
+            Ir1Op::DeleteName { .. } => {
+                // The boolean delete result observes whether a dynamic name
+                // was resident; treat it as an Internal primitive, mirroring
+                // the dynamic-name load lane.
+                let label = Label::Internal;
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    FlowValueShape::Primitive,
+                    &mut next_identity,
+                ));
+                label
+            }
             Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
                 let mut value = pop_flow_value(&mut value_stack)?;
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &value.label);

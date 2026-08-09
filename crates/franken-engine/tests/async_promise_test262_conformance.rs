@@ -582,10 +582,10 @@ mod tests {
     /// Pinned allow-list of MUST-tier async/promise cases known to fail.
     /// Each entry requires a pre-existing follow-up bead; remove an entry as
     /// soon as its named case passes so an obsolete waiver fails loudly.
-    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[(
-        "ES2020-25.6.1.3-promise-resolve-thenable-enqueues-nested-microtask",
-        "bd-iio0f",
-    )];
+    // bd-iio0f closed the last waived MUST case (Promise.resolve thenable
+    // assimilation with nested-microtask ordering); no MUST-tier async/promise
+    // case is expected to fail.
+    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[];
 
     fn must_tests(harness: &AsyncPromiseHarness) -> Vec<&AsyncPromiseTest> {
         harness

@@ -20,8 +20,8 @@
 
 use frankenengine_engine::safe_mode_fallback::{
     ActionTier, AttestationActionRequest, AttestationFallbackConfig, AttestationFallbackDecision,
-    AttestationFallbackError, AttestationFallbackEvent, AttestationFallbackManager,
-    AttestationFallbackState, AttestationHealth, AutonomousAction, EvidenceRingBuffer, FailureType,
+    AttestationFallbackError, AttestationFallbackEvent, AttestationFallbackState,
+    AttestationHealth, AutonomousAction, EvidenceRingBuffer, FailureType,
     LabDeterministicTransitionAuthority, QueuedAttestationDecision, RingBufferEntry,
     SafeModeAction, SafeModeEvent, SafeModeManager, SafeModeStatus,
 };
@@ -776,8 +776,7 @@ fn attestation_fallback_config_serde_round_trip() {
 
 #[test]
 fn attestation_manager_initial_state_normal() {
-    let mgr =
-        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
+    let mgr = LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     assert_eq!(mgr.state(), AttestationFallbackState::Normal);
     assert_eq!(mgr.health(), AttestationHealth::Valid);
     assert!(!mgr.operator_review_required());
@@ -998,8 +997,7 @@ fn attestation_manager_transition_receipt_serde_round_trip() {
 
 #[test]
 fn attestation_manager_operator_review_not_required_initially() {
-    let mgr =
-        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
+    let mgr = LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     assert!(!mgr.operator_review_required());
 }
 

@@ -132,6 +132,123 @@ const CAPABILITY_TAG_RECORD_BYTE_CAP: usize = 256;
 /// representation of a different, overlong tag.
 const CAPABILITY_TAG_DIGEST_PREFIX: &str = "<TRUNCATED:sha256:";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostcallCapabilityClass {
+    Runtime(RuntimeCapability),
+    InternalAllowed,
+    Unknown,
+}
+
+/// Internal HostCall tags implemented by this interpreter. This is a closed
+/// surface: adding a dispatcher arm requires adding its exact tag here too.
+/// Prefix membership is intentionally insufficient because IR3 is an input
+/// boundary and may contain attacker-chosen capability strings (bd-pr33n).
+const KNOWN_INTERNAL_HOSTCALLS: &[&str] = &[
+    "ifc.check_flow",
+    "promise:constructor",
+    "promise:resolve",
+    "promise:reject",
+    "promise:then",
+    "promise:catch",
+    "promise:finally",
+    "promise:all",
+    "promise:race",
+    "promise:allSettled",
+    "promise:any",
+    "number:isNaN",
+    "number:isFinite",
+    "number:Number.isNaN",
+    "number:Number.isFinite",
+    "number:Number.isInteger",
+    "number:Number.isSafeInteger",
+    "console:log",
+    "console:error",
+    "console:warn",
+    "console:info",
+    "timer:setTimeout",
+    "timer:setInterval",
+    "timer:clearTimeout",
+    "timer:clearInterval",
+    "builtin:ReferenceError",
+    "builtin:TypeError",
+    "builtin:ArrayPrototypePush",
+    "builtin:ArrayPrototypePop",
+    "builtin:ArrayIsArray",
+    "builtin:ArrayIsArrayFunction",
+    "builtin:SymbolFunction",
+    "builtin:SymbolFor",
+    "builtin:SymbolKeyFor",
+    "builtin:SymbolIterator",
+    "builtin:SymbolToPrimitive",
+    "builtin:SymbolHasInstance",
+    "builtin:SymbolToStringTag",
+    "builtin:SymbolSpecies",
+    "builtin:SymbolIsConcatSpreadable",
+    "builtin:SymbolUnscopables",
+    "builtin:SymbolAsyncIterator",
+    "builtin:SymbolMatch",
+    "builtin:SymbolMatchAll",
+    "builtin:SymbolReplace",
+    "builtin:SymbolSearch",
+    "builtin:SymbolSplit",
+    "builtin:ObjectKeys",
+    "builtin:ObjectValues",
+    "builtin:ObjectEntries",
+    "builtin:ObjectGetOwnPropertyNames",
+    "builtin:ObjectGetOwnPropertySymbols",
+    "builtin:ReflectOwnKeys",
+    "builtin:ObjectAssign",
+    "builtin:StringPrototypeCharAt",
+    "builtin:StringPrototypeCharCodeAt",
+    "builtin:StringPrototypeCodePointAt",
+    "builtin:StringPrototypeAt",
+    "builtin:StringPrototypeIsWellFormed",
+    "builtin:StringPrototypeToWellFormed",
+    "builtin:StringFromCharCode",
+    "builtin:StringFromCodePoint",
+    "builtin:MathAbs",
+    "builtin:JsonStringify",
+    "builtin:JsonParse",
+    "builtin:PathJoin",
+    "builtin:PathResolve",
+    "builtin:PathNormalize",
+    "builtin:PathBasename",
+    "builtin:PathDirname",
+    "builtin:PathExtname",
+    "builtin:PathIsAbsolute",
+    "builtin:PathRelative",
+    "builtin:PathParse",
+    "builtin:PathFormat",
+    "builtin:PathWin32Join",
+    "builtin:PathWin32Basename",
+    "builtin:PathWin32IsAbsolute",
+    "builtin:QuerystringParse",
+    "builtin:QuerystringStringify",
+    "builtin:QuerystringEscape",
+    "builtin:QuerystringUnescape",
+    "builtin:OsPlatform",
+    "builtin:OsArch",
+    "builtin:OsType",
+    "builtin:OsEndianness",
+    "builtin:OsMachine",
+    "builtin:OsRelease",
+    "builtin:OsVersion",
+    "builtin:OsHomedir",
+    "builtin:OsTmpdir",
+    "builtin:OsHostname",
+    "builtin:OsUptime",
+    "builtin:OsTotalmem",
+    "builtin:OsFreemem",
+    "builtin:OsAvailableParallelism",
+    "builtin:OsLoadavg",
+    "builtin:OsCpus",
+    "builtin:OsNetworkInterfaces",
+    "builtin:OsUserInfo",
+    "builtin:OsGetPriority",
+    "builtin:OsSetPriority",
+    "builtin:OsConstants",
+];
+
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
 /// Canonical operator-facing label for the throughput execution profile.
@@ -172,6 +289,16 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
     out.push_str(&tag[..cut]);
     debug_assert!(out.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
     Cow::Owned(out)
+}
+
+fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
+    if KNOWN_INTERNAL_HOSTCALLS.contains(&tag) {
+        HostcallCapabilityClass::InternalAllowed
+    } else if let Some(capability) = RuntimeCapability::from_tag_str(tag) {
+        HostcallCapabilityClass::Runtime(capability)
+    } else {
+        HostcallCapabilityClass::Unknown
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -7809,7 +7936,10 @@ impl InterpreterCore {
                     args,
                     dst,
                 } => {
-                    // Promise hostcalls are always allowed (runtime-internal).
+                    // Promise hostcalls are internal only when the complete
+                    // tag is in the closed classifier above. The prefix is
+                    // used solely to select the result-label dispatch path
+                    // after the capability gate succeeds.
                     let is_promise_cap = capability.0.starts_with("promise:");
                     let resuming_object_assign = capability.0 == "builtin:ObjectAssign"
                         && self
@@ -7829,24 +7959,30 @@ impl InterpreterCore {
                         // below still uses the original capability string.
                         let recordable_tag = recordable_capability_tag(&capability.0);
 
-                        if !is_promise_cap {
-                            // Map the CapabilityTag string to a typed RuntimeCapability.
-                            // Tags that map to a RuntimeCapability are checked against
-                            // the granted set.  Tags with no mapping are internal
-                            // dispatch tags (ifc.*, hostcall.*) emitted by the
-                            // trusted lowering pipeline and pass through.
-                            if let Some(required_cap) =
-                                RuntimeCapability::from_tag_str(&capability.0)
-                                && !self.config.granted_capabilities.contains(&required_cap)
-                            {
-                                self.emit_witness(
-                                    WitnessEventKind::CapabilityChecked,
-                                    Some(&format!("denied:{recordable_tag}")),
-                                );
-                                return Err(InterpreterError::CapabilityDenied {
-                                    capability: recordable_tag.into_owned(),
-                                });
+                        let allowed = match classify_hostcall_capability(&capability.0) {
+                            HostcallCapabilityClass::Runtime(required) => {
+                                self.config.granted_capabilities.contains(&required)
                             }
+                            HostcallCapabilityClass::InternalAllowed => true,
+                            HostcallCapabilityClass::Unknown => false,
+                        };
+
+                        if !allowed {
+                            self.emit_witness(
+                                WitnessEventKind::CapabilityChecked,
+                                Some(&format!("denied:{recordable_tag}")),
+                            );
+                            self.hostcall_decisions.push(HostcallDecisionRecord {
+                                seq: self.hostcall_decisions.len() as u64,
+                                capability: crate::ir_contract::CapabilityTag(
+                                    recordable_tag.clone().into_owned(),
+                                ),
+                                allowed: false,
+                                instruction_index: self.ip as u32,
+                            });
+                            return Err(InterpreterError::CapabilityDenied {
+                                capability: recordable_tag.into_owned(),
+                            });
                         }
 
                         self.emit_witness(
@@ -25011,6 +25147,96 @@ mod tests {
         );
     }
 
+    #[test]
+    fn closed_hostcall_classifier_matches_engine_contract_bd_pr33n() {
+        for tag in KNOWN_INTERNAL_HOSTCALLS {
+            assert_eq!(
+                classify_hostcall_capability(tag),
+                HostcallCapabilityClass::InternalAllowed,
+                "implemented internal HostCall `{tag}` must remain executable",
+            );
+        }
+        assert_eq!(
+            classify_hostcall_capability("fs_read"),
+            HostcallCapabilityClass::Runtime(RuntimeCapability::FsRead),
+        );
+        for attacker_tag in [
+            "promise:steal_admin_key",
+            "promise:",
+            "promise:Resolve",
+            "promise:resolve ",
+            "builtin:ObjectFreeze",
+            "builtin:ObjectKeys:extra",
+            "hostcall.future_internal",
+        ] {
+            assert_eq!(
+                classify_hostcall_capability(attacker_tag),
+                HostcallCapabilityClass::Unknown,
+                "unknown HostCall `{attacker_tag}` must fail closed",
+            );
+        }
+    }
+
+    #[test]
+    fn known_internal_hostcall_still_executes_and_records_allow_bd_pr33n() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 42 },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("number:Number.isInteger".to_string()),
+                args: RegRange { start: 1, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let result = quickjs_execute(&module).expect("known internal HostCall must execute");
+        assert_eq!(result.value, Value::Bool(true));
+        assert_eq!(result.hostcall_decisions.len(), 1);
+        assert_eq!(
+            result.hostcall_decisions[0].capability.0,
+            "number:Number.isInteger"
+        );
+        assert!(result.hostcall_decisions[0].allowed);
+    }
+
+    #[test]
+    fn unknown_hostcall_is_denied_with_bounded_evidence_bd_pr33n() {
+        let attacker_tag =
+            "promise:".to_string() + &"steal_admin_key".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP);
+        let recorded = recordable_capability_tag(&attacker_tag).into_owned();
+        let module = test_module(vec![Ir3Instruction::HostCall {
+            capability: CapabilityTag(attacker_tag),
+            args: RegRange { start: 0, count: 0 },
+            dst: 0,
+        }]);
+        let mut core = quickjs_test_core();
+
+        let error = core
+            .execute(&module)
+            .expect_err("unknown HostCall must be rejected before dispatch");
+        assert!(matches!(
+            error,
+            InterpreterError::CapabilityDenied { capability } if capability == recorded
+        ));
+        assert!(recorded.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
+        assert_eq!(core.hostcall_decisions.len(), 1);
+        assert_eq!(core.hostcall_decisions[0].capability.0, recorded);
+        assert!(!core.hostcall_decisions[0].allowed);
+        assert_eq!(core.hostcall_decisions[0].instruction_index, 0);
+
+        let denial_payload = format!("denied:{recorded}");
+        assert!(core.witness_events.iter().any(|event| {
+            event.kind == WitnessEventKind::CapabilityChecked
+                && event.payload_hash == ContentHash::compute(denial_payload.as_bytes())
+        }));
+        assert!(
+            !core
+                .witness_events
+                .iter()
+                .any(|event| event.kind == WitnessEventKind::HostcallDispatched)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // 11. Structured events
     // -----------------------------------------------------------------------
@@ -30817,7 +31043,7 @@ mod tests {
                     arity: 0,
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
-                    is_generator: false,
+                    is_generator: true,
                     rest_param_index: None,
                 }],
             );

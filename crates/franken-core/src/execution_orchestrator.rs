@@ -488,6 +488,9 @@ pub enum OrchestratorError {
     },
     EmptySource,
     EmptyExtensionId,
+    UnknownPackageCapability {
+        capability: String,
+    },
     /// The post-execution IR4 witness failed linkage verification against the
     /// executed IR3 (bd-drb55). Fail-closed: a run whose witness cannot be
     /// verified is not published as a success.
@@ -526,6 +529,9 @@ impl fmt::Display for OrchestratorError {
             }
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
+            Self::UnknownPackageCapability { capability } => {
+                write!(f, "unknown package capability `{capability}`")
+            }
             Self::WitnessSealing { detail } => {
                 write!(f, "ir4 witness sealing failed: {detail}")
             }
@@ -1142,7 +1148,24 @@ impl ExecutionOrchestrator {
         if package.extension_id.trim().is_empty() {
             return Err(OrchestratorError::EmptyExtensionId);
         }
+        let _ = Self::package_runtime_capabilities(package)?;
         Ok(())
+    }
+
+    fn package_runtime_capabilities(
+        package: &ExtensionPackage,
+    ) -> Result<BTreeSet<RuntimeCapability>, OrchestratorError> {
+        package
+            .capabilities
+            .iter()
+            .map(|capability| {
+                RuntimeCapability::from_tag_str(capability).ok_or_else(|| {
+                    OrchestratorError::UnknownPackageCapability {
+                        capability: capability.clone(),
+                    }
+                })
+            })
+            .collect()
     }
 
     fn package_fingerprint(package: &ExtensionPackage) -> Result<ContentHash, OrchestratorError> {
@@ -1267,12 +1290,11 @@ impl ExecutionOrchestrator {
             .collect()
     }
 
-    fn lane_router_for_execution(package: &ExtensionPackage, ir3: &Ir3Module) -> LaneRouter {
-        let mut granted_capabilities: BTreeSet<RuntimeCapability> = package
-            .capabilities
-            .iter()
-            .filter_map(|s| RuntimeCapability::from_tag_str(s))
-            .collect();
+    fn lane_router_for_execution(
+        package: &ExtensionPackage,
+        ir3: &Ir3Module,
+    ) -> Result<LaneRouter, OrchestratorError> {
+        let mut granted_capabilities = Self::package_runtime_capabilities(package)?;
         // Interpreter dispatch and module-record allocation are internal runtime authority,
         // not externally requested extension capabilities.
         granted_capabilities.insert(RuntimeCapability::VmDispatch);
@@ -1297,7 +1319,7 @@ impl ExecutionOrchestrator {
             .and_then(|path| std::path::Path::new(path).parent())
             .map(|path| path.display().to_string());
 
-        LaneRouter::with_configs(quickjs_config, v8_config)
+        Ok(LaneRouter::with_configs(quickjs_config, v8_config))
     }
 
     fn phase_execute(
@@ -1313,7 +1335,7 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the internal enforcement capabilities required by the lowered module.
-        let routed = Self::lane_router_for_execution(package, ir3)
+        let routed = Self::lane_router_for_execution(package, ir3)?
             .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
             .map_err(OrchestratorError::Interpreter)?;
         let report = guardplane_adapter
@@ -3723,6 +3745,26 @@ mod tests {
     }
 
     #[test]
+    fn unknown_package_capability_is_rejected_instead_of_dropped_bd_pr33n() {
+        let mut package = simple_package();
+        package
+            .capabilities
+            .push("promise:steal_admin_key".to_string());
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("unknown package grant must fail validation");
+        assert!(matches!(
+            error,
+            OrchestratorError::UnknownPackageCapability { capability }
+                if capability == "promise:steal_admin_key"
+        ));
+        assert_eq!(orchestrator.attempt_counter, 0);
+        assert!(orchestrator.ledger().entries().is_empty());
+    }
+
+    #[test]
     fn multiple_executions_accumulate_evidence() {
         let mut orch = ExecutionOrchestrator::with_defaults();
         for _ in 0..3 {
@@ -4154,6 +4196,25 @@ mod tests {
 
     #[test]
     fn high_cardinality_capabilities_certify_and_complete_containment_lifecycle() {
+        const VALID_CAPABILITY_TAGS: &[&str] = &[
+            "vm_dispatch",
+            "gc_invoke",
+            "ir_lowering",
+            "policy_read",
+            "policy_write",
+            "evidence_emit",
+            "decision_invoke",
+            "network_egress",
+            "lease_management",
+            "idempotency_derive",
+            "extension_lifecycle",
+            "heap_allocate",
+            "env_read",
+            "process_spawn",
+            "fs_read",
+            "fs_write",
+            "module_load",
+        ];
         let mut pkg = package_with_metadata(
             "ext-compression-many-capabilities",
             "const obj = { constructor: 1 }; obj.constructor;",
@@ -4164,17 +4225,19 @@ mod tests {
                 ("capability_witness.denied_capabilities", "object.property"),
             ],
         );
-        pkg.capabilities
-            .extend((0..257).map(|index| format!("compression-unknown-{index}")));
-        let legacy_symbols: BTreeSet<_> = pkg
-            .capabilities
-            .iter()
-            .map(|capability| 1_000 + (ExecutionOrchestrator::stable_symbol(capability) % 10_000))
-            .collect();
+        pkg.capabilities.extend(
+            (0..257).map(|index| VALID_CAPABILITY_TAGS[index % VALID_CAPABILITY_TAGS.len()].into()),
+        );
         assert_eq!(
-            legacy_symbols.len(),
+            pkg.capabilities.len(),
             257,
-            "fixture must retain the former 257-symbol failure shape"
+            "fixture must retain the 257-entry manifest stress shape"
+        );
+        assert!(
+            pkg.capabilities
+                .iter()
+                .all(|capability| RuntimeCapability::from_tag_str(capability).is_some()),
+            "the stress fixture must exercise only grantable capabilities"
         );
         let mut orch = ExecutionOrchestrator::with_defaults();
 
@@ -4226,7 +4289,7 @@ mod tests {
     #[test]
     fn high_cardinality_hostcall_stream_certifies_exact_count_and_finalizes() {
         let source = (0..257)
-            .map(|index| format!(r#""hostcall<\"console:compression-{index}\">";"#))
+            .map(|_| r#""hostcall<\"console:log\">";"#)
             .collect::<Vec<_>>()
             .join("\n");
         let package = package_with_source(&source);

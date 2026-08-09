@@ -7110,26 +7110,37 @@ impl InterpreterCore {
                         }
                         argument_values.truncate(func.arity as usize);
                         argument_labels.truncate(func.arity as usize);
-                        self.apply_rest_param(
-                            module,
-                            &mut argument_values,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.apply_rest_param_labels(
-                            &mut argument_labels,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        if let Err(error) =
+                        // bd-ur3tk.22: `apply_rest_param` materializes the implicit
+                        // rest Array on the shared heap before the pre-call hook runs,
+                        // and `alloc_array_from_values` is not atomic on failure. Wrap
+                        // rest materialization + the hook in the same setup transaction
+                        // the ordinary call path uses (bd-ur3tk.12): on hook denial or a
+                        // partial rest-carrier failure, `restore_call_setup` reclaims the
+                        // unreachable carrier's heap, eager memory, and profiling
+                        // accounting and drops its labeled taint. The transaction ends
+                        // before `prepare_generator_activation`, whose isolated parameter
+                        // prologue may produce language-visible heap side effects that
+                        // must survive.
+                        let setup_snapshot = self.snapshot_call_setup(None, false);
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            self.apply_rest_param(
+                                module,
+                                &mut argument_values,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut argument_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
                             self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
-                        {
-                            match self.route_run_loop_javascript_error(module, error, mode)? {
-                                None => continue,
-                                Some(error) => return Err(error),
-                            }
+                        })();
+                        if let Err(error) = setup_result {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
                         }
                         let super_value =
                             self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
@@ -7190,20 +7201,31 @@ impl InterpreterCore {
                         }
                         argument_values.truncate(func.arity as usize);
                         argument_labels.truncate(func.arity as usize);
-                        self.apply_rest_param(
-                            module,
-                            &mut argument_values,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.apply_rest_param_labels(
-                            &mut argument_labels,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)?;
+                        // bd-ur3tk.22: transactional rest-carrier setup for the direct
+                        // async-generator branch (see the direct sync-generator branch
+                        // for the full rationale). Roll back the unreachable carrier on
+                        // hook denial or partial rest materialization, before activation.
+                        let setup_snapshot = self.snapshot_call_setup(None, false);
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            self.apply_rest_param(
+                                module,
+                                &mut argument_values,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut argument_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
+                        })();
+                        if let Err(error) = setup_result {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
+                        }
                         let super_value =
                             self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
                         let generator = self.prepare_generator_activation(
@@ -7494,26 +7516,30 @@ impl InterpreterCore {
                         }
                         argument_values.truncate(func.arity as usize);
                         argument_labels.truncate(func.arity as usize);
-                        self.apply_rest_param(
-                            module,
-                            &mut argument_values,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.apply_rest_param_labels(
-                            &mut argument_labels,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        if let Err(error) =
+                        // bd-ur3tk.22: transactional rest-carrier setup for the method
+                        // sync-generator branch (see the direct sync-generator branch for
+                        // the full rationale). Roll back the unreachable carrier on hook
+                        // denial or partial rest materialization, before activation.
+                        let setup_snapshot = self.snapshot_call_setup(None, false);
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            self.apply_rest_param(
+                                module,
+                                &mut argument_values,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut argument_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
                             self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
-                        {
-                            match self.route_run_loop_javascript_error(module, error, mode)? {
-                                None => continue,
-                                Some(error) => return Err(error),
-                            }
+                        })();
+                        if let Err(error) = setup_result {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
                         }
                         let super_value = self.method_super_value(&callee_val, &receiver_val)?;
                         let generator = match self.prepare_generator_activation(
@@ -7566,20 +7592,31 @@ impl InterpreterCore {
                         }
                         argument_values.truncate(func.arity as usize);
                         argument_labels.truncate(func.arity as usize);
-                        self.apply_rest_param(
-                            module,
-                            &mut argument_values,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.apply_rest_param_labels(
-                            &mut argument_labels,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)?;
+                        // bd-ur3tk.22: transactional rest-carrier setup for the method
+                        // async-generator branch (see the direct sync-generator branch
+                        // for the full rationale). Roll back the unreachable carrier on
+                        // hook denial or partial rest materialization, before activation.
+                        let setup_snapshot = self.snapshot_call_setup(None, false);
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            self.apply_rest_param(
+                                module,
+                                &mut argument_values,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut argument_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
+                        })();
+                        if let Err(error) = setup_result {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
+                        }
                         let super_value = self.method_super_value(&callee_val, &receiver_val)?;
                         let generator = self.prepare_generator_activation(
                             module,
@@ -22392,6 +22429,161 @@ mod tests {
 
             assert!(matches!(error, InterpreterError::ScopeDepthExceeded { .. }));
             assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum GeneratorCallKindBdUr3tk22 {
+        DirectSync,
+        DirectAsync,
+        MethodSync,
+        MethodAsync,
+    }
+
+    impl GeneratorCallKindBdUr3tk22 {
+        fn is_async(self) -> bool {
+            matches!(self, Self::DirectAsync | Self::MethodAsync)
+        }
+
+        fn is_method(self) -> bool {
+            matches!(self, Self::MethodSync | Self::MethodAsync)
+        }
+    }
+
+    fn generator_rest_descriptor_bd_ur3tk_22() -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry: 2,
+            arity: 2,
+            frame_size: 2,
+            name: Some("gen_rest_bd_ur3tk_22".to_string()),
+            is_generator: true,
+            rest_param_index: Some(1),
+        }
+    }
+
+    fn generator_deny_module_bd_ur3tk_22(kind: GeneratorCallKindBdUr3tk22) -> Ir3Module {
+        let (call, result_reg) = if kind.is_method() {
+            (
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 2 },
+                    dst: 4,
+                },
+                4,
+            )
+        } else {
+            (
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                3,
+            )
+        };
+        test_module_with_functions(
+            vec![
+                call,
+                Ir3Instruction::Return { value: result_reg },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![generator_rest_descriptor_bd_ur3tk_22()],
+        )
+    }
+
+    fn generator_deny_core_bd_ur3tk_22(kind: GeneratorCallKindBdUr3tk22) -> InterpreterCore {
+        let mut core = quickjs_test_core();
+        core.enable_profiling(crate::profiling::ProfilingConfig::default());
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        let callee = if kind.is_async() {
+            Value::AsyncGeneratorFunction(0)
+        } else {
+            Value::GeneratorFunction(0)
+        };
+        if kind.is_method() {
+            core.registers[0] = Value::str("receiver");
+            core.register_labels[0] = crate::ifc_artifacts::Label::Confidential;
+            core.registers[1] = callee;
+            core.registers[2] = Value::Int(10);
+            core.registers[3] = Value::str("rest-tail");
+            core.register_labels[3] = crate::ifc_artifacts::Label::Secret;
+        } else {
+            core.registers[0] = callee;
+            core.registers[1] = Value::Int(10);
+            core.registers[2] = Value::str("rest-tail");
+            core.register_labels[2] = crate::ifc_artifacts::Label::Secret;
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("seed generator call state should fit its initial budget");
+        core
+    }
+
+    /// bd-ur3tk.22: A denied pre-call hook must roll back the implicit rest-Array
+    /// carrier that `apply_rest_param` materializes for a generator/async-generator
+    /// call, across both the direct (`Call`) and method (`CallMethod`) forms. Before
+    /// this fix the four generator branches materialized the carrier on the shared
+    /// heap and, unlike the ordinary call path (bd-ur3tk.12), left it stranded on
+    /// denial — leaking heap objects plus eager/profiling memory accounting and
+    /// orphaning a Secret-labeled carrier (parent bd-ur3tk taint surface).
+    #[test]
+    fn denied_generator_rest_carrier_setup_is_transactional_bd_ur3tk_22() {
+        for kind in [
+            GeneratorCallKindBdUr3tk22::DirectSync,
+            GeneratorCallKindBdUr3tk22::DirectAsync,
+            GeneratorCallKindBdUr3tk22::MethodSync,
+            GeneratorCallKindBdUr3tk22::MethodAsync,
+        ] {
+            let module = generator_deny_module_bd_ur3tk_22(kind);
+            let hook = Arc::new(RecordingHook::with_call_action(HookAction::Terminate(
+                format!("{kind:?} generator call denied"),
+            )));
+            let mut core = generator_deny_core_bd_ur3tk_22(kind);
+            core.set_hook(hook.clone());
+            let heap_len_before = core.heap.len();
+            let generators_before = core.generators.len();
+            let async_generators_before = core.async_generators.len();
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core.run_loop(&module).expect_err(
+                "pre-call denial must refuse the entire generator rest-carrier setup",
+            );
+
+            assert!(
+                matches!(
+                    error,
+                    InterpreterError::ContainmentActionRequested { ref action, .. }
+                        if action == "terminate"
+                ),
+                "{kind:?}: expected a containment denial, got {error:?}"
+            );
+            // The materialized rest Array must be fully reclaimed from the shared
+            // heap, and no generator/async-generator object may be published.
+            assert_eq!(
+                core.heap.len(),
+                heap_len_before,
+                "{kind:?}: the denied rest carrier must be reclaimed from the heap"
+            );
+            assert_eq!(
+                core.generators.len(),
+                generators_before,
+                "{kind:?}: no generator object may be published on denial"
+            );
+            assert_eq!(
+                core.async_generators.len(),
+                async_generators_before,
+                "{kind:?}: no async-generator object may be published on denial"
+            );
+            // Eager memory, profiling allocation counters, caller registers/labels,
+            // pending return/exception, tables, and the deterministic replay seed
+            // all return to their exact pre-setup values.
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            // ...yet the hook still OBSERVED the materialized carrier before denying,
+            // proving the rollback reclaims a real allocation, not a phantom one.
             assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
         }
     }

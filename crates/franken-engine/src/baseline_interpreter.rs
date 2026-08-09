@@ -32863,9 +32863,26 @@ impl InterpreterCore {
                 self.buffer_swap(receiver.unwrap_or(Value::Undefined), 8)
             }
             BuiltinFunctionKind::PromiseResolve => {
+                if let Some(handle_id) = builtin.bound_object {
+                    // A bound handle marks a resolve capability (from
+                    // CreateResolvingFunctions), not the static
+                    // `Promise.resolve` constructor method (bd-iio0f).
+                    return self.apply_promise_capability(
+                        crate::promise_model::PromiseHandle(handle_id),
+                        args,
+                        true,
+                    );
+                }
                 self.dispatch_promise_hostcall("promise:resolve", args, Some(module))
             }
             BuiltinFunctionKind::PromiseReject => {
+                if let Some(handle_id) = builtin.bound_object {
+                    return self.apply_promise_capability(
+                        crate::promise_model::PromiseHandle(handle_id),
+                        args,
+                        false,
+                    );
+                }
                 self.dispatch_promise_hostcall("promise:reject", args, Some(module))
             }
             BuiltinFunctionKind::PromiseAll => {
@@ -44478,9 +44495,15 @@ impl InterpreterCore {
                         Ok(Value::Promise(h))
                     }
                     _ => {
-                        // Promise.resolve(value) — create a pre-resolved promise.
-                        let js_val = Self::value_to_js_value(&arg0);
-                        let handle = self.create_fulfilled_promise(js_val, label.clone())?;
+                        // Promise.resolve(value): a pending promise resolved
+                        // with `value`. Thenable assimilation (ES 25.6.4.5.1)
+                        // is applied — a thenable adopts its eventual state
+                        // through a PromiseResolveThenableJob rather than
+                        // fulfilling with the object itself (bd-iio0f). A
+                        // non-thenable fulfills synchronously here, so the
+                        // observable result for ordinary values is unchanged.
+                        let handle = self.create_promise()?;
+                        self.resolve_promise_with_value(handle, arg0, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -44843,6 +44866,123 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&result))
     }
 
+    /// Whether a promise handle has left the pending state.
+    fn promise_is_settled(&self, handle: crate::promise_model::PromiseHandle) -> bool {
+        self.promise_store
+            .get(handle)
+            .map(|record| record.state.is_settled())
+            .unwrap_or(false)
+    }
+
+    /// ES2020 25.6.1.3.2 Promise Resolve Function: resolve `promise` with
+    /// `value`. If `value` is a thenable (an object exposing a callable `then`),
+    /// adopt its eventual state by enqueuing a PromiseResolveThenableJob rather
+    /// than fulfilling with the object itself; otherwise fulfill directly.
+    ///
+    /// Thenable detection is limited to a `then` property that is a user
+    /// closure (`Value::Closure`) — the [`crate::promise_model::Microtask::ResolveThenable`]
+    /// job carries a `ClosureHandle`. A `then` that is a native builtin or a
+    /// non-callable is treated as a non-thenable and fulfilled directly, which
+    /// matches the observable result for every builtin the engine exposes.
+    fn resolve_promise_with_value(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        if matches!(value, Value::Object(_)) {
+            let then = self.simple_callback_get_property(value.clone(), &Value::str("then"))?;
+            if let Value::Closure(then_id) = then {
+                return self.enqueue_resolve_thenable(
+                    promise,
+                    crate::closure_model::ClosureHandle(then_id),
+                    value,
+                    label,
+                );
+            }
+        }
+        self.fulfill_promise(promise, Self::value_to_js_value(&value), label)
+    }
+
+    /// Enqueue a PromiseResolveThenableJob (memory-preflighted, mirroring
+    /// [`Self::queue_microtask_from_value`]).
+    fn enqueue_resolve_thenable(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        then_handler: crate::closure_model::ClosureHandle,
+        thenable: Value,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let task = crate::promise_model::Microtask::ResolveThenable {
+            promise,
+            then_handler,
+            thenable: Self::value_to_js_value(&thenable),
+            label,
+        };
+        let next_queue_bytes = self
+            .event_loop
+            .microtasks
+            .projected_enqueue_memory_bytes(&task);
+        let next_promise_bytes = self
+            .promise_store
+            .estimated_memory_bytes()
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.event_loop.microtasks.enqueue(task);
+        Ok(())
+    }
+
+    /// Build a single-use resolve/reject capability function bound to
+    /// `promise` (ES CreateResolvingFunctions). The bound promise handle rides
+    /// in `bound_object`; the [`BuiltinFunctionKind::PromiseResolve`] /
+    /// `PromiseReject` apply arms interpret a bound handle as a capability call
+    /// rather than the static `Promise.resolve`/`Promise.reject` constructor
+    /// methods.
+    fn make_promise_capability(
+        &self,
+        kind: BuiltinFunctionKind,
+        promise: crate::promise_model::PromiseHandle,
+    ) -> Value {
+        let mut builtin = BuiltinFunction::new_kind(kind);
+        builtin.bound_object = Some(promise.0);
+        Value::BuiltinFunction(builtin)
+    }
+
+    /// Apply a resolve/reject capability bound to `promise`. Settling is
+    /// once-only (ES `alreadyResolved`): a second call after the promise has
+    /// left the pending state is a silent no-op returning `undefined`.
+    fn apply_promise_capability(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        args: RegRange,
+        is_resolve: bool,
+    ) -> Result<Value, InterpreterError> {
+        let argument = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        if self.promise_is_settled(promise) {
+            return Ok(Value::Undefined);
+        }
+        let label = crate::ifc_artifacts::Label::Public;
+        if is_resolve {
+            self.resolve_promise_with_value(promise, argument, label)?;
+        } else {
+            self.reject_promise(promise, Self::value_to_js_value(&argument), label)?;
+        }
+        Ok(Value::Undefined)
+    }
+
     fn promise_rejection_from_error(error: &InterpreterError) -> crate::object_model::JsValue {
         match error {
             InterpreterError::UncaughtException { value } => {
@@ -44994,18 +45134,42 @@ impl InterpreterCore {
                     }
                     crate::promise_model::Microtask::ResolveThenable {
                         promise,
-                        then_handler: _,
-                        thenable: _,
-                        label: _task_label,
+                        then_handler,
+                        thenable,
+                        label: task_label,
                     } => {
-                        // Simplified: resolve with undefined (full thenable
-                        // unwrapping requires closure execution which is a
-                        // follow-up bead).
-                        self.fulfill_promise(
-                            *promise,
-                            crate::object_model::JsValue::Undefined,
-                            _task_label.clone(),
-                        )?;
+                        // PromiseResolveThenableJob (ES2020 25.6.1.3.1): call
+                        // `thenable.then(resolve, reject)` with resolve/reject
+                        // capabilities bound to `promise`. The user `then` runs
+                        // synchronously within this job; any microtasks it
+                        // schedules (and the settle it performs) are enqueued in
+                        // program order, preserving nested-microtask ordering.
+                        let thenable_value = Self::js_value_to_value(thenable);
+                        let resolve_fn = self
+                            .make_promise_capability(BuiltinFunctionKind::PromiseResolve, *promise);
+                        let reject_fn = self
+                            .make_promise_capability(BuiltinFunctionKind::PromiseReject, *promise);
+                        let invocation = self.invoke_inline_method_call_with_argument_label(
+                            module,
+                            Value::Closure(then_handler.0),
+                            thenable_value,
+                            vec![resolve_fn, reject_fn],
+                            Some(task_label.clone()),
+                        );
+                        if let Err(err) = invocation {
+                            // ES 25.6.1.3.1 step 3: if calling `then` throws,
+                            // reject the promise with the thrown value — unless
+                            // the thenable already settled it via its resolve
+                            // capability, in which case the throw is inert (the
+                            // capability's once-guard has already fired). This
+                            // mirrors the PromiseReaction arm, which turns any
+                            // user-JS error raised inside a microtask into a
+                            // rejection rather than re-propagating.
+                            if !self.promise_is_settled(*promise) {
+                                let reason = Self::promise_rejection_from_error(&err);
+                                self.reject_promise(*promise, reason, task_label.clone())?;
+                            }
+                        }
                     }
                 }
                 Ok(())

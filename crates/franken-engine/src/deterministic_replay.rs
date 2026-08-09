@@ -418,7 +418,10 @@ pub enum ReplayError {
     },
     /// bd-buocz: `next_sequence` disagrees with the recorded event count, so the
     /// finalisation counter was forged or the event vector was truncated.
-    NextSequenceMismatch { next_sequence: u64, event_count: u64 },
+    NextSequenceMismatch {
+        next_sequence: u64,
+        event_count: u64,
+    },
     /// bd-buocz: an event's virtual timestamp regresses below its predecessor's,
     /// so the monotonic virtual clock was violated.
     NonMonotonicVirtualTimestamp {
@@ -1715,9 +1718,16 @@ mod tests {
         let mut trace = NondeterminismTrace::new("ok");
         trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "clk");
         trace.capture(NondeterminismSource::ResourceCheck, vec![2], 10, "budget");
-        trace.capture(NondeterminismSource::LaneSelectionRandom, vec![3], 20, "router");
+        trace.capture(
+            NondeterminismSource::LaneSelectionRandom,
+            vec![3],
+            20,
+            "router",
+        );
         trace.finalise(30);
-        trace.validate_for_replay().expect("wellformed trace validates");
+        trace
+            .validate_for_replay()
+            .expect("wellformed trace validates");
 
         let mut empty = NondeterminismTrace::new("empty");
         empty.finalise(0);
@@ -1862,7 +1872,11 @@ mod tests {
             component: "timer".to_string(),
             ..base.clone()
         };
-        assert_eq!(base.derive_id(), same.derive_id(), "identical events share id");
+        assert_eq!(
+            base.derive_id(),
+            same.derive_id(),
+            "identical events share id"
+        );
         assert_ne!(
             base.derive_id(),
             diff_value.derive_id(),

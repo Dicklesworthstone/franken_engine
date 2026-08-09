@@ -8715,6 +8715,20 @@ pub struct InterpreterCore {
     telemetry_recorder: TelemetryRecorder,
     /// Structured events.
     events: Vec<InterpreterEvent>,
+    /// Exact logical ownership charged for the general (non-generated-code)
+    /// structured events in `events` (bd-zaeeh). Generated-code events are
+    /// charged separately via [`Self::generated_code_observability_bytes`], so
+    /// this field deliberately excludes them to avoid double-charging.
+    /// Eagerly maintained by [`Self::push_event`] and released when `events`
+    /// is drained into [`ExecutionResult`], keeping general observability
+    /// inside `max_total_memory_bytes` even when a core is reused across
+    /// repeated failing executions (which retain the event vector).
+    general_event_bytes: u64,
+    /// Count of general structured events dropped because retaining them would
+    /// have pushed the estimate past `max_total_memory_bytes` (bd-zaeeh).
+    /// Deterministic containment evidence: a bounded diagnostic surface never
+    /// silently exceeds the budget.
+    dropped_event_count: u64,
     /// Append-only audit trail for `Function`-constructor-generated code
     /// (bd-8enww.3.4). Like `events`, this is observability that survives the
     /// re-entrant snapshot/restore of a generated-function call and is drained
@@ -9543,6 +9557,8 @@ impl InterpreterCore {
             security_observability: RuntimeSecurityObservability::new(),
             telemetry_recorder: TelemetryRecorder::new(RecorderConfig::default()),
             events: Vec::new(),
+            general_event_bytes: 0,
+            dropped_event_count: 0,
             generated_code_audit: Vec::new(),
             generated_code_observability_bytes: 0,
             generated_code_observability_reservation_bytes: 0,
@@ -26541,6 +26557,17 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(self.generated_code_observability_bytes);
         self.generated_code_observability_bytes = 0;
+        // bd-zaeeh: draining `events` releases the general structured events
+        // that push_event charged; uncharge them so the estimate stays
+        // consistent with a full recompute after the take below.
+        debug_assert_eq!(
+            self.general_event_bytes,
+            self.general_interpreter_events_memory_bytes()
+        );
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(self.general_event_bytes);
+        self.general_event_bytes = 0;
         ExecutionResult {
             value: completion.value,
             completion_label: completion.label,
@@ -27231,6 +27258,19 @@ impl InterpreterCore {
                 .filter(|event| Self::is_generated_code_interpreter_event(event))
                 .map(Self::estimate_interpreter_event_bytes),
         ))
+    }
+
+    /// Logical ownership of the general (non-generated-code) structured events
+    /// in `events` (bd-zaeeh). The generated-code events are excluded here
+    /// because they are charged by [`Self::generated_code_observability_memory_bytes`];
+    /// the two partitions together cover `events` with no double-count.
+    fn general_interpreter_events_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.events
+                .iter()
+                .filter(|event| !Self::is_generated_code_interpreter_event(event))
+                .map(Self::estimate_interpreter_event_bytes),
+        )
     }
 
     fn generated_code_interpreter_event(
@@ -66848,6 +66888,7 @@ impl InterpreterCore {
             .saturating_add(self.module_state.retained_program_bytes)
             .saturating_add(self.module_state.retained_generated_function_bytes)
             .saturating_add(self.generated_code_observability_memory_bytes())
+            .saturating_add(self.general_interpreter_events_memory_bytes())
             .saturating_add(self.generated_code_observability_reservation_bytes)
             .saturating_add(self.module_exports_memory_bytes())
             .saturating_add(self.state_capture_memory_bytes())
@@ -69061,13 +69102,30 @@ impl InterpreterCore {
     // -- Structured events -------------------------------------------------
 
     fn push_event(&mut self, event: &str, outcome: &str, err_code: Option<&str>) {
-        self.events.push(InterpreterEvent {
+        let event = InterpreterEvent {
             trace_id: self.trace_id.clone(),
             component: COMPONENT.to_string(),
             event: event.to_string(),
             outcome: outcome.to_string(),
             error_code: err_code.map(str::to_string),
-        });
+        };
+        // bd-zaeeh: general structured events are charged against the
+        // containment budget and dropped deterministically at the exact
+        // ceiling rather than accumulating unbounded (a core reused across
+        // repeated failing executions retains its event vector). Dropping
+        // keeps this diagnostic surface from ever pushing the estimate past
+        // `max_total_memory_bytes`; the drop is recorded as evidence.
+        let event_bytes = Self::estimate_interpreter_event_bytes(&event);
+        if Self::memory_request_exceeds_budget(
+            self.estimated_memory_bytes.saturating_add(event_bytes),
+            self.config.max_total_memory_bytes,
+        ) {
+            self.dropped_event_count = self.dropped_event_count.saturating_add(1);
+            return;
+        }
+        self.events.push(event);
+        self.general_event_bytes = self.general_event_bytes.saturating_add(event_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(event_bytes);
     }
 }
 
@@ -92921,6 +92979,120 @@ mod function_prototype_call_apply_tests_current {
             capped.estimated_memory_bytes(),
             capped.recompute_estimated_memory_bytes(),
             "the audit and standard-event halves must stop at the same cap"
+        );
+    }
+
+    #[test]
+    fn bd_zaeeh_general_events_are_budget_bounded_drained_and_recomputed() {
+        let fixture = || {
+            let mut core = test_interpreter();
+            core.sync_estimated_memory_bytes()
+                .expect("general event fixture baseline");
+            core
+        };
+
+        // Baseline: one general event is charged and visible to recompute.
+        let mut probe = fixture();
+        let baseline = probe.estimated_memory_bytes();
+        probe.push_event("execution_started", "ok", None);
+        let event_bytes = probe.estimated_memory_bytes().saturating_sub(baseline);
+        assert!(event_bytes > 0, "a general event must be charged");
+        assert_eq!(probe.events.len(), 1);
+        assert_eq!(probe.general_event_bytes, event_bytes);
+        assert_eq!(
+            probe.general_event_bytes,
+            probe.general_interpreter_events_memory_bytes()
+        );
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            probe.recompute_estimated_memory_bytes(),
+            "a charged general event must keep the estimate consistent"
+        );
+        assert_eq!(probe.dropped_event_count, 0);
+
+        // One-byte-short: a second event that would cross the ceiling is
+        // dropped deterministically with no accounting drift.
+        let mut one_short = fixture();
+        one_short.push_event("execution_started", "ok", None);
+        let after_first = one_short.estimated_memory_bytes();
+        one_short.config.max_total_memory_bytes =
+            after_first.saturating_add(event_bytes).saturating_sub(1);
+        one_short.push_event("execution_started", "ok", None);
+        assert_eq!(one_short.events.len(), 1, "over-ceiling event must be dropped");
+        assert_eq!(one_short.dropped_event_count, 1);
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            after_first,
+            "a dropped event must not be charged"
+        );
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short.recompute_estimated_memory_bytes()
+        );
+
+        // Exact ceiling: a second event that fits precisely is retained.
+        let mut exact = fixture();
+        exact.push_event("execution_started", "ok", None);
+        let after_first = exact.estimated_memory_bytes();
+        exact.config.max_total_memory_bytes = after_first.saturating_add(event_bytes);
+        exact.push_event("execution_started", "ok", None);
+        assert_eq!(exact.events.len(), 2, "event at the exact ceiling is retained");
+        assert_eq!(exact.dropped_event_count, 0);
+        assert_eq!(exact.general_event_bytes, event_bytes.saturating_mul(2));
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+
+        // Drain on take releases the general-event charge (success/reuse
+        // semantics): the estimate returns to the pre-event baseline.
+        let mut drained = fixture();
+        let drain_baseline = drained.estimated_memory_bytes();
+        drained.push_event("execution_completed", "ok", None);
+        assert!(drained.estimated_memory_bytes() > drain_baseline);
+        let taken = drained.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert_eq!(taken.events.len(), 1);
+        assert_eq!(drained.general_event_bytes, 0);
+        assert!(drained.events.is_empty());
+        assert_eq!(
+            drained.estimated_memory_bytes(),
+            drain_baseline,
+            "draining events must restore the pre-event estimate"
+        );
+        assert_eq!(
+            drained.estimated_memory_bytes(),
+            drained.recompute_estimated_memory_bytes()
+        );
+
+        // Repeated failing reuse: without a drain, general events accumulate
+        // charged but stay bounded — they can never exceed the containment
+        // budget, and the surplus pushes drop deterministically.
+        let mut repeated = fixture();
+        let cap_baseline = repeated.estimated_memory_bytes();
+        repeated.config.max_total_memory_bytes =
+            cap_baseline.saturating_add(event_bytes.saturating_mul(3));
+        for _ in 0..20 {
+            repeated.push_event("execution_started", "ok", None);
+        }
+        assert_eq!(
+            repeated.events.len(),
+            3,
+            "exactly three events fit under a 3x-event ceiling"
+        );
+        assert_eq!(repeated.dropped_event_count, 17);
+        assert!(
+            repeated.estimated_memory_bytes() <= repeated.config.max_total_memory_bytes,
+            "accumulated general events must never exceed the containment budget"
+        );
+        assert_eq!(
+            repeated.estimated_memory_bytes(),
+            repeated.recompute_estimated_memory_bytes()
         );
     }
 

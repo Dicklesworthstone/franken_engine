@@ -28516,6 +28516,11 @@ impl InterpreterCore {
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
         let lowering_ctx =
             LoweringContext::new(&self.trace_id, "module-import", "baseline_interpreter");
+        let lowering_ctx = if is_cjs {
+            lowering_ctx.with_authenticated_commonjs_runtime_bindings()
+        } else {
+            lowering_ctx
+        };
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
             InterpreterError::ModuleLoweringFailed {
                 specifier: resolved.to_string(),

@@ -84,6 +84,8 @@ const CLASS_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0class-expression-self\0";
 const CHILD_CAPTURE_BINDING_SENTINEL_PREFIX: &str = "\0child-capture\0";
 const RUNTIME_LEXICAL_BINDING_NAME_PREFIX: &str = "\0runtime-lexical\0";
 const TYPEOF_DYNAMIC_NAME_SENTINEL_PREFIX: &str = "\0typeof-dynamic\0";
+const AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS: [&str; 5] =
+    ["require", "exports", "module", "__filename", "__dirname"];
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
@@ -262,6 +264,12 @@ pub struct LoweringContext {
     /// older serialized contexts (no field) deserializing as deny-all.
     #[serde(default)]
     pub ambient_authority_grant: AmbientAuthorityGrant,
+    /// Whether the caller has authenticated a CommonJS loader environment
+    /// that will inject the canonical wrapper bindings before execution.
+    /// Source labels alone never enable this; the resolved CJS loader must opt
+    /// in explicitly so arbitrary scripts retain deny-all ambient authority.
+    #[serde(default)]
+    pub authenticated_commonjs_runtime_bindings: bool,
 }
 
 impl LoweringContext {
@@ -275,6 +283,7 @@ impl LoweringContext {
             decision_id: decision_id.into(),
             policy_id: policy_id.into(),
             ambient_authority_grant: AmbientAuthorityGrant::DenyAll,
+            authenticated_commonjs_runtime_bindings: false,
         }
     }
 
@@ -283,6 +292,13 @@ impl LoweringContext {
     /// profile; all other callers keep the deny-all default.
     pub fn with_ambient_authority_grant(mut self, grant: AmbientAuthorityGrant) -> Self {
         self.ambient_authority_grant = grant;
+        self
+    }
+
+    /// Bind lowering to the authenticated CommonJS wrapper environment that
+    /// the module loader constructs before executing the resulting IR.
+    pub fn with_authenticated_commonjs_runtime_bindings(mut self) -> Self {
+        self.authenticated_commonjs_runtime_bindings = true;
         self
     }
 }
@@ -534,8 +550,11 @@ pub fn lower_ir0_to_ir3(
 ) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
     let mut events = Vec::<LoweringEvent>::new();
 
-    let ir1_result = match lower_ir0_to_ir1_with_ambient_grant(ir0, context.ambient_authority_grant)
-    {
+    let ir1_result = match lower_ir0_to_ir1_with_authenticated_runtime_bindings(
+        ir0,
+        context.ambient_authority_grant,
+        context.authenticated_commonjs_runtime_bindings,
+    ) {
         Ok(result) => {
             events.push(success_event(context, "ir0_to_ir1_lowered"));
             result
@@ -747,6 +766,14 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false)
+}
+
+fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
+    ir0: &Ir0Module,
+    ambient_grant: AmbientAuthorityGrant,
+    authenticated_commonjs_runtime_bindings: bool,
+) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
     }
@@ -794,8 +821,24 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     if ambient_grant == AmbientAuthorityGrant::TrustedProcessShape {
         binding_lookup.insert(TRUSTED_PROCESS_SHAPE_GRANT_SENTINEL.to_string(), 0);
     }
-    let mut declared_root_bindings =
-        reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    let mut declared_root_bindings = BTreeSet::new();
+    if authenticated_commonjs_runtime_bindings {
+        for name in AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS {
+            let binding_id = reserve_binding_id(&mut binding_lookup, &mut binding_index, name);
+            bindings.push(ResolvedBinding {
+                name: name.to_string(),
+                binding_id,
+                scope: root_scope_id,
+                kind: BindingKind::Parameter,
+            });
+            declared_root_bindings.insert(name.to_string());
+        }
+    }
+    declared_root_bindings.extend(reserve_root_scope_bindings(
+        &ir0.tree.body,
+        &mut binding_lookup,
+        &mut binding_index,
+    ));
     declared_root_bindings.extend(reserve_hoisted_var_bindings(
         &ir0.tree.body,
         &mut binding_lookup,
@@ -37229,6 +37272,61 @@ mod tests {
         // Control: plain `=` must still overwrite (the compound branch must not
         // intercept the Assign operator).
         assert_eq!(cwfiv_eval("let o = { c: 9 }; o.c = 1; o.c;"), "1");
+    }
+
+    // ================================================================
+    // bd-0qks9: authenticated CommonJS wrapper bindings
+    // ================================================================
+
+    #[test]
+    fn authenticated_commonjs_context_binds_wrapper_inputs_without_widening_scripts_bd_0qks9() {
+        let source = "const req = require;\n\
+                      module.exports = [req('./dep.cjs'), exports, __filename, __dirname];\n";
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse CommonJS");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "/tmp/authenticated-context.cjs");
+
+        let untrusted_error = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("bd-0qks9", "untrusted", "deny-all"),
+        )
+        .expect_err("a .cjs source label alone must not authenticate require");
+        assert!(matches!(
+            untrusted_error,
+            LoweringPipelineError::AmbientAuthorityViolation {
+                required_effect: EffectKind::FsRead,
+                ..
+            }
+        ));
+
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("bd-0qks9", "authenticated", "cjs-loader")
+                .with_authenticated_commonjs_runtime_bindings(),
+        )
+        .expect("the authenticated CJS loader context should lower wrapper bindings");
+
+        for name in AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS {
+            assert!(
+                output.ir1.scopes.iter().any(|scope| {
+                    scope.bindings.iter().any(|binding| {
+                        binding.name == name && binding.kind == BindingKind::Parameter
+                    })
+                }),
+                "authenticated CommonJS input {name} must be a real root binding"
+            );
+        }
+        assert_eq!(
+            count_hostcall_deep(&output.ir1.ops, "module:require"),
+            0,
+            "authenticated require must call the injected wrapper binding, not bypass it through a HostCall"
+        );
+        assert!(
+            ops_deep_match(&output.ir1.ops, &|op| matches!(
+                op,
+                Ir1Op::Call { .. } | Ir1Op::CallMethod { .. }
+            )),
+            "the aliased injected require must remain a real callable value"
+        );
     }
 
     // ================================================================

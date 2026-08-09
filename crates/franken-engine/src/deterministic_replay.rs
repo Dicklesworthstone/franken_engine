@@ -37,6 +37,16 @@ fn replay_schema() -> SchemaId {
     SchemaId::from_definition(b"deterministic_replay-v1")
 }
 
+/// Append `bytes` to `buf` with a u64 big-endian length prefix. bd-buocz: a
+/// canonical ID preimage assembled from several variable-length fields is only
+/// injective if each field carries its own length — otherwise bytes can be
+/// shifted across a field boundary (e.g. session id vs event payload) to forge a
+/// colliding preimage. Fixed-width numeric fields are appended without a prefix.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 /// Fixed-point multiplier: 1_000_000 ≡ 1.0.
 const MILLION: i64 = 1_000_000;
 
@@ -119,18 +129,26 @@ pub struct TraceEvent {
 }
 
 impl TraceEvent {
+    /// bd-buocz: canonical, injective preimage that content-binds EVERY identity
+    /// field — including `value` and `component`, which the old
+    /// `format!("trace-{seq}-{source}-{vts}")` preimage omitted, so two events
+    /// differing only in payload or producing component collided to one id.
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&self.sequence.to_be_bytes());
+        push_len_prefixed(&mut buf, self.source.as_str().as_bytes());
+        buf.extend_from_slice(&self.virtual_ts.to_be_bytes());
+        push_len_prefixed(&mut buf, &self.value);
+        push_len_prefixed(&mut buf, self.component.as_bytes());
+        buf
+    }
+
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
-            "trace-{}-{}-{}",
-            self.sequence,
-            self.source.as_str(),
-            self.virtual_ts
-        );
         derive_id(
             ObjectDomain::EvidenceRecord,
             "replay",
             &replay_schema(),
-            canonical.as_bytes(),
+            &self.canonical_bytes(),
         )
         .expect("operation should succeed for valid inputs")
     }
@@ -192,22 +210,102 @@ impl NondeterminismTrace {
         self.capture_ended_vts.is_some()
     }
 
-    /// Validate that the trace is ready for deterministic replay.
+    /// Validate that the trace is structurally sound and ready for deterministic
+    /// replay. bd-buocz: this is a FAIL-CLOSED gate. `ReplayEngine` consumes the
+    /// event vector in order and treats the serialized `event.sequence` as
+    /// diagnostic only, so without these checks a duplicated, gapped, reordered,
+    /// or otherwise forged trace would be silently replayed. It rejects a trace
+    /// that: is not finalised; has a finalisation bound preceding its capture
+    /// start; has a `next_sequence` counter disagreeing with its event count; has
+    /// a non-contiguous (duplicated/gapped/reordered) event sequence; has a
+    /// virtual timestamp that regresses; or has an event outside the capture
+    /// window.
     pub fn validate_for_replay(&self) -> Result<(), ReplayError> {
-        if self.is_finalised() {
-            Ok(())
-        } else {
-            Err(ReplayError::TraceNotFinalised)
+        let Some(capture_ended_vts) = self.capture_ended_vts else {
+            return Err(ReplayError::TraceNotFinalised);
+        };
+        if capture_ended_vts < self.capture_started_vts {
+            return Err(ReplayError::InvalidFinalisationBounds {
+                capture_started_vts: self.capture_started_vts,
+                capture_ended_vts,
+            });
         }
+        if self.next_sequence != self.events.len() as u64 {
+            return Err(ReplayError::NextSequenceMismatch {
+                next_sequence: self.next_sequence,
+                event_count: self.events.len() as u64,
+            });
+        }
+        let mut previous_vts: Option<u64> = None;
+        for (position, event) in self.events.iter().enumerate() {
+            // Contiguity + uniqueness + order in one check: the declared sequence
+            // must equal the vector position, so duplicated/gapped/reordered
+            // sequence metadata (the field ReplayEngine trusts) cannot pass.
+            let expected = position as u64;
+            if event.sequence != expected {
+                return Err(ReplayError::NonContiguousSequence {
+                    position,
+                    declared: event.sequence,
+                    expected,
+                });
+            }
+            // Virtual timestamps are a monotonic (non-decreasing) counter.
+            if let Some(previous) = previous_vts
+                && event.virtual_ts < previous
+            {
+                return Err(ReplayError::NonMonotonicVirtualTimestamp {
+                    sequence: event.sequence,
+                    virtual_ts: event.virtual_ts,
+                    previous,
+                });
+            }
+            // Every event must fall within the declared capture window.
+            if event.virtual_ts < self.capture_started_vts || event.virtual_ts > capture_ended_vts {
+                return Err(ReplayError::VirtualTimestampOutOfBounds {
+                    sequence: event.sequence,
+                    virtual_ts: event.virtual_ts,
+                    capture_started_vts: self.capture_started_vts,
+                    capture_ended_vts,
+                });
+            }
+            previous_vts = Some(event.virtual_ts);
+        }
+        Ok(())
+    }
+
+    /// bd-buocz: canonical, injective preimage that content-binds the full trace
+    /// identity — session id, sequence counter, capture window, and EVERY event's
+    /// canonical bytes in order. The old `format!("trace-{session}-events-{len}")`
+    /// preimage bound only the session id and event COUNT, so two traces sharing a
+    /// session and length but with different (or reordered) events collided.
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        push_len_prefixed(&mut buf, self.session_id.as_bytes());
+        buf.extend_from_slice(&self.next_sequence.to_be_bytes());
+        buf.extend_from_slice(&self.capture_started_vts.to_be_bytes());
+        match self.capture_ended_vts {
+            Some(ended) => {
+                buf.push(1);
+                buf.extend_from_slice(&ended.to_be_bytes());
+            }
+            None => {
+                buf.push(0);
+                buf.extend_from_slice(&0u64.to_be_bytes());
+            }
+        }
+        buf.extend_from_slice(&(self.events.len() as u64).to_be_bytes());
+        for event in &self.events {
+            push_len_prefixed(&mut buf, &event.canonical_bytes());
+        }
+        buf
     }
 
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!("trace-{}-events-{}", self.session_id, self.events.len());
         derive_id(
             ObjectDomain::EvidenceRecord,
             "replay",
             &replay_schema(),
-            canonical.as_bytes(),
+            &self.canonical_bytes(),
         )
         .expect("operation should succeed for valid inputs")
     }
@@ -311,6 +409,37 @@ pub enum ReplayError {
     },
     /// Trace not finalised.
     TraceNotFinalised,
+    /// bd-buocz: an event's declared sequence does not match its position, so
+    /// the trace has a duplicated, gapped, or reordered sequence.
+    NonContiguousSequence {
+        position: usize,
+        declared: u64,
+        expected: u64,
+    },
+    /// bd-buocz: `next_sequence` disagrees with the recorded event count, so the
+    /// finalisation counter was forged or the event vector was truncated.
+    NextSequenceMismatch { next_sequence: u64, event_count: u64 },
+    /// bd-buocz: an event's virtual timestamp regresses below its predecessor's,
+    /// so the monotonic virtual clock was violated.
+    NonMonotonicVirtualTimestamp {
+        sequence: u64,
+        virtual_ts: u64,
+        previous: u64,
+    },
+    /// bd-buocz: an event's virtual timestamp falls outside the capture window
+    /// `[capture_started_vts, capture_ended_vts]`.
+    VirtualTimestampOutOfBounds {
+        sequence: u64,
+        virtual_ts: u64,
+        capture_started_vts: u64,
+        capture_ended_vts: u64,
+    },
+    /// bd-buocz: the finalisation bound precedes the capture start, so the
+    /// declared capture window is empty or inverted.
+    InvalidFinalisationBounds {
+        capture_started_vts: u64,
+        capture_ended_vts: u64,
+    },
 }
 
 impl std::fmt::Display for ReplayError {
@@ -337,6 +466,45 @@ impl std::fmt::Display for ReplayError {
                 actual.as_str()
             ),
             Self::TraceNotFinalised => f.write_str("trace is not finalised"),
+            Self::NonContiguousSequence {
+                position,
+                declared,
+                expected,
+            } => write!(
+                f,
+                "non-contiguous trace: event at position {position} declares sequence {declared} (expected {expected})"
+            ),
+            Self::NextSequenceMismatch {
+                next_sequence,
+                event_count,
+            } => write!(
+                f,
+                "next_sequence {next_sequence} disagrees with recorded event count {event_count}"
+            ),
+            Self::NonMonotonicVirtualTimestamp {
+                sequence,
+                virtual_ts,
+                previous,
+            } => write!(
+                f,
+                "non-monotonic virtual timestamp at sequence {sequence}: {virtual_ts} regresses below previous {previous}"
+            ),
+            Self::VirtualTimestampOutOfBounds {
+                sequence,
+                virtual_ts,
+                capture_started_vts,
+                capture_ended_vts,
+            } => write!(
+                f,
+                "virtual timestamp {virtual_ts} at sequence {sequence} is outside capture window [{capture_started_vts}, {capture_ended_vts}]"
+            ),
+            Self::InvalidFinalisationBounds {
+                capture_started_vts,
+                capture_ended_vts,
+            } => write!(
+                f,
+                "invalid finalisation bounds: capture ended at {capture_ended_vts} before it started at {capture_started_vts}"
+            ),
         }
     }
 }
@@ -443,12 +611,23 @@ impl ReplayEngine {
     }
 
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!("replay-{}-cursor-{}", self.trace.session_id, self.cursor);
+        // bd-buocz: bind the FULL trace content (not just its session id) plus the
+        // replay position and mode, so replay engines over different traces — or
+        // the same trace at a different cursor/mode — never collide to one id.
+        let mut canonical = Vec::new();
+        push_len_prefixed(&mut canonical, &self.trace.canonical_bytes());
+        canonical.extend_from_slice(&(self.cursor as u64).to_be_bytes());
+        canonical.extend_from_slice(&self.replayed_events.to_be_bytes());
+        canonical.push(match self.mode {
+            ReplayMode::Strict => 0,
+            ReplayMode::BestEffort => 1,
+            ReplayMode::Validate => 2,
+        });
         derive_id(
             ObjectDomain::EvidenceRecord,
             "replay",
             &replay_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("operation should succeed for valid inputs")
     }
@@ -2241,6 +2420,31 @@ mod tests {
                 source: NondeterminismSource::ExternalApiResponse,
                 sequence: 1,
             },
+            ReplayError::TraceNotFinalised,
+            ReplayError::NonContiguousSequence {
+                position: 2,
+                declared: 5,
+                expected: 2,
+            },
+            ReplayError::NextSequenceMismatch {
+                next_sequence: 7,
+                event_count: 4,
+            },
+            ReplayError::NonMonotonicVirtualTimestamp {
+                sequence: 3,
+                virtual_ts: 10,
+                previous: 50,
+            },
+            ReplayError::VirtualTimestampOutOfBounds {
+                sequence: 1,
+                virtual_ts: 900,
+                capture_started_vts: 0,
+                capture_ended_vts: 100,
+            },
+            ReplayError::InvalidFinalisationBounds {
+                capture_started_vts: 200,
+                capture_ended_vts: 100,
+            },
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serialize derived Serialize");
@@ -3168,7 +3372,7 @@ mod tests {
 
     #[test]
     fn replay_error_all_variants_debug_distinct() {
-        let errs: [ReplayError; 4] = [
+        let errs: [ReplayError; 9] = [
             ReplayError::TraceExhausted {
                 cursor: 0,
                 total: 0,
@@ -3183,10 +3387,34 @@ mod tests {
                 actual: NondeterminismSource::ResourceCheck,
             },
             ReplayError::TraceNotFinalised,
+            ReplayError::NonContiguousSequence {
+                position: 1,
+                declared: 4,
+                expected: 1,
+            },
+            ReplayError::NextSequenceMismatch {
+                next_sequence: 9,
+                event_count: 3,
+            },
+            ReplayError::NonMonotonicVirtualTimestamp {
+                sequence: 2,
+                virtual_ts: 5,
+                previous: 40,
+            },
+            ReplayError::VirtualTimestampOutOfBounds {
+                sequence: 0,
+                virtual_ts: 999,
+                capture_started_vts: 0,
+                capture_ended_vts: 100,
+            },
+            ReplayError::InvalidFinalisationBounds {
+                capture_started_vts: 300,
+                capture_ended_vts: 50,
+            },
         ];
         let dbgs: std::collections::BTreeSet<String> =
             errs.iter().map(|e| format!("{e:?}")).collect();
-        assert_eq!(dbgs.len(), 4);
+        assert_eq!(dbgs.len(), 9);
     }
 
     // ── FailoverReason Debug ───────────────────────────────────

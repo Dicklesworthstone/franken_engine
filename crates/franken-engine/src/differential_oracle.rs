@@ -422,6 +422,12 @@ pub enum DifferentialComparisonMode {
     ExactStderr,
     ExceptionClass,
     TimingEnvelope,
+    /// Top-level completion-provenance agreement between the in-process lanes
+    /// (bd-5ilh1). Only backends that report a completion label participate
+    /// (engine + core); `node -e`/`bun -e` subprocesses never do. Advisory:
+    /// engine and core label inference may legitimately differ in precision,
+    /// so this mode reports divergence without deciding the semantic verdict.
+    CompletionLabel,
 }
 
 impl DifferentialComparisonMode {
@@ -432,13 +438,17 @@ impl DifferentialComparisonMode {
             Self::ExactStderr => "exact_stderr",
             Self::ExceptionClass => "exception_class",
             Self::TimingEnvelope => "timing_envelope",
+            Self::CompletionLabel => "completion_label",
         }
     }
 
     const fn contributes_to_semantic_verdict(self) -> bool {
         match self {
             Self::StructuredValue | Self::ExceptionClass => true,
-            Self::ExactStdout | Self::ExactStderr | Self::TimingEnvelope => false,
+            Self::ExactStdout
+            | Self::ExactStderr
+            | Self::TimingEnvelope
+            | Self::CompletionLabel => false,
         }
     }
 }
@@ -473,6 +483,11 @@ pub struct DifferentialCanonicalObservation {
     /// (bd-2vzgi). Participates in the `StructuredValue` comparison key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_value_wtf16: Option<Vec<u16>>,
+    /// Completion-provenance label reported by an in-process backend for a
+    /// completed run (bd-5ilh1). Participates in the `CompletionLabel`
+    /// comparison; external subprocess lanes never populate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_label: Option<CoreIfcLabel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1313,7 +1328,7 @@ fn run_franken_engine_backend(
                 exit_code: Some(0),
                 duration_micros: started.elapsed().as_micros(),
                 value: Some(outcome.value),
-                completion_label: None,
+                completion_label: outcome.completion_label.map(core_label_from_engine),
                 value_wtf16: outcome.value_wtf16,
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
                 stderr_sha256: sha256_hex(stderr.as_bytes()),
@@ -1347,6 +1362,20 @@ fn run_franken_engine_backend(
                 trusted_signal,
             )
         }
+    }
+}
+
+/// Project the engine's IFC label onto the core's structurally identical
+/// label lattice so both in-process lanes report completion provenance in one
+/// vocabulary (bd-5ilh1).
+fn core_label_from_engine(label: crate::ifc_artifacts::Label) -> CoreIfcLabel {
+    match label {
+        crate::ifc_artifacts::Label::Public => CoreIfcLabel::Public,
+        crate::ifc_artifacts::Label::Internal => CoreIfcLabel::Internal,
+        crate::ifc_artifacts::Label::Confidential => CoreIfcLabel::Confidential,
+        crate::ifc_artifacts::Label::Secret => CoreIfcLabel::Secret,
+        crate::ifc_artifacts::Label::TopSecret => CoreIfcLabel::TopSecret,
+        crate::ifc_artifacts::Label::Custom { name, level } => CoreIfcLabel::Custom { name, level },
     }
 }
 
@@ -1766,6 +1795,7 @@ fn canonicalize_backend_receipts_with_policy(
         DifferentialComparisonMode::ExactStderr,
         DifferentialComparisonMode::ExceptionClass,
         DifferentialComparisonMode::TimingEnvelope,
+        DifferentialComparisonMode::CompletionLabel,
     ]
     .into_iter()
     .map(|mode| {
@@ -2103,6 +2133,11 @@ fn canonicalize_backend_receipt(
         canonical_stderr,
         structured_value,
         structured_value_wtf16,
+        completion_label: if status == DifferentialBackendStatus::Completed {
+            receipt.completion_label.clone()
+        } else {
+            None
+        },
         exception_kind,
         exception_message_class,
         timing_envelope: timing_envelope(receipt.duration_micros),
@@ -2160,7 +2195,8 @@ fn build_mode_comparison(
                 }
                 DifferentialComparisonMode::ExactStdout
                 | DifferentialComparisonMode::ExactStderr
-                | DifferentialComparisonMode::TimingEnvelope => true,
+                | DifferentialComparisonMode::TimingEnvelope
+                | DifferentialComparisonMode::CompletionLabel => true,
             }
         }
     } else {
@@ -2240,6 +2276,10 @@ fn comparison_entry(
                 None
             }
         }
+        DifferentialComparisonMode::CompletionLabel => observation
+            .completion_label
+            .as_ref()
+            .map(|label| (format!("completion_label:{label:?}"), format!("{label:?}"))),
         DifferentialComparisonMode::TimingEnvelope => {
             if matches!(
                 observation.status,
@@ -3647,6 +3687,58 @@ mod tests {
             DifferentialBackendStatus::Completed
         );
         assert_eq!(report.backends[3].value.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn bd_5ilh1_in_process_lanes_agree_on_completion_label() {
+        let mut input = DifferentialOracleInput::new("completion-label-agreement", "1 + 1;");
+        input.node.program = "frankenengine-missing-node-runtime".to_string();
+        input.bun.program = "frankenengine-missing-bun-runtime".to_string();
+
+        let report = run_differential_oracle(&input);
+        // Both in-process lanes now report completion provenance.
+        assert_eq!(
+            report.backends[2].completion_label,
+            Some(CoreIfcLabel::Public),
+            "engine lane must report a completion label"
+        );
+        assert_eq!(
+            report.backends[3].completion_label,
+            Some(CoreIfcLabel::Public),
+            "core lane must report a completion label"
+        );
+
+        let comparison = report
+            .canonicalization
+            .comparisons
+            .iter()
+            .find(|comparison| comparison.mode == DifferentialComparisonMode::CompletionLabel)
+            .expect("completion-label comparison mode must be present");
+        // Only the in-process lanes participate: subprocess runtimes cannot
+        // report completion provenance and must not poison the comparison.
+        assert_eq!(
+            comparison.applicable_backends,
+            vec![
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackend::FrankenCore,
+            ]
+        );
+        assert_eq!(comparison.verdict, DifferentialComparisonVerdict::Consensus);
+    }
+
+    #[test]
+    fn bd_5ilh1_legacy_report_without_completion_label_mode_remains_readable() {
+        // A serialized observation predating the field deserializes with None
+        // and the receipt-level legacy path is unchanged.
+        let receipt = run_franken_engine_backend("1 + 1;", None, None).receipt;
+        assert_eq!(receipt.completion_label, Some(CoreIfcLabel::Public));
+        let mut wire = serde_json::to_value(receipt).expect("receipt should serialize");
+        wire.as_object_mut()
+            .expect("receipt wire should be an object")
+            .remove("completion_label");
+        let restored: DifferentialBackendReceipt =
+            serde_json::from_value(wire).expect("legacy receipt should deserialize");
+        assert_eq!(restored.completion_label, None);
     }
 
     #[test]

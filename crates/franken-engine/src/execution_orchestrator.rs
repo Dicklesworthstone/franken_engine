@@ -305,6 +305,10 @@ pub struct OrchestratorResult {
     pub lane: LaneChoice,
     pub lane_reason: LaneReason,
     pub execution_value: String,
+    /// IFC label the top-level completion value carried at its interpreter
+    /// dispatch exit (bd-5ilh1). Canonical completion provenance for audit,
+    /// evidence, and the engine<->core differential oracle.
+    pub completion_label: crate::ifc_artifacts::Label,
     pub console_output: Vec<ConsoleEntry>,
     pub instructions_executed: u64,
     pub adaptive_router_summary: Option<RouterSummary>,
@@ -1726,6 +1730,7 @@ impl ExecutionOrchestrator {
             let lane_reason = routed.reason;
             let exec_result = routed.result;
             let execution_value = format!("{}", exec_result.value);
+            let completion_label = exec_result.completion_label.clone();
             let console_output = exec_result.console_output.clone();
             let instructions_executed = exec_result.instructions_executed;
             let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
@@ -1844,6 +1849,7 @@ impl ExecutionOrchestrator {
                 lane,
                 lane_reason,
                 execution_value,
+                completion_label,
                 console_output,
                 instructions_executed,
                 adaptive_router_summary,
@@ -2771,6 +2777,12 @@ impl ExecutionOrchestrator {
         // bd-drb55: bind the sealed IR4 witness into the signed evidence
         // chain so witness tampering is detectable through the receipt path.
         builder = builder.meta("ir4_witness_hash".to_string(), ir4_witness_hash.to_hex());
+        // bd-5ilh1: record top-level completion provenance so the evidence
+        // chain commits to the completion value's IFC label.
+        builder = builder.meta(
+            "completion_label".to_string(),
+            exec.completion_label.to_string(),
+        );
         if let Some(summary) = adaptive_router_summary {
             builder = builder.meta(
                 "adaptive_router_regime".to_string(),
@@ -4748,6 +4760,7 @@ mod tests {
     fn execution_reward_saturates_for_extreme_instruction_count() {
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
             requested_hook_action: None,
@@ -7118,6 +7131,7 @@ mod tests {
     fn execution_reward_zero_instructions() {
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
             requested_hook_action: None,
@@ -7518,6 +7532,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Int(42_000_000),
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 10,
             requested_hook_action: None,
@@ -7549,6 +7564,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
             requested_hook_action: None,
@@ -7593,6 +7609,7 @@ mod tests {
         };
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
             requested_hook_action: None,
@@ -7647,6 +7664,7 @@ mod tests {
     fn execution_reward_one_instruction() {
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 1,
             requested_hook_action: None,
@@ -7833,6 +7851,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
             requested_hook_action: None,
@@ -7863,6 +7882,7 @@ mod tests {
         use crate::ir_contract::{CapabilityTag, HostcallDecisionRecord};
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: vec![
                 HostcallDecisionRecord {
                     seq: 0,
@@ -7906,6 +7926,7 @@ mod tests {
             .collect();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: many_hostcalls,
             instructions_executed: 0,
             requested_hook_action: None,
@@ -8069,6 +8090,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Int(1_000_000),
+            completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
             requested_hook_action: None,

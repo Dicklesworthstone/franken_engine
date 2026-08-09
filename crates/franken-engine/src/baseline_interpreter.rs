@@ -7214,6 +7214,11 @@ pub struct ConsoleEntry {
 pub struct ExecutionResult {
     /// Final value (from the return register or last evaluated expression).
     pub value: Value,
+    /// IFC label of the final completion value (bd-5ilh1): the provenance the
+    /// top-level completion carried at its dispatch exit (direct return,
+    /// finally-return, halt, or fallthrough). `Public` for engine-synthesised
+    /// placeholder completions (e.g. containment-hook interruptions).
+    pub completion_label: Label,
     /// Number of instructions executed.
     pub instructions_executed: u64,
     /// Optional containment action requested by an interpreter hook.
@@ -8838,7 +8843,7 @@ pub struct InterpreterCore {
     /// Completion produced when a resumed entry module either falls through,
     /// halts, or throws. `drain_microtasks` cannot return an error directly, so
     /// the outer execution driver consumes this after the event-loop drain.
-    top_level_await_outcome: Option<Result<Value, InterpreterError>>,
+    top_level_await_outcome: Option<Result<LabeledReturn, InterpreterError>>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
@@ -26469,7 +26474,7 @@ impl InterpreterCore {
 
     fn take_execution_result(
         &mut self,
-        value: Value,
+        completion: LabeledReturn,
         requested_hook_action: Option<HookAction>,
     ) -> ExecutionResult {
         // Finalise the nondeterminism trace at the end-of-execution virtual
@@ -26487,7 +26492,8 @@ impl InterpreterCore {
             .saturating_sub(self.generated_code_observability_bytes);
         self.generated_code_observability_bytes = 0;
         ExecutionResult {
-            value,
+            value: completion.value,
+            completion_label: completion.label,
             instructions_executed: self.instructions_executed,
             requested_hook_action,
             witness_events: std::mem::take(&mut self.witness_events),
@@ -26941,8 +26947,11 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn run_top_level_execution(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
-        let result = self.run_loop(module);
+    fn run_top_level_execution(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<LabeledReturn, InterpreterError> {
+        let result = self.run_loop_labeled(module);
         let suspended_at_top_level_await = !self.top_level_await_resumption_contexts.is_empty();
 
         // Writable completion callbacks occupy Node's internal stream-tick
@@ -26987,7 +26996,7 @@ impl InterpreterCore {
     fn record_execution_outcome(
         &mut self,
         entry_specifier: &str,
-        result: &Result<Value, InterpreterError>,
+        result: &Result<LabeledReturn, InterpreterError>,
     ) {
         if let Some(record) = self.module_state.modules.get_mut(entry_specifier) {
             record.status = match result {
@@ -27019,18 +27028,20 @@ impl InterpreterCore {
 
     fn finish_execution_result(
         &mut self,
-        result: Result<Value, InterpreterError>,
+        result: Result<LabeledReturn, InterpreterError>,
     ) -> Result<ExecutionResult, InterpreterError> {
         match result {
-            Ok(v) => {
+            Ok(completion) => {
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-                Ok(self.take_execution_result(v, None))
+                Ok(self.take_execution_result(completion, None))
             }
             Err(InterpreterError::Halted) => {
-                // Halt is normal termination; return whatever is in r0.
-                let final_value = self.read_reg(0).unwrap_or(Value::Undefined);
+                // Halt is normal termination; return whatever is in r0 with
+                // the label it carries there.
+                let value = self.read_reg(0).unwrap_or(Value::Undefined);
+                let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-                Ok(self.take_execution_result(final_value, None))
+                Ok(self.take_execution_result(LabeledReturn { value, label }, None))
             }
             Err(e) => Err(e),
         }
@@ -33069,7 +33080,7 @@ impl InterpreterCore {
         &mut self,
         return_val: Value,
         return_label: Label,
-    ) -> Result<Option<Value>, InterpreterError> {
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
         let current_depth = self.call_stack.len();
         // A function can return from inside an active try block before `EndTry`
         // executes. Those catch frames belong to the returning callee and must
@@ -33125,7 +33136,10 @@ impl InterpreterCore {
             self.clear_suspended_abrupt_completions();
             self.clear_finally_frames();
             self.pending_finally_entry = None;
-            Ok(Some(return_val))
+            Ok(Some(LabeledReturn {
+                value: return_val,
+                label: return_label,
+            }))
         }
     }
 
@@ -33176,7 +33190,7 @@ impl InterpreterCore {
         mut frame: CallFrame,
         resolution: Result<Value, Value>,
         label: Label,
-    ) -> Result<Option<Value>, InterpreterError> {
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
         let async_id = frame
             .async_function_id
             .ok_or_else(|| InterpreterError::TypeError {
@@ -33212,7 +33226,7 @@ impl InterpreterCore {
         &mut self,
         resolution: Result<Value, Value>,
         label: Label,
-    ) -> Result<Option<Value>, InterpreterError> {
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
         let current_depth = self.call_stack.len();
         self.catch_frames
             .retain(|frame| frame.call_depth < current_depth);
@@ -33735,7 +33749,7 @@ impl InterpreterCore {
 
     fn continue_resumed_top_level(&mut self, module: Option<&Ir3Module>) {
         let outcome = match module {
-            Some(module) => self.run_loop(module),
+            Some(module) => self.run_loop_labeled(module),
             None => Err(InterpreterError::TypeError {
                 expected: "module context for top-level await resumption".to_string(),
                 got: "missing module context".to_string(),
@@ -33744,7 +33758,10 @@ impl InterpreterCore {
 
         if self.top_level_await_resumption_contexts.is_empty() {
             let outcome = match outcome {
-                Err(InterpreterError::Halted) => self.read_reg(0),
+                Err(InterpreterError::Halted) => self.read_reg(0).map(|value| {
+                    let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
+                    LabeledReturn { value, label }
+                }),
                 other => other,
             };
             self.replace_top_level_await_outcome(outcome);
@@ -35841,7 +35858,19 @@ impl InterpreterCore {
     /// catch target. Errors with no eligible handler — and all engine
     /// faults/resource limits, which are not JS-catchable — propagate
     /// unchanged.
+    /// Value-only view of [`Self::run_loop_labeled`] for engine-internal
+    /// callers (generator/async resumption, nested drivers) whose label flow
+    /// travels through the register file and generator/async side channels.
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        self.run_loop_labeled(module)
+            .map(|completion| completion.value)
+    }
+
+    /// Run the dispatch loop, carrying the completion value's IFC label on
+    /// every exit (bd-5ilh1). The labeled type forces each dispatch exit site
+    /// to state its completion provenance explicitly — a new exit path cannot
+    /// silently default to `Public`.
+    fn run_loop_labeled(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
         loop {
             match self.run_loop_dispatch(module) {
                 Err(err)
@@ -35880,7 +35909,7 @@ impl InterpreterCore {
         }
     }
 
-    fn run_loop_dispatch(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+    fn run_loop_dispatch(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -35905,14 +35934,16 @@ impl InterpreterCore {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
-                    if let Some(final_value) =
+                    if let Some(completion) =
                         self.complete_return(Value::Undefined, Label::Public)?
                     {
-                        return Ok(final_value);
+                        return Ok(completion);
                     }
                     continue;
                 } else {
-                    return self.read_reg(0);
+                    let value = self.read_reg(0)?;
+                    let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
+                    return Ok(LabeledReturn { value, label });
                 }
             }
 
@@ -37303,10 +37334,10 @@ impl InterpreterCore {
                         let pending_return = self
                             .take_pending_return_slot()
                             .expect("Return installed a pending completion before direct return");
-                        if let Some(final_value) =
+                        if let Some(completion) =
                             self.complete_return(pending_return.value, pending_return.label)?
                         {
-                            return Ok(final_value);
+                            return Ok(completion);
                         }
                     }
                 }
@@ -38628,10 +38659,10 @@ impl InterpreterCore {
                                     self.estimated_memory_bytes.saturating_sub(
                                         Self::estimate_labeled_return_bytes(&pending_return),
                                     );
-                                if let Some(final_value) = self
+                                if let Some(completion) = self
                                     .complete_return(pending_return.value, pending_return.label)?
                                 {
-                                    return Ok(final_value);
+                                    return Ok(completion);
                                 }
                             }
                         }
@@ -38837,7 +38868,10 @@ impl InterpreterCore {
                     self.generator_yielded = true;
                     self.generator_resume_dst = Some(resume_dst);
                     self.generator_result_label = yielded_label;
-                    return Ok(Value::Object(result_id));
+                    return Ok(LabeledReturn {
+                        value: Value::Object(result_id),
+                        label: self.generator_result_label.clone(),
+                    });
                 }
                 await_instruction @ (Ir3Instruction::AwaitValue { promise_reg }
                 | Ir3Instruction::ModuleAwaitValue { promise_reg }) => {
@@ -38883,7 +38917,12 @@ impl InterpreterCore {
                     // already-settled operands.
                     if is_module_await {
                         self.suspend_top_level_await(promise_handle, promise_reg, effective_label)?;
-                        return Ok(Value::Undefined);
+                        // Suspension marker, not program data: the resumed
+                        // completion carries the real label.
+                        return Ok(LabeledReturn {
+                            value: Value::Undefined,
+                            label: Label::Public,
+                        });
                     }
 
                     if promise_state.is_settled() {
@@ -38920,26 +38959,29 @@ impl InterpreterCore {
 
                         // Return special value to indicate suspension
                         // The interpreter loop should exit and return control to the event loop
-                        return Ok(Value::Undefined);
+                        return Ok(LabeledReturn {
+                            value: Value::Undefined,
+                            label: Label::Public,
+                        });
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
                     let return_label = self.get_register_label(value_reg)?.clone();
-                    if let Some(final_value) =
+                    if let Some(completion) =
                         self.complete_current_async_frame(Ok(return_value), return_label)?
                     {
-                        return Ok(final_value);
+                        return Ok(completion);
                     }
                     continue;
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
                     let error_value = self.read_reg(error_reg)?;
                     let error_label = self.get_register_label(error_reg)?.clone();
-                    if let Some(final_value) =
+                    if let Some(completion) =
                         self.complete_current_async_frame(Err(error_value), error_label)?
                     {
-                        return Ok(final_value);
+                        return Ok(completion);
                     }
                     continue;
                 }
@@ -65576,16 +65618,19 @@ impl InterpreterCore {
 
     fn top_level_await_outcome_memory_bytes(&self) -> u64 {
         match &self.top_level_await_outcome {
-            Some(Ok(value)) => Self::estimate_value_bytes(value),
+            Some(Ok(completion)) => Self::estimate_labeled_return_bytes(completion),
             Some(Err(error)) => Self::estimate_interpreter_error_bytes(error),
             None => 0,
         }
     }
 
-    fn replace_top_level_await_outcome(&mut self, outcome: Result<Value, InterpreterError>) {
+    fn replace_top_level_await_outcome(
+        &mut self,
+        outcome: Result<LabeledReturn, InterpreterError>,
+    ) {
         let previous_bytes = self.top_level_await_outcome_memory_bytes();
         let next_bytes = match &outcome {
-            Ok(value) => Self::estimate_value_bytes(value),
+            Ok(completion) => Self::estimate_labeled_return_bytes(completion),
             Err(error) => Self::estimate_interpreter_error_bytes(error),
         };
         match self.apply_memory_component_delta(previous_bytes, next_bytes) {
@@ -65606,7 +65651,7 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
-    fn take_top_level_await_outcome(&mut self) -> Option<Result<Value, InterpreterError>> {
+    fn take_top_level_await_outcome(&mut self) -> Option<Result<LabeledReturn, InterpreterError>> {
         let released_bytes = self.top_level_await_outcome_memory_bytes();
         let outcome = self.top_level_await_outcome.take();
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
@@ -68826,7 +68871,13 @@ impl QuickJsLane {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result(Value::Undefined, Some(requested_hook_action)))
+                Ok(core.take_execution_result(
+                    LabeledReturn {
+                        value: Value::Undefined,
+                        label: Label::Public,
+                    },
+                    Some(requested_hook_action),
+                ))
             }
             Err(err) => Err(err),
         }
@@ -68952,7 +69003,13 @@ impl V8Lane {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result(Value::Undefined, Some(requested_hook_action)))
+                Ok(core.take_execution_result(
+                    LabeledReturn {
+                        value: Value::Undefined,
+                        label: Label::Public,
+                    },
+                    Some(requested_hook_action),
+                ))
             }
             Err(err) => Err(err),
         }
@@ -78646,7 +78703,10 @@ mod async_runtime_tests_current {
         );
         assert_eq!(hostcall_label.estimated_memory_bytes(), hostcall_baseline);
 
-        let tla_value = Value::BigInt(Arc::from("top-level-await".repeat(31)));
+        let tla_value = LabeledReturn {
+            value: Value::BigInt(Arc::from("top-level-await".repeat(31))),
+            label: Label::Public,
+        };
         let mut tla_probe = test_interpreter();
         let tla_baseline = tla_probe
             .sync_estimated_memory_bytes()
@@ -92674,7 +92734,13 @@ mod function_prototype_call_apply_tests_current {
             exact.recompute_estimated_memory_bytes()
         );
 
-        let result = exact.take_execution_result(Value::Undefined, None);
+        let result = exact.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
         assert_eq!(result.generated_code_audit.len(), 7);
         assert_eq!(result.events.len(), 7);
         assert_eq!(exact.generated_code_observability_bytes, 0);
@@ -102247,6 +102313,87 @@ mod tests {
             core.estimated_memory_bytes,
             "call return deltas must match full recompute"
         );
+    }
+
+    #[test]
+    fn bd_5ilh1_top_level_return_completion_carries_its_label() {
+        // The no-call-frame `complete_return` arm must surface the return
+        // label, not drop it (the pre-fix behavior returned only the Value).
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-5ilh1-return");
+        let outcome = core
+            .complete_return(Value::str("tainted"), Label::Secret)
+            .expect("top-level return should complete");
+        assert_eq!(
+            outcome,
+            Some(LabeledReturn {
+                value: Value::str("tainted"),
+                label: Label::Secret,
+            })
+        );
+    }
+
+    #[test]
+    fn bd_5ilh1_direct_return_instruction_completion_is_secret_labeled() {
+        // Full dispatch path: a Return of a Secret-labeled register must
+        // surface a Secret-labeled top-level completion.
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-5ilh1-dispatch");
+        core.write_reg_with_label(1, Value::str("secret payload"), Label::Secret)
+            .expect("seed labeled register");
+        let completion = core
+            .run_loop_labeled(&test_module(vec![Ir3Instruction::Return { value: 1 }]))
+            .expect("return should complete");
+        assert_eq!(
+            completion,
+            LabeledReturn {
+                value: Value::str("secret payload"),
+                label: Label::Secret,
+            }
+        );
+    }
+
+    #[test]
+    fn bd_5ilh1_fallthrough_and_halt_completions_read_r0_label() {
+        // Fallthrough exit (instruction stream exhausted, no call frames)
+        // reads r0 with the label it carries.
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-5ilh1-fallthrough");
+        core.write_reg_with_label(0, Value::Int(7), Label::Secret)
+            .expect("seed r0");
+        let completion = core
+            .run_loop_labeled(&test_module(Vec::new()))
+            .expect("fallthrough should complete");
+        assert_eq!(
+            completion,
+            LabeledReturn {
+                value: Value::Int(7),
+                label: Label::Secret,
+            }
+        );
+
+        // Halt termination surfaces r0 and its label through
+        // finish_execution_result into ExecutionResult.completion_label.
+        let result = core
+            .finish_execution_result(Err(InterpreterError::Halted))
+            .expect("halt is normal termination");
+        assert_eq!(result.value, Value::Int(7));
+        assert_eq!(result.completion_label, Label::Secret);
+    }
+
+    #[test]
+    fn bd_5ilh1_containment_interruption_completion_is_public_placeholder() {
+        // A containment-hook interruption synthesises an Undefined completion;
+        // its label is Public by construction, never stale register taint.
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-5ilh1-containment");
+        core.write_reg_with_label(0, Value::str("residue"), Label::TopSecret)
+            .expect("seed residue");
+        let result = core.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert_eq!(result.value, Value::Undefined);
+        assert_eq!(result.completion_label, Label::Public);
     }
 
     #[test]

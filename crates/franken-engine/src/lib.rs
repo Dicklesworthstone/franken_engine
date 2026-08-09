@@ -1303,6 +1303,11 @@ pub struct EvalOutcome {
     /// completion value, so the serialized form is unchanged for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_wtf16: Option<Vec<u16>>,
+    /// IFC label the top-level completion value carried at its interpreter
+    /// dispatch exit (bd-5ilh1). `Some` for the in-process native lanes;
+    /// `None` only for legacy serialized outcomes that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_label: Option<crate::ifc_artifacts::Label>,
     pub route_reason: RouteReason,
     #[serde(default)]
     pub console_output: Vec<baseline_interpreter::ConsoleEntry>,
@@ -1885,6 +1890,7 @@ fn eval_with_lane(
         engine: engine_kind_for_lane(lane),
         value: output.value,
         value_wtf16: output.value_wtf16,
+        completion_label: Some(output.completion_label),
         route_reason,
         console_output: output.console_output,
         source_ingestion: prepared.source_ingestion,
@@ -1903,6 +1909,7 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 struct NativeEvalOutput {
     value: String,
     value_wtf16: Option<Vec<u16>>,
+    completion_label: crate::ifc_artifacts::Label,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
     generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
     instructions_executed: u64,
@@ -2019,6 +2026,7 @@ fn eval_via_native_pipeline(
     Ok(NativeEvalOutput {
         value: routed.result.value.to_string(),
         value_wtf16,
+        completion_label: routed.result.completion_label,
         console_output: routed.result.console_output,
         generated_code_audit: routed.result.generated_code_audit,
         instructions_executed: routed.result.instructions_executed,
@@ -2738,6 +2746,7 @@ mod tests {
             engine: EngineKind::V8InspiredNative,
             value: "42".to_string(),
             value_wtf16: None,
+            completion_label: Some(crate::ifc_artifacts::Label::Public),
             route_reason: RouteReason::ContainsAwaitKeyword,
             console_output: Vec::new(),
             source_ingestion: SourceIngestionSummary::default(),

@@ -22549,9 +22549,9 @@ mod tests {
             let async_generators_before = core.async_generators.len();
             let before = capture_call_setup_state_bd_ur3tk_12(&core);
 
-            let error = core.run_loop(&module).expect_err(
-                "pre-call denial must refuse the entire generator rest-carrier setup",
-            );
+            let error = core
+                .run_loop(&module)
+                .expect_err("pre-call denial must refuse the entire generator rest-carrier setup");
 
             assert!(
                 matches!(

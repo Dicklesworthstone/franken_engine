@@ -22,8 +22,8 @@ use frankenengine_engine::safe_mode_fallback::{
     ActionTier, AttestationActionRequest, AttestationFallbackConfig, AttestationFallbackDecision,
     AttestationFallbackError, AttestationFallbackEvent, AttestationFallbackManager,
     AttestationFallbackState, AttestationHealth, AutonomousAction, EvidenceRingBuffer, FailureType,
-    QueuedAttestationDecision, RingBufferEntry, SafeModeAction, SafeModeEvent, SafeModeManager,
-    SafeModeStatus,
+    LabDeterministicTransitionAuthority, QueuedAttestationDecision, RingBufferEntry,
+    SafeModeAction, SafeModeEvent, SafeModeManager, SafeModeStatus,
 };
 
 /// Mirror of the crate-private TEST_RING_BUFFER_CAPACITY constant.
@@ -777,7 +777,7 @@ fn attestation_fallback_config_serde_round_trip() {
 #[test]
 fn attestation_manager_initial_state_normal() {
     let mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     assert_eq!(mgr.state(), AttestationFallbackState::Normal);
     assert_eq!(mgr.health(), AttestationHealth::Valid);
     assert!(!mgr.operator_review_required());
@@ -787,7 +787,7 @@ fn attestation_manager_initial_state_normal() {
 #[test]
 fn attestation_manager_low_impact_always_executes() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     // Low-impact when healthy
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::MetricsEmission, 1000);
@@ -816,7 +816,7 @@ fn attestation_manager_low_impact_always_executes() {
 #[test]
 fn attestation_manager_standard_healthy_executes() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req = AttestationActionRequest::new(
         "t-1",
         "d-1",
@@ -835,7 +835,7 @@ fn attestation_manager_standard_healthy_executes() {
 #[test]
 fn attestation_manager_standard_unhealthy_executes_with_warning() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req = AttestationActionRequest::new(
         "t-1",
         "d-1",
@@ -860,7 +860,7 @@ fn attestation_manager_standard_unhealthy_executes_with_warning() {
 #[test]
 fn attestation_manager_high_impact_healthy_normal_executes() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     let decision = mgr.evaluate_action(req, AttestationHealth::Valid).unwrap();
@@ -873,7 +873,7 @@ fn attestation_manager_high_impact_healthy_normal_executes() {
 #[test]
 fn attestation_manager_high_impact_unhealthy_defers() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     let decision = mgr
@@ -888,7 +888,7 @@ fn attestation_manager_high_impact_unhealthy_defers() {
 #[test]
 fn attestation_manager_high_impact_deferred_increments_queue_id() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req1 =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     let d1 = mgr
@@ -918,7 +918,7 @@ fn attestation_manager_high_impact_deferred_increments_queue_id() {
 #[test]
 fn attestation_manager_state_transition_normal_to_degraded() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     assert_eq!(mgr.state(), AttestationFallbackState::Normal);
 
     // Trigger degraded via unhealthy high-impact action
@@ -932,7 +932,7 @@ fn attestation_manager_state_transition_normal_to_degraded() {
 #[test]
 fn attestation_manager_state_transition_degraded_to_normal() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
 
     // Trigger degraded
     let req =
@@ -956,7 +956,7 @@ fn attestation_manager_state_transition_degraded_to_normal() {
 #[test]
 fn attestation_manager_transition_receipts_generated() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -967,7 +967,7 @@ fn attestation_manager_transition_receipts_generated() {
 #[test]
 fn attestation_manager_transition_receipt_verify() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -980,7 +980,7 @@ fn attestation_manager_transition_receipt_verify() {
 #[test]
 fn attestation_manager_transition_receipt_serde_round_trip() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -999,7 +999,7 @@ fn attestation_manager_transition_receipt_serde_round_trip() {
 #[test]
 fn attestation_manager_operator_review_not_required_initially() {
     let mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     assert!(!mgr.operator_review_required());
 }
 
@@ -1009,7 +1009,7 @@ fn attestation_manager_operator_review_after_timeout() {
         unavailable_timeout_ns: 100,
         ..AttestationFallbackConfig::default()
     };
-    let mut mgr = AttestationFallbackManager::with_default_signing_key(cfg);
+    let mut mgr = LabDeterministicTransitionAuthority::manager(cfg);
 
     // First action at t=0 with EvidenceUnavailable
     let req = AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 0);
@@ -1032,7 +1032,7 @@ fn attestation_manager_operator_review_after_timeout() {
 #[test]
 fn attestation_manager_pending_decisions_tracked() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -1044,7 +1044,7 @@ fn attestation_manager_pending_decisions_tracked() {
 #[test]
 fn attestation_manager_take_recovery_backlog() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
 
     // Defer some high-impact decisions
     let req1 =
@@ -1072,7 +1072,7 @@ fn attestation_manager_take_recovery_backlog() {
 #[test]
 fn attestation_manager_events_emitted() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -1180,7 +1180,7 @@ fn attestation_config_disabled_challenge_and_sandbox() {
         sandbox_on_fallback: false,
         ..AttestationFallbackConfig::default()
     };
-    let mut mgr = AttestationFallbackManager::with_default_signing_key(cfg);
+    let mut mgr = LabDeterministicTransitionAuthority::manager(cfg);
     let req =
         AttestationActionRequest::new("t-1", "d-1", "p-1", AutonomousAction::Quarantine, 1000);
     let decision = mgr
@@ -1254,7 +1254,7 @@ fn full_safe_mode_manager_lifecycle() {
 #[test]
 fn full_attestation_fallback_lifecycle() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
 
     // 1. Normal — high-impact passes
     let req =

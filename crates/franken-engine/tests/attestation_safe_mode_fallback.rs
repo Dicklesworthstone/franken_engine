@@ -17,7 +17,8 @@ use frankenengine_engine::receipt_verifier_pipeline::{
 use frankenengine_engine::safe_mode_fallback::{
     ActionTier, AttestationActionRequest, AttestationFallbackConfig, AttestationFallbackDecision,
     AttestationFallbackError, AttestationFallbackManager, AttestationFallbackState,
-    AttestationHealth, AutonomousAction, attestation_health_from_verdict,
+    AttestationHealth, AutonomousAction, LabDeterministicTransitionAuthority,
+    attestation_health_from_verdict,
 };
 use frankenengine_engine::signature_preimage::SigningKey;
 
@@ -554,7 +555,7 @@ fn action_tier_debug_is_nonempty() {
 }
 
 // ────────────────────────────────────────────────────────────
-// Batch enrichment: health accessor, with_default_signing_key,
+// Batch enrichment: health accessor, lab deterministic authority,
 // decision serde, queued decision fields, transition receipt serde,
 // event field completeness, take_recovery_backlog idempotent
 // ────────────────────────────────────────────────────────────
@@ -578,13 +579,13 @@ fn health_accessor_tracks_latest_observed_health() {
 }
 
 #[test]
-fn with_default_signing_key_produces_working_manager() {
+fn lab_deterministic_authority_produces_working_manager() {
     let config = AttestationFallbackConfig {
         unavailable_timeout_ns: 5_000,
         challenge_on_fallback: false,
         sandbox_on_fallback: true,
     };
-    let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+    let mut mgr = LabDeterministicTransitionAuthority::manager(config);
     assert_eq!(mgr.state(), AttestationFallbackState::Normal);
 
     let req = mk_request(

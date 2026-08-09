@@ -30,8 +30,9 @@ use frankenengine_engine::safe_mode_fallback::{
     ActionTier, AttestationActionRequest, AttestationFallbackConfig, AttestationFallbackDecision,
     AttestationFallbackError, AttestationFallbackEvent, AttestationFallbackManager,
     AttestationFallbackState, AttestationHealth, AutonomousAction, EvidenceRingBuffer, FailureType,
-    QueuedAttestationDecision, RingBufferEntry, SafeModeAction, SafeModeEvent, SafeModeManager,
-    SafeModeStatus, attestation_health_from_verdict,
+    LabDeterministicTransitionAuthority, QueuedAttestationDecision, RingBufferEntry,
+    SafeModeAction, SafeModeEvent, SafeModeManager, SafeModeStatus,
+    attestation_health_from_verdict,
 };
 use frankenengine_engine::signature_preimage::SigningKey;
 use frankenengine_test_support::control_plane::{
@@ -52,11 +53,11 @@ fn mgr_with_cap(cap: usize) -> SafeModeManager {
 }
 
 fn attest_mgr() -> AttestationFallbackManager {
-    AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default())
+    LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default())
 }
 
 fn attest_mgr_cfg(cfg: AttestationFallbackConfig) -> AttestationFallbackManager {
-    AttestationFallbackManager::with_default_signing_key(cfg)
+    LabDeterministicTransitionAuthority::manager(cfg)
 }
 
 fn attest_mgr_key(key: [u8; 32]) -> AttestationFallbackManager {
@@ -1944,9 +1945,9 @@ fn enrichment_integration_manager_initial_state_accessors() {
 }
 
 #[test]
-fn enrichment_integration_with_default_signing_key_produces_valid_receipts() {
+fn enrichment_integration_lab_authority_produces_valid_receipts() {
     let mut mgr =
-        AttestationFallbackManager::with_default_signing_key(AttestationFallbackConfig::default());
+        LabDeterministicTransitionAuthority::manager(AttestationFallbackConfig::default());
     let req = req_hi(AutonomousAction::Quarantine, 100);
     mgr.evaluate_action(req, AttestationHealth::EvidenceExpired)
         .unwrap();

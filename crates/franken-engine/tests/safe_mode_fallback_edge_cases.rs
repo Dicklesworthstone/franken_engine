@@ -34,11 +34,11 @@ fn make_request(action: AutonomousAction, ts: u64) -> AttestationActionRequest {
 }
 
 fn attest_mgr() -> AttestationFallbackManager {
-    AttestationFallbackManager::with_default_signing_key(Default::default())
+    LabDeterministicTransitionAuthority::manager(Default::default())
 }
 
 fn attest_mgr_config(config: AttestationFallbackConfig) -> AttestationFallbackManager {
-    AttestationFallbackManager::with_default_signing_key(config)
+    LabDeterministicTransitionAuthority::manager(config)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

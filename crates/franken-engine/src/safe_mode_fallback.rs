@@ -947,13 +947,39 @@ impl AttestationTransitionReceipt {
         Ok(receipt)
     }
 
-    /// Verify transition receipt signature.
+    /// Verify transition receipt signature against the key embedded in the
+    /// receipt itself.
+    ///
+    /// This proves internal consistency only: a forger who signs a receipt
+    /// with their own key produces a receipt that passes this check. To
+    /// authenticate a receipt as a *runtime* transition, callers must bind it
+    /// to the runtime-owned transition authority via
+    /// [`Self::verify_against_authority`].
     pub fn verify(&self) -> Result<(), SignatureError> {
         verify_signature(
             &self.signer_verification_key,
             &self.preimage(),
             &self.signature,
         )
+    }
+
+    /// Verify the receipt signature AND that it was signed by the expected
+    /// runtime-owned transition authority (bd-tuftw). A receipt signed with
+    /// any other key — including the public, repository-known
+    /// [`LabDeterministicTransitionAuthority`] key — fails closed here even
+    /// though it self-verifies.
+    pub fn verify_against_authority(
+        &self,
+        authority: &VerificationKey,
+    ) -> Result<(), SignatureError> {
+        if self.signer_verification_key != *authority {
+            return Err(SignatureError::VerificationFailed {
+                signer: self.signer_verification_key.clone(),
+                reason: "receipt signer is not the expected runtime transition authority"
+                    .to_string(),
+            });
+        }
+        self.verify()
     }
 }
 
@@ -980,6 +1006,39 @@ impl From<SignatureError> for AttestationFallbackError {
         Self::SignatureFailure {
             detail: value.to_string(),
         }
+    }
+}
+
+/// Explicitly lab-only transition-signing authority (bd-tuftw).
+///
+/// The key material is PUBLIC and repository-known (`[11u8; 32]`): any
+/// source-aware party can reproduce it and sign receipts with it. It exists
+/// solely so lab drills and tests get deterministic, replayable transition
+/// receipts. Receipts signed by this authority MUST never authenticate a
+/// runtime transition — production verifiers bind receipts to a runtime-owned
+/// authority via [`AttestationTransitionReceipt::verify_against_authority`],
+/// which rejects this key like any other non-authority signer.
+#[derive(Debug, Clone, Copy)]
+pub struct LabDeterministicTransitionAuthority;
+
+impl LabDeterministicTransitionAuthority {
+    /// The public, repository-known lab key bytes. Published deliberately:
+    /// external verifiers can check that no runtime authority ever equals the
+    /// key derived from these bytes.
+    pub const KEY_BYTES: [u8; 32] = [11u8; 32];
+
+    /// The forgeable lab signing key derived from [`Self::KEY_BYTES`].
+    #[must_use]
+    pub fn signing_key() -> SigningKey {
+        SigningKey::from_bytes(Self::KEY_BYTES).expect("valid Ed25519 key")
+    }
+
+    /// A manager wired to the lab authority: deterministic, forgeable,
+    /// lab/test-only. Product code must construct
+    /// [`AttestationFallbackManager::new`] with a runtime-owned key instead.
+    #[must_use]
+    pub fn manager(config: AttestationFallbackConfig) -> AttestationFallbackManager {
+        AttestationFallbackManager::new(config, Self::signing_key())
     }
 }
 
@@ -1019,12 +1078,13 @@ impl AttestationFallbackManager {
         }
     }
 
-    /// Create a manager with deterministic default signing key.
-    pub fn with_default_signing_key(config: AttestationFallbackConfig) -> Self {
-        Self::new(
-            config,
-            SigningKey::from_bytes([11u8; 32]).expect("valid Ed25519 key"),
-        )
+    /// The runtime-owned transition authority receipts must be verified
+    /// against. External verifiers should compare a receipt's embedded signer
+    /// key to this value (or call
+    /// [`AttestationTransitionReceipt::verify_against_authority`]) rather than
+    /// trusting the receipt's self-verification alone.
+    pub fn transition_verification_key(&self) -> VerificationKey {
+        self.transition_signing_key.verification_key()
     }
 
     /// Current fallback state.
@@ -2710,7 +2770,7 @@ mod tests {
 
     #[test]
     fn low_impact_always_allowed_when_healthy() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::Valid)
@@ -2724,7 +2784,7 @@ mod tests {
 
     #[test]
     fn low_impact_allowed_when_unhealthy() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -2740,7 +2800,7 @@ mod tests {
 
     #[test]
     fn standard_action_healthy_passes_without_warning() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::RoutineMonitoring, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::Valid)
@@ -2754,7 +2814,7 @@ mod tests {
 
     #[test]
     fn standard_action_unhealthy_executes_with_warning() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::EvidenceCollection, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::EvidenceExpired)
@@ -2780,7 +2840,7 @@ mod tests {
 
     #[test]
     fn high_impact_healthy_normal_executes() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::Valid)
@@ -2794,7 +2854,7 @@ mod tests {
 
     #[test]
     fn high_impact_unhealthy_defers() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::Terminate, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -2821,7 +2881,7 @@ mod tests {
 
     #[test]
     fn high_impact_deferred_while_degraded_increments_queue_id() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         // First defer
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
@@ -2844,7 +2904,7 @@ mod tests {
 
     #[test]
     fn state_transitions_normal_to_degraded_to_normal() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
 
         // Degrade
@@ -2862,7 +2922,7 @@ mod tests {
 
     #[test]
     fn transition_receipts_generated_for_state_changes() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
 
         // Normal → Degraded
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
@@ -2880,7 +2940,7 @@ mod tests {
 
     #[test]
     fn transition_receipts_verify_signature() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
             .expect("operation should succeed for valid inputs");
@@ -2888,6 +2948,51 @@ mod tests {
         for receipt in mgr.transition_receipts() {
             receipt.verify().expect("receipt signature should be valid");
         }
+    }
+
+    #[test]
+    fn bd_tuftw_lab_key_cannot_authenticate_runtime_transition() {
+        // A runtime manager owns a private transition authority.
+        let runtime_key = make_signing_key();
+        let mut runtime_mgr = AttestationFallbackManager::new(Default::default(), runtime_key);
+        let req = attestation_request(AutonomousAction::Quarantine, 100);
+        runtime_mgr
+            .evaluate_action(req, AttestationHealth::VerificationFailed)
+            .expect("runtime transition");
+        let authority = runtime_mgr.transition_verification_key();
+        let genuine = &runtime_mgr.transition_receipts()[0];
+        genuine
+            .verify_against_authority(&authority)
+            .expect("genuine receipt binds to the runtime authority");
+
+        // An attacker reproduces the public, repository-known lab key and
+        // signs an identical-content transition receipt with it.
+        let forged = AttestationTransitionReceipt::signed(
+            genuine.sequence,
+            genuine.from_state,
+            genuine.to_state,
+            &genuine.reason,
+            &attestation_request(AutonomousAction::Quarantine, 100),
+            &LabDeterministicTransitionAuthority::signing_key(),
+        )
+        .expect("sign forged receipt");
+
+        // The forgery is internally consistent -- self-verification passes,
+        // which is exactly why self-verification is insufficient...
+        forged
+            .verify()
+            .expect("forged receipt self-verifies (documents the limitation)");
+        // ...but it must never authenticate as a runtime transition.
+        assert!(
+            forged.verify_against_authority(&authority).is_err(),
+            "the repository-known [11u8; 32] key must not authenticate a runtime transition"
+        );
+        // And the runtime authority can never equal the published lab key.
+        assert_ne!(
+            authority,
+            LabDeterministicTransitionAuthority::signing_key().verification_key(),
+            "runtime manager must not run on the lab authority"
+        );
     }
 
     #[test]
@@ -2940,7 +3045,7 @@ mod tests {
 
     #[test]
     fn recovery_moves_pending_to_backlog() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
 
         // Degrade and defer
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
@@ -2967,7 +3072,7 @@ mod tests {
             unavailable_timeout_ns: 1000,
             ..Default::default()
         };
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+        let mut mgr = LabDeterministicTransitionAuthority::manager(config);
 
         // First request sets degraded_since_ns = 100
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
@@ -2988,7 +3093,7 @@ mod tests {
             unavailable_timeout_ns: 1000,
             ..Default::default()
         };
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+        let mut mgr = LabDeterministicTransitionAuthority::manager(config);
 
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
@@ -3007,7 +3112,7 @@ mod tests {
             unavailable_timeout_ns: 100,
             ..Default::default()
         };
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+        let mut mgr = LabDeterministicTransitionAuthority::manager(config);
 
         let req1 = attestation_request(AutonomousAction::Quarantine, 0);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
@@ -3032,7 +3137,7 @@ mod tests {
             unavailable_timeout_ns: 100,
             ..Default::default()
         };
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+        let mut mgr = LabDeterministicTransitionAuthority::manager(config);
 
         // VerificationFailed past timeout does NOT trigger operator review
         let req1 = attestation_request(AutonomousAction::Quarantine, 0);
@@ -3048,7 +3153,7 @@ mod tests {
 
     #[test]
     fn attestation_fallback_emits_structured_events() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
         mgr.evaluate_action(req, AttestationHealth::Valid)
             .expect("operation should succeed for valid inputs");
@@ -3130,7 +3235,7 @@ mod tests {
 
     #[test]
     fn attestation_transition_receipt_serde_roundtrip() {
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+        let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
             .expect("operation should succeed for valid inputs");
@@ -3240,7 +3345,7 @@ mod tests {
     fn attestation_fallback_deterministic_100_times() {
         let mut results = Vec::new();
         for _ in 0..100 {
-            let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
+            let mut mgr = LabDeterministicTransitionAuthority::manager(Default::default());
             let req = attestation_request(AutonomousAction::Quarantine, 100);
             let decision = mgr
                 .evaluate_action(req, AttestationHealth::VerificationFailed)
@@ -3275,7 +3380,7 @@ mod tests {
             challenge_on_fallback: false,
             sandbox_on_fallback: false,
         };
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+        let mut mgr = LabDeterministicTransitionAuthority::manager(config);
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::EvidenceExpired)
@@ -3301,7 +3406,7 @@ mod tests {
             unavailable_timeout_ns: 500,
             ..Default::default()
         };
-        let mut mgr = AttestationFallbackManager::with_default_signing_key(config);
+        let mut mgr = LabDeterministicTransitionAuthority::manager(config);
 
         // 1. Normal: high-impact passes
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);

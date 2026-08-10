@@ -105,6 +105,7 @@ fn release_context(
         extension_id: request.extension_id.clone(),
         source_labels: request.source_labels.clone(),
         sink_clearance: request.sink_clearance.clone(),
+        declassification_route_ref: request.requested_route_id.clone(),
         decision_contract_id: request.decision_contract_id.clone(),
         algorithm: request.algorithm,
         mode: request.mode,
@@ -537,11 +538,23 @@ fn secret_markers_remain_fail_closed_across_kdf_and_cipher_egress() {
 }
 
 #[test]
-fn raw_kdf_and_unauthenticated_ciphertext_cannot_obtain_release_receipts() {
+fn plaintext_raw_kdf_and_unauthenticated_ciphertext_cannot_obtain_release_receipts() {
     let signing_key = SigningKey::from_bytes([73; 32]).expect("valid signing key");
     let policy = crypto_release_policy();
     let loss = low_crypto_release_loss();
     let mut pipeline = DeclassificationPipeline::default();
+
+    let mut plaintext_request = gcm_release_request();
+    plaintext_request.output_class = CryptographicTransformOutputClass::Plaintext;
+    assert_eq!(
+        pipeline.process_cryptographic_transform_release(
+            &plaintext_request,
+            &policy,
+            &loss,
+            &signing_key,
+        ),
+        Err(CryptographicTransformReleaseError::PlaintextReleaseDenied)
+    );
 
     let mut kdf_request = gcm_release_request();
     kdf_request.output_class = CryptographicTransformOutputClass::DerivedKeyMaterial;
@@ -590,7 +603,7 @@ fn exact_authenticated_ciphertext_receipt_is_sink_bound_and_one_use() {
         .expect("valid AES-256-GCM ciphertext should receive exact release authorization");
     assert_eq!(
         pipeline.cryptographic_transform_receipts(),
-        [receipt.clone()]
+        std::slice::from_ref(&receipt)
     );
     receipt
         .verify(&signing_key.verification_key())
@@ -614,6 +627,19 @@ fn exact_authenticated_ciphertext_receipt_is_sink_bound_and_one_use() {
         ),
         Err(CryptographicTransformReleaseError::ContextMismatch { field: "site" })
     );
+    let mut wrong_route = context.clone();
+    wrong_route.declassification_route_ref = "different.route".to_string();
+    assert_eq!(
+        guard.release_ciphertext(
+            &receipt,
+            &request.output_bytes,
+            &wrong_route,
+            CRYPTO_RELEASE_TIME_MS,
+        ),
+        Err(CryptographicTransformReleaseError::ContextMismatch {
+            field: "declassification_route_ref"
+        })
+    );
     assert_eq!(
         guard.release_ciphertext(
             &receipt,
@@ -636,6 +662,27 @@ fn exact_authenticated_ciphertext_receipt_is_sink_bound_and_one_use() {
     assert_eq!(
         guard.release_ciphertext(&receipt, &released, &context, CRYPTO_RELEASE_TIME_MS,),
         Err(CryptographicTransformReleaseError::ReplayDetected)
+    );
+
+    let mut second_request = request.clone();
+    second_request.request_id = "crypto-release-2".to_string();
+    let second_receipt = pipeline
+        .process_cryptographic_transform_release(
+            &second_request,
+            &crypto_release_policy(),
+            &low_crypto_release_loss(),
+            &signing_key,
+        )
+        .expect("a distinct receipt can be issued for replay rejection coverage");
+    assert_eq!(
+        guard.release_ciphertext(
+            &second_receipt,
+            &second_request.output_bytes,
+            &release_context(&second_request),
+            CRYPTO_RELEASE_TIME_MS,
+        ),
+        Err(CryptographicTransformReleaseError::ReplayDetected),
+        "a new receipt ID must not bypass one-use replay identity consumption"
     );
 }
 

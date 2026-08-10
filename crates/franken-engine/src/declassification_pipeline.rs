@@ -71,6 +71,7 @@ pub struct DeclassificationRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CryptographicTransformOutputClass {
     Ciphertext,
+    Plaintext,
     DerivedKeyMaterial,
 }
 
@@ -181,6 +182,7 @@ pub struct CryptographicTransformReleaseContext {
     pub extension_id: String,
     pub source_labels: Vec<Label>,
     pub sink_clearance: Label,
+    pub declassification_route_ref: String,
     pub decision_contract_id: String,
     pub algorithm: CryptographicCipherAlgorithm,
     pub mode: CryptographicCipherMode,
@@ -197,6 +199,7 @@ pub struct CryptographicTransformReleaseContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CryptographicTransformReleaseError {
+    PlaintextReleaseDenied,
     DerivedKeyMaterialReleaseDenied,
     UnauthenticatedCiphertextReleaseDenied,
     InvalidRequest {
@@ -227,6 +230,12 @@ pub enum CryptographicTransformReleaseError {
 impl fmt::Display for CryptographicTransformReleaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::PlaintextReleaseDenied => {
+                write!(
+                    f,
+                    "plaintext is never releasable through the ciphertext contract"
+                )
+            }
             Self::DerivedKeyMaterialReleaseDenied => {
                 write!(f, "raw KDF-derived key material is never releasable")
             }
@@ -324,8 +333,14 @@ impl CryptographicTransformReleaseReceipt {
             validate_nonblank_crypto_field(field, value)?;
         }
         self.sink.validate()?;
-        if self.output_class != CryptographicTransformOutputClass::Ciphertext {
-            return Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied);
+        match self.output_class {
+            CryptographicTransformOutputClass::Ciphertext => {}
+            CryptographicTransformOutputClass::Plaintext => {
+                return Err(CryptographicTransformReleaseError::PlaintextReleaseDenied);
+            }
+            CryptographicTransformOutputClass::DerivedKeyMaterial => {
+                return Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied);
+            }
         }
         if self.output_length == 0 {
             return Err(CryptographicTransformReleaseError::InvalidRequest {
@@ -425,7 +440,7 @@ impl SignaturePreimage for CryptographicTransformReleaseReceipt {
 #[derive(Debug, Default)]
 pub struct CryptographicTransformReleaseGuard {
     trusted_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
-    consumed_receipts: BTreeSet<(String, String, String)>,
+    consumed_replay_identities: BTreeSet<(String, String)>,
 }
 
 impl CryptographicTransformReleaseGuard {
@@ -471,6 +486,10 @@ impl CryptographicTransformReleaseGuard {
             (
                 receipt.sink_clearance != context.sink_clearance,
                 "sink_clearance",
+            ),
+            (
+                receipt.declassification_route_ref != context.declassification_route_ref,
+                "declassification_route_ref",
             ),
             (
                 receipt.decision_contract_id != context.decision_contract_id,
@@ -519,9 +538,8 @@ impl CryptographicTransformReleaseGuard {
         let replay_key = (
             receipt.decision_contract_id.clone(),
             receipt.replay_identity.clone(),
-            receipt.receipt_id.clone(),
         );
-        if !self.consumed_receipts.insert(replay_key) {
+        if !self.consumed_replay_identities.insert(replay_key) {
             return Err(CryptographicTransformReleaseError::ReplayDetected);
         }
         Ok(ciphertext.to_vec())
@@ -918,8 +936,14 @@ impl DeclassificationPipeline {
         loss: &LossAssessment,
         signing_key: &SigningKey,
     ) -> Result<CryptographicTransformReleaseReceipt, CryptographicTransformReleaseError> {
-        if request.output_class == CryptographicTransformOutputClass::DerivedKeyMaterial {
-            return Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied);
+        match request.output_class {
+            CryptographicTransformOutputClass::Ciphertext => {}
+            CryptographicTransformOutputClass::Plaintext => {
+                return Err(CryptographicTransformReleaseError::PlaintextReleaseDenied);
+            }
+            CryptographicTransformOutputClass::DerivedKeyMaterial => {
+                return Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied);
+            }
         }
         for (field, value) in [
             ("request_id", request.request_id.as_str()),

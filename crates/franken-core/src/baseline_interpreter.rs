@@ -6269,18 +6269,50 @@ impl InterpreterCore {
         Ok(Value::Object(result_id))
     }
 
+    /// Isolated generator activation with no caller-side carrier rollback,
+    /// used by the interpreter tests that exercise activation directly (no
+    /// caller allocated a rest carrier). Production call branches use
+    /// [`Self::prepare_generator_activation_inner`] with the caller snapshot.
+    #[cfg(test)]
     fn prepare_generator_activation(
         &mut self,
         module: &Ir3Module,
         setup: GeneratorCallSetup,
     ) -> Result<GeneratorObject, InterpreterError> {
-        self.ensure_call_depth_available()?;
+        self.prepare_generator_activation_inner(module, setup, None)
+    }
+
+    /// `rollback` carries the caller's pre-carrier [`CallSetupSnapshot`] when
+    /// the caller allocated an implicit rest-Array carrier. Pre-prologue setup
+    /// refusals (call-depth / scope-depth / memory) occur before any parameter
+    /// prologue runs, so the carrier is still the heap tail and a blind
+    /// `restore_call_setup` truncate is correct (bd-tstbe). Once the prologue
+    /// runs (`run_loop_with_mode`) it may store objects into persistent roots,
+    /// so those refusals must NOT truncate the heap and are propagated without
+    /// the carrier rollback.
+    fn prepare_generator_activation_inner(
+        &mut self,
+        module: &Ir3Module,
+        setup: GeneratorCallSetup,
+        rollback: Option<CallSetupSnapshot>,
+    ) -> Result<GeneratorObject, InterpreterError> {
+        if let Err(error) = self.ensure_call_depth_available() {
+            if let Some(snapshot) = rollback {
+                self.restore_call_setup(snapshot);
+            }
+            return Err(error);
+        }
 
         let mut scope_chain = ScopeChain {
             frames: setup.captured_env,
         };
         let saved_scope_depth = scope_chain.depth();
-        scope_chain.push(self.config.max_scope_depth)?;
+        if let Err(error) = scope_chain.push(self.config.max_scope_depth) {
+            if let Some(snapshot) = rollback {
+                self.restore_call_setup(snapshot);
+            }
+            return Err(error);
+        }
 
         let max_registers = self.config.max_registers as usize;
         let mut registers = vec![Value::Undefined; max_registers];
@@ -6349,12 +6381,26 @@ impl InterpreterCore {
                 minor: 10,
                 patch: 0,
             };
-        let outcome = match self.sync_estimated_memory_bytes() {
-            Ok(_) if has_explicit_body_boundary => {
-                self.run_loop_with_mode(module, RunLoopMode::Generator)
+        // Memory refusal here is still pre-prologue (the prologue only runs
+        // via `run_loop_with_mode` below), so undo the installed activation,
+        // restore the caller, and roll back the rest-Array carrier (bd-tstbe).
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            let _ = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            if let Some(snapshot) = rollback {
+                self.restore_call_setup(snapshot);
             }
-            Ok(_) => Ok(RunLoopExit::GeneratorBodyStart),
-            Err(error) => Err(error),
+            return Err(error);
+        }
+
+        // Prologue commit point: from here a refusal is post-prologue and must
+        // preserve any language-visible side effects — no carrier rollback.
+        let outcome = if has_explicit_body_boundary {
+            self.run_loop_with_mode(module, RunLoopMode::Generator)
+        } else {
+            Ok(RunLoopExit::GeneratorBodyStart)
         };
         let activation = self.take_module_execution();
         let escaped_exception = activation.pending_exception.clone();
@@ -7321,7 +7367,7 @@ impl InterpreterCore {
                         }
                         let super_value =
                             self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
-                        let generator = match self.prepare_generator_activation(
+                        let generator = match self.prepare_generator_activation_inner(
                             module,
                             GeneratorCallSetup {
                                 function_index: func_idx,
@@ -7336,6 +7382,7 @@ impl InterpreterCore {
                                 super_value,
                                 super_label: callee_label.clone(),
                             },
+                            Some(setup_snapshot),
                         ) {
                             Ok(generator) => generator,
                             Err(error) => {
@@ -7405,7 +7452,7 @@ impl InterpreterCore {
                         }
                         let super_value =
                             self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
-                        let generator = self.prepare_generator_activation(
+                        let generator = self.prepare_generator_activation_inner(
                             module,
                             GeneratorCallSetup {
                                 function_index: func_idx,
@@ -7420,6 +7467,7 @@ impl InterpreterCore {
                                 super_value,
                                 super_label: callee_label.clone(),
                             },
+                            Some(setup_snapshot),
                         )?;
                         self.publish_async_generator(
                             dst,
@@ -7719,7 +7767,7 @@ impl InterpreterCore {
                             return Err(error);
                         }
                         let super_value = self.method_super_value(&callee_val, &receiver_val)?;
-                        let generator = match self.prepare_generator_activation(
+                        let generator = match self.prepare_generator_activation_inner(
                             module,
                             GeneratorCallSetup {
                                 function_index: func_idx,
@@ -7734,6 +7782,7 @@ impl InterpreterCore {
                                 super_value,
                                 super_label: callee_label.clone(),
                             },
+                            Some(setup_snapshot),
                         ) {
                             Ok(generator) => generator,
                             Err(error) => {
@@ -7795,7 +7844,7 @@ impl InterpreterCore {
                             return Err(error);
                         }
                         let super_value = self.method_super_value(&callee_val, &receiver_val)?;
-                        let generator = self.prepare_generator_activation(
+                        let generator = self.prepare_generator_activation_inner(
                             module,
                             GeneratorCallSetup {
                                 function_index: func_idx,
@@ -7810,6 +7859,7 @@ impl InterpreterCore {
                                 super_value,
                                 super_label: callee_label.clone(),
                             },
+                            Some(setup_snapshot),
                         )?;
                         self.publish_async_generator(
                             dst,
@@ -23039,6 +23089,56 @@ mod tests {
             // ...yet the hook still OBSERVED the materialized carrier before denying,
             // proving the rollback reclaims a real allocation, not a phantom one.
             assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
+        }
+    }
+
+    /// bd-tstbe: a PRE-PROLOGUE setup refusal inside `prepare_generator_activation`
+    /// (scope-depth here) must roll back the implicit rest-Array carrier exactly
+    /// like a denied pre-call hook (bd-ur3tk.22) — no parameter prologue ran, so
+    /// the carrier is still the heap tail and the blind `restore_call_setup`
+    /// truncate is correct. Covers all four generator call branches.
+    #[test]
+    fn generator_rest_carrier_rolls_back_on_scope_refusal_bd_tstbe() {
+        for kind in [
+            GeneratorCallKindBdUr3tk22::DirectSync,
+            GeneratorCallKindBdUr3tk22::DirectAsync,
+            GeneratorCallKindBdUr3tk22::MethodSync,
+            GeneratorCallKindBdUr3tk22::MethodAsync,
+        ] {
+            let module = generator_deny_module_bd_ur3tk_22(kind);
+            let mut core = generator_deny_core_bd_ur3tk_22(kind);
+            // No hook: force the pre-prologue scope-depth refusal at the
+            // generator's own scope_chain.push (one frame past the caller's
+            // current depth).
+            core.config.max_scope_depth = core.scope_chain.depth() as u32;
+            let heap_len_before = core.heap.len();
+            let generators_before = core.generators.len();
+            let async_generators_before = core.async_generators.len();
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core.run_loop(&module).expect_err(
+                "scope-depth refusal must refuse the entire generator rest-carrier setup",
+            );
+            assert!(
+                matches!(error, InterpreterError::ScopeDepthExceeded { .. }),
+                "{kind:?}: expected a scope-depth refusal, got {error:?}"
+            );
+            assert_eq!(
+                core.heap.len(),
+                heap_len_before,
+                "{kind:?}: the refused rest carrier must be reclaimed from the heap"
+            );
+            assert_eq!(
+                core.generators.len(),
+                generators_before,
+                "{kind:?}: no generator object may be published on a setup refusal"
+            );
+            assert_eq!(
+                core.async_generators.len(),
+                async_generators_before,
+                "{kind:?}: no async-generator object may be published on a setup refusal"
+            );
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
         }
     }
 

@@ -2513,10 +2513,14 @@ fn expose_class_expression_self_binding(
 }
 
 /// Replace the ordinary outer-capture alias synthesized by `collect_free_vars`
-/// with the class-specific runtime name selected by the caller. Constructors
-/// retain their literal source name so the existing exact-name closure self-bind
-/// can initialize the cycle. Methods retain a private alias for the already
-/// created internal class binding, which prevents the source name from leaking.
+/// with the class-specific runtime name selected by the caller. Both the
+/// constructor and methods now use a private `class_expression_self_capture_name`
+/// alias for the already-created internal class binding: the literal source name
+/// collides with a same-named outer binding, so a self-reference lowered against
+/// the literal name (notably a parameter default `constructor(v = Inner)`) could
+/// capture the OUTER binding instead of the class value (bd-4thqe). The private
+/// alias binds unambiguously to the class self-cell and never leaks the source
+/// name; body self-references still resolve through the exposed self binding.
 fn rewrite_class_expression_self_capture(
     outer_lookup: &mut BTreeMap<String, BindingId>,
     body_binding: BindingId,
@@ -15321,8 +15325,8 @@ fn lower_expression_to_ir1_inner(
                     binding_lookup,
                     self_binding,
                     bid,
-                    self_name.to_string(),
-                    false,
+                    class_expression_self_capture_name(self_name, bid),
+                    true,
                     &mut ctor_free_vars,
                     &ctor_free_var_ids,
                 );

@@ -193,6 +193,11 @@ pub enum ProcessSpawnRequest {
         handle: String,
         signal: ProcessSignal,
     },
+    /// Engine-owned compensating teardown. This operation is journaled but
+    /// cannot be dispatched through the guest process-effect handler.
+    Cleanup {
+        handle: String,
+    },
 }
 
 impl fmt::Debug for ProcessSpawnRequest {
@@ -234,6 +239,10 @@ impl fmt::Debug for ProcessSpawnRequest {
                 .field("handle_bytes", &handle.len())
                 .field("signal", signal)
                 .finish(),
+            Self::Cleanup { handle } => f
+                .debug_struct("ProcessSpawnRequest::Cleanup")
+                .field("handle_bytes", &handle.len())
+                .finish(),
         }
     }
 }
@@ -248,6 +257,7 @@ impl ProcessSpawnRequest {
             Self::CloseStdin { .. } => "close_stdin",
             Self::Wait { .. } => "wait",
             Self::Kill { .. } => "kill",
+            Self::Cleanup { .. } => "cleanup",
         }
     }
 
@@ -309,6 +319,9 @@ pub enum ProcessSpawnResponse {
         stdout: Vec<u8>,
         stderr: Vec<u8>,
     },
+    Cleaned {
+        was_present: bool,
+    },
 }
 
 impl fmt::Debug for ProcessSpawnResponse {
@@ -354,6 +367,10 @@ impl fmt::Debug for ProcessSpawnResponse {
                 .field("exit", exit)
                 .field("stdout_bytes", &stdout.len())
                 .field("stderr_bytes", &stderr.len())
+                .finish(),
+            Self::Cleaned { was_present } => f
+                .debug_struct("ProcessSpawnResponse::Cleaned")
+                .field("was_present", was_present)
                 .finish(),
         }
     }
@@ -728,8 +745,10 @@ pub trait ProcessSpawnProvider: fmt::Debug + Send + Sync {
     /// Abandon one engine-owned lifecycle handle during execution teardown.
     /// This is compensating containment, not a guest-requested signal: native
     /// providers must synchronously revoke ownership and reap any live child
-    /// even when the signed guest policy does not grant `Kill`.
-    fn cleanup_handle(&self, handle: &str);
+    /// even when the signed guest policy does not grant `Kill`. The caller
+    /// must reserve and commit the returned typed outcome in the global
+    /// host-effect journal.
+    fn cleanup_handle(&self, handle: &str) -> ProcessSpawnOutcome;
 }
 
 /// Default provider: no request can cause a process effect.
@@ -751,7 +770,9 @@ impl ProcessSpawnProvider for DenyAllProcessSpawn {
         })
     }
 
-    fn cleanup_handle(&self, _handle: &str) {}
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+    }
 }
 
 #[must_use]
@@ -1080,7 +1101,7 @@ impl NativeProcessSpawn {
                 prepared.argv = vec!["-c".to_string(), command.to_string()];
                 return Ok(prepared);
             }
-            // Preparation is idempotent because `perform_recorded` prepares
+            // Preparation is idempotent because the process handler prepares
             // before calling a provider that independently prepares again.
             if &launch.executable == shell
                 && launch.argv.len() == 2
@@ -1150,6 +1171,9 @@ impl NativeProcessSpawn {
             ProcessSpawnRequest::Kill { handle, signal } => ProcessSpawnRequest::Kill {
                 handle: handle.clone(),
                 signal: *signal,
+            },
+            ProcessSpawnRequest::Cleanup { handle } => ProcessSpawnRequest::Cleanup {
+                handle: handle.clone(),
             },
         })
     }
@@ -1577,17 +1601,15 @@ impl ProcessSpawnProvider for NativeProcessSpawn {
                 timeout_millis,
             } => self.wait(handle, *timeout_millis),
             ProcessSpawnRequest::Kill { handle, signal } => self.kill(handle, *signal),
+            ProcessSpawnRequest::Cleanup { .. } => Err(ProcessSpawnError::Denied {
+                reason: "process cleanup is an engine-owned teardown operation".to_string(),
+            }),
         }
     }
 
-    fn cleanup_handle(&self, handle: &str) {
+    fn cleanup_handle(&self, handle: &str) -> ProcessSpawnOutcome {
         let state = lock_unpoison(&self.children).remove(handle);
-        if let Some(LifecycleChild::Running(mut running)) = state {
-            cancel_watchdog(&mut running);
-            let _ = terminate_remaining_process_group(&running);
-            kill_and_reap(&mut running.child);
-            let _ = collect_outputs(running);
-        }
+        cleanup_lifecycle_child(state)
     }
 }
 
@@ -1598,12 +1620,7 @@ impl Drop for NativeProcessSpawn {
             std::mem::take(&mut *children)
         };
         for (_, state) in children {
-            if let LifecycleChild::Running(mut running) = state {
-                cancel_watchdog(&mut running);
-                let _ = terminate_remaining_process_group(&running);
-                kill_and_reap(&mut running.child);
-                let _ = collect_outputs(running);
-            }
+            let _ = cleanup_lifecycle_child(Some(state));
         }
     }
 }
@@ -2150,14 +2167,42 @@ fn wait_and_collect(
     Ok((exit, stdout, stderr))
 }
 
-fn kill_and_reap(child: &mut Child) {
-    match child.try_wait() {
-        Ok(Some(_)) => {}
-        Ok(None) | Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+fn cleanup_lifecycle_child(state: Option<LifecycleChild>) -> ProcessSpawnOutcome {
+    let Some(state) = state else {
+        return Ok(ProcessSpawnResponse::Cleaned { was_present: false });
+    };
+    let LifecycleChild::Running(mut running) = state else {
+        return Ok(ProcessSpawnResponse::Cleaned { was_present: true });
+    };
+    cancel_watchdog(&mut running);
+    let terminate = terminate_remaining_process_group(&running);
+    let reap = kill_and_reap_fallible(&mut running.child);
+    let outputs = collect_outputs(running);
+    terminate?;
+    reap?;
+    outputs?;
+    Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+}
+
+fn kill_and_reap_fallible(child: &mut Child) -> Result<(), ProcessSpawnError> {
+    let poll_error = match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => None,
+        Err(error) => Some(error),
+    };
+    let kill_error = child.kill().err();
+    let wait_error = child.wait().err();
+    if let Some(error) = poll_error.or(kill_error).or(wait_error) {
+        return Err(ProcessSpawnError::Io {
+            operation: "kill and reap child".to_string(),
+            detail: error.to_string(),
+        });
     }
+    Ok(())
+}
+
+fn kill_and_reap(child: &mut Child) {
+    let _ = kill_and_reap_fallible(child);
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -2579,6 +2624,10 @@ mod tests {
         let handle_response = ProcessSpawnResponse::Spawned {
             handle: handle_secret.to_string(),
         };
+        let cleanup_request = ProcessSpawnRequest::Cleanup {
+            handle: handle_secret.to_string(),
+        };
+        let cleanup_response = ProcessSpawnResponse::Cleaned { was_present: true };
         let errors = [
             ProcessSpawnError::Denied {
                 reason: detail_secret.to_string(),
@@ -2649,6 +2698,8 @@ mod tests {
             format!("{response:?}"),
             format!("{handle_request:?}"),
             format!("{handle_response:?}"),
+            format!("{cleanup_request:?}"),
+            format!("{cleanup_response:?}"),
             format!("{policy:?}"),
             format!("{captured:?}"),
             format!("{validated:?}"),
@@ -3238,7 +3289,10 @@ mod tests {
             panic!("spawned response");
         };
 
-        provider.cleanup_handle(&handle);
+        assert!(matches!(
+            provider.cleanup_handle(&handle),
+            Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+        ));
 
         assert!(matches!(
             provider.perform(

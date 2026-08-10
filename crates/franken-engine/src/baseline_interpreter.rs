@@ -9096,9 +9096,9 @@ pub struct InterpreterCore {
 
 impl Drop for InterpreterCore {
     fn drop(&mut self) {
-        let Some(provider) = self.process_spawn.as_ref() else {
+        if self.process_spawn.is_none() {
             return;
-        };
+        }
         // Execution can exit before the deferred Wait turn (fatal callback,
         // containment, memory budget, or turn-limit exhaustion). Provider Arcs
         // may outlive this core, so do not rely on provider Drop for ownership
@@ -9109,7 +9109,7 @@ impl Drop for InterpreterCore {
             .map(|task| task.handle.clone())
             .collect::<BTreeSet<_>>();
         for handle in handles {
-            provider.cleanup_handle(&handle);
+            let _ = self.cleanup_process_handle(&handle);
         }
     }
 }
@@ -10104,6 +10104,60 @@ impl InterpreterCore {
             })
     }
 
+    fn cleanup_process_handle(&self, handle: &str) -> Result<(), InterpreterError> {
+        let Some(provider) = self.process_spawn.as_ref() else {
+            return Err(InterpreterError::InternalError {
+                details: "process cleanup requested without an admitted provider".to_string(),
+            });
+        };
+        let Some(journal) = self.host_effect_journal.as_ref() else {
+            return Err(InterpreterError::InternalError {
+                details: "process cleanup requested without a host-effect journal".to_string(),
+            });
+        };
+        let request = ProcessSpawnRequest::Cleanup {
+            handle: handle.to_string(),
+        };
+        let outcome = if let Some(recorded) = journal.replay_process_spawn(&request) {
+            recorded
+        } else {
+            let reservation = journal.reserve_process_spawn(&request).map_err(|error| {
+                InterpreterError::InternalError {
+                    details: format!("failed to reserve process cleanup: {error}"),
+                }
+            })?;
+            let outcome = provider.cleanup_handle(handle);
+            journal
+                .complete_process_spawn(reservation, &request, &outcome)
+                .map_err(|error| InterpreterError::InternalError {
+                    details: format!("failed to journal process cleanup outcome: {error}"),
+                })?;
+            outcome
+        };
+        match outcome {
+            Ok(ProcessSpawnResponse::Cleaned { .. }) => Ok(()),
+            Ok(_) => Err(InterpreterError::InternalError {
+                details: "process cleanup returned a non-cleanup response".to_string(),
+            }),
+            Err(error) => Err(InterpreterError::InternalError {
+                details: format!("process cleanup failed: {error}"),
+            }),
+        }
+    }
+
+    fn cleanup_process_handle_after_error(
+        &self,
+        handle: &str,
+        primary: InterpreterError,
+    ) -> InterpreterError {
+        match self.cleanup_process_handle(handle) {
+            Ok(()) => primary,
+            Err(cleanup) => InterpreterError::InternalError {
+                details: format!("{primary}; compensating process cleanup also failed: {cleanup}"),
+            },
+        }
+    }
+
     fn process_output_value(
         &mut self,
         bytes: &[u8],
@@ -10462,17 +10516,13 @@ impl InterpreterCore {
                 )
             }
             Ok(_) => {
-                if let Some(provider) = &self.process_spawn {
-                    provider.cleanup_handle(&task.handle);
-                }
-                return Err(InterpreterError::InternalError {
+                let error = InterpreterError::InternalError {
                     details: "process wait returned a non-wait response".to_string(),
-                });
+                };
+                return Err(self.cleanup_process_handle_after_error(&task.handle, error));
             }
             Err(error) => {
-                if let Some(provider) = &self.process_spawn {
-                    provider.cleanup_handle(&task.handle);
-                }
+                self.cleanup_process_handle(&task.handle)?;
                 let thrown = self.native_error_to_thrown_value(&error)?;
                 (Err(error), vec![thrown, Value::str(""), Value::str("")])
             }
@@ -10635,30 +10685,22 @@ impl InterpreterCore {
                     if let Err(error) =
                         self.replace_child_process_state(child, Self::pending_child_process_state())
                     {
-                        if let Some(provider) = &self.process_spawn {
-                            provider.cleanup_handle(&handle);
-                        }
-                        return Err(error);
+                        return Err(self.cleanup_process_handle_after_error(&handle, error));
                     }
                     let spawn_sequence =
                         match self.activate_completed_child_process_event(child, "spawn") {
                             Ok(Some(sequence)) => sequence,
                             Ok(None) => {
                                 self.remove_child_process_state(child);
-                                if let Some(provider) = &self.process_spawn {
-                                    provider.cleanup_handle(&handle);
-                                }
-                                return Err(InterpreterError::InternalError {
+                                let error = InterpreterError::InternalError {
                                     details: "spawn event was not scheduled for a live process"
                                         .to_string(),
-                                });
+                                };
+                                return Err(self.cleanup_process_handle_after_error(&handle, error));
                             }
                             Err(error) => {
                                 self.remove_child_process_state(child);
-                                if let Some(provider) = &self.process_spawn {
-                                    provider.cleanup_handle(&handle);
-                                }
-                                return Err(error);
+                                return Err(self.cleanup_process_handle_after_error(&handle, error));
                             }
                         };
                     if let Err(error) = self.schedule_child_process_wait(PendingChildProcessTask {
@@ -10675,10 +10717,7 @@ impl InterpreterCore {
                     }) {
                         self.cancel_http_task_registration(spawn_sequence);
                         self.remove_child_process_state(child);
-                        if let Some(provider) = &self.process_spawn {
-                            provider.cleanup_handle(&handle);
-                        }
-                        return Err(error);
+                        return Err(self.cleanup_process_handle_after_error(&handle, error));
                     }
                 }
                 Ok(_) => {
@@ -17221,7 +17260,7 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
-    fn clear_residual_event_state(&mut self) {
+    fn clear_residual_event_state(&mut self) -> Result<(), InterpreterError> {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let released_bytes = self
             .event_listeners_memory_bytes()
@@ -17232,10 +17271,11 @@ impl InterpreterCore {
             .saturating_add(self.pending_child_process_tasks_memory_bytes())
             .saturating_add(self.child_process_task_in_flight_bytes);
         let pending_tasks = std::mem::take(&mut self.pending_child_process_tasks);
+        let mut cleanup_error = None;
         for (registration, task) in pending_tasks {
             self.event_loop.cancel_registration(registration);
-            if let Some(provider) = &self.process_spawn {
-                provider.cleanup_handle(&task.handle);
+            if let Err(error) = self.cleanup_process_handle(&task.handle) {
+                cleanup_error.get_or_insert(error);
             }
         }
         for registration in self.pending_io_callbacks.keys().copied() {
@@ -17253,6 +17293,7 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_bytes.saturating_add(released_promise_bytes));
+        cleanup_error.map_or(Ok(()), Err)
     }
 
     fn clear_event_once_wrapper_state(&mut self) {
@@ -25819,7 +25860,7 @@ impl InterpreterCore {
         self.clear_writable_execution_state();
         self.clear_http_execution_state();
         self.clear_loopback_execution_state();
-        self.clear_residual_event_state();
+        self.clear_residual_event_state()?;
         self.clear_event_once_wrapper_state();
         self.clear_object_mutation_labels();
         if let Some(context) = self.active_inline_callback_context_label.take() {

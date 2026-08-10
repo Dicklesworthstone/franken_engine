@@ -89,7 +89,41 @@ impl ProcessSpawnProvider for RecordingProcessSpawn {
         }
     }
 
-    fn cleanup_handle(&self, _handle: &str) {}
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+    }
+}
+
+#[derive(Debug, Default)]
+struct CleanupFailingProcessSpawn;
+
+impl ProcessSpawnProvider for CleanupFailingProcessSpawn {
+    fn name(&self) -> &str {
+        "cleanup-failing-process-spawn"
+    }
+
+    fn perform(
+        &self,
+        request: &ProcessSpawnRequest,
+        _granted: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        match request {
+            ProcessSpawnRequest::Spawn { .. } => Ok(ProcessSpawnResponse::Spawned {
+                handle: "opaque-cleanup-failure-handle".to_string(),
+            }),
+            ProcessSpawnRequest::Wait { .. } => Ok(ProcessSpawnResponse::StdinClosed),
+            _ => Err(ProcessSpawnError::Denied {
+                reason: "unexpected test process request".to_string(),
+            }),
+        }
+    }
+
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Err(ProcessSpawnError::Io {
+            operation: "injected cleanup".to_string(),
+            detail: "injected cleanup failure".to_string(),
+        })
+    }
 }
 
 fn process_package(source: &str) -> ExtensionPackage {
@@ -589,6 +623,38 @@ fn replay_finalization_failure_retains_the_consumed_effect_prefix() {
             .is_empty(),
         "replay finalization must never invoke the live provider"
     );
+}
+
+#[test]
+fn cleanup_failure_is_typed_journaled_and_preserves_the_effect_prefix() {
+    let provider = Arc::new(CleanupFailingProcessSpawn);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider, journal);
+
+    let error = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.spawn('tool', ['alpha']);",
+        ))
+        .expect_err("an injected cleanup failure must fail the execution");
+    assert!(error.to_string().contains("cleanup"));
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Spawn { .. },
+                outcome: Ok(ProcessSpawnResponse::Spawned { .. }),
+            },
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Wait { .. },
+                outcome: Ok(ProcessSpawnResponse::StdinClosed),
+            },
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Cleanup { .. },
+                outcome: Err(ProcessSpawnError::Io { operation, .. }),
+            },
+        ] if operation == "injected cleanup"
+    ));
 }
 
 #[test]

@@ -1425,7 +1425,9 @@ mod tests {
             })
         }
 
-        fn cleanup_handle(&self, _handle: &str) {}
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
     }
 
     #[derive(Debug)]
@@ -1475,7 +1477,9 @@ mod tests {
             })
         }
 
-        fn cleanup_handle(&self, _handle: &str) {}
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
     }
 
     #[derive(Debug)]
@@ -1497,7 +1501,9 @@ mod tests {
             })
         }
 
-        fn cleanup_handle(&self, _handle: &str) {}
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
     }
 
     fn process_run_request() -> ProcessSpawnRequest {

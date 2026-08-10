@@ -17024,6 +17024,44 @@ impl InterpreterCore {
         Some(removed)
     }
 
+    /// Remove every listener registered for `event`, emitting one
+    /// `removeListener` meta-event per guest listener in Node's LIFO order
+    /// (bd-asw4m.6). Internal pipe listeners are removed silently to preserve
+    /// internal-listener hiding. Iterating an entry-time snapshot bounds
+    /// reentrancy from meta handlers that re-register listeners, and a throwing
+    /// meta handler propagates with the already-removed listeners left removed.
+    /// `event_remove_listener_meta_value` supplies Node's scalar/array
+    /// once-wrapper identity against the live bucket at each removal.
+    fn remove_all_listeners_for_event_with_meta(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        event: &str,
+        meta_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let snapshot = self.event_listener_records_for(target_id, event);
+        for record in snapshot.into_iter().rev() {
+            let removal_argument = record.listener.clone();
+            let meta = self.event_remove_listener_meta_value(target_id, event, &removal_argument);
+            let Some(removed) = self.remove_event_listener(target_id, event, &removal_argument)
+            else {
+                continue;
+            };
+            if Self::is_internal_readable_pipe_listener(&removed.listener) {
+                self.detach_current_readable_pipe(target_id);
+                continue;
+            }
+            self.emit_event_listener_records(
+                module,
+                target_id,
+                "removeListener",
+                vec![Value::str(event), meta],
+                meta_label.clone(),
+            )?;
+        }
+        Ok(())
+    }
+
     fn is_readable_pipe_listener_for(
         value: &Value,
         kind: BuiltinFunctionKind,
@@ -32675,6 +32713,53 @@ impl InterpreterCore {
                 let invalidates_pipe = event
                     .as_deref()
                     .is_none_or(|event| matches!(event, "data" | "end"));
+                // bd-asw4m.6: Node emits a `removeListener` meta-event for every
+                // listener dropped by removeAllListeners, but ONLY when a
+                // `removeListener` handler is registered — otherwise it takes the
+                // silent fast clear. Mirror that split so the common case stays
+                // allocation-free and the observed case matches donor order.
+                let has_remove_listener_handler = !self
+                    .event_listener_records_for(target_id, "removeListener")
+                    .is_empty();
+                if has_remove_listener_handler {
+                    let meta_label = self.join_arg_range_label(args)?;
+                    if let Some(event) = event.as_deref() {
+                        self.remove_all_listeners_for_event_with_meta(
+                            module, target_id, event, meta_label,
+                        )?;
+                    } else {
+                        // All-events form: drain every event except
+                        // `removeListener`, then `removeListener` itself last so
+                        // its own handlers observe the other removals (Node
+                        // ordering). Snapshot the key set first — the meta
+                        // handlers may mutate the live map.
+                        let keys: Vec<String> = self
+                            .event_listeners
+                            .get(&target_id)
+                            .map(|by_event| by_event.keys().cloned().collect())
+                            .unwrap_or_default();
+                        for key in keys {
+                            if key == "removeListener" {
+                                continue;
+                            }
+                            self.remove_all_listeners_for_event_with_meta(
+                                module,
+                                target_id,
+                                &key,
+                                meta_label.clone(),
+                            )?;
+                        }
+                        self.remove_all_listeners_for_event_with_meta(
+                            module,
+                            target_id,
+                            "removeListener",
+                            meta_label,
+                        )?;
+                    }
+                }
+                // Hard clear (Node resets the bucket): also drops internal
+                // listeners removed silently above and anything a meta handler
+                // re-registered, keeping memory accounting exact.
                 if let Some(event) = event {
                     self.clear_event_listeners(target_id, Some(&event));
                 } else {
@@ -88309,6 +88394,158 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "settling static-once wrappers keeps the memory estimate exact"
+        );
+    }
+
+    #[test]
+    fn remove_all_listeners_emits_meta_and_stays_atomic_bd_asw4m_6() {
+        // function_table[0] throws when invoked (a throwing guest
+        // `removeListener` handler); function_table[1] returns normally.
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 2,
+                    frame_size: 2,
+                    name: Some("throwing_remove_listener".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 1,
+                    arity: 2,
+                    frame_size: 2,
+                    name: Some("returning_remove_listener".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let remove_all = BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterRemoveAllListeners);
+        // Register through the canonical EmitterOn dispatch so listener memory is
+        // accounted exactly as production does.
+        let register =
+            |core: &mut InterpreterCore, emitter: ObjectId, event: &str, listener: Value| {
+                core.mutate_registers(|registers| {
+                    if registers.len() < 2 {
+                        registers.resize(2, Value::Undefined);
+                    }
+                    registers[0] = Value::str(event);
+                    registers[1] = listener;
+                });
+                core.dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOn),
+                    RegRange { start: 0, count: 2 },
+                    Some(Value::Object(emitter)),
+                    None,
+                )
+                .expect("register listener via EmitterOn");
+            };
+        let remove_all_for = |core: &mut InterpreterCore, emitter: ObjectId| {
+            core.mutate_registers(|registers| {
+                if registers.is_empty() {
+                    registers.resize(1, Value::Undefined);
+                }
+                registers[0] = Value::str("ready");
+            });
+            core.dispatch_builtin_function(
+                &module,
+                &remove_all,
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(emitter)),
+                None,
+            )
+        };
+
+        // Fast path: with no `removeListener` handler registered, Node clears
+        // silently and emits no meta-events.
+        let mut fast = test_interpreter();
+        let fast_emitter = fast
+            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .expect("emitter object");
+        register(&mut fast, fast_emitter, "ready", Value::Closure(1));
+        register(&mut fast, fast_emitter, "ready", Value::Closure(2));
+        remove_all_for(&mut fast, fast_emitter).expect("fast-path removeAllListeners");
+        assert!(
+            fast.event_listener_records_for(fast_emitter, "ready")
+                .is_empty(),
+            "the silent fast path still removes the listeners"
+        );
+
+        // Slow path, full completion: a non-throwing `removeListener` handler is
+        // invoked once per removed listener; every `ready` listener is removed,
+        // the handler stays, and accounting is exact after settlement.
+        let mut done = test_interpreter();
+        let done_emitter = done
+            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .expect("emitter object");
+        register(
+            &mut done,
+            done_emitter,
+            "removeListener",
+            Value::Function(1),
+        );
+        register(&mut done, done_emitter, "ready", Value::Closure(1));
+        register(&mut done, done_emitter, "ready", Value::Closure(2));
+        // Gap-invariance: removeAllListeners must release exactly the memory it
+        // charged, so the estimate/recompute delta is unchanged across the call
+        // (robust to any fixed test-setup accounting baseline).
+        let gap_before =
+            done.recompute_estimated_memory_bytes() as i128 - done.estimated_memory_bytes() as i128;
+        remove_all_for(&mut done, done_emitter).expect("slow-path removeAllListeners completes");
+        let gap_after =
+            done.recompute_estimated_memory_bytes() as i128 - done.estimated_memory_bytes() as i128;
+        assert_eq!(
+            gap_before, gap_after,
+            "a fully-completing removeAllListeners releases exactly the charged listener memory"
+        );
+        assert!(
+            done.event_listener_records_for(done_emitter, "ready")
+                .is_empty(),
+            "every requested-event listener is removed"
+        );
+        assert!(
+            !done
+                .event_listener_records_for(done_emitter, "removeListener")
+                .is_empty(),
+            "an event-specific removeAllListeners leaves the removeListener handler in place"
+        );
+
+        // Slow path, throwing handler: proves the meta-events fire in LIFO order
+        // and that a throw leaves consistent state — exactly the most-recent
+        // listener is removed before the handler aborts.
+        let mut slow = test_interpreter();
+        let slow_emitter = slow
+            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .expect("emitter object");
+        register(
+            &mut slow,
+            slow_emitter,
+            "removeListener",
+            Value::Function(0),
+        );
+        register(&mut slow, slow_emitter, "ready", Value::Closure(1));
+        register(&mut slow, slow_emitter, "ready", Value::Closure(2));
+        let result = remove_all_for(&mut slow, slow_emitter);
+        assert!(
+            result.is_err(),
+            "a throwing removeListener handler propagates out of removeAllListeners"
+        );
+        let remaining = slow.event_listener_records_for(slow_emitter, "ready");
+        assert_eq!(
+            remaining.len(),
+            1,
+            "only the LIFO-first removal completed before the meta handler threw"
+        );
+        assert_eq!(
+            remaining[0].listener,
+            Value::Closure(1),
+            "the most-recently registered listener is removed first"
         );
     }
 

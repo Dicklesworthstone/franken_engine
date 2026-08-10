@@ -1981,21 +1981,25 @@ impl CanonicalEs2020Parser {
         I: ParserInput,
     {
         match input.into_source() {
-            Ok(source) => match parse_source(&source.text, &source.label, goal, options) {
-                Ok(tree) => {
-                    let event_ir = ParseEventIr::from_parse_source(
-                        &tree,
-                        &source.text,
-                        source.label,
-                        options.mode,
-                    );
-                    (Ok(tree), event_ir)
+            // bd-rucba: tree parse AND event-IR construction both recurse over
+            // the tree, so run them together on one budget-provisioned stack.
+            Ok(source) => with_provisioned_parse_stack(options, || {
+                match parse_source(&source.text, &source.label, goal, options) {
+                    Ok(tree) => {
+                        let event_ir = ParseEventIr::from_parse_source(
+                            &tree,
+                            &source.text,
+                            source.label,
+                            options.mode,
+                        );
+                        (Ok(tree), event_ir)
+                    }
+                    Err(error) => {
+                        let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
+                        (Err(error), event_ir)
+                    }
                 }
-                Err(error) => {
-                    let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
-                    (Err(error), event_ir)
-                }
-            },
+            }),
             Err(error) => {
                 let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
                 (Err(error), event_ir)
@@ -2018,27 +2022,32 @@ impl CanonicalEs2020Parser {
         I: ParserInput,
     {
         match input.into_source() {
-            Ok(source) => match parse_source(&source.text, &source.label, goal, options) {
-                Ok(tree) => {
-                    let event_ir = ParseEventIr::from_parse_source(
-                        &tree,
-                        &source.text,
-                        source.label.clone(),
-                        options.mode,
-                    );
-                    let materialized = event_ir.materialize_with_tree(&tree, Some(&source.text));
-                    (Ok(tree), event_ir, materialized)
+            // bd-rucba: tree + event-IR + materialization all recurse over the
+            // tree; provision one budget-sized stack for the whole pipeline.
+            Ok(source) => with_provisioned_parse_stack(options, || {
+                match parse_source(&source.text, &source.label, goal, options) {
+                    Ok(tree) => {
+                        let event_ir = ParseEventIr::from_parse_source(
+                            &tree,
+                            &source.text,
+                            source.label.clone(),
+                            options.mode,
+                        );
+                        let materialized =
+                            event_ir.materialize_with_tree(&tree, Some(&source.text));
+                        (Ok(tree), event_ir, materialized)
+                    }
+                    Err(error) => {
+                        let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
+                        let materialized = Err(ParseEventMaterializationError::new(
+                            ParseEventMaterializationErrorCode::ParseFailedEventStream,
+                            "cannot materialize AST for failed parse".to_string(),
+                            None,
+                        ));
+                        (Err(error), event_ir, materialized)
+                    }
                 }
-                Err(error) => {
-                    let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
-                    let materialized = Err(ParseEventMaterializationError::new(
-                        ParseEventMaterializationErrorCode::ParseFailedEventStream,
-                        "cannot materialize AST for failed parse".to_string(),
-                        None,
-                    ));
-                    (Err(error), event_ir, materialized)
-                }
-            },
+            }),
             Err(error) => {
                 let event_ir = ParseEventIr::from_parse_error(&error, goal, options.mode);
                 let materialized = Err(ParseEventMaterializationError::new(
@@ -2782,6 +2791,53 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     }
 
     result
+}
+
+/// Native-stack bytes provisioned per unit of the recursion-depth budget, plus
+/// a fixed base. The recursion-depth guard only fails closed (a recoverable
+/// `ParseError`) if the native stack can actually hold `max_recursion_depth`
+/// frames; otherwise the OS aborts the process first. Running the parse (tree,
+/// event-IR, and materialization all recurse over the tree) on a dedicated
+/// scoped thread sized from the budget makes the guard, not the stack, the
+/// enforcement boundary — the franken-core bd-47ae4 recipe ported to the engine
+/// parser lane (bd-rucba).
+const PARSE_STACK_BYTES_PER_RECURSION_LEVEL: usize = 64 * 1024;
+const PARSE_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Run `run` on a scoped thread whose stack is provisioned from the recursion
+/// budget, falling back to the caller stack if the thread cannot be spawned
+/// (mirrors franken-core; bd-rucba).
+fn with_provisioned_parse_stack<T, F>(options: &ParserOptions, run: F) -> T
+where
+    T: Send,
+    F: FnOnce() -> T + Send,
+{
+    let budget_depth = usize::try_from(options.budget.max_recursion_depth).unwrap_or(usize::MAX);
+    let stack_bytes = PARSE_STACK_BASE_BYTES
+        .saturating_add(budget_depth.saturating_mul(PARSE_STACK_BYTES_PER_RECURSION_LEVEL));
+    // The slot lets the closure survive a failed spawn (Builder::spawn_scoped
+    // consumes its argument even on error); the mutex is uncontended — only one
+    // of the two arms ever takes it.
+    let run_slot = std::sync::Mutex::new(Some(run));
+    let take_and_run = || {
+        (run_slot
+            .lock()
+            .expect("parse closure slot is never poisoned")
+            .take()
+            .expect("parse closure is consumed exactly once"))()
+    };
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .name("franken-engine-parse".to_string())
+            .stack_size(stack_bytes)
+            .spawn_scoped(scope, take_and_run)
+        {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            Err(_) => take_and_run(),
+        }
+    })
 }
 
 fn parse_source(
@@ -10456,6 +10512,55 @@ mod tests {
             .parse("import x from 'mod';", ParseGoal::Script)
             .expect_err("script goal should reject import");
         assert_eq!(error.code, ParseErrorCode::InvalidGoal);
+    }
+
+    /// bd-rucba (franken-core bd-47ae4 twin): a within-budget deep chain must
+    /// parse regardless of the caller's stack size, because parsing now runs on
+    /// a stack provisioned from the recursion budget rather than the OS default.
+    #[test]
+    fn nested_if_parses_from_a_tiny_caller_stack_bd_rucba() {
+        // 64 nested `if` statements recurse through parse_statement 64 deep,
+        // within the default budget (256) but enough to overflow a small caller
+        // stack without the provisioned parse thread.
+        let depth = 64usize;
+        let source = format!("{}x;", "if (true) ".repeat(depth));
+        let handle = std::thread::Builder::new()
+            .name("bd-rucba-tiny-caller".to_string())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                CanonicalEs2020Parser
+                    .parse(source.as_str(), ParseGoal::Script)
+                    .is_ok()
+            })
+            .expect("tiny caller thread should spawn");
+        assert!(
+            handle.join().expect("caller thread must not abort"),
+            "a within-budget nesting must parse regardless of caller stack"
+        );
+    }
+
+    /// bd-rucba: nesting beyond a tight recursion budget must fail closed with
+    /// the recoverable budget error, never a native stack abort.
+    #[test]
+    fn tight_statement_nesting_budget_fails_closed_not_abort_bd_rucba() {
+        let depth = 16usize;
+        let source = format!("{}x;", "if (true) ".repeat(depth));
+        let options = ParserOptions {
+            budget: ParserBudget {
+                max_recursion_depth: 8,
+                ..ParserBudget::default()
+            },
+            ..ParserOptions::default()
+        };
+        let error = CanonicalEs2020Parser
+            .parse_with_options(source.as_str(), ParseGoal::Script, &options)
+            .expect_err("nesting beyond the tight budget must be rejected");
+        assert_eq!(error.code, ParseErrorCode::BudgetExceeded);
+        assert!(
+            error.message.contains("statement nesting budget exceeded"),
+            "unexpected rejection: {}",
+            error.message
+        );
     }
 
     #[test]

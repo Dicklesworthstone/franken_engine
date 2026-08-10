@@ -1311,10 +1311,10 @@ const STATIC_BUILTIN_GLOBALS: [&str; 7] = [
     "Object", "Array", "String", "Math", "JSON", "Symbol", "Reflect",
 ];
 
-/// Intrinsics that exist only through a direct-call lowering seam. Bare
-/// unshadowed reads are undefined, but a real outer lexical binding with the
-/// same name must still propagate into a nested function and shadow the seam.
-const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 1] = ["require"];
+/// Intrinsics that exist only through call-lowering seams. Bare unshadowed
+/// reads are undefined, but a real outer lexical binding with the same name
+/// must still propagate into a nested function and shadow the seam.
+const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 2] = ["require", "console"];
 
 /// Return a UTF-8-exact static name without ever projecting a lone UTF-16
 /// surrogate through U+FFFD. Identifiers are always well formed; quoted
@@ -1397,6 +1397,41 @@ fn static_builtin_call_capability(
         ("Symbol", "for") => Some("builtin:SymbolFor"),
         ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),
         ("Reflect", "ownKeys") => Some("builtin:ReflectOwnKeys"),
+        _ => None,
+    }
+}
+
+/// Recognize the capture-only console methods implemented by the core
+/// interpreter. Core has no heap-backed `console` global, so an unshadowed
+/// static member call must lower directly to its existing hostcall. Quoted
+/// computed names are accepted when their UTF-16 contents have an exact UTF-8
+/// view; dynamic and unknown properties retain ordinary member-call behavior.
+fn console_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "console")
+        || binding_lookup.contains_key("console")
+    {
+        return None;
+    }
+    let method = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    match method {
+        "log" => Some("console:log"),
+        "error" => Some("console:error"),
+        "warn" => Some("console:warn"),
+        "info" => Some("console:info"),
         _ => None,
     }
 }
@@ -10124,8 +10159,8 @@ fn lower_expression_to_ir1(
                 return Ok(());
             }
             // Core has no heap-backed global objects for the remaining static
-            // builtin receivers, and `require` is supported only as a
-            // direct-call lowering seam. An unbound bare read is therefore
+            // builtin receivers; `require` and `console` are supported only
+            // through call-lowering seams. An unbound bare read is therefore
             // undefined and must not create a forward-reference entry that
             // poisons a later supported static call such as
             // `Math.nope; Math.abs(1)` (bd-zql4d) or a later unshadowed
@@ -11269,6 +11304,27 @@ fn lower_expression_to_ir1(
             if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
                 .or_else(|| os_builtin_call_capability(callee, binding_lookup))
             {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
+            // bd-lmchj: connect source-level console calls to the capture-only
+            // hostcalls already implemented by the core interpreter. The
+            // receiver is syntactic and is not materialized as a heap object.
+            if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
                 for arg in arguments {
                     lower_expression_to_ir1(
                         arg,
@@ -12591,7 +12647,7 @@ mod tests {
         ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
         VariableDeclarationKind, VariableDeclarator, WhileStatement,
     };
-    use crate::baseline_interpreter::{InterpreterConfig, QuickJsLane, Value};
+    use crate::baseline_interpreter::{ConsoleLevel, InterpreterConfig, QuickJsLane, Value};
     use crate::capability::RuntimeCapability;
     use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
     use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
@@ -12870,6 +12926,88 @@ mod tests {
         );
 
         assert!(host_calls_bd_n8eta_4_3(&ir1.ops).is_empty());
+    }
+
+    #[test]
+    fn console_member_calls_lower_to_existing_hostcalls_bd_lmchj() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "console.log('alpha', 7);\
+             console['error']('bad');\
+             console.warn();\
+             console.info(true);",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![
+                ("console:log", 2),
+                ("console:error", 1),
+                ("console:warn", 0),
+                ("console:info", 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn console_lowering_fails_closed_for_shadowed_dynamic_and_unknown_members_bd_lmchj() {
+        let shadowed = lower_source_to_ir1_bd_n8eta_4_3(
+            "const console = { log: function(value) { return value; } };\
+             function invoke() { return console.log(7); }\
+             invoke();",
+        );
+        assert!(host_calls_bd_n8eta_4_3(&shadowed.ops).is_empty());
+        let (_, _, shadowed_value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "const console = { log: function(value) { return value; } };\
+             function invoke() { return console.log(7); }\
+             invoke();",
+        );
+        assert_eq!(shadowed_value, Value::Int(7));
+
+        let unsupported = lower_source_to_ir1_bd_n8eta_4_3(
+            "const method = 'log';\
+             console[method]('dynamic');\
+             console.debug('unknown');",
+        );
+        assert!(host_calls_bd_n8eta_4_3(&unsupported.ops).is_empty());
+    }
+
+    #[test]
+    fn console_source_executes_through_capture_only_core_hostcalls_bd_lmchj() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "console.log('alpha', 7);\
+                 console['error']('bad');\
+                 console.warn();\
+                 console.info(true);",
+                ParseGoal::Script,
+            )
+            .expect("console regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_lmchj_console.js");
+        let module = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-lmchj", "decision-bd-lmchj", "policy-bd-lmchj"),
+        )
+        .expect("console regression source should lower through IR3")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let result = QuickJsLane::with_config(config)
+            .execute(&module, "trace-bd-lmchj")
+            .expect("console regression source should execute");
+
+        assert_eq!(result.console_output.len(), 4);
+        assert_eq!(result.console_output[0].level, ConsoleLevel::Log);
+        assert_eq!(result.console_output[0].message, "alpha 7");
+        assert_eq!(result.console_output[1].level, ConsoleLevel::Error);
+        assert_eq!(result.console_output[1].message, "bad");
+        assert_eq!(result.console_output[2].level, ConsoleLevel::Warn);
+        assert_eq!(result.console_output[2].message, "");
+        assert_eq!(result.console_output[3].level, ConsoleLevel::Info);
+        assert_eq!(result.console_output[3].message, "true");
+        assert_eq!(result.value, Value::Undefined);
     }
 
     #[test]

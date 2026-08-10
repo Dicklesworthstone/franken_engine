@@ -133,11 +133,17 @@ shared ordered sidecar, typed property hooks are live in both lanes, and
 (`tests/differential_oracle_integration.rs::symbol_own_key_donor_matrix_bd_n8eta_4_5`)
 plus the focused `CapturedInterpreterState` Symbol round-trip test. DISC-013
 records the remaining ACCEPTED residuals (core lacks executable Proxy /
-defineProperty / console lowering / Array push+join; engine own-key readers
+defineProperty / Array push+join; engine own-key readers
 other than Reflect.ownKeys / getOwnPropertySymbols / assign / spread do not
 route through Proxy `ownKeys`; the time-travel snapshot drops
 `symbol_state`) — those are missing-surface gaps, not order-carrier parity
 gaps.
+
+`bd-lmchj` subsequently connected unshadowed source-level
+`console.log/error/warn/info` calls to core's existing capture-only hostcalls.
+The first three Symbol donor rows now place Node, Bun, engine, and core in the
+same exact-stdout group; Proxy and `Object.defineProperty` rows remain scoped
+to the donors plus engine.
 
 The evidence landed in this order:
 

@@ -23,7 +23,7 @@
 //! For non-TEE environments, this module implements graceful degradation to
 //! evidence-only paths with proper signed acknowledgment of the capability gap.
 
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -143,10 +143,35 @@ pub enum TeeQuoteError {
     PolicyViolation { violation: String },
 }
 
+/// Source of the `FRANKEN_TEE_*` capability-detection variables.
+///
+/// Production reads the process environment; tests inject an isolated fixture
+/// map so capability detection is driven without mutating process-global state
+/// (bd-performance-conformance-bridge-tu32j.1.9). This removes the Rust-2024
+/// `unsafe` `set_var`/`remove_var` test helpers and the serializing mutex the
+/// shared process environment required (bd-g63gw): each generator now owns its
+/// own environment view, so env-driven tests are race-free in parallel.
+#[derive(Debug, Clone)]
+enum TeeEnvSource {
+    Process,
+    #[cfg_attr(not(test), allow(dead_code))]
+    Fixture(std::collections::BTreeMap<String, String>),
+}
+
+impl TeeEnvSource {
+    fn get(&self, key: &str) -> Option<String> {
+        match self {
+            Self::Process => std::env::var(key).ok(),
+            Self::Fixture(map) => map.get(key).cloned(),
+        }
+    }
+}
+
 /// Main TEE quote generator interface.
 pub struct TeeQuoteGenerator {
     config: TeeQuoteConfig,
     signing_key: SigningKey,
+    env: TeeEnvSource,
 }
 
 impl TeeQuoteGenerator {
@@ -155,6 +180,24 @@ impl TeeQuoteGenerator {
         Self {
             config,
             signing_key,
+            env: TeeEnvSource::Process,
+        }
+    }
+
+    /// Construct a generator whose capability-detection environment is an
+    /// isolated fixture rather than the process environment. Test-only: it is
+    /// how the `FRANKEN_TEE_*` detection states are driven without mutating
+    /// process-global state.
+    #[cfg(test)]
+    fn with_env_fixture(
+        config: TeeQuoteConfig,
+        signing_key: SigningKey,
+        env: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            config,
+            signing_key,
+            env: TeeEnvSource::Fixture(env),
         }
     }
 
@@ -162,14 +205,12 @@ impl TeeQuoteGenerator {
     pub fn detect_tee_capability(&self) -> TeeCapability {
         // In a real implementation, this would probe the hardware
         // For now, we simulate based on environment variables
-        if std::env::var("FRANKEN_TEE_ENABLED").unwrap_or_default() == "true" {
+        if self.env.get("FRANKEN_TEE_ENABLED").unwrap_or_default() == "true" {
             TeeCapability::Available {
                 platform: self.config.platform,
             }
-        } else if std::env::var("FRANKEN_TEE_ERROR").is_ok() {
-            TeeCapability::Error {
-                reason: std::env::var("FRANKEN_TEE_ERROR").unwrap_or_default(),
-            }
+        } else if let Some(reason) = self.env.get("FRANKEN_TEE_ERROR") {
+            TeeCapability::Error { reason }
         } else {
             TeeCapability::NotAvailable
         }
@@ -306,7 +347,7 @@ impl TeeQuoteGenerator {
         platform: TeePlatform,
     ) -> Result<(Vec<u8>, String), TeeQuoteError> {
         // Simulate different quote generation scenarios based on environment
-        if std::env::var("FRANKEN_TEE_QUOTE_FAIL").is_ok() {
+        if self.env.get("FRANKEN_TEE_QUOTE_FAIL").is_some() {
             return Err(TeeQuoteError::GenerationFailed {
                 reason: "Simulated quote generation failure".to_string(),
             });
@@ -447,22 +488,19 @@ mod tests {
     use super::*;
     use crate::tee_attestation_policy::TeePlatform;
 
-    // The FRANKEN_TEE_* env vars that `detect_tee_capability` reads are
-    // process-global, but `cargo test` runs tests in parallel threads sharing
-    // one process. Tests that mutate those vars therefore race unless they are
-    // serialized; each such test holds this mutex for its whole body
-    // (bd-g63gw). Poison is recovered (a panicking test must not wedge the
-    // rest) via `into_inner`.
-    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    // edition-2024: env mutators are `unsafe`; confined to these test helpers.
-    fn set_test_env(key: &str, val: &str) {
-        // SAFETY: single-threaded test setup mutating process env for capability detection.
-        unsafe { std::env::set_var(key, val) };
-    }
-    fn remove_test_env(key: &str) {
-        // SAFETY: single-threaded test teardown removing a process env var.
-        unsafe { std::env::remove_var(key) };
+    // The `FRANKEN_TEE_*` capability-detection variables are read through an
+    // injected [`TeeEnvSource`], so tests drive detection with an isolated
+    // fixture map (`tee_env`) instead of mutating the process environment.
+    // This is race-free under parallel `cargo test` without a serializing
+    // mutex (bd-g63gw) and needs no `unsafe` env mutators
+    // (bd-performance-conformance-bridge-tu32j.1.9).
+    fn tee_env<const N: usize>(
+        pairs: [(&str, &str); N],
+    ) -> std::collections::BTreeMap<String, String> {
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn test_config() -> TeeQuoteConfig {
@@ -484,22 +522,19 @@ mod tests {
 
     #[test]
     fn detect_tee_capability_not_available() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        remove_test_env("FRANKEN_TEE_ENABLED");
-        remove_test_env("FRANKEN_TEE_ERROR");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator =
+            TeeQuoteGenerator::with_env_fixture(test_config(), test_signing_key(), tee_env([]));
         let capability = generator.detect_tee_capability();
         assert_eq!(capability, TeeCapability::NotAvailable);
     }
 
     #[test]
     fn detect_tee_capability_available() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        set_test_env("FRANKEN_TEE_ENABLED", "true");
-        remove_test_env("FRANKEN_TEE_ERROR");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator = TeeQuoteGenerator::with_env_fixture(
+            test_config(),
+            test_signing_key(),
+            tee_env([("FRANKEN_TEE_ENABLED", "true")]),
+        );
         let capability = generator.detect_tee_capability();
         assert_eq!(
             capability,
@@ -507,21 +542,22 @@ mod tests {
                 platform: TeePlatform::IntelSgx
             }
         );
-
-        remove_test_env("FRANKEN_TEE_ENABLED");
     }
 
     #[test]
     fn detect_tee_capability_error() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        remove_test_env("FRANKEN_TEE_ENABLED");
-        set_test_env("FRANKEN_TEE_ERROR", "Hardware malfunction");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator = TeeQuoteGenerator::with_env_fixture(
+            test_config(),
+            test_signing_key(),
+            tee_env([("FRANKEN_TEE_ERROR", "Hardware malfunction")]),
+        );
         let capability = generator.detect_tee_capability();
-        matches!(capability, TeeCapability::Error { .. });
-
-        remove_test_env("FRANKEN_TEE_ERROR");
+        assert_eq!(
+            capability,
+            TeeCapability::Error {
+                reason: "Hardware malfunction".to_string()
+            }
+        );
     }
 
     // Default build: no real TEE SDK is compiled in (`tee-real-sdk` off), so a
@@ -530,11 +566,11 @@ mod tests {
     #[cfg(not(feature = "tee-real-sdk"))]
     #[test]
     fn generate_quote_tee_available_is_simulated_not_success() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        set_test_env("FRANKEN_TEE_ENABLED", "true");
-        remove_test_env("FRANKEN_TEE_QUOTE_FAIL");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator = TeeQuoteGenerator::with_env_fixture(
+            test_config(),
+            test_signing_key(),
+            tee_env([("FRANKEN_TEE_ENABLED", "true")]),
+        );
         let decision_data = b"test decision data";
         let nonce = "test_nonce_123";
 
@@ -556,8 +592,6 @@ mod tests {
             }
             other => panic!("expected SimulatedQuote, got {other:?}"),
         }
-
-        remove_test_env("FRANKEN_TEE_ENABLED");
     }
 
     // With the real-SDK feature enabled but no hardware SDK integrated, the live
@@ -565,27 +599,22 @@ mod tests {
     #[cfg(feature = "tee-real-sdk")]
     #[test]
     fn generate_quote_real_sdk_without_hardware_fails_closed() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        set_test_env("FRANKEN_TEE_ENABLED", "true");
-        remove_test_env("FRANKEN_TEE_QUOTE_FAIL");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator = TeeQuoteGenerator::with_env_fixture(
+            test_config(),
+            test_signing_key(),
+            tee_env([("FRANKEN_TEE_ENABLED", "true")]),
+        );
         let result = generator.generate_quote(b"test decision data", "test_nonce_123");
         assert!(
             matches!(result, TeeQuoteResult::Failed { .. }),
             "real-SDK path with no hardware must fail closed, never Success"
         );
-
-        remove_test_env("FRANKEN_TEE_ENABLED");
     }
 
     #[test]
     fn generate_quote_safe_mode_fallback() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        remove_test_env("FRANKEN_TEE_ENABLED");
-        remove_test_env("FRANKEN_TEE_ERROR");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator =
+            TeeQuoteGenerator::with_env_fixture(test_config(), test_signing_key(), tee_env([]));
         let decision_data = b"test decision data";
         let nonce = "test_nonce_123";
 
@@ -595,19 +624,19 @@ mod tests {
 
     #[test]
     fn generate_quote_failure() {
-        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        set_test_env("FRANKEN_TEE_ENABLED", "true");
-        set_test_env("FRANKEN_TEE_QUOTE_FAIL", "1");
-
-        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let generator = TeeQuoteGenerator::with_env_fixture(
+            test_config(),
+            test_signing_key(),
+            tee_env([
+                ("FRANKEN_TEE_ENABLED", "true"),
+                ("FRANKEN_TEE_QUOTE_FAIL", "1"),
+            ]),
+        );
         let decision_data = b"test decision data";
         let nonce = "test_nonce_123";
 
         let result = generator.generate_quote(decision_data, nonce);
         assert!(matches!(result, TeeQuoteResult::Failed { .. }));
-
-        remove_test_env("FRANKEN_TEE_ENABLED");
-        remove_test_env("FRANKEN_TEE_QUOTE_FAIL");
     }
 
     #[test]

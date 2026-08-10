@@ -1,7 +1,11 @@
-// Production builds forbid unsafe entirely. Tests may use `unsafe` only for
-// edition-2024 `std::env::set_var`/`remove_var` (process-env setup), which is
-// localized to test helpers; shipped code remains unsafe-free.
-#![cfg_attr(not(test), forbid(unsafe_code))]
+// Unsafe code is forbidden unconditionally — including in test builds — per the
+// repository contract in AGENTS.md
+// (bd-performance-conformance-bridge-tu32j.1.9). The former `cfg(test)`
+// exception existed only for edition-2024 `std::env::set_var`/`remove_var` in
+// TEE capability-detection tests; those now drive an injected environment
+// fixture instead of mutating process-global state, so the forbid is
+// unconditional and `cfg(test)` can no longer reintroduce `unsafe`.
+#![forbid(unsafe_code)]
 
 extern crate self as frankenengine_engine;
 

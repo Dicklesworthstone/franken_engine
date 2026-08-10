@@ -93018,7 +93018,11 @@ mod function_prototype_call_apply_tests_current {
         one_short.config.max_total_memory_bytes =
             after_first.saturating_add(event_bytes).saturating_sub(1);
         one_short.push_event("execution_started", "ok", None);
-        assert_eq!(one_short.events.len(), 1, "over-ceiling event must be dropped");
+        assert_eq!(
+            one_short.events.len(),
+            1,
+            "over-ceiling event must be dropped"
+        );
         assert_eq!(one_short.dropped_event_count, 1);
         assert_eq!(
             one_short.estimated_memory_bytes(),
@@ -93036,7 +93040,11 @@ mod function_prototype_call_apply_tests_current {
         let after_first = exact.estimated_memory_bytes();
         exact.config.max_total_memory_bytes = after_first.saturating_add(event_bytes);
         exact.push_event("execution_started", "ok", None);
-        assert_eq!(exact.events.len(), 2, "event at the exact ceiling is retained");
+        assert_eq!(
+            exact.events.len(),
+            2,
+            "event at the exact ceiling is retained"
+        );
         assert_eq!(exact.dropped_event_count, 0);
         assert_eq!(exact.general_event_bytes, event_bytes.saturating_mul(2));
         assert_eq!(

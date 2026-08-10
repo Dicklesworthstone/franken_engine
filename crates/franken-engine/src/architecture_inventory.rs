@@ -143,8 +143,36 @@ impl Error for ArchitectureInventoryError {
     }
 }
 
+/// Walk up from `start` looking for the franken-engine crate marker
+/// (`crates/franken-engine/{Cargo.toml, src/lib.rs}`). Returns the first
+/// ancestor that contains it — the repository root the caller is actually
+/// standing in, independent of where the binary was compiled.
+pub fn discover_repo_root_from(start: &Path) -> Option<PathBuf> {
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        if dir.join("crates/franken-engine/Cargo.toml").is_file()
+            && dir.join("crates/franken-engine/src/lib.rs").is_file()
+        {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Resolve the repository root to inventory (bd-yetou).
+///
+/// Prefer discovery from the current working directory so a prebuilt binary
+/// inventories the tree it is *run in*, not the tree it was *compiled in* —
+/// `env!("CARGO_MANIFEST_DIR")` is resolved at compile time and permanently
+/// points a binary built from a worktree/snapshot at that stale tree, exiting 0
+/// with a plausible-but-wrong inventory. Fall back to the compile-time path
+/// only when discovery fails (e.g. run from outside any franken-engine tree).
 pub fn default_repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| discover_repo_root_from(&cwd))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }
 
 pub fn collect_workspace_inventory(

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
 use std::{env, fs, process};
 
 use frankenengine_engine::architecture_inventory::{
@@ -14,23 +15,40 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mode = Mode::from_args(env::args().skip(1));
-    if mode == Mode::Help {
+    let cli = Cli::from_args(env::args().skip(1))?;
+    if cli.mode == Mode::Help {
         print_usage();
         return Ok(());
     }
 
-    let repo_root = default_repo_root();
+    // Resolve the tree to inventory: an explicit `--repo-root` wins, otherwise
+    // discover from the current working directory (bd-yetou). Always announce
+    // the resolved root on stderr so an inventory can be reviewed against the
+    // tree it actually describes — a silent wrong-tree run is exactly the
+    // failure this fixes.
+    let repo_root = cli.repo_root.unwrap_or_else(default_repo_root);
+    eprintln!("architecture inventory: repo root = {}", repo_root.display());
+
     let inventory = collect_workspace_inventory(&repo_root)?;
     let markdown = inventory.render_markdown();
     let output_path = repo_root.join("docs/ARCHITECTURE_INVENTORY.md");
 
-    match mode {
+    match cli.mode {
         Mode::Write => {
             fs::write(&output_path, markdown)?;
             println!("wrote {}", output_path.display());
         }
         Mode::Check => {
+            // Fail loudly if the resolved tree has no inventory doc to compare
+            // against, rather than emitting a confusing raw I/O error (bd-yetou).
+            if !output_path.is_file() {
+                return Err(format!(
+                    "{} does not exist under the resolved repo root {}",
+                    output_path.display(),
+                    repo_root.display()
+                )
+                .into());
+            }
             let existing = fs::read_to_string(&output_path)?;
             if existing != markdown {
                 return Err(format!(
@@ -44,7 +62,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Stdout => {
             print!("{markdown}");
         }
-        Mode::Help => unreachable!("help mode returns before inventory collection"),
+        Mode::Help => {
+            unreachable!("help mode returns before inventory collection")
+        }
     }
 
     Ok(())
@@ -58,18 +78,36 @@ enum Mode {
     Help,
 }
 
-impl Mode {
-    fn from_args(args: impl IntoIterator<Item = String>) -> Self {
-        let mut mode = Self::Write;
-        for arg in args {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Cli {
+    mode: Mode,
+    repo_root: Option<PathBuf>,
+}
+
+impl Cli {
+    fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut mode = Mode::Write;
+        let mut repo_root = None;
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
-                "--help" | "-h" => mode = Self::Help,
-                "--check" => mode = Self::Check,
-                "--stdout" => mode = Self::Stdout,
-                _ => {}
+                "--help" | "-h" => mode = Mode::Help,
+                "--check" => mode = Mode::Check,
+                "--stdout" => mode = Mode::Stdout,
+                "--repo-root" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "--repo-root requires a path argument".to_string())?;
+                    repo_root = Some(PathBuf::from(value));
+                }
+                other if other.starts_with("--repo-root=") => {
+                    repo_root =
+                        Some(PathBuf::from(other.trim_start_matches("--repo-root=").to_string()));
+                }
+                other => return Err(format!("unrecognized argument: {other}")),
             }
         }
-        mode
+        Ok(Self { mode, repo_root })
     }
 }
 

@@ -1320,6 +1320,7 @@ pub enum MethodKind {
 pub enum ObjectPropertyKind {
     #[default]
     Data,
+    Method,
     Get,
     Set,
 }
@@ -1328,6 +1329,7 @@ impl ObjectPropertyKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Data => "data",
+            Self::Method => "method",
             Self::Get => "get",
             Self::Set => "set",
         }
@@ -3764,6 +3766,34 @@ mod tests {
     }
 
     #[test]
+    fn object_method_property_canonical_value_preserves_method_kind_bd_gqaa4() {
+        let prop = ObjectProperty {
+            key: Expression::Identifier("run".into()),
+            value: Expression::Function {
+                name: None,
+                params: Vec::new(),
+                body: BlockStatement {
+                    body: Vec::new(),
+                    span: SourceSpan::new(0, 0, 1, 1, 1, 1),
+                },
+                is_async: false,
+                is_generator: false,
+            },
+            computed: false,
+            shorthand: false,
+            kind: ObjectPropertyKind::Method,
+        };
+
+        match prop.canonical_value() {
+            CanonicalValue::Map(map) => assert_eq!(
+                map.get("kind"),
+                Some(&CanonicalValue::String("method".to_string()))
+            ),
+            other => panic!("expected map, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn expression_arrow_function_canonical_value() {
         let expr = Expression::ArrowFunction {
             params: vec![FunctionParam {
@@ -5301,6 +5331,31 @@ mod tests {
         let restored: ObjectProperty =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(prop, restored);
+    }
+
+    #[test]
+    fn object_property_kind_serde_preserves_method_and_defaults_legacy_data_bd_gqaa4() {
+        let method = ObjectProperty {
+            key: Expression::Identifier("run".into()),
+            value: Expression::NumericLiteral(42),
+            computed: false,
+            shorthand: false,
+            kind: ObjectPropertyKind::Method,
+        };
+        let method_json = serde_json::to_string(&method).expect("serialize method property");
+        let restored: ObjectProperty =
+            serde_json::from_str(&method_json).expect("deserialize method property");
+        assert_eq!(restored.kind, ObjectPropertyKind::Method);
+
+        let mut legacy_value =
+            serde_json::to_value(&method).expect("serialize legacy object-property fixture");
+        legacy_value
+            .as_object_mut()
+            .expect("object-property fixture should be an object")
+            .remove("kind");
+        let legacy: ObjectProperty =
+            serde_json::from_value(legacy_value).expect("deserialize legacy property");
+        assert_eq!(legacy.kind, ObjectPropertyKind::Data);
     }
 
     #[test]

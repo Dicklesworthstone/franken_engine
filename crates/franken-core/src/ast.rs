@@ -1732,6 +1732,26 @@ impl AssignmentOperator {
     }
 }
 
+/// Definition kind for a property in an object literal.
+///
+/// `Data` is the serde default so syntax artifacts produced before concise
+/// methods gained an explicit carrier continue to deserialize faithfully.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ObjectPropertyKind {
+    #[default]
+    Data,
+    Method,
+}
+
+impl ObjectPropertyKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Data => "data",
+            Self::Method => "method",
+        }
+    }
+}
+
 /// Property in an object literal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectProperty {
@@ -1739,6 +1759,8 @@ pub struct ObjectProperty {
     pub value: Expression,
     pub computed: bool,
     pub shorthand: bool,
+    #[serde(default)]
+    pub kind: ObjectPropertyKind,
 }
 
 impl ObjectProperty {
@@ -1750,6 +1772,10 @@ impl ObjectProperty {
         map.insert(
             "shorthand".to_string(),
             CanonicalValue::Bool(self.shorthand),
+        );
+        map.insert(
+            "kind".to_string(),
+            CanonicalValue::String(self.kind.as_str().to_string()),
         );
         CanonicalValue::Map(map)
     }
@@ -3899,6 +3925,7 @@ mod tests {
             value: Expression::NumericLiteral(1),
             computed: false,
             shorthand: true,
+            kind: ObjectPropertyKind::Data,
         }]);
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3923,6 +3950,7 @@ mod tests {
             value: Expression::NumericLiteral(42),
             computed: true,
             shorthand: false,
+            kind: ObjectPropertyKind::Method,
         };
         match prop.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3930,6 +3958,10 @@ mod tests {
                 assert!(map.contains_key("value"));
                 assert_eq!(map.get("computed"), Some(&CanonicalValue::Bool(true)));
                 assert_eq!(map.get("shorthand"), Some(&CanonicalValue::Bool(false)));
+                assert_eq!(
+                    map.get("kind"),
+                    Some(&CanonicalValue::String("method".to_string()))
+                );
             }
             _ => panic!("expected map"),
         }
@@ -5547,10 +5579,23 @@ mod tests {
             value: Expression::NumericLiteral(42),
             computed: true,
             shorthand: false,
+            kind: ObjectPropertyKind::Method,
         };
         let json = serde_json::to_string(&prop).unwrap();
         let restored: ObjectProperty = serde_json::from_str(&json).unwrap();
         assert_eq!(prop, restored);
+    }
+
+    #[test]
+    fn object_property_serde_defaults_legacy_kind_to_data() {
+        let legacy = r#"{
+            "key":{"StringLiteral":"name"},
+            "value":{"NumericLiteral":42},
+            "computed":false,
+            "shorthand":false
+        }"#;
+        let restored: ObjectProperty = serde_json::from_str(legacy).unwrap();
+        assert_eq!(restored.kind, ObjectPropertyKind::Data);
     }
 
     #[test]

@@ -27,7 +27,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // tree it actually describes — a silent wrong-tree run is exactly the
     // failure this fixes.
     let repo_root = cli.repo_root.unwrap_or_else(default_repo_root);
-    eprintln!("architecture inventory: repo root = {}", repo_root.display());
+    eprintln!(
+        "architecture inventory: repo root = {}",
+        repo_root.display()
+    );
 
     let inventory = collect_workspace_inventory(&repo_root)?;
     let markdown = inventory.render_markdown();
@@ -101,8 +104,9 @@ impl Cli {
                     repo_root = Some(PathBuf::from(value));
                 }
                 other if other.starts_with("--repo-root=") => {
-                    repo_root =
-                        Some(PathBuf::from(other.trim_start_matches("--repo-root=").to_string()));
+                    repo_root = Some(PathBuf::from(
+                        other.trim_start_matches("--repo-root=").to_string(),
+                    ));
                 }
                 other => return Err(format!("unrecognized argument: {other}")),
             }

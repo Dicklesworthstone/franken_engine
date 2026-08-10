@@ -37,8 +37,12 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.11.0` adds explicit derived-constructor registration and `super()`
-    /// construction operations to serialized IR1, IR2, and IR3. `0.10.0` adds
+    /// `0.13.0` adds explicit concise-object-method definition operations to
+    /// serialized IR1, IR2, and IR3. Core minor `0.12.0` is intentionally
+    /// skipped because that numeric version identifies an incompatible
+    /// `franken-engine` IR wire. `0.11.0` adds explicit derived-constructor
+    /// registration and `super()` construction operations to serialized IR1,
+    /// IR2, and IR3. `0.10.0` adds
     /// the explicit `GeneratorBodyStart` boundary to serialized
     /// IR1, IR2, and IR3 so generator invocation can initialize parameters before
     /// suspending ahead of the body. `0.9.0` adds optional exact body-local
@@ -58,7 +62,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 11,
+        minor: 13,
         patch: 0,
     };
 
@@ -525,6 +529,10 @@ pub enum Ir1Op {
     /// Object property write. Value is always on top-of-stack; dynamic keys sit
     /// below it, while static keys are carried directly in the op.
     SetProperty { key: Ir1PropertyKey },
+    /// Define a concise object method while retaining the target object.
+    /// Static stack: `[..., object, function] -> [..., object]`; dynamic stack:
+    /// `[..., object, key, function] -> [..., object]`.
+    DefineMethod { key: Ir1PropertyKey },
     /// Delete an object property. Dynamic keys remain on top-of-stack; static
     /// keys are carried directly in the op.
     DeleteProperty { key: Ir1PropertyKey },
@@ -863,6 +871,13 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("set_property".to_string()),
+                );
+                map.insert("key".to_string(), key.canonical_value());
+            }
+            Self::DefineMethod { key } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("define_method".to_string()),
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
@@ -1717,6 +1732,9 @@ pub enum Ir3Instruction {
     GetProperty { obj: Reg, key: Reg, dst: Reg },
     /// Object property write: obj[key] = val.
     SetProperty { obj: Reg, key: Reg, val: Reg },
+    /// Define a concise method with `func.[[HomeObject]] = obj`, then install
+    /// it as the own property `obj[key]`.
+    DefineMethod { obj: Reg, key: Reg, func: Reg },
     /// Object property deletion: delete obj[key].
     DeleteProperty { obj: Reg, key: Reg, dst: Reg },
     /// Allocate a new object on the heap.
@@ -2117,6 +2135,15 @@ impl Ir3Instruction {
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
                 map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
+            }
+            Self::DefineMethod { obj, key, func } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("define_method".to_string()),
+                );
+                map.insert("func".to_string(), CanonicalValue::U64(u64::from(*func)));
+                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
+                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
             }
             Self::DeleteProperty { obj, key, dst } => {
                 map.insert(
@@ -3269,6 +3296,7 @@ pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(),
 pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
     verify_ir1_derived_constructor_schema(module)?;
+    verify_ir1_method_definition_schema(module)?;
     verify_ir1_generator_boundaries(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
@@ -3293,6 +3321,7 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
 pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
     verify_ir3_derived_constructor_schema(module)?;
+    verify_ir3_method_definition_schema(module)?;
     verify_ir3_generator_boundaries(module)?;
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
@@ -3384,12 +3413,11 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Core 0.6.0 and 0.7.0 never existed. Those numeric versions identify
-    // incompatible franken-engine IR shapes: engine 0.6 adds explicit
-    // unresolved-name operations, and engine 0.7 adds Continue on top of that
-    // divergent wire. Accepting either as a historical core artifact would
-    // make the schema gate ambiguous for the overlapping enum variants.
-    if provided.major == 0 && matches!(provided.minor, 6 | 7) {
+    // Core 0.6.0, 0.7.0, and 0.12.0 never existed. Those numeric versions
+    // identify incompatible franken-engine IR shapes. Accepting them as
+    // historical core artifacts would make the schema gate ambiguous for the
+    // overlapping enum variants.
+    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3486,6 +3514,76 @@ fn verify_ir3_derived_constructor_schema(module: &Ir3Module) -> Result<(), IrErr
             format!(
                 "derived-constructor IR3 instructions require schema {}, provided {}",
                 DERIVED_CONSTRUCTOR_SCHEMA_VERSION, module.header.schema_version
+            ),
+            IrLevel::Ir3,
+        ));
+    }
+    Ok(())
+}
+
+const METHOD_DEFINITION_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 13,
+    patch: 0,
+};
+
+fn ir1_op_uses_method_definition_schema(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::DefineMethod { .. } => true,
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_uses_method_definition_schema)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn verify_ir1_method_definition_schema(module: &Ir1Module) -> Result<(), IrError> {
+    if module.ops.iter().any(ir1_op_uses_method_definition_schema)
+        && module.header.schema_version < METHOD_DEFINITION_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "method-definition IR1 operations require schema {}, provided {}",
+                METHOD_DEFINITION_SCHEMA_VERSION, module.header.schema_version
+            ),
+            IrLevel::Ir1,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir2_method_definition_schema(module: &Ir2Module) -> Result<(), IrError> {
+    if module
+        .ops
+        .iter()
+        .any(|op| ir1_op_uses_method_definition_schema(&op.inner))
+        && module.header.schema_version < METHOD_DEFINITION_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "method-definition IR2 operations require schema {}, provided {}",
+                METHOD_DEFINITION_SCHEMA_VERSION, module.header.schema_version
+            ),
+            IrLevel::Ir2,
+        ));
+    }
+    Ok(())
+}
+
+fn verify_ir3_method_definition_schema(module: &Ir3Module) -> Result<(), IrError> {
+    if module
+        .instructions
+        .iter()
+        .any(|instruction| matches!(instruction, Ir3Instruction::DefineMethod { .. }))
+        && module.header.schema_version < METHOD_DEFINITION_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "method-definition IR3 instructions require schema {}, provided {}",
+                METHOD_DEFINITION_SCHEMA_VERSION, module.header.schema_version
             ),
             IrLevel::Ir3,
         ));
@@ -3980,7 +4078,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.11.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.13.0");
     }
 
     #[test]
@@ -4001,7 +4099,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3, 4, 5, 8, 9, 10] {
+        for minor in [1, 2, 3, 4, 5, 8, 9, 10, 11] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -4012,7 +4110,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.11 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.13 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -4102,8 +4200,68 @@ mod tests {
     }
 
     #[test]
+    fn define_method_requires_core_013_schema_recursively_bd_gqaa4() {
+        fn nested_define_method() -> Ir1Op {
+            Ir1Op::CreateFunction {
+                name: None,
+                param_names: Vec::new(),
+                body_ops: vec![Ir1Op::DefineMethod {
+                    key: Ir1PropertyKey::Dynamic,
+                }],
+                free_vars: Vec::new(),
+                free_var_ids: Vec::new(),
+                free_var_outer_ids: Vec::new(),
+                local_lexical_bindings: None,
+                is_generator: false,
+                is_arrow: false,
+                rest_param_index: None,
+            }
+        }
+
+        let source_hash = ContentHash::compute(b"method-definition-schema");
+        let legacy_version = IrSchemaVersion {
+            major: 0,
+            minor: 11,
+            patch: u32::MAX,
+        };
+
+        let mut ir1 = Ir1Module::new(source_hash, "legacy-method-ir1.js");
+        ir1.header.schema_version = legacy_version;
+        ir1.ops = vec![nested_define_method()];
+        let error = verify_ir1_source(&ir1, &source_hash)
+            .expect_err("nested DefineMethod must be rejected in backversioned IR1");
+        assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(error.message.contains("require schema 0.13.0"));
+
+        let mut ir2 = Ir2Module::new(source_hash, "legacy-method-ir2.js");
+        ir2.header.schema_version = legacy_version;
+        ir2.ops = vec![Ir2Op {
+            inner: nested_define_method(),
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        }];
+        let error = verify_ir2_method_definition_schema(&ir2)
+            .expect_err("nested DefineMethod must be rejected in backversioned IR2");
+        assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(error.message.contains("require schema 0.13.0"));
+
+        let mut ir3 = Ir3Module::new(source_hash, "legacy-method-ir3.js");
+        ir3.header.schema_version = legacy_version;
+        ir3.instructions = vec![Ir3Instruction::DefineMethod {
+            obj: 0,
+            key: 1,
+            func: 2,
+        }];
+        let error = verify_ir3_specialization(&ir3)
+            .expect_err("DefineMethod must be rejected in backversioned IR3");
+        assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(error.message.contains("require schema 0.13.0"));
+    }
+
+    #[test]
     fn schema_version_validation_rejects_skipped_engine_owned_minors_bd_t9n3s() {
-        for minor in [6, 7] {
+        for minor in [6, 7, 12] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: 0,
@@ -4810,6 +4968,9 @@ mod tests {
                 binding_id: 0,
             },
             Ir1Op::Await,
+            Ir1Op::DefineMethod {
+                key: Ir1PropertyKey::Static("method".into()),
+            },
             Ir1Op::ArraySlice,
             Ir1Op::CopyDataProperties { excluded_count: 2 },
             Ir1Op::DiscardAbruptCompletion,
@@ -5032,6 +5193,11 @@ mod tests {
                 obj: 0,
                 key: 1,
                 val: 2,
+            },
+            Ir3Instruction::DefineMethod {
+                obj: 0,
+                key: 1,
+                func: 2,
             },
             Ir3Instruction::DeleteProperty {
                 obj: 0,
@@ -6031,6 +6197,9 @@ mod tests {
                 binding_id: 0,
             },
             Ir1Op::Await,
+            Ir1Op::DefineMethod {
+                key: Ir1PropertyKey::Dynamic,
+            },
             Ir1Op::CopyDataProperties { excluded_count: 2 },
             Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
@@ -6149,6 +6318,11 @@ mod tests {
                 obj: 0,
                 key: 1,
                 val: 2,
+            },
+            Ir3Instruction::DefineMethod {
+                obj: 0,
+                key: 1,
+                func: 2,
             },
             Ir3Instruction::DeleteProperty {
                 obj: 0,
@@ -6502,7 +6676,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 11);
+        assert_eq!(v.minor, 13);
         assert_eq!(v.patch, 0);
     }
 
@@ -6732,6 +6906,14 @@ mod tests {
                     val: 2,
                 },
                 "set_property",
+            ),
+            (
+                Ir3Instruction::DefineMethod {
+                    obj: 0,
+                    key: 1,
+                    func: 2,
+                },
+                "define_method",
             ),
             (
                 Ir3Instruction::DeleteProperty {

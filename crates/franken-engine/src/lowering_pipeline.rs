@@ -23342,7 +23342,22 @@ fn classify_ir1_op(
                 declassification_required: false,
             }),
         ),
-        Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. } | Ir1Op::DeleteProperty { .. } => {
+        // A property READ observes a value; it is not an information sink. Its
+        // result already carries the receiver's label (join, in
+        // simulate_ir2_flow_labels) so any real egress downstream still checks
+        // it -- exactly like an ordinary Call (also Pure) whose getter body is
+        // checked separately. Classifying it as a ReadEffect gave it an Internal
+        // sink clearance, which wrongly DENIED the single most common error
+        // idiom `catch (e) { e.message }`: the caught exception carries the
+        // fail-high TopSecret user-Call exception label, and reading a property
+        // off it tripped a TopSecret -> Internal egress denial even though
+        // nothing leaves the program (bd-az056).
+        Ir1Op::GetProperty { .. } => (EffectBoundary::Pure, None, None),
+        // SetProperty and DeleteProperty stay checked: they MUTATE the heap,
+        // whose per-property IFC labels are not yet persisted (bd-ojvo1), so
+        // their Internal sink is a fail-closed guard against laundering a high
+        // value through an untracked property slot.
+        Ir1Op::SetProperty { .. } | Ir1Op::DeleteProperty { .. } => {
             (EffectBoundary::ReadEffect, None, None)
         }
         Ir1Op::ForInInit
@@ -26785,6 +26800,66 @@ mod tests {
                     && entry.capability.as_deref() == Some("fs.read"))
         );
         assert!(artifact.artifact_id.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn get_property_read_is_pure_set_and_delete_stay_checked_bd_az056() {
+        // The exact classification change: a property READ is not an information
+        // sink (its result carries the receiver label for real egress checks),
+        // while SetProperty/DeleteProperty stay checked to fail-close the
+        // unpersisted heap-label boundary (bd-ojvo1).
+        assert!(matches!(
+            classify_ir1_op(&Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static("x".into()),
+            })
+            .0,
+            EffectBoundary::Pure
+        ));
+        assert!(matches!(
+            classify_ir1_op(&Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static("x".into()),
+            })
+            .0,
+            EffectBoundary::ReadEffect
+        ));
+        assert!(matches!(
+            classify_ir1_op(&Ir1Op::DeleteProperty {
+                key: Ir1PropertyKey::Static("x".into()),
+            })
+            .0,
+            EffectBoundary::ReadEffect
+        ));
+    }
+
+    #[test]
+    fn property_read_off_a_high_value_is_not_an_egress_bd_az056() {
+        // Reproduces bd-az056 at the flow-proof level: reading a property off a
+        // high-labeled value (a Secret string literal here -- the same shape as
+        // a caught exception carrying the fail-high user-Call exception label)
+        // must NOT be denied. Before reclassifying GetProperty as Pure this
+        // failed closed with Secret -> Internal, which rejected the pervasive
+        // `catch (e) { e.message }` idiom.
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"az056-ir0"), "prop_read_az056.js");
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret_token".into()),
+        });
+        ir1.ops.push(Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static("length".into()),
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("IR1->IR2 should succeed")
+            .module;
+        let context = LoweringContext::new("trace-az056", "decision-az056", "policy-az056");
+        let artifact = build_ir2_flow_proof_artifact(&ir2, &context)
+            .expect("flow artifact should succeed");
+
+        assert!(
+            artifact.denied_flows.is_empty(),
+            "reading a property off a high value must not deny: {:?}",
+            artifact.denied_flows
+        );
     }
 
     #[test]

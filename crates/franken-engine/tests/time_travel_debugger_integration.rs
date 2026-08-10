@@ -5,7 +5,7 @@
 //! why did my program get contained" and receive one structured answer,
 //! instead of reading a multi-thousand-line trace.
 
-use frankenengine_engine::baseline_interpreter::{HeapObject, ObjectId, Value};
+use frankenengine_engine::baseline_interpreter::{HeapObject, ObjectId, RuntimeSymbolState, Value};
 use frankenengine_engine::deterministic_replay::{
     NondeterminismSource, NondeterminismTrace, ReplayMode,
 };
@@ -137,7 +137,72 @@ fn state_snapshot(tick: u64, register_value: i64, label: Label) -> InterpreterSt
             object,
             label,
         }],
+        RuntimeSymbolState::default(),
     )
+}
+
+#[test]
+fn interpreter_state_snapshot_carries_symbol_state_and_fails_closed_bd_g63h5() {
+    use frankenengine_engine::object_model::SymbolId;
+
+    // Symbol-free snapshot: legacy-readable, omits `symbol_state`, exact round trip.
+    let plain = InterpreterStateSnapshot::new(
+        0,
+        vec![InterpreterRegisterSnapshot {
+            register: 0,
+            value: Value::Int(7),
+            label: Label::Public,
+        }],
+        Vec::new(),
+        RuntimeSymbolState::default(),
+    );
+    let plain_wire = serde_json::to_string(&plain).expect("plain snapshot serializes");
+    assert!(
+        !plain_wire.contains("symbol_state"),
+        "a Symbol-free snapshot omits symbol_state so pre-bd-g63h5 wires stay byte-identical"
+    );
+    assert_eq!(
+        serde_json::from_str::<InterpreterStateSnapshot>(&plain_wire)
+            .expect("legacy Symbol-free wire stays readable"),
+        plain
+    );
+
+    // Symbol-bearing snapshot: `symbol_state` is serialized and round-trips exactly.
+    let symbolic = InterpreterStateSnapshot::new(
+        1,
+        vec![InterpreterRegisterSnapshot {
+            register: 0,
+            value: Value::Symbol(SymbolId(42)),
+            label: Label::Public,
+        }],
+        Vec::new(),
+        RuntimeSymbolState::default(),
+    );
+    let wire = serde_json::to_string(&symbolic).expect("symbolic snapshot serializes");
+    assert!(
+        wire.contains("\"symbol_state\""),
+        "a snapshot carrying a Symbol value serializes its identity registry"
+    );
+    assert_eq!(
+        serde_json::from_str::<InterpreterStateSnapshot>(&wire)
+            .expect("symbolic snapshot round-trips"),
+        symbolic
+    );
+
+    // Fail closed: a Symbol-bearing wire without symbol_state cannot be interpreted.
+    let mut stripped: serde_json::Value =
+        serde_json::from_str(&wire).expect("wire re-parses as JSON");
+    stripped
+        .as_object_mut()
+        .expect("wire is an object")
+        .remove("symbol_state");
+    let error = serde_json::from_value::<InterpreterStateSnapshot>(stripped)
+        .expect_err("missing symbol_state must be rejected")
+        .to_string();
+    assert!(
+        error.contains("requires symbol_state"),
+        "unexpected rejection message: {error}"
+    );
 }
 
 fn make_inspect_session() -> RobotSession {

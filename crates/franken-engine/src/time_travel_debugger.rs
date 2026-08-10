@@ -26,7 +26,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::baseline_interpreter::{
-    CapturedInterpreterState, HeapObject, InterpreterConfig, InterpreterCore, ObjectId, Value,
+    CapturedInterpreterState, HeapObject, InterpreterConfig, InterpreterCore, ObjectId,
+    RuntimeSymbolState, Value, heap_object_contains_symbols, value_contains_symbol,
 };
 use crate::deterministic_replay::NondeterminismTrace;
 use crate::forensic_causation_operator::{ForensicOperator, InvestigationReport, OperatorError};
@@ -235,11 +236,16 @@ pub struct InterpreterHeapSnapshot {
 ///
 /// The debugger indexes these snapshots by tick; it does not infer register or
 /// heap values from event metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpreterStateSnapshot {
     pub tick: u64,
     pub registers: Vec<InterpreterRegisterSnapshot>,
     pub heap: Vec<InterpreterHeapSnapshot>,
+    /// Symbol identity registry (SymbolId -> kind/description/registry key) at
+    /// the captured tick. Without it, time-travel inspection of a
+    /// Symbol-bearing register or own-key cannot distinguish same-description
+    /// symbols or global-registry membership (bd-g63h5).
+    pub symbol_state: RuntimeSymbolState,
 }
 
 impl InterpreterStateSnapshot {
@@ -247,6 +253,7 @@ impl InterpreterStateSnapshot {
         tick: u64,
         mut registers: Vec<InterpreterRegisterSnapshot>,
         mut heap: Vec<InterpreterHeapSnapshot>,
+        symbol_state: RuntimeSymbolState,
     ) -> Self {
         registers.sort_by_key(|entry| entry.register);
         heap.sort_by_key(|entry| entry.object_id);
@@ -254,7 +261,20 @@ impl InterpreterStateSnapshot {
             tick,
             registers,
             heap,
+            symbol_state,
         }
+    }
+
+    /// Whether any register value or heap object carries a `Symbol` value or a
+    /// symbol-keyed property, i.e. whether `symbol_state` is load-bearing.
+    fn contains_symbol_values(&self) -> bool {
+        self.registers
+            .iter()
+            .any(|entry| value_contains_symbol(&entry.value))
+            || self
+                .heap
+                .iter()
+                .any(|entry| heap_object_contains_symbols(&entry.object))
     }
 
     /// Convert a real-interpreter capture into the debugger's snapshot shape.
@@ -279,7 +299,62 @@ impl InterpreterStateSnapshot {
                     label: entry.label,
                 })
                 .collect(),
+            captured.symbol_state,
         )
+    }
+}
+
+impl Serialize for InterpreterStateSnapshot {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        // Legacy-readable: omit `symbol_state` when it is the default registry
+        // and no Symbol values are present, so pre-bd-g63h5 snapshots stay
+        // byte-identical. Mirrors CapturedInterpreterState's serde.
+        let include_symbol_state = !self.symbol_state.is_default() || self.contains_symbol_values();
+        let mut state = serializer.serialize_struct(
+            "InterpreterStateSnapshot",
+            if include_symbol_state { 4 } else { 3 },
+        )?;
+        state.serialize_field("tick", &self.tick)?;
+        state.serialize_field("registers", &self.registers)?;
+        state.serialize_field("heap", &self.heap)?;
+        if include_symbol_state {
+            state.serialize_field("symbol_state", &self.symbol_state)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for InterpreterStateSnapshot {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        struct Wire {
+            tick: u64,
+            registers: Vec<InterpreterRegisterSnapshot>,
+            heap: Vec<InterpreterHeapSnapshot>,
+            #[serde(default)]
+            symbol_state: Option<RuntimeSymbolState>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let symbol_state_was_present = wire.symbol_state.is_some();
+        let snapshot = Self::new(
+            wire.tick,
+            wire.registers,
+            wire.heap,
+            wire.symbol_state.unwrap_or_default(),
+        );
+        // Fail closed: a snapshot whose values/keys carry Symbols but omits the
+        // identity registry cannot be interpreted (bd-g63h5).
+        if !symbol_state_was_present && snapshot.contains_symbol_values() {
+            return Err(D::Error::custom(
+                "InterpreterStateSnapshot with Symbol values or keys requires symbol_state",
+            ));
+        }
+        Ok(snapshot)
     }
 }
 
@@ -435,8 +510,12 @@ impl TimeTravelDebugger {
         let state_snapshots = state_snapshots
             .into_iter()
             .map(|snapshot| {
-                let normalized =
-                    InterpreterStateSnapshot::new(snapshot.tick, snapshot.registers, snapshot.heap);
+                let normalized = InterpreterStateSnapshot::new(
+                    snapshot.tick,
+                    snapshot.registers,
+                    snapshot.heap,
+                    snapshot.symbol_state,
+                );
                 (normalized.tick, normalized)
             })
             .collect();

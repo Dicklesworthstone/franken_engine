@@ -2111,7 +2111,7 @@ impl<'de> Deserialize<'de> for RuntimeSymbolState {
 }
 
 impl RuntimeSymbolState {
-    fn is_default(&self) -> bool {
+    pub(crate) fn is_default(&self) -> bool {
         self.next_symbol_id == FIRST_DYNAMIC_SYMBOL_ID && self.symbols.is_empty()
     }
 
@@ -4996,7 +4996,7 @@ impl<'de> Deserialize<'de> for HeapObject {
     }
 }
 
-fn heap_object_contains_symbols(object: &HeapObject) -> bool {
+pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
     !object.properties.baseline_symbol_key_order().is_empty()
         || object
             .properties
@@ -5014,7 +5014,7 @@ fn heap_object_contains_symbols(object: &HeapObject) -> bool {
             })
 }
 
-fn value_contains_symbol(value: &Value) -> bool {
+pub(crate) fn value_contains_symbol(value: &Value) -> bool {
     let mut stack = vec![value];
     let mut visited = BTreeSet::new();
     while let Some(value) = stack.pop() {
@@ -8562,7 +8562,7 @@ pub struct CapturedInterpreterState {
     pub tick: u64,
     pub registers: Vec<CapturedRegisterState>,
     pub heap: Vec<CapturedHeapState>,
-    symbol_state: RuntimeSymbolState,
+    pub(crate) symbol_state: RuntimeSymbolState,
 }
 
 impl CapturedInterpreterState {

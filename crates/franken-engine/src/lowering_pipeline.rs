@@ -17829,6 +17829,77 @@ fn is_crypto_hash_copy_transfer_initializer(expr: &Expression, source_alias: &st
     }
 }
 
+fn crypto_object_control_flow_statement_has_rejected_use(
+    statement: &Statement,
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+    binding_lookup: &BTreeMap<String, BindingId>,
+    active: &mut BTreeSet<String>,
+) -> bool {
+    // The caller holds `alias` in `active` as its recursion cycle guard, but
+    // recursing into a NESTED lexical scope for the SAME alias is not a cycle --
+    // it is the same alias's uses in a child scope. Lift the guard for the
+    // duration of this nested validation and restore it after; without this the
+    // guard trips on re-entry and every nested Hash.copy chain is spuriously
+    // rejected (bd-5l5ye).
+    let was_active = active.remove(alias);
+    let result = match statement {
+        Statement::Block(block) => {
+            crypto_object_alias_has_rejected_use(&block.body, alias, surface, binding_lookup, active)
+        }
+        Statement::If(if_statement) => {
+            module_alias_expr_has_rejected_use(&if_statement.condition, alias, surface)
+                || crypto_object_control_flow_statement_has_rejected_use(
+                    &if_statement.consequent,
+                    alias,
+                    surface,
+                    binding_lookup,
+                    active,
+                )
+                || if_statement.alternate.as_deref().is_some_and(|alternate| {
+                    crypto_object_control_flow_statement_has_rejected_use(
+                        alternate,
+                        alias,
+                        surface,
+                        binding_lookup,
+                        active,
+                    )
+                })
+        }
+        Statement::TryCatch(try_statement) => {
+            crypto_object_alias_has_rejected_use(
+                &try_statement.block.body,
+                alias,
+                surface,
+                binding_lookup,
+                active,
+            ) || try_statement.handler.as_ref().is_some_and(|handler| {
+                handler.parameter.as_deref() != Some(alias)
+                    && crypto_object_alias_has_rejected_use(
+                        &handler.body.body,
+                        alias,
+                        surface,
+                        binding_lookup,
+                        active,
+                    )
+            }) || try_statement.finalizer.as_ref().is_some_and(|finalizer| {
+                crypto_object_alias_has_rejected_use(
+                    &finalizer.body,
+                    alias,
+                    surface,
+                    binding_lookup,
+                    active,
+                )
+            })
+        }
+        _ => module_alias_statement_has_rejected_use(statement, alias, surface),
+    };
+    if was_active {
+        active.insert(alias.to_string());
+    }
+    result
+}
+
 fn crypto_object_alias_has_rejected_use(
     body: &[Statement],
     alias: &str,
@@ -17842,6 +17913,15 @@ fn crypto_object_alias_has_rejected_use(
 
     let rejected = body.iter().enumerate().any(|(statement_index, statement)| {
         let Statement::VariableDeclaration(declaration) = statement else {
+            if surface.is_crypto_object() {
+                return crypto_object_control_flow_statement_has_rejected_use(
+                    statement,
+                    alias,
+                    surface,
+                    binding_lookup,
+                    active,
+                );
+            }
             return module_alias_statement_has_rejected_use(statement, alias, surface);
         };
         declaration
@@ -28586,6 +28666,86 @@ mod tests {
         assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectUpdate"), 3);
         assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectCopy"), 2);
         assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectDigest"), 3);
+    }
+
+    #[test]
+    fn crypto_object_copy_transfer_admitted_in_nested_control_flow_bd_5l5ye() {
+        // A `const copy = hash.copy().update(...)` transfer nested inside a
+        // block / if / try must lower with exactly the same finite crypto
+        // provenance as the top-level form
+        // (crypto_object_alias_provenance_reaches_dependent_copy_alias_bd_1by6p),
+        // not fall back to ambient-denied generic scanning.
+        for (label, source) in [
+            (
+                "block",
+                "const crypto = require('crypto');\n\
+                 const hash = crypto.createHash('sha256').update('partial');\n\
+                 { const copy = hash.copy().update('-more'); copy.digest('hex'); }\n\
+                 hash.digest('hex');\n",
+            ),
+            (
+                "if",
+                "const crypto = require('crypto');\n\
+                 const hash = crypto.createHash('sha256').update('partial');\n\
+                 if (true) { const copy = hash.copy().update('-more'); copy.digest('hex'); }\n\
+                 hash.digest('hex');\n",
+            ),
+            (
+                "try",
+                "const crypto = require('crypto');\n\
+                 const hash = crypto.createHash('sha256').update('partial');\n\
+                 try { const copy = hash.copy().update('-more'); copy.digest('hex'); } catch (_e) {}\n\
+                 hash.digest('hex');\n",
+            ),
+        ] {
+            let ops = lower_script_source_ops(source, "crypto_nested_copy_bd_5l5ye.js");
+            assert_eq!(
+                count_hostcall_deep(&ops, "builtin:CryptoCreateHash"),
+                1,
+                "{label}: createHash"
+            );
+            assert_eq!(
+                count_hostcall_deep(&ops, "builtin:CryptoObjectCopy"),
+                1,
+                "{label}: copy"
+            );
+            assert_eq!(
+                count_hostcall_deep(&ops, "builtin:CryptoObjectUpdate"),
+                2,
+                "{label}: update"
+            );
+            assert_eq!(
+                count_hostcall_deep(&ops, "builtin:CryptoObjectDigest"),
+                2,
+                "{label}: digest"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_object_copy_transfer_rejected_in_nested_control_flow_stays_fail_closed_bd_5l5ye() {
+        // The nested-scope admission must NOT relax any bd-1by6p guard. When a
+        // nested `const copy = hash.copy()...` ESCAPES (here via console.log),
+        // the recursion must still reject it, so the source hash never confirms
+        // and NONE of its finite crypto object hostcalls are emitted -- unlike
+        // the admitted positive case (which emits copy=1, update=2, digest=2).
+        let escaped = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             const hash = crypto.createHash('sha256').update('partial');\n\
+             { const copy = hash.copy().update('-more'); console.log(copy); }\n\
+             hash.digest('hex');\n",
+            "crypto_nested_escaped_copy_bd_5l5ye.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&escaped, "builtin:CryptoObjectCopy"),
+            0,
+            "escaped nested copy must not lower to a finite CryptoObjectCopy"
+        );
+        assert_eq!(
+            count_hostcall_deep(&escaped, "builtin:CryptoObjectDigest"),
+            0,
+            "an escaped nested copy must fail the whole source hash closed"
+        );
     }
 
     #[test]

@@ -18,12 +18,11 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, IR_ACCESSOR_GET_PREFIX,
-    IR_ACCESSOR_SET_PREFIX, IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module,
-    Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
-    Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
-    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_generator_boundaries,
-    verify_ir1_source, verify_ir2_generator_boundaries, verify_ir3_specialization,
-    verify_schema_version,
+    IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir1Literal, Ir1Module, Ir1Op,
+    Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel,
+    IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
+    verify_ir1_generator_boundaries, verify_ir1_source, verify_ir2_generator_boundaries,
+    verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
 use crate::parser::{
@@ -5202,8 +5201,13 @@ fn lower_statement_to_ir1_with_flow(
 
             // Set up inheritance if this class extends another
             if let Some(super_class) = &cls.super_class {
-                // Record parent constructor for constructor-frame `super()`.
-                ops.push(Ir1Op::LoadBinding { binding_id: bid });
+                let super_binding = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    "class_super",
+                )?;
                 lower_expression_to_ir1(
                     super_class,
                     ops,
@@ -5213,8 +5217,18 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                 )?;
-                ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.into()),
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: super_binding,
+                });
+                ops.push(Ir1Op::Pop);
+
+                // Record parent constructor for constructor-frame `super()`.
+                ops.push(Ir1Op::LoadBinding { binding_id: bid });
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: super_binding,
+                });
+                ops.push(Ir1Op::RegisterDerivedConstructor {
+                    default_constructor: constructor.is_none(),
                 });
 
                 // Load child constructor (our class)
@@ -5224,15 +5238,9 @@ fn lower_statement_to_ir1_with_flow(
                 });
 
                 // Load parent constructor
-                lower_expression_to_ir1(
-                    super_class,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                )?;
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: super_binding,
+                });
                 ops.push(Ir1Op::GetProperty {
                     key: Ir1PropertyKey::Static("prototype".into()),
                 });
@@ -7493,6 +7501,61 @@ pub fn lower_ir2_to_ir3(
                     reason: *reason,
                 });
             }
+            Ir1Op::ConstructSuper { arg_count } => {
+                let count = *arg_count as usize;
+                if count > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in ConstructSuper",
+                    });
+                }
+                let mut arg_regs = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    arg_regs.push(value_stack.pop().unwrap_or(0));
+                }
+                arg_regs.reverse();
+                let dst = alloc_register(&mut register_cursor);
+                let args = if arg_regs.is_empty() {
+                    RegRange { start: 0, count: 0 }
+                } else {
+                    let start_reg = register_cursor;
+                    for &src in &arg_regs {
+                        let contiguous_dst = alloc_register(&mut register_cursor);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: contiguous_dst,
+                            src,
+                        });
+                    }
+                    RegRange {
+                        start: start_reg,
+                        count: arg_regs.len() as u32,
+                    }
+                };
+                ir3.instructions
+                    .push(Ir3Instruction::ConstructSuper { args, dst });
+                value_stack.push(dst);
+            }
+            Ir1Op::RegisterDerivedConstructor {
+                default_constructor,
+            } => {
+                let parent =
+                    value_stack
+                        .pop()
+                        .ok_or(LoweringPipelineError::InvariantViolation {
+                            detail: "RegisterDerivedConstructor requires a parent value",
+                        })?;
+                let constructor =
+                    value_stack
+                        .pop()
+                        .ok_or(LoweringPipelineError::InvariantViolation {
+                            detail: "RegisterDerivedConstructor requires a constructor value",
+                        })?;
+                ir3.instructions
+                    .push(Ir3Instruction::RegisterDerivedConstructor {
+                        constructor,
+                        parent,
+                        default_constructor: *default_constructor,
+                    });
+            }
             Ir1Op::Construct { arg_count } => {
                 // Pop callee + arg_count args from value stack; push result.
                 let count = *arg_count as usize;
@@ -8980,6 +9043,61 @@ pub fn lower_ir2_to_ir3(
                         reason: *reason,
                     });
                 }
+                Ir1Op::ConstructSuper { arg_count } => {
+                    let count = *arg_count as usize;
+                    if count > fn_value_stack.len() {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in nested ConstructSuper",
+                        });
+                    }
+                    let mut arg_regs = Vec::with_capacity(count.min(1024));
+                    for _ in 0..count {
+                        arg_regs.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    arg_regs.reverse();
+                    let dst = alloc_register(&mut fn_reg);
+                    let args = if arg_regs.is_empty() {
+                        RegRange { start: 0, count: 0 }
+                    } else {
+                        let start_reg = fn_reg;
+                        for &src in &arg_regs {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        RegRange {
+                            start: start_reg,
+                            count: arg_regs.len() as u32,
+                        }
+                    };
+                    ir3.instructions
+                        .push(Ir3Instruction::ConstructSuper { args, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::RegisterDerivedConstructor {
+                    default_constructor,
+                } => {
+                    let parent =
+                        fn_value_stack
+                            .pop()
+                            .ok_or(LoweringPipelineError::InvariantViolation {
+                                detail: "nested RegisterDerivedConstructor requires a parent value",
+                            })?;
+                    let constructor = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "nested RegisterDerivedConstructor requires a constructor value",
+                        },
+                    )?;
+                    ir3.instructions
+                        .push(Ir3Instruction::RegisterDerivedConstructor {
+                            constructor,
+                            parent,
+                            default_constructor: *default_constructor,
+                        });
+                }
                 Ir1Op::Construct { arg_count } => {
                     let count = *arg_count as usize;
                     if count
@@ -9841,9 +9959,13 @@ fn lower_class_expression_to_ir1(
     ops.push(Ir1Op::Nop);
 
     if let Some(super_expr) = super_class {
-        ops.push(Ir1Op::LoadBinding {
-            binding_id: class_binding,
-        });
+        let super_binding = alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            "class_expression_super",
+        )?;
         lower_expression_to_ir1(
             super_expr,
             ops,
@@ -9853,10 +9975,20 @@ fn lower_class_expression_to_ir1(
             scope_id,
             label_counter,
         )?;
-        ops.push(Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.into()),
+        ops.push(Ir1Op::StoreBinding {
+            binding_id: super_binding,
         });
-        ops.push(Ir1Op::Nop);
+        ops.push(Ir1Op::Pop);
+
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: class_binding,
+        });
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: super_binding,
+        });
+        ops.push(Ir1Op::RegisterDerivedConstructor {
+            default_constructor: constructor.is_none(),
+        });
 
         ops.push(Ir1Op::LoadBinding {
             binding_id: class_binding,
@@ -9864,15 +9996,9 @@ fn lower_class_expression_to_ir1(
         ops.push(Ir1Op::GetProperty {
             key: Ir1PropertyKey::Static("prototype".into()),
         });
-        lower_expression_to_ir1(
-            super_expr,
-            ops,
-            bindings,
-            binding_lookup,
-            binding_index,
-            scope_id,
-            label_counter,
-        )?;
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: super_binding,
+        });
         ops.push(Ir1Op::GetProperty {
             key: Ir1PropertyKey::Static("prototype".into()),
         });
@@ -11192,8 +11318,6 @@ fn lower_expression_to_ir1(
         }
         Expression::Call { callee, arguments } => {
             if matches!(callee.as_ref(), Expression::Super) {
-                ops.push(Ir1Op::LoadSuper);
-                ops.push(Ir1Op::LoadThis);
                 for arg in arguments {
                     lower_expression_to_ir1(
                         arg,
@@ -11205,7 +11329,7 @@ fn lower_expression_to_ir1(
                         label_counter,
                     )?;
                 }
-                ops.push(Ir1Op::CallMethod {
+                ops.push(Ir1Op::ConstructSuper {
                     arg_count: arguments.len() as u32,
                 });
                 return Ok(());
@@ -12346,6 +12470,8 @@ fn classify_ir1_op(
         | Ir1Op::ForOfNext { .. }
         | Ir1Op::IteratorClose { .. }
         | Ir1Op::Construct { .. }
+        | Ir1Op::ConstructSuper { .. }
+        | Ir1Op::RegisterDerivedConstructor { .. }
         | Ir1Op::TemplateLiteral { .. } => (EffectBoundary::ReadEffect, None, None),
         _ => (EffectBoundary::Pure, None, None),
     }
@@ -15668,12 +15794,10 @@ mod tests {
     fn class_expression_with_extends_and_methods_lowers_super_metadata() {
         let module = assert_class_expression_lowers(complex_class_expression());
         assert!(
-            module.ops.iter().any(|op| matches!(
-                op,
-                Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(key)
-                } if key == IR_SUPER_CONSTRUCTOR_PROPERTY
-            )),
+            module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::RegisterDerivedConstructor { .. })),
             "derived class expression should record parent constructor metadata"
         );
         assert!(

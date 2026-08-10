@@ -4610,7 +4610,6 @@ fn parse_primary_expression(
             context,
         ));
     }
-
     if let Some(rest) = expression.strip_prefix("await")
         && (rest.starts_with(' ') || rest.starts_with('('))
     {
@@ -6420,16 +6419,13 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if callee_src == "super" {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
-                span,
-                context,
-            )));
-        }
-        let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
-            Ok(e) => e,
-            Err(e) => return Some(Err(e)),
+        let callee = if callee_src == "super" && !optional {
+            Expression::Super
+        } else {
+            match parse_expression(callee_src, span, context, recursion_depth + 1) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            }
         };
         let arguments =
             match parse_comma_separated_exprs(args_src, span, context, recursion_depth + 1) {

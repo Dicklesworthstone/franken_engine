@@ -113,6 +113,18 @@ run_case() {
     end
   ' "${output_dir}/actionability_report.json" >/dev/null || record_failure "candidate report mismatch for ${case_id}"
 
+  # bd-vaynw: missing_source must be internally consistent. states_for previously
+  # mixed jq `|` with `and` without parenthesizing each negated any(...), so a
+  # fully present ready candidate was wrongly tagged missing_source while the report
+  # still decided safe_to_claim. A candidate carrying missing_source must be absent
+  # from EVERY required source.
+  jq -e '
+    all(.candidate_reports[]?;
+      ((.states | index("missing_source")) == null)
+      or (([.evidence.in_br_ready, .evidence.in_br_open, .evidence.in_br_in_progress, .evidence.in_br_blocked, .evidence.in_bv_actionable] | any) | not))
+  ' "${output_dir}/actionability_report.json" >/dev/null \
+    || record_failure "missing_source inconsistent with source evidence for ${case_id}"
+
   grep -Fq "decision:" "${output_dir}/report.md" || record_failure "report markdown missing decision for ${case_id}"
   grep -Fq "./scripts/swarm_actionability_truth_gate.sh" "${output_dir}/commands.txt" || record_failure "commands.txt missing invocation for ${case_id}"
 

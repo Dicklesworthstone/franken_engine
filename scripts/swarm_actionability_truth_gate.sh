@@ -393,7 +393,7 @@ def states_for($id; $ready; $open; $in_progress; $blocked; $bv; $reservations; $
     if any($blocked[]?; .id == $id) then "blocked" else empty end,
     if any($reservations[]?; ((.bead_id // .candidate_id // .id // "") == $id) and ((.exclusive // true) == true)) then "reserved" else empty end,
     if any($reservations[]?; overlaps_dirty(.; $dirty_paths)) then "dirty_overlap" else empty end,
-    if any($bv[]?; .id == $id) | not and any($ready[]?; .id == $id) | not and any($open[]?; .id == $id) | not and any($in_progress[]?; .id == $id) | not and any($blocked[]?; .id == $id) | not then "missing_source" else empty end
+    if (any($bv[]?; .id == $id) | not) and (any($ready[]?; .id == $id) | not) and (any($open[]?; .id == $id) | not) and (any($in_progress[]?; .id == $id) | not) and (any($blocked[]?; .id == $id) | not) then "missing_source" else empty end
   ] | unique;
 
 def reason_codes_for($id; $ready; $open; $in_progress; $blocked; $bv; $reservations; $dirty_paths; $stale):

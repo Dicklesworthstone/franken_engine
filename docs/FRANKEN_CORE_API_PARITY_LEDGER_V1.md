@@ -141,9 +141,10 @@ gaps.
 
 `bd-lmchj` subsequently connected unshadowed source-level
 `console.log/error/warn/info` calls to core's existing capture-only hostcalls.
-The first three Symbol donor rows now place Node, Bun, engine, and core in the
-same exact-stdout group; Proxy and `Object.defineProperty` rows remain scoped
-to the donors plus engine.
+The first three Symbol donor rows now require Node, Bun, engine, and core to
+share one exact-stdout group; Proxy and `Object.defineProperty` rows remain
+scoped to the donors plus engine. The row is not closure evidence until that
+executable matrix reaches a terminal pass on an attributable revision.
 
 The evidence landed in this order:
 

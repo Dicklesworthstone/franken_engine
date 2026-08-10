@@ -310,7 +310,7 @@ fn assert_engine_core_lockstep(case_id: &str, source: &str, expected: &str) {
 }
 
 /// bd-n8eta.4.5: the executable Node/Bun/engine/core Symbol own-key donor
-/// matrix. The first three donor-observing cases prove Node + Bun + engine +
+/// matrix. The first three donor-observing cases require Node + Bun + engine +
 /// core parity through the shared console observable; the console-free twins
 /// retain structured-completion lockstep coverage. Core still has no
 /// executable Proxy or `Object.defineProperty`, so those two rows remain

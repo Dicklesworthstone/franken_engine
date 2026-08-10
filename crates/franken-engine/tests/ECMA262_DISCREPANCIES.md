@@ -336,7 +336,7 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Remaining ACCEPTED residuals:** (a) franken-core's executable lane has no
   Proxy, no `Object.defineProperty`, and no `Array.prototype.push`/`join`, so
   the Proxy and accessor-conversion matrix rows are donor+engine only; the
-  first three donor rows use core-compatible loops and now prove four-lane
+  first three donor rows use core-compatible loops and now require four-lane
   exact-stdout consensus through the `console.*` lowering added by `bd-lmchj`;
   (b) the engine's `Object.keys`/`values`/`entries`/
   `getOwnPropertyNames`/for-in/JSON read own keys directly and do not route

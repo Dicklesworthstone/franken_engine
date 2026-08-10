@@ -3268,6 +3268,7 @@ pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(),
 /// Verify that an IR1 module's source hash matches the expected IR0 hash.
 pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
+    verify_ir1_derived_constructor_schema(module)?;
     verify_ir1_generator_boundaries(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
@@ -3291,6 +3292,7 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
 /// Verify that an IR3 module has valid specialization linkage if present.
 pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
+    verify_ir3_derived_constructor_schema(module)?;
     verify_ir3_generator_boundaries(module)?;
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
@@ -3409,6 +3411,85 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
+    Ok(())
+}
+
+const DERIVED_CONSTRUCTOR_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 11,
+    patch: 0,
+};
+
+fn ir1_op_uses_derived_constructor_schema(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::ConstructSuper { .. } | Ir1Op::RegisterDerivedConstructor { .. } => true,
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_uses_derived_constructor_schema)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn verify_ir1_derived_constructor_schema(module: &Ir1Module) -> Result<(), IrError> {
+    let uses_derived_constructor_op = module
+        .ops
+        .iter()
+        .any(ir1_op_uses_derived_constructor_schema);
+    if uses_derived_constructor_op
+        && module.header.schema_version < DERIVED_CONSTRUCTOR_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "derived-constructor IR1 operations require schema {}, provided {}",
+                DERIVED_CONSTRUCTOR_SCHEMA_VERSION, module.header.schema_version
+            ),
+            IrLevel::Ir1,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir2_derived_constructor_schema(module: &Ir2Module) -> Result<(), IrError> {
+    let uses_derived_constructor_op = module
+        .ops
+        .iter()
+        .any(|op| ir1_op_uses_derived_constructor_schema(&op.inner));
+    if uses_derived_constructor_op
+        && module.header.schema_version < DERIVED_CONSTRUCTOR_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "derived-constructor IR2 operations require schema {}, provided {}",
+                DERIVED_CONSTRUCTOR_SCHEMA_VERSION, module.header.schema_version
+            ),
+            IrLevel::Ir2,
+        ));
+    }
+    Ok(())
+}
+
+fn verify_ir3_derived_constructor_schema(module: &Ir3Module) -> Result<(), IrError> {
+    let uses_derived_constructor_instruction = module.instructions.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Ir3Instruction::ConstructSuper { .. }
+                | Ir3Instruction::RegisterDerivedConstructor { .. }
+        )
+    });
+    if uses_derived_constructor_instruction
+        && module.header.schema_version < DERIVED_CONSTRUCTOR_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "derived-constructor IR3 instructions require schema {}, provided {}",
+                DERIVED_CONSTRUCTOR_SCHEMA_VERSION, module.header.schema_version
+            ),
+            IrLevel::Ir3,
+        ));
+    }
     Ok(())
 }
 
@@ -3961,6 +4042,63 @@ mod tests {
             assert_eq!(error.level, level);
             assert!(error.message.contains(expected_message));
         }
+    }
+
+    #[test]
+    fn derived_constructor_ops_require_core_011_schema_bd_ppfz7() {
+        let source_hash = ContentHash::compute(b"derived-constructor-schema");
+        let legacy_version = IrSchemaVersion {
+            major: 0,
+            minor: 10,
+            patch: u32::MAX,
+        };
+
+        for op in [
+            Ir1Op::ConstructSuper { arg_count: 0 },
+            Ir1Op::RegisterDerivedConstructor {
+                default_constructor: false,
+            },
+        ] {
+            let mut module = Ir1Module::new(source_hash, "legacy-derived-ir1.js");
+            module.header.schema_version = legacy_version;
+            module.ops = vec![op];
+            let error = verify_ir1_source(&module, &source_hash)
+                .expect_err("0.10 IR1 must not carry 0.11 constructor operations");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert!(error.message.contains("require schema 0.11.0"));
+        }
+
+        for instruction in [
+            Ir3Instruction::ConstructSuper {
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::RegisterDerivedConstructor {
+                constructor: 0,
+                parent: 1,
+                default_constructor: false,
+            },
+        ] {
+            let mut module = Ir3Module::new(source_hash, "legacy-derived-ir3.js");
+            module.header.schema_version = legacy_version;
+            module.instructions = vec![instruction];
+            let error = verify_ir3_specialization(&module)
+                .expect_err("0.10 IR3 must not carry 0.11 constructor instructions");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert!(error.message.contains("require schema 0.11.0"));
+        }
+
+        let mut legacy_ir1 = Ir1Module::new(source_hash, "legacy-ir1.js");
+        legacy_ir1.header.schema_version = legacy_version;
+        legacy_ir1.ops = vec![Ir1Op::Nop];
+        verify_ir1_source(&legacy_ir1, &source_hash)
+            .expect("legacy IR1 without newer operations remains readable");
+
+        let mut legacy_ir3 = Ir3Module::new(source_hash, "legacy-ir3.js");
+        legacy_ir3.header.schema_version = legacy_version;
+        legacy_ir3.instructions = vec![Ir3Instruction::Halt];
+        verify_ir3_specialization(&legacy_ir3)
+            .expect("legacy IR3 without newer instructions remains readable");
     }
 
     #[test]

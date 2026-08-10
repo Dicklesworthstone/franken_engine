@@ -21,7 +21,8 @@ use crate::ir_contract::{
     IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir1Literal, Ir1Module, Ir1Op,
     Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel,
     IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_generator_boundaries, verify_ir1_source, verify_ir2_generator_boundaries,
+    verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries, verify_ir1_source,
+    verify_ir2_derived_constructor_schema, verify_ir2_generator_boundaries,
     verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
@@ -5861,6 +5862,7 @@ pub fn lower_ir1_to_ir2(
     ir1: &Ir1Module,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_generator_boundaries(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
@@ -6199,6 +6201,7 @@ pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_generator_boundaries(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
@@ -12792,6 +12795,47 @@ mod tests {
             span: span(),
         };
         Ir0Module::from_syntax_tree(tree, "fixture.js")
+    }
+
+    #[test]
+    fn lowering_rejects_backversioned_derived_constructor_ops_bd_ppfz7() {
+        let source_hash = ContentHash::compute(b"core-derived-lowering-schema");
+        let legacy_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: 10,
+            patch: 0,
+        };
+
+        let mut malformed_ir1 = Ir1Module::new(source_hash, "legacy-derived-ir1.js");
+        malformed_ir1.header.schema_version = legacy_version;
+        malformed_ir1.ops = vec![Ir1Op::ConstructSuper { arg_count: 0 }];
+        assert!(lower_ir1_to_ir2(&malformed_ir1).is_err());
+
+        let inner = Ir1Op::RegisterDerivedConstructor {
+            default_constructor: false,
+        };
+        let (effect, required_capability, flow) = classify_ir1_op(&inner);
+        let mut malformed_ir2 = Ir2Module::new(source_hash, "legacy-derived-ir2.js");
+        malformed_ir2.header.schema_version = legacy_version;
+        malformed_ir2.ops = vec![Ir2Op {
+            inner,
+            effect,
+            required_capability,
+            flow,
+        }];
+        assert!(lower_ir2_to_ir3(&malformed_ir2).is_err());
+
+        let mut legacy_ir1 = Ir1Module::new(source_hash, "legacy-ir1.js");
+        legacy_ir1.header.schema_version = legacy_version;
+        legacy_ir1.ops = vec![Ir1Op::Nop];
+        let legacy_ir2 = lower_ir1_to_ir2(&legacy_ir1)
+            .expect("legacy IR1 without newer operations should lower")
+            .module;
+        assert_eq!(legacy_ir2.header.schema_version, legacy_version);
+        let legacy_ir3 = lower_ir2_to_ir3(&legacy_ir2)
+            .expect("legacy IR2 without newer operations should lower")
+            .module;
+        assert_eq!(legacy_ir3.header.schema_version, legacy_version);
     }
 
     fn lower_source_to_ir1_bd_n8eta_4_3(source: &str) -> Ir1Module {

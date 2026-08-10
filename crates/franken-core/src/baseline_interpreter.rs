@@ -1173,7 +1173,8 @@ impl Serialize for HeapObject {
             .collect::<Vec<_>>();
         let has_constructor_metadata = self.is_derived_constructor
             || self.is_default_derived_constructor
-            || self.derived_constructor_parent.is_some();
+            || self.derived_constructor_parent.is_some()
+            || self.derived_constructor_parent_label.is_some();
         let field_count = 4
             + if has_accessors { 1 } else { 0 }
             + if order.is_some() { 1 } else { 0 }
@@ -1256,6 +1257,23 @@ impl<'de> Deserialize<'de> for HeapObject {
         }
 
         let wire = HeapObjectWire::deserialize(deserializer)?;
+        let has_parent = wire.derived_constructor_parent.is_some();
+        let has_parent_label = wire.derived_constructor_parent_label.is_some();
+        if has_parent != has_parent_label {
+            return Err(D::Error::custom(
+                "derived constructor parent and label must be present together",
+            ));
+        }
+        if wire.is_derived_constructor != has_parent {
+            return Err(D::Error::custom(
+                "derived constructor metadata must include parent, label, and derived flag",
+            ));
+        }
+        if wire.is_default_derived_constructor && !wire.is_derived_constructor {
+            return Err(D::Error::custom(
+                "default derived constructor flag requires derived constructor metadata",
+            ));
+        }
         let mut object = Self {
             properties: wire.properties,
             accessors: BTreeMap::new(),
@@ -18504,6 +18522,43 @@ mod tests {
     }
 
     #[test]
+    fn derived_constructor_metadata_wire_is_atomic_and_label_preserving_bd_ppfz7() {
+        let mut object = HeapObject::new();
+        object.derived_constructor_parent = Some(Value::Function(7));
+        object.derived_constructor_parent_label = Some(crate::ifc_artifacts::Label::Secret);
+        object.is_derived_constructor = true;
+        object.is_default_derived_constructor = true;
+
+        let encoded = serde_json::to_value(&object).expect("serialize constructor metadata");
+        let restored: HeapObject =
+            serde_json::from_value(encoded.clone()).expect("round-trip constructor metadata");
+        assert_eq!(restored, object);
+        assert_eq!(
+            restored.derived_constructor_parent_label,
+            Some(crate::ifc_artifacts::Label::Secret)
+        );
+
+        let mut missing_label = encoded.clone();
+        missing_label
+            .as_object_mut()
+            .expect("HeapObject wire must be an object")
+            .remove("derived_constructor_parent_label");
+        assert!(serde_json::from_value::<HeapObject>(missing_label).is_err());
+
+        let mut missing_parent = encoded;
+        missing_parent
+            .as_object_mut()
+            .expect("HeapObject wire must be an object")
+            .remove("derived_constructor_parent");
+        assert!(serde_json::from_value::<HeapObject>(missing_parent).is_err());
+
+        let mut invalid_default =
+            serde_json::to_value(HeapObject::new()).expect("serialize legacy HeapObject");
+        invalid_default["is_default_derived_constructor"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<HeapObject>(invalid_default).is_err());
+    }
+
+    #[test]
     fn symbol_heap_wire_rejects_malformed_records_bd_n8eta_4_3() {
         let malformed = [
             r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":0,"kind":"data","value":{"Int":1}}]}"#,
@@ -22881,11 +22936,15 @@ mod tests {
                 Ir3Instruction::Halt,
                 Ir3Instruction::LoadUndefined { dst: 0 },
                 Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
             ],
             vec![
                 constructor_descriptor_bd_ur3tk_4(4, 0, 1),
-                constructor_descriptor_bd_ur3tk_4(4, 0, 1),
-                constructor_descriptor_bd_ur3tk_4(4, 0, 1),
+                constructor_descriptor_bd_ur3tk_4(6, 0, 1),
+                constructor_descriptor_bd_ur3tk_4(8, 0, 1),
             ],
         );
         let mut core = quickjs_test_core();
@@ -22901,7 +22960,8 @@ mod tests {
 
         assert!(matches!(core.registers[3], Value::Object(_)));
         assert_eq!(
-            core.read_reg_label(3).expect("default-derived result label"),
+            core.read_reg_label(3)
+                .expect("default-derived result label"),
             crate::ifc_artifacts::Label::Secret,
             "forwarding must not overwrite an intermediate parent label"
         );

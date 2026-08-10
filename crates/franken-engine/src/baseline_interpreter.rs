@@ -4884,7 +4884,8 @@ impl Serialize for HeapObject {
             .collect::<Vec<_>>();
         let has_constructor_metadata = self.is_derived_constructor
             || self.is_default_derived_constructor
-            || self.derived_constructor_parent.is_some();
+            || self.derived_constructor_parent.is_some()
+            || self.derived_constructor_parent_label.is_some();
         let mut object = serializer.serialize_struct(
             "HeapObject",
             10 + usize::from(!symbol_properties.is_empty())
@@ -4965,6 +4966,23 @@ impl<'de> Deserialize<'de> for HeapObject {
         }
 
         let wire = HeapObjectWire::deserialize(deserializer)?;
+        let has_parent = wire.derived_constructor_parent.is_some();
+        let has_parent_label = wire.derived_constructor_parent_label.is_some();
+        if has_parent != has_parent_label {
+            return Err(D::Error::custom(
+                "derived constructor parent and label must be present together",
+            ));
+        }
+        if wire.is_derived_constructor != has_parent {
+            return Err(D::Error::custom(
+                "derived constructor metadata must include parent, label, and derived flag",
+            ));
+        }
+        if wire.is_default_derived_constructor && !wire.is_derived_constructor {
+            return Err(D::Error::custom(
+                "default derived constructor flag requires derived constructor metadata",
+            ));
+        }
         let mut object = Self {
             properties: wire.properties,
             prototype: wire.prototype,
@@ -27168,6 +27186,12 @@ impl InterpreterCore {
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+        crate::ir_contract::verify_ir3_specialization(module).map_err(|error| {
+            InterpreterError::TypeError {
+                expected: "supported, structurally valid engine IR3 module".to_string(),
+                got: error.to_string(),
+            }
+        })?;
         self.ensure_vm_dispatch_capability()?;
         let entry_specifier = self.prepare_execution(module)?;
         let result = self.run_top_level_execution(module);
@@ -35705,10 +35729,8 @@ impl InterpreterCore {
                 });
             }
             active_callee = parent;
-            active_callee_label = self.join_owned_label_with_temporary_budget(
-                active_callee_label,
-                &parent_label,
-            )?;
+            active_callee_label =
+                self.join_owned_label_with_temporary_budget(active_callee_label, &parent_label)?;
             forwarding_depth += 1;
         }
 
@@ -67480,7 +67502,9 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
             .saturating_add(Self::estimate_label_bytes(&frame.this_label))
             .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
             .saturating_add(Self::estimate_value_bytes(&frame.super_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.super_label))
             .saturating_add(
                 frame
                     .construct_this
@@ -67518,7 +67542,9 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
             .saturating_add(Self::estimate_label_bytes(&frame.this_label))
             .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
             .saturating_add(Self::estimate_value_bytes(&frame.super_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.super_label))
             .saturating_add(
                 frame
                     .construct_this
@@ -80302,12 +80328,20 @@ mod async_runtime_tests_current {
     }
 
     #[test]
-    fn call_frame_super_and_timer_iterator_payloads_are_eagerly_counted_bd_6pdka() {
+    fn call_frame_super_and_timer_iterator_payloads_are_eagerly_counted_bd_6pdka_bd_ppfz7() {
         let mut core = test_interpreter();
         let baseline = core
             .sync_estimated_memory_bytes()
             .expect("eager ownership baseline");
         let super_value = Value::BigInt(Arc::from("8".repeat(311)));
+        let new_target_label = Label::Custom {
+            name: "new-target-label".repeat(19),
+            level: 4,
+        };
+        let super_label = Label::Custom {
+            name: "super-binding-label".repeat(17),
+            level: 4,
+        };
         let frame = CallFrame {
             return_ip: 0,
             return_reg: 0,
@@ -80316,9 +80350,9 @@ mod async_runtime_tests_current {
             this_value: Value::Undefined,
             this_label: Label::Public,
             new_target_value: Value::Undefined,
-            new_target_label: Label::Public,
+            new_target_label: new_target_label.clone(),
             super_value,
-            super_label: Label::Public,
+            super_label: super_label.clone(),
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -80333,6 +80367,24 @@ mod async_runtime_tests_current {
             async_function_id: None,
         };
         let frame_bytes = InterpreterCore::estimate_call_frame_bytes(&frame);
+        let snapshot_bytes = InterpreterCore::estimate_call_frame_snapshot_clone_bytes(&frame);
+        let mut public_labels = frame.clone();
+        public_labels.new_target_label = Label::Public;
+        public_labels.super_label = Label::Public;
+        let expected_label_bytes = InterpreterCore::estimate_label_bytes(&new_target_label)
+            .saturating_add(InterpreterCore::estimate_label_bytes(&super_label));
+        assert_eq!(
+            frame_bytes.saturating_sub(InterpreterCore::estimate_call_frame_bytes(&public_labels)),
+            expected_label_bytes,
+            "live call-frame accounting must retain new.target and super labels"
+        );
+        assert_eq!(
+            snapshot_bytes.saturating_sub(
+                InterpreterCore::estimate_call_frame_snapshot_clone_bytes(&public_labels)
+            ),
+            expected_label_bytes,
+            "snapshot call-frame accounting must retain new.target and super labels"
+        );
         core.call_stack.push(frame);
         core.sync_estimated_memory_bytes()
             .expect("super payload accounting");
@@ -91358,6 +91410,8 @@ mod async_runtime_tests_current {
                 Ir3Instruction::Halt,
                 Ir3Instruction::LoadUndefined { dst: 0 },
                 Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
             ],
             vec![
                 Ir3FunctionDesc {
@@ -91369,7 +91423,7 @@ mod async_runtime_tests_current {
                     rest_param_index: None,
                 },
                 Ir3FunctionDesc {
-                    entry: 4,
+                    entry: 6,
                     arity: 0,
                     frame_size: 1,
                     name: Some("Middle".to_string()),
@@ -93557,7 +93611,7 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
-    fn foreign_direct_constructor_uses_owner_key_and_preserves_exact_ifc_bd_fw7zd_7() {
+    fn foreign_direct_constructor_uses_owner_key_and_preserves_exact_ifc_bd_fw7zd_7_bd_ppfz7() {
         let mut owner = test_module_with_functions(
             vec![
                 Ir3Instruction::LoadStr {
@@ -93642,7 +93696,7 @@ mod function_prototype_call_apply_tests_current {
             Some(&Label::Secret),
             "the exact argument label must reach constructor side effects"
         );
-        let owner_key = (InterpreterCore::function_prototype_owner_id(&owner), 0);
+        let owner_key = (InterpreterCore::closure_prototype_owner_id(&owner), 0);
         let owner_prototype = core.function_prototypes[&owner_key];
         assert_ne!(
             owner_prototype, caller_prototype,
@@ -101819,6 +101873,43 @@ mod tests {
 
         let malformed_state = r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":"y"}]}"#;
         assert!(serde_json::from_str::<RuntimeSymbolState>(malformed_state).is_err());
+    }
+
+    #[test]
+    fn derived_constructor_metadata_wire_is_atomic_and_label_preserving_bd_ppfz7() {
+        let mut object = HeapObject::new();
+        object.derived_constructor_parent = Some(Value::Function(7));
+        object.derived_constructor_parent_label = Some(Label::Secret);
+        object.is_derived_constructor = true;
+        object.is_default_derived_constructor = true;
+
+        let encoded = serde_json::to_value(&object).expect("serialize constructor metadata");
+        let restored: HeapObject =
+            serde_json::from_value(encoded.clone()).expect("round-trip constructor metadata");
+        assert_eq!(restored, object);
+        assert_eq!(
+            restored.derived_constructor_parent_label,
+            Some(Label::Secret)
+        );
+
+        let mut missing_label = encoded.clone();
+        missing_label
+            .as_object_mut()
+            .expect("HeapObject wire must be an object")
+            .remove("derived_constructor_parent_label");
+        assert!(serde_json::from_value::<HeapObject>(missing_label).is_err());
+
+        let mut missing_parent = encoded;
+        missing_parent
+            .as_object_mut()
+            .expect("HeapObject wire must be an object")
+            .remove("derived_constructor_parent");
+        assert!(serde_json::from_value::<HeapObject>(missing_parent).is_err());
+
+        let mut invalid_default =
+            serde_json::to_value(HeapObject::new()).expect("serialize legacy HeapObject");
+        invalid_default["is_default_derived_constructor"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<HeapObject>(invalid_default).is_err());
     }
 
     /// bd-n8eta.4.5: focused `CapturedInterpreterState` JSON round trip with a
@@ -113460,12 +113551,57 @@ mod tests {
 
 #[cfg(test)]
 mod class_feature_bd_bg9l1_16_tests {
+    use super::*;
+
     fn eval_class_source(source: &str) -> Result<String, String> {
         let mut engine = crate::HybridRouter::default();
         engine
             .eval(source)
             .map(|outcome| outcome.value)
             .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn execution_rejects_unsupported_ir_schema_before_dispatch_bd_ppfz7() {
+        for schema_version in [
+            crate::ir_contract::IrSchemaVersion {
+                major: 0,
+                minor: crate::ir_contract::IrSchemaVersion::CURRENT.minor + 1,
+                patch: 0,
+            },
+            crate::ir_contract::IrSchemaVersion {
+                major: 0,
+                minor: 11,
+                patch: 0,
+            },
+        ] {
+            let mut module = Ir3Module::new(
+                ContentHash::compute(b"unsupported-engine-ir"),
+                "unsupported-engine-ir.js",
+            );
+            module.header.schema_version = schema_version;
+            module.instructions = vec![Ir3Instruction::Halt];
+
+            let mut core = InterpreterCore::new(
+                InterpreterConfig::quickjs_defaults(),
+                "unsupported-engine-ir",
+            );
+            let initial_events = core.events.len();
+            let initial_memory = core.estimated_memory_bytes();
+            let error = core
+                .execute(&module)
+                .expect_err("unsupported IR schema must reject before dispatch");
+            assert!(matches!(
+                error,
+                InterpreterError::TypeError { expected, got }
+                    if expected.contains("structurally valid engine IR3")
+                        && got.contains("IR_SCHEMA_VERSION_MISMATCH")
+            ));
+            assert_eq!(core.instructions_executed, 0);
+            assert_eq!(core.events.len(), initial_events);
+            assert_eq!(core.estimated_memory_bytes(), initial_memory);
+            assert!(core.entry_module_specifier.is_none());
+        }
     }
 
     #[test]

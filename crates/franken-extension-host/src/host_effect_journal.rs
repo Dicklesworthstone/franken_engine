@@ -55,12 +55,38 @@ pub enum HostEffectJournalMode {
     Replay,
 }
 
+/// Bounded evidence explaining why a replay request did not match the
+/// recorded transcript.
+///
+/// The evidence is boxed by [`HostEffectJournalError`] so routine journal
+/// results do not carry the cost of this diagnostic-only payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostEffectReplayDivergence {
+    pub index: usize,
+    pub expected_family: String,
+    pub expected_kind: String,
+    pub live_family: String,
+    pub live_kind: String,
+    pub expected_request_digest: Option<[u8; 32]>,
+    pub live_request_digest: [u8; 32],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostEffectJournalError {
     Lifecycle {
         detail: String,
     },
     ReplayDivergence {
+        evidence: Box<HostEffectReplayDivergence>,
+    },
+    UnusedReplaySuffix {
+        index: usize,
+        remaining: usize,
+    },
+}
+
+impl HostEffectJournalError {
+    fn replay_divergence(
         index: usize,
         expected_family: String,
         expected_kind: String,
@@ -68,11 +94,19 @@ pub enum HostEffectJournalError {
         live_kind: String,
         expected_request_digest: Option<[u8; 32]>,
         live_request_digest: [u8; 32],
-    },
-    UnusedReplaySuffix {
-        index: usize,
-        remaining: usize,
-    },
+    ) -> Self {
+        Self::ReplayDivergence {
+            evidence: Box::new(HostEffectReplayDivergence {
+                index,
+                expected_family,
+                expected_kind,
+                live_family,
+                live_kind,
+                expected_request_digest,
+                live_request_digest,
+            }),
+        }
+    }
 }
 
 impl fmt::Display for HostEffectJournalError {
@@ -81,21 +115,19 @@ impl fmt::Display for HostEffectJournalError {
             Self::Lifecycle { detail } => {
                 write!(f, "host-effect journal lifecycle error: {detail}")
             }
-            Self::ReplayDivergence {
-                index,
-                expected_family,
-                expected_kind,
-                live_family,
-                live_kind,
-                expected_request_digest,
-                live_request_digest,
-            } => write!(
+            Self::ReplayDivergence { evidence } => write!(
                 f,
-                "host-effect replay divergence at index {index}: expected {expected_family}:{expected_kind}, got {live_family}:{live_kind}; expected_request_sha256={}, live_request_sha256={}",
-                expected_request_digest
+                "host-effect replay divergence at index {}: expected {}:{}, got {}:{}; expected_request_sha256={}, live_request_sha256={}",
+                evidence.index,
+                evidence.expected_family,
+                evidence.expected_kind,
+                evidence.live_family,
+                evidence.live_kind,
+                evidence
+                    .expected_request_digest
                     .as_ref()
                     .map_or_else(|| "end_of_transcript".to_string(), hex_digest),
-                hex_digest(live_request_digest)
+                hex_digest(&evidence.live_request_digest)
             ),
             Self::UnusedReplaySuffix { index, remaining } => write!(
                 f,
@@ -500,10 +532,10 @@ impl InMemoryHostEffectJournal {
                 JournalState::Idle => 0,
                 JournalState::Replaying { cursor } => *cursor,
                 JournalState::Finalized => usize::MAX,
-                JournalState::Poisoned(HostEffectJournalError::ReplayDivergence {
-                    index, ..
-                })
-                | JournalState::Poisoned(HostEffectJournalError::UnusedReplaySuffix {
+                JournalState::Poisoned(HostEffectJournalError::ReplayDivergence { evidence }) => {
+                    evidence.index
+                }
+                JournalState::Poisoned(HostEffectJournalError::UnusedReplaySuffix {
                     index,
                     ..
                 }) => *index,
@@ -567,15 +599,15 @@ impl InMemoryHostEffectJournal {
         };
         let entries = self.entries.lock().expect("host-effect journal mutex");
         let Some(slot) = entries.get(cursor) else {
-            let error = HostEffectJournalError::ReplayDivergence {
-                index: cursor,
-                expected_family: "end_of_transcript".to_string(),
-                expected_kind: "end_of_transcript".to_string(),
-                live_family: live_request.family().to_string(),
-                live_kind: live_request.kind().to_string(),
-                expected_request_digest: None,
-                live_request_digest: live_request.digest(),
-            };
+            let error = HostEffectJournalError::replay_divergence(
+                cursor,
+                "end_of_transcript".to_string(),
+                "end_of_transcript".to_string(),
+                live_request.family().to_string(),
+                live_request.kind().to_string(),
+                None,
+                live_request.digest(),
+            );
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
         };
@@ -587,15 +619,15 @@ impl InMemoryHostEffectJournal {
             return Err(error);
         };
         if !live_request.matches_entry(entry) {
-            let error = HostEffectJournalError::ReplayDivergence {
-                index: cursor,
-                expected_family: entry.family().to_string(),
-                expected_kind: entry.request_kind().to_string(),
-                live_family: live_request.family().to_string(),
-                live_kind: live_request.kind().to_string(),
-                expected_request_digest: Some(entry_request_digest(entry)),
-                live_request_digest: live_request.digest(),
-            };
+            let error = HostEffectJournalError::replay_divergence(
+                cursor,
+                entry.family().to_string(),
+                entry.request_kind().to_string(),
+                live_request.family().to_string(),
+                live_request.kind().to_string(),
+                Some(entry_request_digest(entry)),
+                live_request.digest(),
+            );
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
         }
@@ -708,29 +740,24 @@ fn completed_entries(
 
 fn replay_error_index(error: &HostEffectJournalError) -> usize {
     match error {
-        HostEffectJournalError::ReplayDivergence { index, .. }
-        | HostEffectJournalError::UnusedReplaySuffix { index, .. } => *index,
+        HostEffectJournalError::ReplayDivergence { evidence } => evidence.index,
+        HostEffectJournalError::UnusedReplaySuffix { index, .. } => *index,
         HostEffectJournalError::Lifecycle { .. } => 0,
     }
 }
 
 fn replay_error_expected(error: &HostEffectJournalError) -> String {
     match error {
-        HostEffectJournalError::ReplayDivergence {
-            expected_family,
-            expected_kind,
-            ..
-        } => format!("{expected_family}:{expected_kind}"),
+        HostEffectJournalError::ReplayDivergence { evidence } => {
+            format!("{}:{}", evidence.expected_family, evidence.expected_kind)
+        }
         _ => error.to_string(),
     }
 }
 
 fn replay_error_expected_digest(error: &HostEffectJournalError) -> Option<[u8; 32]> {
     match error {
-        HostEffectJournalError::ReplayDivergence {
-            expected_request_digest,
-            ..
-        } => *expected_request_digest,
+        HostEffectJournalError::ReplayDivergence { evidence } => evidence.expected_request_digest,
         _ => None,
     }
 }

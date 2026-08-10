@@ -8499,6 +8499,13 @@ struct EventOnceWrapperState {
     event: String,
     original_listener: Value,
     fired: bool,
+    /// `Some(waiter_id)` when this wrapper is the guest-visible carrier for a
+    /// static `events.once` Promise registration (bd-asw4m.4) rather than a
+    /// `emitter.once()` listener. Its settlement is driven by
+    /// `settle_event_promise_waiters`, never by invoking the wrapper, so the
+    /// emit dispatch loop skips it and the promise-waiter removal path drops it
+    /// by matching `waiter_id`.
+    static_once_waiter: Option<u64>,
 }
 
 /// One link in the Promise-backed static `events.once` waiter table
@@ -16439,9 +16446,64 @@ impl InterpreterCore {
                     registration_label,
                 });
         }
+        // bd-asw4m.4: publish one guest-visible `onceWrapper` listener per link
+        // (the requested event, plus `error` for non-error waits) so
+        // rawListeners()/listeners() report the registration the way Node does.
+        // The wrapper is an introspection/removal carrier only — settlement runs
+        // through settle_event_promise_waiters, which strips these wrappers — so
+        // its `.listener` is intentionally inert and the emit dispatch loop never
+        // invokes it.
+        let wrapper_events: Vec<String> = if event == "error" {
+            vec![event.clone()]
+        } else {
+            vec![event.clone(), "error".to_string()]
+        };
+        let mut wrapper_rollback: Vec<(ObjectId, usize)> = Vec::new();
+        for wrapper_event in &wrapper_events {
+            let (wrapper, property_object, previous_heap_len) = match self
+                .create_event_once_wrapper(
+                    target_id,
+                    wrapper_event,
+                    Value::Undefined,
+                    Some(waiter_id),
+                ) {
+                Ok(created) => created,
+                Err(error) => {
+                    self.unwind_static_once_wrappers(target_id, waiter_id, &wrapper_rollback);
+                    self.remove_event_promise_waiter_links(target_id, waiter_id);
+                    self.next_event_promise_waiter_id = waiter_id;
+                    self.rollback_fresh_promise(promise);
+                    if pump_reserved {
+                        self.release_readable_pump_reservation(target_id);
+                    }
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.insert_event_listener(
+                target_id,
+                wrapper_event,
+                EventListenerRecord {
+                    listener: wrapper,
+                    once: true,
+                },
+                false,
+            ) {
+                self.rollback_event_once_wrapper(property_object, previous_heap_len);
+                self.unwind_static_once_wrappers(target_id, waiter_id, &wrapper_rollback);
+                self.remove_event_promise_waiter_links(target_id, waiter_id);
+                self.next_event_promise_waiter_id = waiter_id;
+                self.rollback_fresh_promise(promise);
+                if pump_reserved {
+                    self.release_readable_pump_reservation(target_id);
+                }
+                return Err(error);
+            }
+            wrapper_rollback.push((property_object, previous_heap_len));
+        }
         if let Err(error) =
             self.activate_readable_from_data_flow_with_reservation(target_id, &event, pump_reserved)
         {
+            self.unwind_static_once_wrappers(target_id, waiter_id, &wrapper_rollback);
             self.remove_event_promise_waiter_links(target_id, waiter_id);
             self.next_event_promise_waiter_id = waiter_id;
             self.rollback_fresh_promise(promise);
@@ -16489,6 +16551,83 @@ impl InterpreterCore {
             self.event_promise_waiters.remove(&target_id);
         }
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        // bd-asw4m.4: drop the guest-visible once wrappers linked to this waiter
+        // (the requested-event wrapper and, for non-error waits, the `error`
+        // wrapper) so `rawListeners` stops reporting them the moment either link
+        // settles or the registration is rolled back.
+        self.remove_static_once_wrapper_listeners(target_id, waiter_id);
+    }
+
+    /// Remove every static-`events.once` wrapper listener carrier tied to
+    /// `waiter_id` from the emitter's listener table, releasing each record's
+    /// exact charge. The wrapper's private `event_once_wrappers` state is marked
+    /// fired but retained until reset, mirroring `emitter.once()` wrappers whose
+    /// carrier survives a single delivery (bd-asw4m.4).
+    fn remove_static_once_wrapper_listeners(&mut self, target_id: ObjectId, waiter_id: u64) {
+        let matching: std::collections::BTreeSet<ObjectId> = self
+            .event_once_wrappers
+            .iter()
+            .filter(|(_, state)| {
+                state.target == target_id && state.static_once_waiter == Some(waiter_id)
+            })
+            .map(|(property_object, _)| *property_object)
+            .collect();
+        if matching.is_empty() {
+            return;
+        }
+        let mut empty_events = Vec::new();
+        let mut released = Vec::new();
+        if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
+            for (event, records) in by_event.iter_mut() {
+                records.retain(|record| {
+                    if let Some(property_object) =
+                        Self::event_once_wrapper_property_object(&record.listener)
+                        && matching.contains(&property_object)
+                    {
+                        released.push((event.clone(), record.clone()));
+                        return false;
+                    }
+                    true
+                });
+                if records.is_empty() {
+                    empty_events.push(event.clone());
+                }
+            }
+            for event in empty_events {
+                by_event.remove(&event);
+            }
+        }
+        if self
+            .event_listeners
+            .get(&target_id)
+            .is_some_and(BTreeMap::is_empty)
+        {
+            self.event_listeners.remove(&target_id);
+        }
+        for (event, record) in released {
+            self.release_event_listener_memory(&event, &record);
+        }
+        for property_object in matching {
+            if let Some(state) = self.event_once_wrappers.get_mut(&property_object) {
+                state.fired = true;
+            }
+        }
+    }
+
+    /// Fully undo the static-once wrappers created during a single
+    /// `register_event_promise_once` that then failed: strip their listener
+    /// records, then discard each wrapper's private state and heap carrier in
+    /// reverse allocation order so the heap suffix invariant holds (bd-asw4m.4).
+    fn unwind_static_once_wrappers(
+        &mut self,
+        target_id: ObjectId,
+        waiter_id: u64,
+        inserted: &[(ObjectId, usize)],
+    ) {
+        self.remove_static_once_wrapper_listeners(target_id, waiter_id);
+        for (property_object, previous_heap_len) in inserted.iter().rev() {
+            self.rollback_event_once_wrapper(*property_object, *previous_heap_len);
+        }
     }
 
     /// Settle every static `events.once` waiter linked to this emission. Promise
@@ -16578,12 +16717,14 @@ impl InterpreterCore {
         target: ObjectId,
         event: &str,
         original_listener: Value,
+        static_once_waiter: Option<u64>,
     ) -> Result<(Value, ObjectId, usize), InterpreterError> {
         let state = EventOnceWrapperState {
             target,
             event: event.to_string(),
             original_listener: original_listener.clone(),
             fired: false,
+            static_once_waiter,
         };
         let state_bytes = Self::estimate_event_once_wrapper_state_bytes(&state);
         let previous_estimated_bytes = self.estimated_memory_bytes;
@@ -17337,6 +17478,19 @@ impl InterpreterCore {
         }
 
         for record in records {
+            if let Some(property_object) =
+                Self::event_once_wrapper_property_object(&record.listener)
+                && self
+                    .event_once_wrappers
+                    .get(&property_object)
+                    .is_some_and(|state| state.static_once_waiter.is_some())
+            {
+                // bd-asw4m.4: static `events.once` wrappers are guest-visible
+                // introspection carriers only. Their Promise settlement (and
+                // listener removal) is driven by `settle_event_promise_waiters`
+                // above, so invoking them here would duplicate settlement.
+                continue;
+            }
             if record.once && Self::event_once_wrapper_property_object(&record.listener).is_none() {
                 // Bare one-shot records are engine-internal callbacks (pipe,
                 // pipeline, and the current Writable end-callback carrier),
@@ -32413,6 +32567,7 @@ impl InterpreterCore {
                             target_id,
                             &event,
                             listener.clone(),
+                            None,
                         ) {
                             Ok((wrapper, property_object, previous_heap_len)) => (
                                 wrapper,
@@ -88066,6 +88221,98 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn static_events_once_publishes_removable_once_wrappers_bd_asw4m_4() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let emitter = core
+            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .expect("emitter object");
+
+        // events.once(emitter, "ready")
+        core.write_reg(1, Value::Object(emitter))
+            .expect("emitter registration value");
+        core.write_reg(2, Value::str("ready"))
+            .expect("event registration value");
+        core.set_register_label(1, Label::Public)
+            .expect("emitter registration label");
+        core.set_register_label(2, Label::Public)
+            .expect("event registration label");
+        let Value::Promise(promise) = core
+            .register_event_promise_once(RegRange { start: 1, count: 2 })
+            .expect("register static events.once waiter")
+        else {
+            panic!("events.once must return a Promise");
+        };
+
+        // Both the requested event and the implicit `error` link now surface one
+        // callable once wrapper through rawListeners (bd-asw4m.4), and both share
+        // the same static waiter id so either settlement removes the pair.
+        let mut waiter_ids = Vec::new();
+        for event in ["ready", "error"] {
+            let records = core.event_listener_records_for(emitter, event);
+            assert_eq!(
+                records.len(),
+                1,
+                "static events.once must expose one wrapper on `{event}`"
+            );
+            assert!(records[0].once, "the static-once wrapper is one-shot");
+            let property_object =
+                InterpreterCore::event_once_wrapper_property_object(&records[0].listener)
+                    .expect("static-once listener is a once wrapper");
+            let waiter = core
+                .event_once_wrappers
+                .get(&property_object)
+                .and_then(|state| state.static_once_waiter)
+                .expect("static-once wrapper carries its waiter id");
+            waiter_ids.push(waiter);
+        }
+        assert_eq!(
+            waiter_ids[0], waiter_ids[1],
+            "the requested-event and error wrappers belong to one registration"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "publishing static-once wrappers keeps the memory estimate exact"
+        );
+
+        // Emitting the event settles the Promise through the waiter table and
+        // strips BOTH wrappers without invoking them (no duplicated settlement).
+        core.emit_event_listener_records(
+            &module,
+            emitter,
+            "ready",
+            vec![Value::str("go")],
+            Label::Public,
+        )
+        .expect("emit ready");
+        assert!(
+            core.event_listener_records_for(emitter, "ready").is_empty(),
+            "settling removes the requested-event wrapper"
+        );
+        assert!(
+            core.event_listener_records_for(emitter, "error").is_empty(),
+            "settling one link removes the sibling error wrapper"
+        );
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(promise))
+            .expect("settled events.once promise");
+        assert!(
+            matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(_)
+            ),
+            "the requested event fulfils the events.once promise"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "settling static-once wrappers keeps the memory estimate exact"
+        );
+    }
+
+    #[test]
     fn readable_from_throwing_data_or_end_listener_still_closes_bd_fw7zd() {
         let module = test_module_with_functions(
             vec![Ir3Instruction::Throw { value: 0 }],
@@ -88202,6 +88449,7 @@ mod async_runtime_tests_current {
             event: "tick".to_string(),
             original_listener: original_listener.clone(),
             fired: false,
+            static_once_waiter: None,
         };
         let state_bytes =
             InterpreterCore::estimate_event_once_wrapper_state_bytes(&projected_state);
@@ -88216,7 +88464,7 @@ mod async_runtime_tests_current {
 
         core.config.max_total_memory_bytes = exact_bytes.saturating_sub(1);
         let error = core
-            .create_event_once_wrapper(target, "tick", original_listener.clone())
+            .create_event_once_wrapper(target, "tick", original_listener.clone(), None)
             .expect_err("one-byte-short wrapper allocation must fail atomically");
         assert!(matches!(
             error,
@@ -88232,7 +88480,7 @@ mod async_runtime_tests_current {
 
         core.config.max_total_memory_bytes = exact_bytes;
         let (wrapper, property_object, previous_heap_len) = core
-            .create_event_once_wrapper(target, "tick", original_listener.clone())
+            .create_event_once_wrapper(target, "tick", original_listener.clone(), None)
             .expect("exact wrapper allocation ceiling must succeed");
         assert_eq!(previous_heap_len, baseline_heap_len);
         assert_eq!(
@@ -88310,7 +88558,7 @@ mod async_runtime_tests_current {
         let original =
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
         let (wrapper, property_object, _) = core
-            .create_event_once_wrapper(source, "source", original)
+            .create_event_once_wrapper(source, "source", original, None)
             .expect("stable once wrapper");
         core.insert_event_listener(
             source,
@@ -88411,7 +88659,7 @@ mod async_runtime_tests_current {
         let original =
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
         let (keep, keep_state, _) = core
-            .create_event_once_wrapper(target, "response", original.clone())
+            .create_event_once_wrapper(target, "response", original.clone(), None)
             .expect("pre-existing response wrapper");
         core.insert_event_listener(
             target,
@@ -88428,7 +88676,7 @@ mod async_runtime_tests_current {
         core.remove_event_listener(target, "response", &keep)
             .expect("leading callback removes pre-existing listener");
         let (late, late_state, _) = core
-            .create_event_once_wrapper(target, "response", original)
+            .create_event_once_wrapper(target, "response", original, None)
             .expect("late response wrapper");
         core.insert_event_listener(
             target,

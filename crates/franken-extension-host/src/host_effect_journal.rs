@@ -686,7 +686,7 @@ impl InMemoryHostEffectJournal {
             return Err(error);
         };
         if !matches!(slot, JournalSlot::Reserved(request)
-            if request.eq(&reservation.request) && request.matches_entry(&entry))
+            if (*request).eq(&reservation.request) && request.matches_entry(&entry))
         {
             let error = HostEffectJournalError::Lifecycle {
                 detail: format!(

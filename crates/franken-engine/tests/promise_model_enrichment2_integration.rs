@@ -204,8 +204,12 @@ fn enrichment_reject_propagates_through_chain() {
     store
         .reject(p1, js_str("err"), Label::Public, &mut queue)
         .unwrap();
-    // Rejection should have enqueued microtasks for reaction chain
-    assert!(queue.pending_count() >= 2);
+    // Rejecting p1 enqueues exactly one microtask: p1's single registered
+    // reaction (the p2 continuation). The p2->p3 reaction only enqueues once
+    // that first microtask drains and settles p2 — ES promise reactions run
+    // lazily per settlement, not as an eager whole-chain cascade, matching
+    // Node/V8. The prior `>= 2` expectation assumed eager cascade (bd-rbzi4).
+    assert_eq!(queue.pending_count(), 1);
 }
 
 // ===========================================================================

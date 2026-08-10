@@ -108,3 +108,20 @@ fn for_in_enumerates_proxy_keys_through_traps_bd_9trje() {
                out.join(',');";
     assert_eq!(eval_value(src), "a");
 }
+
+#[test]
+fn json_stringify_serializes_proxy_through_traps_bd_9trje() {
+    // JSON.stringify over a Proxy serializes its enumerable own String keys via
+    // the ownKeys + getOwnPropertyDescriptor traps, reading values via [[Get]]
+    // ('b' is non-enumerable, so it is omitted).
+    let src = "const target = { a: 1, b: 2, c: 3 };\
+               const handler = {\
+                   ownKeys(t) { return Reflect.ownKeys(t); },\
+                   getOwnPropertyDescriptor(t, k) {\
+                       return { value: t[k], enumerable: k !== 'b', configurable: true };\
+                   }\
+               };\
+               const p = new Proxy(target, handler);\
+               JSON.stringify(p);";
+    assert_eq!(eval_value(src), r#"{"a":1,"c":3}"#);
+}

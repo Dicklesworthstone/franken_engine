@@ -52007,10 +52007,15 @@ impl InterpreterCore {
         out
     }
 
-    fn json_stringify_value(&self, value: &Value, visited: &mut Vec<ObjectId>) -> Option<String> {
+    fn json_stringify_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+        visited: &mut Vec<ObjectId>,
+    ) -> Result<Option<String>, InterpreterError> {
         let rendered = match value {
-            Value::Undefined => return None,
-            Value::Symbol(_) => return None,
+            Value::Undefined => return Ok(None),
+            Value::Symbol(_) => return Ok(None),
             Value::Null => "null".to_string(),
             Value::Bool(b) => {
                 if *b {
@@ -52034,51 +52039,85 @@ impl InterpreterCore {
                 if visited.contains(id) {
                     // Cyclic reference: ES throws TypeError; omit to stay safe
                     // rather than recurse forever.
-                    return None;
+                    return Ok(None);
                 }
-                let object = self.heap.get(id.0 as usize).cloned()?;
-                visited.push(*id);
-                let rendered = if object.is_array {
-                    let len = object
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(n) if *n >= 0 => Some(*n as usize),
-                            _ => None,
-                        })
-                        .or_else(|| object.cached_dense_length.map(|l| l as usize))
-                        .unwrap_or(0);
-                    let items: Vec<String> = (0..len)
-                        .map(|i| {
-                            object
-                                .properties
-                                .get(&i.to_string())
-                                .and_then(|v| self.json_stringify_value(v, visited))
-                                .unwrap_or_else(|| "null".to_string())
-                        })
-                        .collect();
-                    format!("[{}]", items.join(","))
-                } else {
+                if self.active_proxy_record(*id)?.is_some() {
+                    // bd-9trje: a Proxy serializes its enumerable own String keys
+                    // through the ownKeys + getOwnPropertyDescriptor traps, reading
+                    // each value via [[Get]] (get trap / target).
+                    visited.push(*id);
+                    let keys = self.proxy_own_enumerable_string_keys(module, *id)?;
                     let mut members = Vec::new();
-                    for (key, val) in object.properties.exact_entries() {
-                        // Engine-internal metadata (e.g. Symbol __type/__key) is
-                        // not a real enumerable JS property — do not serialize it.
-                        if key.as_str().is_some_and(|key| key.starts_with("__"))
-                            || !self.writable_own_runtime_property_visible(*id, &key)
+                    for key in keys {
+                        let val = self.proxy_aware_get_runtime_property(
+                            module,
+                            *id,
+                            &RuntimePropertyKey::String(key.clone()),
+                            Value::Object(*id),
+                            0,
+                        )?;
+                        if let Some(rendered_val) =
+                            self.json_stringify_value(module, &val, visited)?
                         {
-                            continue;
-                        }
-                        if let Some(rendered_val) = self.json_stringify_value(val, visited) {
                             members.push(format!(
                                 "{}:{rendered_val}",
                                 Self::json_quote_js_string(&key)
                             ));
                         }
                     }
+                    visited.pop();
                     format!("{{{}}}", members.join(","))
-                };
-                visited.pop();
-                rendered
+                } else {
+                    let Some(object) = self.heap.get(id.0 as usize).cloned() else {
+                        return Ok(None);
+                    };
+                    visited.push(*id);
+                    let rendered = if object.is_array {
+                        let len = object
+                            .properties
+                            .get("length")
+                            .and_then(|v| match v {
+                                Value::Int(n) if *n >= 0 => Some(*n as usize),
+                                _ => None,
+                            })
+                            .or_else(|| object.cached_dense_length.map(|l| l as usize))
+                            .unwrap_or(0);
+                        let mut items = Vec::with_capacity(len);
+                        for i in 0..len {
+                            let element = object.properties.get(&i.to_string()).cloned();
+                            let rendered_item = match element {
+                                Some(v) => self
+                                    .json_stringify_value(module, &v, visited)?
+                                    .unwrap_or_else(|| "null".to_string()),
+                                None => "null".to_string(),
+                            };
+                            items.push(rendered_item);
+                        }
+                        format!("[{}]", items.join(","))
+                    } else {
+                        let mut members = Vec::new();
+                        for (key, val) in object.properties.exact_entries() {
+                            // Engine-internal metadata (e.g. Symbol __type/__key)
+                            // is not a real enumerable JS property.
+                            if key.as_str().is_some_and(|key| key.starts_with("__"))
+                                || !self.writable_own_runtime_property_visible(*id, &key)
+                            {
+                                continue;
+                            }
+                            if let Some(rendered_val) =
+                                self.json_stringify_value(module, val, visited)?
+                            {
+                                members.push(format!(
+                                    "{}:{rendered_val}",
+                                    Self::json_quote_js_string(&key)
+                                ));
+                            }
+                        }
+                        format!("{{{}}}", members.join(","))
+                    };
+                    visited.pop();
+                    rendered
+                }
             }
             // Functions have no JSON representation (omitted).
             Value::Function(_)
@@ -52086,7 +52125,7 @@ impl InterpreterCore {
             | Value::GeneratorFunction(_)
             | Value::AsyncFunction(_)
             | Value::AsyncGeneratorFunction(_)
-            | Value::BuiltinFunction(_) => return None,
+            | Value::BuiltinFunction(_) => return Ok(None),
             // Other object-likes: preserve the prior "{}" fallback rather than
             // leaking internal structure.
             Value::Iterator(_)
@@ -52096,7 +52135,7 @@ impl InterpreterCore {
             | Value::AsyncGeneratorObject(_)
             | Value::Accessor { .. } => "{}".to_string(),
         };
-        Some(rendered)
+        Ok(Some(rendered))
     }
 
     fn construct_node_invalid_url_error(&mut self, input: &str) -> Result<Value, InterpreterError> {
@@ -58346,7 +58385,7 @@ impl InterpreterCore {
                 // behavior).
                 let mut visited = Vec::new();
                 let json_str = self
-                    .json_stringify_value(&value, &mut visited)
+                    .json_stringify_value(module, &value, &mut visited)?
                     .unwrap_or_else(|| "undefined".to_string());
                 Ok(Value::str(json_str))
             }
@@ -100738,7 +100777,8 @@ mod tests {
             vec![Value::str("stored"), Value::Symbol(symbol)]
         );
         assert_eq!(
-            core.json_stringify_value(&Value::Object(source), &mut Vec::new()),
+            core.json_stringify_value(None, &Value::Object(source), &mut Vec::new())
+                .unwrap(),
             Some("{}".to_string())
         );
 
@@ -110981,7 +111021,8 @@ mod tests {
             "0=6&2=3&10=2&4294967294=9&01=4&4294967295=5&a=7&b=8"
         );
         assert_eq!(
-            core.json_stringify_value(&Value::Object(object_id), &mut Vec::new()),
+            core.json_stringify_value(None, &Value::Object(object_id), &mut Vec::new())
+                .unwrap(),
             Some(
                 r#"{"0":6,"2":3,"10":2,"4294967294":9,"01":4,"4294967295":5,"a":7,"b":8}"#
                     .to_string()

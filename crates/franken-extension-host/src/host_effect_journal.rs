@@ -303,6 +303,11 @@ impl InMemoryHostEffectJournal {
         }
     }
 
+    #[must_use]
+    pub const fn mode(&self) -> HostEffectJournalMode {
+        self.mode
+    }
+
     pub fn begin_execution(&self) -> Result<(), HostEffectJournalError> {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
         match &*state {
@@ -410,11 +415,85 @@ impl InMemoryHostEffectJournal {
         }
     }
 
+    /// Replay a request rejected during policy preparation. Only an exact
+    /// recorded preparation failure may be consumed. A recorded success or a
+    /// different failure poisons replay rather than allowing a current policy
+    /// denial to be replaced by stale successful evidence.
+    pub fn replay_process_spawn_preparation_failure(
+        &self,
+        request: &ProcessSpawnRequest,
+        failure: &ProcessSpawnError,
+    ) -> Option<ProcessSpawnOutcome> {
+        if self.mode != HostEffectJournalMode::Replay {
+            return None;
+        }
+        let live_request = HostEffectJournalRequest::ProcessSpawn(request.clone());
+        let consumed = self.consume_replay_with_validator(&live_request, |index, entry| {
+            let outcome = match entry {
+                HostEffectJournalEntry::ProcessSpawn { outcome, .. } => outcome,
+                HostEffectJournalEntry::HostIo { .. } => {
+                    return Err(HostEffectJournalError::Lifecycle {
+                        detail: "process preparation replay resolved to a host-I/O entry"
+                            .to_string(),
+                    });
+                }
+            };
+            match outcome {
+                Err(recorded) if recorded == failure => Ok(()),
+                Ok(_) => Err(HostEffectJournalError::replay_divergence(
+                    index,
+                    "process_spawn".to_string(),
+                    format!("{}:recorded_success", request.kind()),
+                    "process_spawn".to_string(),
+                    format!("{}:preparation_failure", request.kind()),
+                    Some(process_spawn_request_digest(request)),
+                    process_spawn_request_digest(request),
+                )),
+                Err(_) => Err(HostEffectJournalError::replay_divergence(
+                    index,
+                    "process_spawn".to_string(),
+                    format!("{}:recorded_preparation_failure", request.kind()),
+                    "process_spawn".to_string(),
+                    format!("{}:different_preparation_failure", request.kind()),
+                    Some(process_spawn_request_digest(request)),
+                    process_spawn_request_digest(request),
+                )),
+            }
+        });
+        match consumed {
+            Ok(HostEffectJournalEntry::ProcessSpawn { outcome, .. }) => Some(outcome),
+            Ok(HostEffectJournalEntry::HostIo { .. }) => unreachable!("family checked"),
+            Err(error) => Some(Err(ProcessSpawnError::ReplayDivergence {
+                index: replay_error_index(&error),
+                live_kind: request.kind().to_string(),
+                recorded_kind: replay_error_expected(&error),
+                live_request_digest: process_spawn_request_digest(request),
+                recorded_request_digest: replay_error_expected_digest(&error),
+            })),
+        }
+    }
+
     pub fn reserve_process_spawn(
         &self,
         request: &ProcessSpawnRequest,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
         self.reserve(HostEffectJournalRequest::ProcessSpawn(request.clone()))
+    }
+
+    /// Replace a provisional process reservation with the exact canonical
+    /// request produced by policy preparation. The provisional reservation is
+    /// committed before preparation so no provider call can precede journal
+    /// admission; rebinding then makes the transcript describe the request
+    /// actually dispatched to the live provider.
+    pub fn bind_prepared_process_spawn(
+        &self,
+        reservation: HostEffectJournalReservation,
+        prepared: &ProcessSpawnRequest,
+    ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
+        self.rebind(
+            reservation,
+            HostEffectJournalRequest::ProcessSpawn(prepared.clone()),
+        )
     }
 
     pub fn complete_process_spawn(
@@ -575,6 +654,14 @@ impl InMemoryHostEffectJournal {
         &self,
         live_request: &HostEffectJournalRequest,
     ) -> Result<HostEffectJournalEntry, HostEffectJournalError> {
+        self.consume_replay_with_validator(live_request, |_, _| Ok(()))
+    }
+
+    fn consume_replay_with_validator(
+        &self,
+        live_request: &HostEffectJournalRequest,
+        validate: impl FnOnce(usize, &HostEffectJournalEntry) -> Result<(), HostEffectJournalError>,
+    ) -> Result<HostEffectJournalEntry, HostEffectJournalError> {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
         let cursor = match &*state {
             JournalState::Replaying { cursor } => *cursor,
@@ -631,6 +718,10 @@ impl InMemoryHostEffectJournal {
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
         }
+        if let Err(error) = validate(cursor, entry) {
+            *state = JournalState::Poisoned(error.clone());
+            return Err(error);
+        }
         let entry = entry.clone();
         *state = JournalState::Replaying { cursor: cursor + 1 };
         self.attempt_entries
@@ -659,7 +750,9 @@ impl InMemoryHostEffectJournal {
             let error = HostEffectJournalError::Lifecycle {
                 detail: "record reservation attempted outside an active execution".to_string(),
             };
-            *state = JournalState::Poisoned(error.clone());
+            if !matches!(&*state, JournalState::Poisoned(_)) {
+                *state = JournalState::Poisoned(error.clone());
+            }
             Err(error)
         }
     }
@@ -670,11 +763,18 @@ impl InMemoryHostEffectJournal {
         entry: HostEffectJournalEntry,
     ) -> Result<(), HostEffectJournalError> {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
-        if !matches!(&*state, JournalState::Recording { .. }) {
+        if self.mode != HostEffectJournalMode::Record
+            || !matches!(
+                &*state,
+                JournalState::Recording { .. } | JournalState::Poisoned(_)
+            )
+        {
             let error = HostEffectJournalError::Lifecycle {
                 detail: "record completion attempted outside an active execution".to_string(),
             };
-            *state = JournalState::Poisoned(error.clone());
+            if !matches!(&*state, JournalState::Poisoned(_)) {
+                *state = JournalState::Poisoned(error.clone());
+            }
             return Err(error);
         }
         let mut entries = self.entries.lock().expect("host-effect journal mutex");
@@ -682,7 +782,9 @@ impl InMemoryHostEffectJournal {
             let error = HostEffectJournalError::Lifecycle {
                 detail: format!("record reservation {} is missing", reservation.index),
             };
-            *state = JournalState::Poisoned(error.clone());
+            if !matches!(&*state, JournalState::Poisoned(_)) {
+                *state = JournalState::Poisoned(error.clone());
+            }
             return Err(error);
         };
         if !matches!(slot, JournalSlot::Reserved(request)
@@ -694,7 +796,9 @@ impl InMemoryHostEffectJournal {
                     reservation.index
                 ),
             };
-            *state = JournalState::Poisoned(error.clone());
+            if !matches!(&*state, JournalState::Poisoned(_)) {
+                *state = JournalState::Poisoned(error.clone());
+            }
             return Err(error);
         }
         *slot = JournalSlot::Completed(entry);
@@ -716,6 +820,65 @@ impl InMemoryHostEffectJournal {
             .lock()
             .expect("host-effect attempt mutex") = completed;
         Ok(())
+    }
+
+    fn rebind(
+        &self,
+        reservation: HostEffectJournalReservation,
+        request: HostEffectJournalRequest,
+    ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
+        let mut state = self.state.lock().expect("host-effect journal state mutex");
+        if self.mode != HostEffectJournalMode::Record
+            || !matches!(&*state, JournalState::Recording { .. })
+        {
+            let error = HostEffectJournalError::Lifecycle {
+                detail: "record reservation binding attempted outside an active execution"
+                    .to_string(),
+            };
+            if !matches!(&*state, JournalState::Poisoned(_)) {
+                *state = JournalState::Poisoned(error.clone());
+            }
+            return Err(error);
+        }
+        if reservation.request.family().ne(request.family())
+            || reservation.request.kind().ne(request.kind())
+        {
+            let error = HostEffectJournalError::Lifecycle {
+                detail: format!(
+                    "record reservation {} changed effect identity from {}:{} to {}:{}",
+                    reservation.index,
+                    reservation.request.family(),
+                    reservation.request.kind(),
+                    request.family(),
+                    request.kind()
+                ),
+            };
+            *state = JournalState::Poisoned(error.clone());
+            return Err(error);
+        }
+        let mut entries = self.entries.lock().expect("host-effect journal mutex");
+        let Some(slot) = entries.get_mut(reservation.index) else {
+            let error = HostEffectJournalError::Lifecycle {
+                detail: format!("record reservation {} is missing", reservation.index),
+            };
+            *state = JournalState::Poisoned(error.clone());
+            return Err(error);
+        };
+        if !matches!(slot, JournalSlot::Reserved(current) if (*current).eq(&reservation.request)) {
+            let error = HostEffectJournalError::Lifecycle {
+                detail: format!(
+                    "record reservation {} cannot be rebound after mutation or completion",
+                    reservation.index
+                ),
+            };
+            *state = JournalState::Poisoned(error.clone());
+            return Err(error);
+        }
+        *slot = JournalSlot::Reserved(request.clone());
+        Ok(HostEffectJournalReservation {
+            index: reservation.index,
+            request,
+        })
     }
 }
 
@@ -1007,6 +1170,63 @@ mod tests {
         ));
         assert!(journal.attempt_entries().is_empty());
         assert_eq!(journal.attempt_records(), records);
+    }
+
+    #[test]
+    fn completion_failure_cannot_hide_a_later_concurrent_completion() {
+        let journal = InMemoryHostEffectJournal::recording();
+        journal.begin_execution().unwrap();
+        let first = journal.reserve_host_io(&fs_request()).unwrap();
+        let second = journal.reserve_process_spawn(&process_request()).unwrap();
+        let barrier = std::sync::Barrier::new(2);
+
+        let first_error = std::thread::scope(|scope| {
+            let journal_ref = &journal;
+            let barrier_ref = &barrier;
+            let failed_completion = scope.spawn(move || {
+                let mutated = HostIoRequest::FsRead {
+                    path: "different.txt".to_string(),
+                };
+                let error = journal_ref
+                    .complete_host_io(first, &mutated, &fs_outcome())
+                    .unwrap_err();
+                barrier_ref.wait();
+                error
+            });
+            let journal_ref = &journal;
+            let barrier_ref = &barrier;
+            let later_completion = scope.spawn(move || {
+                barrier_ref.wait();
+                journal_ref.complete_process_spawn(second, &process_request(), &process_outcome())
+            });
+            let error = failed_completion.join().expect("failure worker joins");
+            later_completion
+                .join()
+                .expect("later completion worker joins")
+                .expect("matching reservation remains completable after poison");
+            error
+        });
+
+        assert!(matches!(
+            journal.attempt_records().as_slice(),
+            [
+                HostEffectJournalAttemptRecord::Uncompleted {
+                    sequence: 0,
+                    family,
+                    request_kind,
+                    ..
+                },
+                HostEffectJournalAttemptRecord::Completed {
+                    sequence: 1,
+                    entry: HostEffectJournalEntry::ProcessSpawn { .. }
+                }
+            ] if family == "host_io" && request_kind == "fs_read"
+        ));
+        assert!(matches!(
+            journal.reserve_host_io(&fs_request()),
+            Err(HostEffectJournalError::Lifecycle { .. })
+        ));
+        assert_eq!(journal.finish_execution(), Err(first_error));
     }
 
     #[test]

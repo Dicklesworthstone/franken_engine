@@ -19,7 +19,7 @@ use crate::algebraic_effects::{
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
 use frankenengine_extension_host::host_effect_journal::{
-    HostEffectJournalError, InMemoryHostEffectJournal,
+    HostEffectJournalError, HostEffectJournalMode, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::host_io::{
     FsOperation, HostIoCapability, HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest,
@@ -632,8 +632,28 @@ impl ProcessSpawnHandler {
         request: &ProcessSpawnRequest,
         granted: &[ProcessSpawnCapability],
     ) -> Result<Result<ProcessSpawnResponse, ProcessSpawnError>, EffectError> {
-        if let Some(recorded) = journal.replay_process_spawn(request) {
-            return Ok(recorded);
+        if journal.mode() == HostEffectJournalMode::Replay {
+            return Ok(match self.provider.prepare_request(request) {
+                Ok(prepared) => journal.replay_process_spawn(&prepared).ok_or_else(|| {
+                    host_effect_journal_error(
+                        "process_spawn_handler",
+                        HostEffectJournalError::Lifecycle {
+                            detail: "replay journal omitted a typed process outcome".to_string(),
+                        },
+                    )
+                })?,
+                Err(failure) => journal
+                    .replay_process_spawn_preparation_failure(request, &failure)
+                    .ok_or_else(|| {
+                        host_effect_journal_error(
+                            "process_spawn_handler",
+                            HostEffectJournalError::Lifecycle {
+                                detail: "replay journal omitted a typed preparation outcome"
+                                    .to_string(),
+                            },
+                        )
+                    })?,
+            });
         }
         let reservation = journal
             .reserve_process_spawn(request)
@@ -648,9 +668,12 @@ impl ProcessSpawnHandler {
                 return Ok(outcome);
             }
         };
+        let reservation = journal
+            .bind_prepared_process_spawn(reservation, &prepared)
+            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
         let outcome = self.provider.perform(&prepared, granted);
         journal
-            .complete_process_spawn(reservation, request, &outcome)
+            .complete_process_spawn(reservation, &prepared, &outcome)
             .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
         Ok(outcome)
     }
@@ -1483,6 +1506,93 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct CanonicalizingProcessSpawn {
+        canonical_executable: String,
+        seen: std::sync::Mutex<Vec<ProcessSpawnRequest>>,
+    }
+
+    impl ProcessSpawnProvider for CanonicalizingProcessSpawn {
+        fn name(&self) -> &str {
+            "canonicalizing-test-process-spawn"
+        }
+
+        fn prepare_request(
+            &self,
+            request: &ProcessSpawnRequest,
+        ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+            let mut prepared = request.clone();
+            match &mut prepared {
+                ProcessSpawnRequest::Run { launch, .. } | ProcessSpawnRequest::Spawn { launch } => {
+                    launch.executable.clone_from(&self.canonical_executable);
+                }
+                ProcessSpawnRequest::WriteStdin { .. }
+                | ProcessSpawnRequest::CloseStdin { .. }
+                | ProcessSpawnRequest::Wait { .. }
+                | ProcessSpawnRequest::Kill { .. }
+                | ProcessSpawnRequest::Cleanup { .. } => {}
+            }
+            Ok(prepared)
+        }
+
+        fn perform(
+            &self,
+            request: &ProcessSpawnRequest,
+            granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+            self.seen.lock().unwrap().push(request.clone());
+            Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                },
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
+    }
+
+    #[derive(Debug)]
+    struct PreparationDenyingProcessSpawn {
+        failure: ProcessSpawnError,
+        perform_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ProcessSpawnProvider for PreparationDenyingProcessSpawn {
+        fn name(&self) -> &str {
+            "preparation-denying-test-process-spawn"
+        }
+
+        fn prepare_request(
+            &self,
+            _request: &ProcessSpawnRequest,
+        ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+            Err(self.failure.clone())
+        }
+
+        fn perform(
+            &self,
+            _request: &ProcessSpawnRequest,
+            _granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            self.perform_calls
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Err(ProcessSpawnError::Denied {
+                reason: "preparation denial must prevent dispatch".to_string(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
+    }
+
+    #[derive(Debug)]
     struct DenyingProcessSpawn;
 
     impl ProcessSpawnProvider for DenyingProcessSpawn {
@@ -1647,6 +1757,222 @@ mod tests {
                 outcome: Ok(ProcessSpawnResponse::Run { .. }),
             }]) if recorded == &request
         ));
+    }
+
+    #[test]
+    fn process_journal_binds_and_replays_the_policy_prepared_request_bd_x85a7_2() {
+        let mut request = process_run_request();
+        let ProcessSpawnRequest::Run { launch, .. } = &mut request else {
+            unreachable!("fixture is a run request");
+        };
+        launch.executable = "signed-tool-alias".to_string();
+
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().expect("begin recording journal");
+        let recording_provider = Arc::new(CanonicalizingProcessSpawn {
+            canonical_executable: "/policy/v1/signed-tool".to_string(),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut recording_stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(recording_provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+        recording_stack
+            .handle_effect(create_process_spawn_effect(request.clone()).as_ref())
+            .expect("canonical request dispatches");
+        let entries = journal
+            .finish_execution()
+            .expect("finish recording journal");
+        assert!(matches!(
+            entries.as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Run { launch, .. },
+                ..
+            }] if launch.executable == "/policy/v1/signed-tool"
+        ));
+        assert!(matches!(
+            recording_provider.seen.lock().unwrap().as_slice(),
+            [ProcessSpawnRequest::Run { launch, .. }]
+                if launch.executable == "/policy/v1/signed-tool"
+        ));
+
+        let exact = Arc::new(InMemoryHostEffectJournal::replaying(entries.clone()));
+        exact.begin_execution().expect("begin exact replay");
+        let exact_provider = Arc::new(CanonicalizingProcessSpawn {
+            canonical_executable: "/policy/v1/signed-tool".to_string(),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut exact_stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(exact_provider.clone()),
+            None,
+            Some(exact.clone()),
+        );
+        exact_stack
+            .handle_effect(create_process_spawn_effect(request.clone()).as_ref())
+            .expect("matching canonical mapping replays");
+        assert!(exact_provider.seen.lock().unwrap().is_empty());
+        assert_eq!(exact.finish_execution().unwrap(), entries);
+
+        let divergent = Arc::new(InMemoryHostEffectJournal::replaying(entries));
+        divergent.begin_execution().expect("begin divergent replay");
+        let divergent_provider = Arc::new(CanonicalizingProcessSpawn {
+            canonical_executable: "/policy/v2/signed-tool".to_string(),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut divergent_stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(divergent_provider.clone()),
+            None,
+            Some(divergent.clone()),
+        );
+        let error = divergent_stack
+            .handle_effect(create_process_spawn_effect(request).as_ref())
+            .expect_err("changed canonical mapping must diverge before dispatch");
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("PROCESS_SPAWN_REPLAY_DIVERGENCE")
+        ));
+        assert!(divergent_provider.seen.lock().unwrap().is_empty());
+        assert!(divergent.finish_execution().is_err());
+    }
+
+    #[test]
+    fn replay_preparation_failure_cannot_reuse_recorded_success_bd_x85a7_2() {
+        let request = process_run_request();
+        let recorded_success = HostEffectJournalEntry::ProcessSpawn {
+            request: request.clone(),
+            outcome: Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                },
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }),
+        };
+        let failure = ProcessSpawnError::PolicyViolation {
+            code: "executable_alias_denied".to_string(),
+            detail: "current policy refuses preparation".to_string(),
+        };
+        let journal = Arc::new(InMemoryHostEffectJournal::replaying(vec![recorded_success]));
+        journal.begin_execution().expect("begin replay");
+        let provider = Arc::new(PreparationDenyingProcessSpawn {
+            failure,
+            perform_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+
+        let error = stack
+            .handle_effect(create_process_spawn_effect(request).as_ref())
+            .expect_err("current preparation denial must not replay recorded success");
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("PROCESS_SPAWN_REPLAY_DIVERGENCE")
+        ));
+        assert_eq!(
+            provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        assert!(journal.finish_execution().is_err());
+    }
+
+    #[test]
+    fn replay_accepts_only_the_exact_recorded_preparation_failure_bd_x85a7_2() {
+        let request = process_run_request();
+        let failure = ProcessSpawnError::PolicyViolation {
+            code: "executable_alias_denied".to_string(),
+            detail: "policy refuses preparation".to_string(),
+        };
+        let entry = HostEffectJournalEntry::ProcessSpawn {
+            request: request.clone(),
+            outcome: Err(failure.clone()),
+        };
+        let journal = Arc::new(InMemoryHostEffectJournal::replaying(vec![entry.clone()]));
+        journal.begin_execution().expect("begin replay");
+        let provider = Arc::new(PreparationDenyingProcessSpawn {
+            failure,
+            perform_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+
+        let error = stack
+            .handle_effect(create_process_spawn_effect(request).as_ref())
+            .expect_err("recorded preparation denial remains a typed guest error");
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("PROCESS_SPAWN_POLICY_VIOLATION")
+        ));
+        assert_eq!(
+            provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        assert_eq!(journal.finish_execution().unwrap(), vec![entry.clone()]);
+
+        let different_journal = Arc::new(InMemoryHostEffectJournal::replaying(vec![entry]));
+        different_journal
+            .begin_execution()
+            .expect("begin unequal-failure replay");
+        let different_provider = Arc::new(PreparationDenyingProcessSpawn {
+            failure: ProcessSpawnError::PolicyViolation {
+                code: "different_policy_denial".to_string(),
+                detail: "the current preparation failure changed".to_string(),
+            },
+            perform_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut different_stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(different_provider.clone()),
+            None,
+            Some(different_journal.clone()),
+        );
+        let error = different_stack
+            .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
+            .expect_err("a different preparation failure must diverge");
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("PROCESS_SPAWN_REPLAY_DIVERGENCE")
+        ));
+        assert_eq!(
+            different_provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        assert!(different_journal.finish_execution().is_err());
     }
 
     #[test]

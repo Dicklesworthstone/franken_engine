@@ -19063,7 +19063,7 @@ strict"; var static = 1; }"#,
         assert!(matches!(
             &properties[3].key,
             Expression::TemplateLiteral { quasis, expressions }
-                if quasis == &[JsString::from("]")] && expressions.is_empty()
+                if quasis == &["]"] && expressions.is_empty()
         ));
 
         let parser = CanonicalEs2020Parser;

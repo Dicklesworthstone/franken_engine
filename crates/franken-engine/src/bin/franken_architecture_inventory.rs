@@ -116,13 +116,19 @@ fn print_usage() {
         "\
 franken-architecture-inventory usage:
 
-  franken-architecture-inventory [--stdout|--check|--help]
+  franken-architecture-inventory [--repo-root <path>] [--stdout|--check|--help]
 
 Options:
+  --repo-root <path>   Inventory this tree instead of discovering one from the
+                       current working directory (the resolved root is always
+                       printed on stderr)
   --stdout   Print the generated architecture inventory markdown to stdout
   --check    Fail if docs/ARCHITECTURE_INVENTORY.md is stale
   --help     Print this help text
 
-Default behavior writes docs/ARCHITECTURE_INVENTORY.md."
+The repo root is discovered by walking up from the current working directory
+for crates/franken-engine/Cargo.toml, so a prebuilt binary inventories the tree
+it is run in rather than the tree it was compiled in. Default behavior writes
+docs/ARCHITECTURE_INVENTORY.md under the resolved root."
     );
 }

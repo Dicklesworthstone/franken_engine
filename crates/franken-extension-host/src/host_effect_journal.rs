@@ -686,7 +686,7 @@ impl InMemoryHostEffectJournal {
             return Err(error);
         };
         if !matches!(slot, JournalSlot::Reserved(request)
-            if request == &reservation.request && request.matches_entry(&entry))
+            if request.eq(&reservation.request) && request.matches_entry(&entry))
         {
             let error = HostEffectJournalError::Lifecycle {
                 detail: format!(
@@ -1073,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn process_replay_divergence_commits_expected_and_live_request_digests() {
+    fn process_replay_divergence_commits_expected_and_live_request_digests() -> Result<(), String> {
         let recorded = process_request();
         let live = ProcessSpawnRequest::Run {
             launch: ProcessLaunch {
@@ -1100,7 +1100,7 @@ mod tests {
             ..
         })) = journal.replay_process_spawn(&live)
         else {
-            panic!("mismatched process request must produce replay divergence");
+            return Err("mismatched process request must produce replay divergence".to_string());
         };
         assert_eq!(live_request_digest, process_spawn_request_digest(&live));
         assert_eq!(
@@ -1108,6 +1108,7 @@ mod tests {
             Some(process_spawn_request_digest(&recorded))
         );
         assert_ne!(recorded_request_digest, Some(live_request_digest));
+        Ok(())
     }
 
     #[test]

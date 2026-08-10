@@ -632,15 +632,15 @@ impl ProcessSpawnHandler {
         request: &ProcessSpawnRequest,
         granted: &[ProcessSpawnCapability],
     ) -> Result<Result<ProcessSpawnResponse, ProcessSpawnError>, EffectError> {
+        if let Some(recorded) = journal.replay_process_spawn(request) {
+            return Ok(recorded);
+        }
+        let reservation = journal
+            .reserve_process_spawn(request)
+            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
         let prepared = match self.provider.prepare_request(request) {
             Ok(prepared) => prepared,
             Err(error) => {
-                if let Some(recorded) = journal.replay_process_spawn(request) {
-                    return Ok(recorded);
-                }
-                let reservation = journal
-                    .reserve_process_spawn(request)
-                    .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
                 let outcome = Err(error);
                 journal
                     .complete_process_spawn(reservation, request, &outcome)
@@ -648,15 +648,9 @@ impl ProcessSpawnHandler {
                 return Ok(outcome);
             }
         };
-        if let Some(recorded) = journal.replay_process_spawn(&prepared) {
-            return Ok(recorded);
-        }
-        let reservation = journal
-            .reserve_process_spawn(&prepared)
-            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
         let outcome = self.provider.perform(&prepared, granted);
         journal
-            .complete_process_spawn(reservation, &prepared, &outcome)
+            .complete_process_spawn(reservation, request, &outcome)
             .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
         Ok(outcome)
     }
@@ -1250,10 +1244,13 @@ pub fn create_process_spawn_effect(request: ProcessSpawnRequest) -> Box<dyn Eras
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frankenengine_extension_host::host_effect_journal::HostEffectJournalEntry;
+    use frankenengine_extension_host::host_effect_journal::{
+        HostEffectJournalAttemptRecord, HostEffectJournalEntry,
+    };
     use frankenengine_extension_host::host_io::HostIoCapability;
     use frankenengine_extension_host::process_spawn::{
-        ProcessExit, ProcessLaunch, ProcessSpawnOutcome, ProcessStdio,
+        InMemoryProcessSpawnTranscript, ProcessExit, ProcessLaunch, ProcessSpawnOutcome,
+        ProcessStdio,
     };
     use std::collections::BTreeMap;
 
@@ -1432,6 +1429,56 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct ReservationObservingProcessSpawn {
+        journal: Arc<InMemoryHostEffectJournal>,
+        prepare_seen: std::sync::atomic::AtomicBool,
+    }
+
+    impl ProcessSpawnProvider for ReservationObservingProcessSpawn {
+        fn name(&self) -> &str {
+            "reservation-observing-process-spawn"
+        }
+
+        fn prepare_request(
+            &self,
+            request: &ProcessSpawnRequest,
+        ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+            assert!(matches!(
+                self.journal.attempt_records().as_slice(),
+                [HostEffectJournalAttemptRecord::Uncompleted {
+                    sequence: 0,
+                    family,
+                    request_kind,
+                    ..
+                }] if family == "process_spawn" && request_kind == request.kind()
+            ));
+            self.prepare_seen
+                .store(true, std::sync::atomic::Ordering::Release);
+            Ok(request.clone())
+        }
+
+        fn perform(
+            &self,
+            _request: &ProcessSpawnRequest,
+            granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+            assert!(self.prepare_seen.load(std::sync::atomic::Ordering::Acquire));
+            Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                },
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) {}
+    }
+
+    #[derive(Debug)]
     struct DenyingProcessSpawn;
 
     impl ProcessSpawnProvider for DenyingProcessSpawn {
@@ -1527,6 +1574,73 @@ mod tests {
                 if code.as_deref() == Some("HOST_EFFECT_JOURNAL")
         ));
         assert!(provider.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn family_local_process_recorder_is_replay_only_without_global_reservation_bd_x85a7_2() {
+        let provider = Arc::new(RecordingProcessSpawn::default());
+        let recorder = Arc::new(InMemoryProcessSpawnTranscript::recording());
+        recorder.begin_execution().expect("begin legacy transcript");
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            Some(recorder.clone()),
+            None,
+        );
+
+        let error = stack
+            .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
+            .expect_err("live process dispatch without a global reservation must fail closed");
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("PROCESS_SPAWN_DENIED")
+        ));
+        assert!(provider.seen.lock().unwrap().is_empty());
+        let entries = recorder
+            .finish_execution()
+            .expect("finish legacy transcript");
+        assert!(matches!(
+            entries.as_slice(),
+            [(_, Err(ProcessSpawnError::Denied { .. }))]
+        ));
+    }
+
+    #[test]
+    fn process_reservation_precedes_provider_preparation_and_dispatch_bd_x85a7_2() {
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().expect("begin global journal");
+        let provider = Arc::new(ReservationObservingProcessSpawn {
+            journal: journal.clone(),
+            prepare_seen: std::sync::atomic::AtomicBool::new(false),
+        });
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+        let request = process_run_request();
+
+        stack
+            .handle_effect(create_process_spawn_effect(request.clone()).as_ref())
+            .expect("journaled process effect must dispatch");
+        assert!(
+            provider
+                .prepare_seen
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert!(matches!(
+            journal.finish_execution().as_deref(),
+            Ok([HostEffectJournalEntry::ProcessSpawn {
+                request: recorded,
+                outcome: Ok(ProcessSpawnResponse::Run { .. }),
+            }]) if recorded == &request
+        ));
     }
 
     #[test]

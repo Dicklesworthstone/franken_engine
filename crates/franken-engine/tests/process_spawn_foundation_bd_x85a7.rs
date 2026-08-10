@@ -13,7 +13,7 @@ use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 use frankenengine_extension_host::host_effect_journal::{
-    HostEffectJournalEntry, InMemoryHostEffectJournal,
+    HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnOutcome,
@@ -570,7 +570,17 @@ fn replay_finalization_failure_retains_the_consumed_effect_prefix() {
         ))
         .expect_err("unused replay suffix must fail finalization");
     assert!(error.to_string().contains("unused entries"));
-    assert_eq!(orchestrator.last_failed_host_effect_journal(), &[recorded]);
+    assert_eq!(
+        orchestrator.last_failed_host_effect_journal(),
+        std::slice::from_ref(&recorded)
+    );
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal_records(),
+        [HostEffectJournalAttemptRecord::Completed {
+            sequence: 0,
+            entry
+        }] if entry == &recorded
+    ));
     assert!(
         provider
             .seen

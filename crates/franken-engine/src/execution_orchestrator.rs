@@ -84,7 +84,7 @@ use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
 use frankenengine_extension_host::host_effect_journal::{
-    HostEffectJournalEntry, InMemoryHostEffectJournal,
+    HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::host_io::{
     HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
@@ -985,6 +985,7 @@ pub struct ExecutionOrchestrator {
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     last_failed_host_effect_journal: Vec<HostEffectJournalEntry>,
+    last_failed_host_effect_journal_records: Vec<HostEffectJournalAttemptRecord>,
     /// Trace of the most recent execution attempt that returned an error, bound
     /// as soon as the attempt's identifiers exist. A product caller labelling
     /// the retained failure journal must use the same trace the successful path
@@ -1262,6 +1263,7 @@ impl ExecutionOrchestrator {
             process_spawn: None,
             host_effect_journal: None,
             last_failed_host_effect_journal: Vec::new(),
+            last_failed_host_effect_journal_records: Vec::new(),
             last_failed_trace_id: None,
             cancellation_token: None,
             data_contract_ingress: None,
@@ -1336,6 +1338,14 @@ impl ExecutionOrchestrator {
     #[must_use]
     pub fn last_failed_host_effect_journal(&self) -> &[HostEffectJournalEntry] {
         &self.last_failed_host_effect_journal
+    }
+
+    /// Total journal state for the most recent failed attempt. Unlike the
+    /// compatibility prefix above, this preserves incomplete reservation
+    /// positions and later completed crossings with absolute sequence numbers.
+    #[must_use]
+    pub fn last_failed_host_effect_journal_records(&self) -> &[HostEffectJournalAttemptRecord] {
+        &self.last_failed_host_effect_journal_records
     }
 
     /// Trace identifier of the most recent execution attempt that returned an
@@ -1563,6 +1573,7 @@ impl ExecutionOrchestrator {
         let process_spawn = self.process_spawn.take();
         let host_effect_journal = self.host_effect_journal.take();
         self.last_failed_host_effect_journal.clear();
+        self.last_failed_host_effect_journal_records.clear();
         self.last_failed_trace_id = None;
         // Step 0: Validate.
         Self::validate_package(package)?;
@@ -1641,6 +1652,7 @@ impl ExecutionOrchestrator {
                     Ok(entries) => entries,
                     Err(error) => {
                         self.last_failed_host_effect_journal = journal.attempt_entries();
+                        self.last_failed_host_effect_journal_records = journal.attempt_records();
                         let finish_error =
                             OrchestratorError::Interpreter(InterpreterError::InternalError {
                                 details: format!(
@@ -1724,6 +1736,21 @@ impl ExecutionOrchestrator {
                     })
                     .collect()
             };
+            self.last_failed_host_effect_journal_records =
+                if let Some(journal) = host_effect_journal.as_deref() {
+                    journal.attempt_records()
+                } else {
+                    self.last_failed_host_effect_journal
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(index, entry)| HostEffectJournalAttemptRecord::Completed {
+                            sequence: u64::try_from(index)
+                                .expect("host-effect journal sequence must fit in u64"),
+                            entry,
+                        })
+                        .collect()
+                };
             let (routed, guardplane_report) = execution?;
             self.ensure_not_cancelled()?;
             let lane = routed.lane;
@@ -1924,6 +1951,7 @@ impl ExecutionOrchestrator {
                 result.finalize_result = Some(finalize_result);
                 self.execution_counter = self.execution_counter.saturating_add(1);
                 self.last_failed_host_effect_journal.clear();
+                self.last_failed_host_effect_journal_records.clear();
                 self.last_failed_trace_id = None;
                 Ok(result)
             }

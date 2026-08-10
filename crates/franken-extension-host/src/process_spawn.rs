@@ -257,6 +257,21 @@ impl ProcessSpawnRequest {
     }
 }
 
+const PROCESS_SPAWN_REQUEST_DIGEST_DOMAIN: &[u8] = b"franken-engine/process-spawn-request/v1\0";
+
+/// Content digest used only to correlate bounded replay-divergence evidence.
+///
+/// The request remains the replay authority; this digest is not an
+/// authorization token and never replaces the exact typed equality check.
+pub(crate) fn process_spawn_request_digest(request: &ProcessSpawnRequest) -> [u8; 32] {
+    let encoded = serde_json::to_vec(request)
+        .expect("a typed process-spawn request must have an infallible JSON encoding");
+    let mut digest = Sha256::new();
+    digest.update(PROCESS_SPAWN_REQUEST_DIGEST_DOMAIN);
+    digest.update(encoded);
+    digest.finalize().into()
+}
+
 /// Platform-neutral exit information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -385,6 +400,10 @@ pub enum ProcessSpawnError {
         index: usize,
         live_kind: String,
         recorded_kind: String,
+        /// Digest of the exact live request that failed replay matching.
+        live_request_digest: [u8; 32],
+        /// Digest of the expected request, or `None` when the transcript ended.
+        recorded_request_digest: Option<[u8; 32]>,
     },
 }
 
@@ -440,11 +459,18 @@ impl fmt::Debug for ProcessSpawnError {
                 index,
                 live_kind,
                 recorded_kind,
+                live_request_digest,
+                recorded_request_digest,
             } => f
                 .debug_struct("ProcessSpawnError::ReplayDivergence")
                 .field("index", index)
                 .field("live_kind_bytes", &live_kind.len())
                 .field("recorded_kind_bytes", &recorded_kind.len())
+                .field("live_request_digest", &hex_digest(live_request_digest))
+                .field(
+                    "recorded_request_digest",
+                    &recorded_request_digest.as_ref().map(hex_digest),
+                )
                 .finish(),
         }
     }
@@ -505,14 +531,29 @@ impl fmt::Display for ProcessSpawnError {
                 index,
                 live_kind,
                 recorded_kind,
+                live_request_digest,
+                recorded_request_digest,
             } => write!(
                 f,
-                "process replay divergence at index {index}: redacted live kind ({} bytes) != recorded kind ({} bytes)",
+                "process replay divergence at index {index}: redacted live kind ({} bytes) != recorded kind ({} bytes); live_request_sha256={}, recorded_request_sha256={}",
                 live_kind.len(),
-                recorded_kind.len()
+                recorded_kind.len(),
+                hex_digest(live_request_digest),
+                recorded_request_digest
+                    .as_ref()
+                    .map_or_else(|| "end_of_transcript".to_string(), hex_digest)
             ),
         }
     }
+}
+
+fn hex_digest(digest: &[u8; 32]) -> String {
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 impl std::error::Error for ProcessSpawnError {}
@@ -2186,9 +2227,12 @@ pub trait ProcessSpawnRecorder: fmt::Debug + Send + Sync {
     }
 }
 
-/// Execute through a transcript: replay never reaches the live provider.
+/// Replay through the legacy family-local transcript.
+///
+/// A missing replay match fails closed because this recorder cannot reserve a
+/// position in the globally ordered host-effect journal before provider work.
 pub fn perform_recorded(
-    provider: &dyn ProcessSpawnProvider,
+    _provider: &dyn ProcessSpawnProvider,
     recorder: Option<&dyn ProcessSpawnRecorder>,
     request: &ProcessSpawnRequest,
     granted: &[ProcessSpawnCapability],
@@ -2203,25 +2247,21 @@ pub fn perform_recorded(
         }
         return outcome;
     }
-    let prepared = match provider.prepare_request(request) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            if let Some(outcome) = recorder.and_then(|recorder| recorder.replay(request)) {
-                return outcome;
-            }
-            let outcome = Err(error);
-            if let Some(recorder) = recorder {
-                recorder.record(request, &outcome);
-            }
-            return outcome;
-        }
-    };
-    if let Some(outcome) = recorder.and_then(|recorder| recorder.replay(&prepared)) {
+    if let Some(outcome) = recorder.and_then(|recorder| recorder.replay(request)) {
         return outcome;
     }
-    let outcome = provider.perform(&prepared, granted);
+
+    // The legacy family-local transcript cannot prove a global reservation
+    // across process and ordinary host effects. It therefore remains replay
+    // only: live execution must use `InMemoryHostEffectJournal`, whose opaque
+    // reservation is accepted before provider preparation or dispatch.
+    let outcome = Err(ProcessSpawnError::Denied {
+        reason:
+            "live process execution requires a globally ordered host-effect journal reservation"
+                .to_string(),
+    });
     if let Some(recorder) = recorder {
-        recorder.record(&prepared, &outcome);
+        recorder.record(request, &outcome);
     }
     outcome
 }
@@ -2344,6 +2384,8 @@ impl ProcessSpawnRecorder for InMemoryProcessSpawnTranscript {
                     index: cursor,
                     live_kind: request.kind().to_string(),
                     recorded_kind: recorded.kind().to_string(),
+                    live_request_digest: process_spawn_request_digest(request),
+                    recorded_request_digest: Some(process_spawn_request_digest(recorded)),
                 };
                 *state = ProcessTranscriptState::Poisoned(error.clone());
                 Some(Err(error))
@@ -2567,6 +2609,8 @@ mod tests {
                 index: 4,
                 live_kind: detail_secret.to_string(),
                 recorded_kind: detail_secret.to_string(),
+                live_request_digest: [8; 32],
+                recorded_request_digest: Some([9; 32]),
             },
         ];
         let policy = ProcessSpawnPolicy {
@@ -2772,7 +2816,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn signed_alias_is_resolved_before_recording_or_dispatch() {
+    fn legacy_recorder_refuses_live_alias_preparation_and_dispatch() {
         let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
         let canonical = policy
@@ -2789,14 +2833,18 @@ mod tests {
                 &request,
                 &[ProcessSpawnCapability::Spawn],
             ),
-            Ok(ProcessSpawnResponse::Run { ref stdout, .. }) if stdout == b"aliased\n"
+            Err(ProcessSpawnError::Denied { .. })
         ));
         let current = recorder.finish_execution().expect("finish recording");
         let ProcessSpawnRequest::Run { launch, .. } = &current[0].0 else {
             panic!("run transcript");
         };
-        assert_eq!(launch.executable, canonical);
-        assert_ne!(launch.executable, "echo");
+        assert_eq!(launch.executable, "echo");
+        assert_ne!(launch.executable, canonical);
+        assert!(matches!(
+            &current[0].1,
+            Err(ProcessSpawnError::Denied { .. })
+        ));
 
         assert!(matches!(
             provider.perform(
@@ -3252,7 +3300,7 @@ mod tests {
             handle: "one".to_string(),
         };
         let transcript = InMemoryProcessSpawnTranscript::replaying(vec![(
-            recorded,
+            recorded.clone(),
             Ok(ProcessSpawnResponse::StdinClosed),
         )]);
         transcript.begin_execution().expect("begin replay");
@@ -3264,8 +3312,13 @@ mod tests {
             .expect("replay outcome")
             .expect_err("mismatch");
         assert!(matches!(
-            mismatch,
-            ProcessSpawnError::ReplayDivergence { .. }
+            &mismatch,
+            ProcessSpawnError::ReplayDivergence {
+                live_request_digest,
+                recorded_request_digest: Some(recorded_request_digest),
+                ..
+            } if live_request_digest == &process_spawn_request_digest(&live)
+                && recorded_request_digest == &process_spawn_request_digest(&recorded)
         ));
         assert_eq!(transcript.finish_execution(), Err(mismatch));
 

@@ -9,8 +9,11 @@
 #![forbid(unsafe_code)]
 
 use crate::host_io::{HostIoError, HostIoOutcome, HostIoRequest};
-use crate::process_spawn::{ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnRequest};
+use crate::process_spawn::{
+    ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnRequest, process_spawn_request_digest,
+};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::Mutex;
 
@@ -63,6 +66,8 @@ pub enum HostEffectJournalError {
         expected_kind: String,
         live_family: String,
         live_kind: String,
+        expected_request_digest: Option<[u8; 32]>,
+        live_request_digest: [u8; 32],
     },
     UnusedReplaySuffix {
         index: usize,
@@ -82,9 +87,15 @@ impl fmt::Display for HostEffectJournalError {
                 expected_kind,
                 live_family,
                 live_kind,
+                expected_request_digest,
+                live_request_digest,
             } => write!(
                 f,
-                "host-effect replay divergence at index {index}: expected {expected_family}:{expected_kind}, got {live_family}:{live_kind}"
+                "host-effect replay divergence at index {index}: expected {expected_family}:{expected_kind}, got {live_family}:{live_kind}; expected_request_sha256={}, live_request_sha256={}",
+                expected_request_digest
+                    .as_ref()
+                    .map_or_else(|| "end_of_transcript".to_string(), hex_digest),
+                hex_digest(live_request_digest)
             ),
             Self::UnusedReplaySuffix { index, remaining } => write!(
                 f,
@@ -154,6 +165,62 @@ impl HostEffectJournalRequest {
                 },
             ) => expected == actual,
             _ => false,
+        }
+    }
+
+    fn digest(&self) -> [u8; 32] {
+        match self {
+            Self::HostIo(request) => host_io_request_digest(request),
+            Self::ProcessSpawn(request) => process_spawn_request_digest(request),
+        }
+    }
+}
+
+/// Total per-attempt journal state in global reservation order.
+///
+/// `Uncompleted` is evidence of an accepted crossing whose typed outcome was
+/// never committed. It deliberately retains only structural metadata and a
+/// bounded request digest; the exact request remains inside the journal.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "snake_case",
+    tag = "completion_state",
+    deny_unknown_fields
+)]
+pub enum HostEffectJournalAttemptRecord {
+    Completed {
+        sequence: u64,
+        entry: HostEffectJournalEntry,
+    },
+    Uncompleted {
+        sequence: u64,
+        family: String,
+        request_kind: String,
+        request_digest: [u8; 32],
+    },
+}
+
+impl fmt::Debug for HostEffectJournalAttemptRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Completed { sequence, entry } => f
+                .debug_struct("HostEffectJournalAttemptRecord::Completed")
+                .field("sequence", sequence)
+                .field("family", &entry.family())
+                .field("request_kind", &entry.request_kind())
+                .finish(),
+            Self::Uncompleted {
+                sequence,
+                family,
+                request_kind,
+                request_digest,
+            } => f
+                .debug_struct("HostEffectJournalAttemptRecord::Uncompleted")
+                .field("sequence", sequence)
+                .field("family", family)
+                .field("request_kind", request_kind)
+                .field("request_digest", &hex_digest(request_digest))
+                .finish(),
         }
     }
 }
@@ -247,9 +314,8 @@ impl InMemoryHostEffectJournal {
         if self.mode != HostEffectJournalMode::Replay {
             return None;
         }
-        match self.consume_replay("host_io", request.kind(), |entry| {
-            matches!(entry, HostEffectJournalEntry::HostIo { request: recorded, .. } if recorded == request)
-        }) {
+        let live_request = HostEffectJournalRequest::HostIo(request.clone());
+        match self.consume_replay(&live_request) {
             Ok(HostEffectJournalEntry::HostIo { outcome, .. }) => Some(outcome),
             Ok(HostEffectJournalEntry::ProcessSpawn { .. }) => unreachable!("family checked"),
             Err(error) => Some(Err(HostIoError::Denied {
@@ -298,15 +364,16 @@ impl InMemoryHostEffectJournal {
         if self.mode != HostEffectJournalMode::Replay {
             return None;
         }
-        match self.consume_replay("process_spawn", request.kind(), |entry| {
-            matches!(entry, HostEffectJournalEntry::ProcessSpawn { request: recorded, .. } if recorded == request)
-        }) {
+        let live_request = HostEffectJournalRequest::ProcessSpawn(request.clone());
+        match self.consume_replay(&live_request) {
             Ok(HostEffectJournalEntry::ProcessSpawn { outcome, .. }) => Some(outcome),
             Ok(HostEffectJournalEntry::HostIo { .. }) => unreachable!("family checked"),
             Err(error) => Some(Err(ProcessSpawnError::ReplayDivergence {
                 index: replay_error_index(&error),
                 live_kind: request.kind().to_string(),
                 recorded_kind: replay_error_expected(&error),
+                live_request_digest: process_spawn_request_digest(request),
+                recorded_request_digest: replay_error_expected_digest(&error),
             })),
         }
     }
@@ -392,6 +459,9 @@ impl InMemoryHostEffectJournal {
         }
     }
 
+    /// Completed entries across all attempts, with incomplete positions
+    /// omitted. This is a compatibility view, not total failure evidence;
+    /// use [`Self::attempt_records`] for the current attempt's sequence map.
     #[must_use]
     pub fn entries(&self) -> Vec<HostEffectJournalEntry> {
         self.entries
@@ -405,10 +475,9 @@ impl InMemoryHostEffectJournal {
             .collect()
     }
 
-    /// Completed effects from the current or most recently failed execution
-    /// attempt. Unlike `finish_execution`, this remains available after replay
-    /// divergence, an unused suffix, or an incomplete recording reservation so
-    /// callers can still issue failure receipts for the performed prefix.
+    /// Contiguous completed prefix from the current or most recently failed
+    /// execution attempt. Use [`Self::attempt_records`] when failure evidence
+    /// must retain incomplete positions and later out-of-order completions.
     #[must_use]
     pub fn attempt_entries(&self) -> Vec<HostEffectJournalEntry> {
         self.attempt_entries
@@ -417,11 +486,62 @@ impl InMemoryHostEffectJournal {
             .clone()
     }
 
+    /// Complete and incomplete reservations from the current or most recently
+    /// failed attempt, preserving their absolute global sequence positions.
+    #[must_use]
+    pub fn attempt_records(&self) -> Vec<HostEffectJournalAttemptRecord> {
+        let start = *self
+            .attempt_record_start
+            .lock()
+            .expect("host-effect attempt boundary mutex");
+        let replay_end = if self.mode == HostEffectJournalMode::Replay {
+            let state = self.state.lock().expect("host-effect journal state mutex");
+            Some(match &*state {
+                JournalState::Idle => 0,
+                JournalState::Replaying { cursor } => *cursor,
+                JournalState::Finalized => usize::MAX,
+                JournalState::Poisoned(HostEffectJournalError::ReplayDivergence {
+                    index, ..
+                })
+                | JournalState::Poisoned(HostEffectJournalError::UnusedReplaySuffix {
+                    index,
+                    ..
+                }) => *index,
+                JournalState::Poisoned(HostEffectJournalError::Lifecycle { .. })
+                | JournalState::Recording { .. } => 0,
+            })
+        } else {
+            None
+        };
+        self.entries
+            .lock()
+            .expect("host-effect journal mutex")
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(replay_end.unwrap_or(usize::MAX).saturating_sub(start))
+            .map(|(index, slot)| {
+                let sequence =
+                    u64::try_from(index).expect("host-effect journal sequence must fit in u64");
+                match slot {
+                    JournalSlot::Completed(entry) => HostEffectJournalAttemptRecord::Completed {
+                        sequence,
+                        entry: entry.clone(),
+                    },
+                    JournalSlot::Reserved(request) => HostEffectJournalAttemptRecord::Uncompleted {
+                        sequence,
+                        family: request.family().to_string(),
+                        request_kind: request.kind().to_string(),
+                        request_digest: request.digest(),
+                    },
+                }
+            })
+            .collect()
+    }
+
     fn consume_replay(
         &self,
-        live_family: &str,
-        live_kind: &str,
-        matches_request: impl FnOnce(&HostEffectJournalEntry) -> bool,
+        live_request: &HostEffectJournalRequest,
     ) -> Result<HostEffectJournalEntry, HostEffectJournalError> {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
         let cursor = match &*state {
@@ -451,8 +571,10 @@ impl InMemoryHostEffectJournal {
                 index: cursor,
                 expected_family: "end_of_transcript".to_string(),
                 expected_kind: "end_of_transcript".to_string(),
-                live_family: live_family.to_string(),
-                live_kind: live_kind.to_string(),
+                live_family: live_request.family().to_string(),
+                live_kind: live_request.kind().to_string(),
+                expected_request_digest: None,
+                live_request_digest: live_request.digest(),
             };
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
@@ -464,13 +586,15 @@ impl InMemoryHostEffectJournal {
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
         };
-        if !matches_request(entry) {
+        if !live_request.matches_entry(entry) {
             let error = HostEffectJournalError::ReplayDivergence {
                 index: cursor,
                 expected_family: entry.family().to_string(),
                 expected_kind: entry.request_kind().to_string(),
-                live_family: live_family.to_string(),
-                live_kind: live_kind.to_string(),
+                live_family: live_request.family().to_string(),
+                live_kind: live_request.kind().to_string(),
+                expected_request_digest: Some(entry_request_digest(entry)),
+                live_request_digest: live_request.digest(),
             };
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
@@ -599,6 +723,44 @@ fn replay_error_expected(error: &HostEffectJournalError) -> String {
         } => format!("{expected_family}:{expected_kind}"),
         _ => error.to_string(),
     }
+}
+
+fn replay_error_expected_digest(error: &HostEffectJournalError) -> Option<[u8; 32]> {
+    match error {
+        HostEffectJournalError::ReplayDivergence {
+            expected_request_digest,
+            ..
+        } => *expected_request_digest,
+        _ => None,
+    }
+}
+
+fn entry_request_digest(entry: &HostEffectJournalEntry) -> [u8; 32] {
+    match entry {
+        HostEffectJournalEntry::HostIo { request, .. } => host_io_request_digest(request),
+        HostEffectJournalEntry::ProcessSpawn { request, .. } => {
+            process_spawn_request_digest(request)
+        }
+    }
+}
+
+fn host_io_request_digest(request: &HostIoRequest) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"franken-engine/host-io-request/v1\0";
+    let encoded = serde_json::to_vec(request)
+        .expect("a typed host-I/O request must have an infallible JSON encoding");
+    let mut digest = Sha256::new();
+    digest.update(DOMAIN);
+    digest.update(encoded);
+    digest.finalize().into()
+}
+
+fn hex_digest(digest: &[u8; 32]) -> String {
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -764,6 +926,13 @@ mod tests {
             journal.attempt_entries().is_empty(),
             "a later completion must not leapfrog an earlier reserved crossing"
         );
+        assert!(matches!(
+            journal.attempt_records().as_slice(),
+            [
+                HostEffectJournalAttemptRecord::Uncompleted { sequence: 0, .. },
+                HostEffectJournalAttemptRecord::Completed { sequence: 1, .. }
+            ]
+        ));
         journal
             .complete_host_io(first, &fs_request(), &fs_outcome())
             .unwrap();
@@ -779,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_recording_exposes_only_the_contiguous_completed_prefix() {
+    fn failed_recording_retains_hole_and_later_completion_in_total_attempt_records() {
         let journal = InMemoryHostEffectJournal::recording();
         journal.begin_execution().unwrap();
         let _first = journal.reserve_host_io(&fs_request()).unwrap();
@@ -789,11 +958,28 @@ mod tests {
             .unwrap();
 
         assert!(journal.attempt_entries().is_empty());
+        let records = journal.attempt_records();
+        assert!(matches!(
+            records.as_slice(),
+            [
+                HostEffectJournalAttemptRecord::Uncompleted {
+                    sequence: 0,
+                    family,
+                    request_kind,
+                    ..
+                },
+                HostEffectJournalAttemptRecord::Completed {
+                    sequence: 1,
+                    entry: HostEffectJournalEntry::ProcessSpawn { .. }
+                }
+            ] if family == "host_io" && request_kind == "fs_read"
+        ));
         assert!(matches!(
             journal.finish_execution(),
             Err(HostEffectJournalError::Lifecycle { .. })
         ));
         assert!(journal.attempt_entries().is_empty());
+        assert_eq!(journal.attempt_records(), records);
     }
 
     #[test]
@@ -808,6 +994,15 @@ mod tests {
             .complete_host_io(reservation, &mutated, &fs_outcome())
             .unwrap_err();
         assert!(matches!(error, HostEffectJournalError::Lifecycle { .. }));
+        assert!(matches!(
+            journal.attempt_records().as_slice(),
+            [HostEffectJournalAttemptRecord::Uncompleted {
+                sequence: 0,
+                family,
+                request_kind,
+                ..
+            }] if family == "host_io" && request_kind == "fs_read"
+        ));
         assert_eq!(journal.finish_execution(), Err(error));
     }
 
@@ -848,6 +1043,44 @@ mod tests {
             Some(Err(ProcessSpawnError::ReplayDivergence { index: 0, .. }))
         ));
         assert!(journal.finish_execution().is_err());
+    }
+
+    #[test]
+    fn process_replay_divergence_commits_expected_and_live_request_digests() {
+        let recorded = process_request();
+        let live = ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "/usr/bin/false".to_string(),
+                argv: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: Some("/".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: Vec::new(),
+            timeout_millis: Some(100),
+        };
+        let journal =
+            InMemoryHostEffectJournal::replaying(vec![HostEffectJournalEntry::ProcessSpawn {
+                request: recorded.clone(),
+                outcome: process_outcome(),
+            }]);
+        journal.begin_execution().unwrap();
+
+        let Some(Err(ProcessSpawnError::ReplayDivergence {
+            live_request_digest,
+            recorded_request_digest,
+            ..
+        })) = journal.replay_process_spawn(&live)
+        else {
+            panic!("mismatched process request must produce replay divergence");
+        };
+        assert_eq!(live_request_digest, process_spawn_request_digest(&live));
+        assert_eq!(
+            recorded_request_digest,
+            Some(process_spawn_request_digest(&recorded))
+        );
+        assert_ne!(recorded_request_digest, Some(live_request_digest));
     }
 
     #[test]

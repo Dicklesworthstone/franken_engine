@@ -43598,6 +43598,77 @@ impl InterpreterCore {
         self.proxy_aware_own_property_keys(module, target, depth + 1)
     }
 
+    /// Whether `key` is an enumerable own String property of `object_id`.
+    ///
+    /// For a Proxy receiver this consults the `getOwnPropertyDescriptor` trap
+    /// (ES OrdinaryOwnPropertyKeys consumers — Object.keys/values/entries,
+    /// for-in, JSON — must check per-key enumerability through the trap), and
+    /// falls through to the target when the trap is absent. Ordinary objects
+    /// use their existing own-key visibility (bd-9trje).
+    fn own_string_key_is_enumerable(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &JsString,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded Proxy getOwnPropertyDescriptor recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return Ok(self.writable_own_runtime_property_visible(object_id, key));
+        };
+        let descriptor = self.invoke_proxy_trap(
+            module,
+            handler,
+            "getOwnPropertyDescriptor",
+            vec![Value::Object(target), Value::Str(key.clone())],
+        )?;
+        match descriptor {
+            // Trap absent: the target governs the descriptor.
+            None => self.own_string_key_is_enumerable(module, target, key, depth + 1),
+            // Property reported absent.
+            Some(Value::Undefined | Value::Null) => Ok(false),
+            Some(Value::Object(descriptor_id)) => {
+                let enumerable = self.proxy_aware_get_runtime_property(
+                    module,
+                    descriptor_id,
+                    &RuntimePropertyKey::String(JsString::from("enumerable")),
+                    Value::Object(descriptor_id),
+                    0,
+                )?;
+                Ok(enumerable.is_truthy())
+            }
+            Some(other) => Err(InterpreterError::TypeError {
+                expected: "object or undefined from Proxy.getOwnPropertyDescriptor".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// Own enumerable String keys of `object_id` in ES order, honoring the
+    /// Proxy `ownKeys` + `getOwnPropertyDescriptor` traps (bd-9trje). Used by
+    /// the Object.keys/values/entries proxy branch.
+    fn proxy_own_enumerable_string_keys(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Vec<JsString>, InterpreterError> {
+        let keys = self.proxy_aware_own_property_keys(module, object_id, 0)?;
+        let mut result = Vec::new();
+        for key_value in keys {
+            if let Value::Str(key) = key_value
+                && self.own_string_key_is_enumerable(module, object_id, &key, 0)?
+            {
+                result.push(key);
+            }
+        }
+        Ok(result)
+    }
+
     /// Snapshot a source object's typed own-key order, read each value through
     /// ordinary `[[Get]]` (so Symbol accessors and Proxy traps execute), and
     /// copy it to the target. Object spread defines plain data properties;
@@ -57265,6 +57336,17 @@ impl InterpreterCore {
 
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
+                    Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
+                        // bd-9trje: a Proxy receiver must surface keys through the
+                        // ownKeys trap and per-key getOwnPropertyDescriptor trap.
+                        let key_values = self
+                            .proxy_own_enumerable_string_keys(module, obj_id)?
+                            .into_iter()
+                            .map(Value::Str)
+                            .collect::<Vec<_>>();
+                        let array_id = self.alloc_array_from_values(&key_values)?;
+                        Ok(Value::Object(array_id))
+                    }
                     Value::Object(obj_id) => {
                         let key_values = self
                             .heap
@@ -57295,6 +57377,23 @@ impl InterpreterCore {
 
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
+                    Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
+                        // bd-9trje: read each enumerable Proxy key's value through
+                        // the get trap, in ownKeys-trap order.
+                        let keys = self.proxy_own_enumerable_string_keys(module, obj_id)?;
+                        let mut values = Vec::with_capacity(keys.len());
+                        for key in keys {
+                            values.push(self.proxy_aware_get_runtime_property(
+                                module,
+                                obj_id,
+                                &RuntimePropertyKey::String(key),
+                                Value::Object(obj_id),
+                                0,
+                            )?);
+                        }
+                        let array_id = self.alloc_array_from_values(&values)?;
+                        Ok(Value::Object(array_id))
+                    }
                     Value::Object(obj_id) => {
                         let values = self
                             .heap
@@ -57327,6 +57426,26 @@ impl InterpreterCore {
 
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
+                    Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
+                        // bd-9trje: [key, value] pairs for each enumerable Proxy key,
+                        // key order from the ownKeys trap, values from the get trap.
+                        let keys = self.proxy_own_enumerable_string_keys(module, obj_id)?;
+                        let mut entry_values = Vec::with_capacity(keys.len());
+                        for key in keys {
+                            let value = self.proxy_aware_get_runtime_property(
+                                module,
+                                obj_id,
+                                &RuntimePropertyKey::String(key.clone()),
+                                Value::Object(obj_id),
+                                0,
+                            )?;
+                            let entry_array_id =
+                                self.alloc_array_from_values(&[Value::Str(key), value])?;
+                            entry_values.push(Value::Object(entry_array_id));
+                        }
+                        let array_id = self.alloc_array_from_values(&entry_values)?;
+                        Ok(Value::Object(array_id))
+                    }
                     Value::Object(obj_id) => {
                         let entries = self
                             .heap
@@ -60514,6 +60633,18 @@ impl InterpreterCore {
 
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
+                    Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
+                        // bd-9trje: getOwnPropertyNames returns EVERY own String key
+                        // (enumerable or not) surfaced by the ownKeys trap — no
+                        // per-key descriptor consultation.
+                        let property_name_values = self
+                            .proxy_aware_own_property_keys(module, obj_id, 0)?
+                            .into_iter()
+                            .filter(|key| matches!(key, Value::Str(_)))
+                            .collect::<Vec<_>>();
+                        let array_id = self.alloc_array_from_values(&property_name_values)?;
+                        Ok(Value::Object(array_id))
+                    }
                     Value::Object(obj_id) => {
                         let property_name_values = self
                             .heap

@@ -462,9 +462,13 @@ fn own_property_names_use_deterministic_integer_then_string_order() {
             .unwrap();
     }
 
+    // ES OrdinaryOwnPropertyKeys (and DISC-013 / bd-n8eta): array-index keys
+    // (canonical uint < 2^32-1) come first in ascending numeric order, then the
+    // remaining string keys in creation (insertion) order. "4294967295" == 2^32-1
+    // is NOT an array index, so it stays a string key ordered by creation.
     assert_eq!(
         heap.get_own_property_names(object).unwrap(),
-        vec!["1", "2", "10", "4294967295", "alpha", "zeta"]
+        vec!["1", "2", "10", "zeta", "alpha", "4294967295"]
     );
 }
 
@@ -485,9 +489,11 @@ fn own_property_symbols_return_symbol_keys_in_symbol_order() {
     )
     .unwrap();
 
+    // Symbols enumerate in creation (definition) order per ES, not sorted by id:
+    // SymbolId(22) was defined before SymbolId(14).
     assert_eq!(
         heap.get_own_property_symbols(object).unwrap(),
-        vec![SymbolId(14), SymbolId(22)]
+        vec![SymbolId(22), SymbolId(14)]
     );
 }
 
@@ -507,7 +513,8 @@ fn get_own_property_descriptors_follow_own_key_order() {
         .map(|(name, _)| name)
         .collect();
 
-    assert_eq!(keys, vec![key("1"), key("alpha"), key("beta")]);
+    // Integer index "1" first, then string keys in creation order (beta before alpha).
+    assert_eq!(keys, vec![key("1"), key("beta"), key("alpha")]);
 }
 
 #[test]
@@ -559,9 +566,11 @@ fn values_follow_key_order_and_skip_non_enumerable() {
     )
     .unwrap();
 
+    // Values follow own-key creation order (b defined before a); the
+    // non-enumerable "hidden" is skipped.
     assert_eq!(
         heap.values(object).unwrap(),
-        vec![str_value("a"), str_value("b")]
+        vec![str_value("b"), str_value("a")]
     );
 }
 
@@ -578,11 +587,12 @@ fn entries_follow_key_order_and_skip_symbols() {
     )
     .unwrap();
 
+    // Entries follow own-key creation order (b inserted before a); the symbol is skipped.
     assert_eq!(
         heap.entries(object).unwrap(),
         vec![
-            ("a".to_string(), int_value(1)),
             ("b".to_string(), int_value(2)),
+            ("a".to_string(), int_value(1)),
         ]
     );
 }
@@ -709,11 +719,12 @@ fn from_entries_creates_plain_extensible_object_with_entries() {
     ]);
 
     assert!(heap.is_extensible(object).unwrap());
+    // from_entries preserves entry (creation) order: beta before alpha.
     assert_eq!(
         heap.entries(object).unwrap(),
         vec![
-            ("alpha".to_string(), int_value(1)),
             ("beta".to_string(), int_value(2)),
+            ("alpha".to_string(), int_value(1)),
         ]
     );
 }

@@ -551,6 +551,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn discover_repo_root_walks_up_to_the_crate_marker_bd_yetou() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("checkout");
+        let crate_dir = root.join("crates/franken-engine");
+        std::fs::create_dir_all(crate_dir.join("src")).expect("create crate tree");
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\n").expect("Cargo.toml");
+        std::fs::write(crate_dir.join("src/lib.rs"), "// lib\n").expect("lib.rs");
+
+        // Discovery from a nested working directory finds the tree's own root,
+        // not whatever tree the binary was compiled in.
+        let nested = crate_dir.join("src");
+        assert_eq!(
+            discover_repo_root_from(&nested).as_deref(),
+            Some(root.as_path())
+        );
+        // And a tree with no franken-engine crate marker yields no root.
+        let bare = temp.path().join("unrelated");
+        std::fs::create_dir_all(&bare).expect("bare dir");
+        assert_eq!(discover_repo_root_from(&bare), None);
+    }
+
+    #[test]
+    fn discover_repo_root_requires_both_cargo_and_lib_markers_bd_yetou() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("checkout");
+        let crate_dir = root.join("crates/franken-engine");
+        std::fs::create_dir_all(&crate_dir).expect("create crate dir");
+        // Only Cargo.toml, no src/lib.rs: not a complete marker, no match.
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\n").expect("Cargo.toml");
+        assert_eq!(discover_repo_root_from(&crate_dir), None);
+    }
+
+    #[test]
     fn architecture_inventory_basic_creation() {
         let inventory = ArchitectureInventory {
             source_modules: vec![],

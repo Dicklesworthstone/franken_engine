@@ -104,6 +104,25 @@ impl std::fmt::Debug for SigningKey {
     }
 }
 
+impl zeroize::Zeroize for SigningKey {
+    fn zeroize(&mut self) {
+        // `[u8; N]: Zeroize` — the trait is in scope via this impl.
+        self.inner.zeroize();
+    }
+}
+
+/// Wipe the Ed25519 seed on drop (bd-acwe9). `RuntimeEvidenceAuthority` retains
+/// a project-owned [`SigningKey`] for the whole session; ordinary drop would
+/// leave the secret seed resident in the freed allocation. Every owner and
+/// clone clears its own copy on the way out. `no-unsafe`: the wipe is the
+/// audited `zeroize` crate's volatile write, not a hand-rolled `unsafe` one.
+impl Drop for SigningKey {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.zeroize();
+    }
+}
+
 /// A verification key (Ed25519 public key).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerificationKey {
@@ -909,6 +928,23 @@ mod tests {
         let vk1 = sk.verification_key();
         let vk2 = sk.verification_key();
         assert_eq!(vk1, vk2);
+    }
+
+    #[test]
+    fn signing_key_zeroize_wipes_secret_material_bd_acwe9() {
+        use zeroize::Zeroize;
+        let mut sk = SigningKey::from_bytes([7u8; SIGNING_KEY_LEN])
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(sk.as_bytes(), &[7u8; SIGNING_KEY_LEN]);
+        // The same wipe the `Drop` impl performs — observable here without
+        // reading freed memory (which would require the now-forbidden
+        // `unsafe`). After it, no secret bytes remain resident.
+        sk.zeroize();
+        assert_eq!(
+            sk.as_bytes(),
+            &[0u8; SIGNING_KEY_LEN],
+            "zeroize must clear the Ed25519 seed"
+        );
     }
 
     #[test]

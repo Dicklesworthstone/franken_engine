@@ -1725,6 +1725,7 @@ fn core_ir3_destination_register(instr: &CoreIr3Instruction) -> Option<u32> {
         | CoreIr3Instruction::InstanceOf { dst, .. }
         | CoreIr3Instruction::InOp { dst, .. }
         | CoreIr3Instruction::Construct { dst, .. }
+        | CoreIr3Instruction::ConstructSuper { dst, .. }
         | CoreIr3Instruction::ForInInit { dst, .. }
         | CoreIr3Instruction::ForInNext { value_dst: dst, .. }
         | CoreIr3Instruction::ForOfInit { dst, .. }

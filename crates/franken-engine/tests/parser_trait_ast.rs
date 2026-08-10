@@ -1595,15 +1595,20 @@ fn parser_tagged_meta_frontier_rejects_super_computed_member_expression() {
 }
 
 #[test]
-fn parser_tagged_meta_frontier_rejects_super_call_expression() {
+fn parser_tagged_meta_frontier_parses_super_call_expression_bd_ppfz7() {
     let parser = CanonicalEs2020Parser;
     let source = "super()";
-    let err = parser
+    let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect_err("super call expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
-    assert_eq!(err.span, Some(single_line_source_span(source)));
+        .expect("super call expression should parse for constructor lowering");
+    let Statement::Expression(statement) = &tree.body[0] else {
+        panic!("expected expression statement, got {:?}", tree.body[0]);
+    };
+    assert!(matches!(
+        &statement.expression,
+        Expression::Call { callee, arguments, .. }
+            if matches!(callee.as_ref(), Expression::Super) && arguments.is_empty()
+    ));
 }
 
 #[test]

@@ -1105,6 +1105,14 @@ pub struct HeapObject {
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
+    /// Engine-private parent constructor slot, inaccessible to guest code.
+    derived_constructor_parent: Option<Value>,
+    /// IFC provenance paired with the private parent constructor slot.
+    derived_constructor_parent_label: Option<crate::ifc_artifacts::Label>,
+    /// Whether the owning function is a derived class constructor.
+    is_derived_constructor: bool,
+    /// Whether the owning function uses the implicit forwarding constructor.
+    is_default_derived_constructor: bool,
     /// Whether this object was allocated by an array-producing path.
     pub is_array: bool,
 }
@@ -1163,10 +1171,14 @@ impl Serialize for HeapObject {
                 property,
             })
             .collect::<Vec<_>>();
+        let has_constructor_metadata = self.is_derived_constructor
+            || self.is_default_derived_constructor
+            || self.derived_constructor_parent.is_some();
         let field_count = 4
             + if has_accessors { 1 } else { 0 }
             + if order.is_some() { 1 } else { 0 }
-            + if symbol_properties.is_empty() { 0 } else { 1 };
+            + if symbol_properties.is_empty() { 0 } else { 1 }
+            + if has_constructor_metadata { 4 } else { 0 };
         let mut object = serializer.serialize_struct("HeapObject", field_count)?;
         object.serialize_field("properties", &self.properties)?;
         if has_accessors {
@@ -1179,6 +1191,21 @@ impl Serialize for HeapObject {
         object.serialize_field("prototype", &self.prototype)?;
         object.serialize_field("constructor_function", &self.constructor_function)?;
         object.serialize_field("is_array", &self.is_array)?;
+        if has_constructor_metadata {
+            object.serialize_field(
+                "derived_constructor_parent",
+                &self.derived_constructor_parent,
+            )?;
+            object.serialize_field(
+                "derived_constructor_parent_label",
+                &self.derived_constructor_parent_label,
+            )?;
+            object.serialize_field("is_derived_constructor", &self.is_derived_constructor)?;
+            object.serialize_field(
+                "is_default_derived_constructor",
+                &self.is_default_derived_constructor,
+            )?;
+        }
         if let Some(order) = &order {
             object.serialize_field("own_string_key_order", order)?;
         }
@@ -1203,6 +1230,14 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             is_array: bool,
             #[serde(default)]
+            derived_constructor_parent: Option<Value>,
+            #[serde(default)]
+            derived_constructor_parent_label: Option<crate::ifc_artifacts::Label>,
+            #[serde(default)]
+            is_derived_constructor: bool,
+            #[serde(default)]
+            is_default_derived_constructor: bool,
+            #[serde(default)]
             own_string_key_order: Option<Vec<JsString>>,
             #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
@@ -1226,6 +1261,10 @@ impl<'de> Deserialize<'de> for HeapObject {
             accessors: BTreeMap::new(),
             prototype: wire.prototype,
             constructor_function: wire.constructor_function,
+            derived_constructor_parent: wire.derived_constructor_parent,
+            derived_constructor_parent_label: wire.derived_constructor_parent_label,
+            is_derived_constructor: wire.is_derived_constructor,
+            is_default_derived_constructor: wire.is_default_derived_constructor,
             is_array: wire.is_array,
         };
 
@@ -1322,6 +1361,10 @@ impl PartialEq for HeapObject {
             && self.accessors == other.accessors
             && self.prototype == other.prototype
             && self.constructor_function == other.constructor_function
+            && self.derived_constructor_parent == other.derived_constructor_parent
+            && self.derived_constructor_parent_label == other.derived_constructor_parent_label
+            && self.is_derived_constructor == other.is_derived_constructor
+            && self.is_default_derived_constructor == other.is_default_derived_constructor
             && self.is_array == other.is_array
             && self.properties.baseline_string_key_order().is_some()
                 == other.properties.baseline_string_key_order().is_some()
@@ -2317,6 +2360,14 @@ struct CallFrame {
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
     construct_this: Option<Value>,
+    /// Whether this is a derived constructor activation. Derived activations
+    /// begin with an uninitialized `this` binding and use distinct return rules.
+    derived_constructor: bool,
+    /// Whether the current constructor's `this` binding has been initialized.
+    this_initialized: bool,
+    /// A parent entered by `super()` initializes the immediately enclosing
+    /// derived activation with its effective object result when it returns.
+    initialize_derived_this_on_return: bool,
     /// Caller exception state saved across the call so callee control flow
     /// cannot clobber an outer in-flight abrupt completion.
     saved_pending_exception: Option<LabeledException>,
@@ -3891,6 +3942,10 @@ impl InterpreterCore {
                 accessors: std::collections::BTreeMap::new(),
                 prototype: None,
                 constructor_function: None,
+                derived_constructor_parent: None,
+                derived_constructor_parent_label: None,
+                is_derived_constructor: false,
+                is_default_derived_constructor: false,
                 is_array: false,
             });
         }
@@ -5186,6 +5241,9 @@ impl InterpreterCore {
                 super_value,
                 super_label,
                 construct_this: None,
+                derived_constructor: false,
+                this_initialized: true,
+                initialize_derived_this_on_return: false,
                 saved_pending_exception: self.pending_exception.take(),
                 saved_pending_return: self.pending_return.take(),
                 saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
@@ -5493,15 +5551,49 @@ impl InterpreterCore {
             self.restore_scope_chain_for_frame(&frame);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
-            // ES2020 §9.2.2 step 13: if this is a constructor call and the
-            // return value is not an object, use the allocated `this` object
-            // instead.
-            let (effective_val, effective_label) = match &frame.construct_this {
-                Some(this_obj) if !return_val.is_object_like() => {
-                    (this_obj.clone(), frame.this_label.clone())
+            let (effective_val, effective_label) = if frame.derived_constructor {
+                if return_val.is_object_like() {
+                    (return_val, return_label)
+                } else if !matches!(&return_val, Value::Undefined) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object or undefined from derived constructor".to_string(),
+                        got: return_val.type_name().to_string(),
+                    });
+                } else if frame.this_initialized {
+                    (frame.this_value.clone(), frame.this_label.clone())
+                } else {
+                    return Err(InterpreterError::UninitializedBinding {
+                        name: "this".to_string(),
+                    });
                 }
-                _ => (return_val, return_label),
+            } else {
+                // Base constructors preserve the ordinary return-object-or-this
+                // rule. Non-constructor frames have no `construct_this`.
+                match &frame.construct_this {
+                    Some(this_obj) if !return_val.is_object_like() => {
+                        (this_obj.clone(), frame.this_label.clone())
+                    }
+                    _ => (return_val, return_label),
+                }
             };
+            if frame.initialize_derived_this_on_return {
+                let Some(derived_frame) = self.call_stack.last_mut() else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "enclosing derived constructor".to_string(),
+                        got: "missing caller frame after super()".to_string(),
+                    });
+                };
+                if !derived_frame.derived_constructor || derived_frame.this_initialized {
+                    return Err(InterpreterError::TypeError {
+                        expected: "uninitialized enclosing derived-constructor this binding"
+                            .to_string(),
+                        got: "super() attempted to initialize this twice".to_string(),
+                    });
+                }
+                derived_frame.this_value = effective_val.clone();
+                derived_frame.this_label = effective_label.clone();
+                derived_frame.this_initialized = true;
+            }
             if let Some(return_reg) = frame.return_reg {
                 self.write_reg_with_label(return_reg, effective_val, effective_label)?;
             }
@@ -6191,6 +6283,9 @@ impl InterpreterCore {
                 super_value,
                 super_label: crate::ifc_artifacts::Label::Public,
                 construct_this: None,
+                derived_constructor: false,
+                this_initialized: true,
+                initialize_derived_this_on_return: false,
                 saved_pending_exception: self.pending_exception.take(),
                 saved_pending_return: self.pending_return.take(),
                 saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
@@ -6224,6 +6319,197 @@ impl InterpreterCore {
             }
 
             self.ip = func.entry as usize;
+            Ok(())
+        })();
+        if let Err(error) = setup_result {
+            self.restore_call_setup(setup_snapshot);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enter_constructor_call(
+        &mut self,
+        module: &Ir3Module,
+        callee_value: Value,
+        callee_label: crate::ifc_artifacts::Label,
+        args: RegRange,
+        return_ip: usize,
+        return_reg: Option<u32>,
+        new_target_value: Value,
+        new_target_label: crate::ifc_artifacts::Label,
+        initialize_derived_this_on_return: bool,
+    ) -> Result<(), InterpreterError> {
+        // An omitted derived constructor is semantically
+        // `constructor(...args) { super(...args); }`. Resolve any chain of such
+        // synthetic constructors before frame entry so every original argument
+        // and the original `new.target` survive without a fixed-arity shim.
+        let mut active_callee = callee_value;
+        let mut active_callee_label = callee_label;
+        let mut visited = BTreeSet::new();
+        loop {
+            let (_, is_default_derived, parent, parent_label) =
+                self.derived_constructor_metadata(&active_callee)?;
+            if !is_default_derived {
+                break;
+            }
+            let key = Self::function_object_key(&active_callee).ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "default derived constructor function".to_string(),
+                    got: active_callee.type_name().to_string(),
+                }
+            })?;
+            if !visited.insert(key) {
+                return Err(InterpreterError::TypeError {
+                    expected: "acyclic derived constructor chain".to_string(),
+                    got: "cyclic default-derived superclass metadata".to_string(),
+                });
+            }
+            active_callee = parent;
+            active_callee_label = active_callee_label.join(&parent_label);
+        }
+
+        let (derived_constructor, _, super_value, super_label) =
+            self.derived_constructor_metadata(&active_callee)?;
+        let (function_index, captured_env) = match &active_callee {
+            Value::Function(index) => (*index, None),
+            Value::Closure(closure_id) => {
+                let closure = self.closures.get(*closure_id as usize).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "valid closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    }
+                })?;
+                (
+                    closure.function_index,
+                    Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                )
+            }
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "constructor function".to_string(),
+                    got: active_callee.type_name().to_string(),
+                });
+            }
+        };
+        let function = module.function_table.get(function_index as usize).ok_or(
+            InterpreterError::FunctionNotFound {
+                index: function_index,
+                table_size: module.function_table.len() as u32,
+            },
+        )?;
+        self.validate_function_rest_param(function)?;
+        self.ensure_call_depth_available()?;
+
+        let mut argument_values = Vec::new();
+        let mut argument_labels = Vec::new();
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            argument_values.push(self.read_reg(register)?);
+            argument_labels.push(self.read_reg_label(register)?);
+        }
+        argument_values.truncate(function.arity as usize);
+        argument_labels.truncate(function.arity as usize);
+
+        let setup_snapshot = self.snapshot_call_setup(None, true);
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            self.apply_rest_param(
+                module,
+                &mut argument_values,
+                function.rest_param_index,
+                function.arity,
+                args,
+            )?;
+            self.apply_rest_param_labels(
+                &mut argument_labels,
+                function.rest_param_index,
+                function.arity,
+                args,
+            )?;
+
+            let (this_value, construct_this, this_initialized) = if derived_constructor {
+                (Value::Undefined, None, false)
+            } else {
+                let prototype = self
+                    .function_prototype_for_value(&new_target_value)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "constructible new.target".to_string(),
+                        got: new_target_value.type_name().to_string(),
+                    })?;
+                let this_id = self.alloc_object_with_prototype(Some(prototype))?;
+                if let Some(object) = self.heap.get_mut(this_id.0 as usize) {
+                    object.constructor_function = Some(function_index);
+                }
+                let this_value = Value::Object(this_id);
+                (this_value.clone(), Some(this_value), true)
+            };
+            self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
+
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = captured_env
+                .as_ref()
+                .map(|environment| Self::estimate_scope_chain_bytes(environment))
+                .unwrap_or(0);
+            let saved_scope_chain = if captured_env.is_some() {
+                Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+            } else {
+                None
+            };
+            self.call_stack.push(CallFrame {
+                return_ip,
+                return_reg,
+                register_base: self.register_base,
+                function_index: Some(function_index),
+                this_value,
+                this_label: active_callee_label.join(&new_target_label),
+                new_target_value,
+                new_target_label: new_target_label.clone(),
+                super_value,
+                super_label,
+                construct_this,
+                derived_constructor,
+                this_initialized,
+                initialize_derived_this_on_return,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain,
+                async_function_id: None,
+            });
+
+            if let Some(environment) = captured_env {
+                self.scope_chain.frames = environment;
+            }
+            if let Err(error) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(error);
+            }
+            if let Err(error) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(error);
+            }
+
+            self.register_base += self.config.max_registers as usize;
+            let required_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, required_len);
+            for (index, (value, label)) in
+                argument_values.into_iter().zip(argument_labels).enumerate()
+            {
+                let register = index as u32;
+                if register < self.config.max_registers {
+                    self.write_reg_with_label(register, value, label)?;
+                }
+            }
+            self.ip = function.entry as usize;
             Ok(())
         })();
         if let Err(error) = setup_result {
@@ -6349,6 +6635,9 @@ impl InterpreterCore {
                 super_value: setup.super_value,
                 super_label: setup.super_label,
                 construct_this: None,
+                derived_constructor: false,
+                this_initialized: true,
+                initialize_derived_this_on_return: false,
                 saved_pending_exception: None,
                 saved_pending_return: None,
                 saved_suspended_abrupt_depth: 0,
@@ -7596,6 +7885,9 @@ impl InterpreterCore {
                                     super_value,
                                     super_label: callee_label,
                                     construct_this: None,
+                                    derived_constructor: false,
+                                    this_initialized: true,
+                                    initialize_derived_this_on_return: false,
                                     saved_pending_exception: self.pending_exception.take(),
                                     saved_pending_return: self.pending_return.take(),
                                     saved_suspended_abrupt_depth: self
@@ -7950,6 +8242,9 @@ impl InterpreterCore {
                             super_value,
                             super_label: callee_label,
                             construct_this: None,
+                            derived_constructor: false,
+                            this_initialized: true,
+                            initialize_derived_this_on_return: false,
                             saved_pending_exception: self.pending_exception.take(),
                             saved_pending_return: self.pending_return.take(),
                             saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
@@ -8026,8 +8321,17 @@ impl InterpreterCore {
                                 label: completed_label,
                             });
                         }
-                        if let Some(final_value) = self.complete_return(return_val, return_label)? {
-                            return Ok(RunLoopExit::Value(final_value));
+                        match self.complete_return(return_val, return_label) {
+                            Ok(Some(final_value)) => {
+                                return Ok(RunLoopExit::Value(final_value));
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
                         }
                     }
                 }
@@ -8704,9 +9008,95 @@ impl InterpreterCore {
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
+                Ir3Instruction::RegisterDerivedConstructor {
+                    constructor,
+                    parent,
+                    default_constructor,
+                } => {
+                    let constructor = self.read_reg(constructor)?;
+                    let parent_value = self.read_reg(parent)?;
+                    let parent_label = self.read_reg_label(parent)?;
+                    self.register_derived_constructor_metadata(
+                        &constructor,
+                        parent_value,
+                        parent_label,
+                        default_constructor,
+                    )?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ConstructSuper { args, dst } => {
+                    let Some(frame) = self.call_stack.last() else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "active derived constructor".to_string(),
+                            got: "super() outside a constructor".to_string(),
+                        });
+                    };
+                    if !frame.derived_constructor || frame.this_initialized {
+                        let error = InterpreterError::TypeError {
+                            expected: "uninitialized derived-constructor this binding".to_string(),
+                            got: if frame.derived_constructor {
+                                "super() called more than once".to_string()
+                            } else {
+                                "super() in a base constructor".to_string()
+                            },
+                        };
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        }
+                    }
+                    let parent = frame.super_value.clone();
+                    let parent_label = frame.super_label.clone();
+                    let new_target = frame.new_target_value.clone();
+                    let new_target_label = frame.new_target_label.clone();
+                    if let Err(error) = self.enter_constructor_call(
+                        module,
+                        parent,
+                        parent_label,
+                        args,
+                        self.ip + 1,
+                        Some(dst),
+                        new_target,
+                        new_target_label,
+                        true,
+                    ) {
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        }
+                    }
+                }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
                     let callee_label = self.read_reg_label(callee)?;
+
+                    let (is_derived, is_default_derived) =
+                        if matches!(&callee_val, Value::Function(_) | Value::Closure(_)) {
+                            let (derived, default_derived, _, _) =
+                                self.derived_constructor_metadata(&callee_val)?;
+                            (derived, default_derived)
+                        } else {
+                            (false, false)
+                        };
+                    if is_derived || is_default_derived {
+                        if let Err(error) = self.enter_constructor_call(
+                            module,
+                            callee_val.clone(),
+                            callee_label.clone(),
+                            args,
+                            self.ip + 1,
+                            Some(dst),
+                            callee_val,
+                            callee_label,
+                            false,
+                        ) {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
+                        continue;
+                    }
 
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env) = match &callee_val {
@@ -8820,6 +9210,9 @@ impl InterpreterCore {
                                     super_value,
                                     super_label: callee_label,
                                     construct_this: Some(this_val.clone()),
+                                    derived_constructor: false,
+                                    this_initialized: true,
+                                    initialize_derived_this_on_return: false,
                                     saved_pending_exception: self.pending_exception.take(),
                                     saved_pending_return: self.pending_return.take(),
                                     saved_suspended_abrupt_depth: self
@@ -8927,6 +9320,19 @@ impl InterpreterCore {
                     return Err(InterpreterError::Halted);
                 }
                 Ir3Instruction::LoadThis { dst } => {
+                    if self
+                        .call_stack
+                        .last()
+                        .is_some_and(|frame| frame.derived_constructor && !frame.this_initialized)
+                    {
+                        let error = InterpreterError::UninitializedBinding {
+                            name: "this".to_string(),
+                        };
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        }
+                    }
                     let (this_val, this_label) = self.call_stack.last().map_or(
                         (Value::Undefined, crate::ifc_artifacts::Label::Public),
                         |frame| (frame.this_value.clone(), frame.this_label.clone()),
@@ -9128,10 +9534,21 @@ impl InterpreterCore {
                                         label: completed_label,
                                     });
                                 }
-                                if let Some(final_value) = self
-                                    .complete_return(pending_return.value, pending_return.label)?
+                                match self
+                                    .complete_return(pending_return.value, pending_return.label)
                                 {
-                                    return Ok(RunLoopExit::Value(final_value));
+                                    Ok(Some(final_value)) => {
+                                        return Ok(RunLoopExit::Value(final_value));
+                                    }
+                                    Ok(None) => {}
+                                    Err(error) => {
+                                        match self
+                                            .route_run_loop_javascript_error(module, error, mode)?
+                                        {
+                                            None => continue,
+                                            Some(error) => return Err(error),
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -12625,6 +13042,9 @@ impl InterpreterCore {
                 super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
                 super_label: crate::ifc_artifacts::Label::Public,
                 construct_this: None,
+                derived_constructor: false,
+                this_initialized: true,
+                initialize_derived_this_on_return: false,
                 saved_pending_exception: self.pending_exception.take(),
                 saved_pending_return: self.pending_return.take(),
                 saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
@@ -15026,6 +15446,20 @@ impl InterpreterCore {
             .saturating_add(own_string_key_order)
             .saturating_add(symbol_properties)
             .saturating_add(symbol_order)
+            .saturating_add(
+                object
+                    .derived_constructor_parent
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
+                    .derived_constructor_parent_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -16087,6 +16521,81 @@ impl InterpreterCore {
             .get(key)
             .cloned()
             .unwrap_or(Value::Undefined))
+    }
+
+    fn derived_constructor_metadata(
+        &mut self,
+        value: &Value,
+    ) -> Result<(bool, bool, Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let prototype = self.function_prototype_for_value(value)?.ok_or_else(|| {
+            InterpreterError::TypeError {
+                expected: "constructor function".to_string(),
+                got: value.type_name().to_string(),
+            }
+        })?;
+        let object = self
+            .heap
+            .get(prototype.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
+        Ok((
+            object.is_derived_constructor,
+            object.is_default_derived_constructor,
+            object
+                .derived_constructor_parent
+                .clone()
+                .unwrap_or(Value::Undefined),
+            object
+                .derived_constructor_parent_label
+                .clone()
+                .unwrap_or(crate::ifc_artifacts::Label::Public),
+        ))
+    }
+
+    fn register_derived_constructor_metadata(
+        &mut self,
+        constructor: &Value,
+        parent: Value,
+        parent_label: crate::ifc_artifacts::Label,
+        default_constructor: bool,
+    ) -> Result<(), InterpreterError> {
+        let prototype = self
+            .function_prototype_for_value(constructor)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "constructor function".to_string(),
+                got: constructor.type_name().to_string(),
+            })?;
+        let index = prototype.0 as usize;
+        let object = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
+        let previous = (
+            object.derived_constructor_parent.clone(),
+            object.derived_constructor_parent_label.clone(),
+            object.is_derived_constructor,
+            object.is_default_derived_constructor,
+        );
+        let object = self
+            .heap
+            .get_mut(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
+        object.derived_constructor_parent = Some(parent);
+        object.derived_constructor_parent_label = Some(parent_label);
+        object.is_derived_constructor = true;
+        object.is_default_derived_constructor = default_constructor;
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            let object = self
+                .heap
+                .get_mut(index)
+                .expect("constructor metadata prototype remained allocated");
+            object.derived_constructor_parent = previous.0;
+            object.derived_constructor_parent_label = previous.1;
+            object.is_derived_constructor = previous.2;
+            object.is_default_derived_constructor = previous.3;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn function_super_value(
@@ -22305,6 +22814,100 @@ mod tests {
     }
 
     #[test]
+    fn super_construction_preserves_private_parent_label_bd_ppfz7() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::RegisterDerivedConstructor {
+                    constructor: 0,
+                    parent: 1,
+                    default_constructor: false,
+                },
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::ConstructSuper {
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::LoadThis { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                constructor_descriptor_bd_ur3tk_4(3, 0, 2),
+                constructor_descriptor_bd_ur3tk_4(6, 0, 1),
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Public)
+            .expect("child constructor should be writable");
+        core.write_reg_with_label(1, Value::Function(1), crate::ifc_artifacts::Label::Secret)
+            .expect("parent constructor should be writable");
+
+        core.execute(&module)
+            .expect("derived super construction should execute");
+
+        assert!(matches!(core.registers[2], Value::Object(_)));
+        assert_eq!(
+            core.read_reg_label(2).expect("derived result label"),
+            crate::ifc_artifacts::Label::Secret,
+            "the private parent-constructor label must reach initialized derived this"
+        );
+    }
+
+    #[test]
+    fn default_derived_chain_accumulates_intermediate_parent_label_bd_ppfz7() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::RegisterDerivedConstructor {
+                    constructor: 1,
+                    parent: 2,
+                    default_constructor: true,
+                },
+                Ir3Instruction::RegisterDerivedConstructor {
+                    constructor: 0,
+                    parent: 1,
+                    default_constructor: true,
+                },
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                constructor_descriptor_bd_ur3tk_4(4, 0, 1),
+                constructor_descriptor_bd_ur3tk_4(4, 0, 1),
+                constructor_descriptor_bd_ur3tk_4(4, 0, 1),
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Public)
+            .expect("leaf constructor should be writable");
+        core.write_reg_with_label(1, Value::Function(1), crate::ifc_artifacts::Label::Secret)
+            .expect("intermediate constructor should be writable");
+        core.write_reg_with_label(2, Value::Function(2), crate::ifc_artifacts::Label::Public)
+            .expect("base constructor should be writable");
+
+        core.execute(&module)
+            .expect("default-derived chain should execute");
+
+        assert!(matches!(core.registers[3], Value::Object(_)));
+        assert_eq!(
+            core.read_reg_label(3).expect("default-derived result label"),
+            crate::ifc_artifacts::Label::Secret,
+            "forwarding must not overwrite an intermediate parent label"
+        );
+    }
+
+    #[test]
     fn constructor_super_value_preserves_callee_label_bd_ur3tk_4() {
         let module = test_module_with_functions(
             vec![
@@ -26702,6 +27305,9 @@ mod tests {
             super_value: Value::Undefined,
             super_label: crate::ifc_artifacts::Label::Public,
             construct_this: None,
+            derived_constructor: false,
+            this_initialized: true,
+            initialize_derived_this_on_return: false,
             saved_pending_exception: None,
             saved_pending_return: None,
             saved_suspended_abrupt_depth: 0,
@@ -29184,6 +29790,9 @@ mod tests {
             super_value: Value::Undefined,
             super_label: crate::ifc_artifacts::Label::Public,
             construct_this: Some(allocated_this),
+            derived_constructor: false,
+            this_initialized: true,
+            initialize_derived_this_on_return: false,
             saved_pending_exception: None,
             saved_pending_return: None,
             saved_suspended_abrupt_depth: 0,
@@ -29498,11 +30107,10 @@ mod tests {
             "constructor and method bodies should load a frame super binding"
         );
         assert!(
-            output
-                .ir3
-                .constant_pool
-                .iter()
-                .any(|constant| constant == IR_SUPER_CONSTRUCTOR_PROPERTY),
+            output.ir3.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::RegisterDerivedConstructor { .. }
+            )),
             "derived constructor lowering should record its parent constructor"
         );
         assert!(
@@ -29520,6 +30128,137 @@ mod tests {
             .expect("class extends and super should execute through parser/lowering path");
 
         assert_eq!(result.value, Value::Int(42));
+    }
+
+    #[test]
+    fn derived_constructor_completion_matrix_bd_ppfz7() {
+        for (case, source, expected) in [
+            (
+                "explicit object without super",
+                "class Base {} class Child extends Base { constructor(){ return { value: 7 }; } } new Child().value;",
+                Value::Int(7),
+            ),
+            (
+                "primitive without super",
+                "class Base {} class Child extends Base { constructor(){ return 7; } } let kind; try { new Child(); } catch (error) { kind = error.name; } kind;",
+                Value::str("TypeError"),
+            ),
+            (
+                "undefined without super",
+                "class Base {} class Child extends Base { constructor(){ return undefined; } } let kind; try { new Child(); } catch (error) { kind = error.name; } kind;",
+                Value::str("ReferenceError"),
+            ),
+            (
+                "fallthrough without super",
+                "class Base {} class Child extends Base { constructor(){} } let kind; try { new Child(); } catch (error) { kind = error.name; } kind;",
+                Value::str("ReferenceError"),
+            ),
+            (
+                "primitive after super",
+                "class Base {} class Child extends Base { constructor(){ super(); return 7; } } let kind; try { new Child(); } catch (error) { kind = error.name; } kind;",
+                Value::str("TypeError"),
+            ),
+            (
+                "primitive return through finally",
+                "class Base {} class Child extends Base { constructor(){ super(); try { return 7; } finally {} } } let kind; try { new Child(); } catch (error) { kind = error.name; } kind;",
+                Value::str("TypeError"),
+            ),
+            (
+                "guest static marker collision cannot declassify a derived constructor",
+                "class Base {} class Child extends Base { static __franken_ir_derived_constructor__(){ return false; } constructor(){ return 7; } } let kind; try { new Child(); } catch (error) { kind = error.name; } kind;",
+                Value::str("TypeError"),
+            ),
+            (
+                "undefined after super",
+                "class Base { constructor(){ this.value = 8; } } class Child extends Base { constructor(){ super(); return undefined; } } new Child().value;",
+                Value::Int(8),
+            ),
+            (
+                "fallthrough after super",
+                "class Base { constructor(){ this.value = 9; } } class Child extends Base { constructor(){ super(); } } new Child().value;",
+                Value::Int(9),
+            ),
+        ] {
+            assert_eq!(
+                execute_class_expression_source_bd_va13y(source),
+                expected,
+                "derived constructor completion mismatch for {case}",
+            );
+        }
+    }
+
+    #[test]
+    fn base_constructor_completion_matrix_bd_ppfz7() {
+        for (case, source, expected) in [
+            (
+                "explicit object",
+                "class Base { constructor(){ return { value: 7 }; } } new Base().value;",
+                Value::Int(7),
+            ),
+            (
+                "primitive falls back to allocated this",
+                "class Base { constructor(){ return 7; } } new Base() instanceof Base;",
+                Value::Bool(true),
+            ),
+            (
+                "undefined falls back to allocated this",
+                "class Base { constructor(){ return undefined; } } new Base() instanceof Base;",
+                Value::Bool(true),
+            ),
+            (
+                "fallthrough falls back to allocated this",
+                "class Base { constructor(){} } new Base() instanceof Base;",
+                Value::Bool(true),
+            ),
+        ] {
+            assert_eq!(
+                execute_class_expression_source_bd_va13y(source),
+                expected,
+                "base constructor completion mismatch for {case}",
+            );
+        }
+    }
+
+    #[test]
+    fn derived_construction_forwards_and_preserves_new_target_bd_ppfz7() {
+        for (case, source, expected) in [
+            (
+                "default constructor forwards every argument",
+                "class Base { constructor(left, right){ this.total = left + right; } } class Child extends Base {} new Child(20, 22).total;",
+                Value::Int(42),
+            ),
+            (
+                "parent replacement object becomes derived result",
+                "class Base { constructor(){ return { value: 42 }; } } class Child extends Base { constructor(){ super(); } } new Child().value;",
+                Value::Int(42),
+            ),
+            (
+                "parent observes child new.target",
+                "class Base { constructor(){ this.target = new.target; } } class Child extends Base { constructor(){ super(); } } new Child().target === Child;",
+                Value::Bool(true),
+            ),
+            (
+                "class expression has matching super semantics",
+                "class Base { constructor(value){ this.value = value; } } let Child = class extends Base { constructor(value){ super(value); } }; new Child(42).value;",
+                Value::Int(42),
+            ),
+            (
+                "default class expression forwards every argument",
+                "class Base { constructor(left, right){ this.total = left + right; } } let Child = class extends Base {}; new Child(20, 22).total;",
+                Value::Int(42),
+            ),
+            (
+                "repeated class expressions retain distinct parent constructors",
+                "class A { constructor(){ this.value = 1; } } class B { constructor(){ this.value = 2; } } function make(Parent){ return class extends Parent {}; } let First = make(A); let Second = make(B); new First().value * 10 + new Second().value;",
+                Value::Int(12),
+            ),
+        ] {
+            assert_eq!(
+                execute_class_expression_source_bd_va13y(source),
+                expected,
+                "derived construction mismatch for {case}",
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

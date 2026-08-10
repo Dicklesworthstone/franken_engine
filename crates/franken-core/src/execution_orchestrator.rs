@@ -2263,6 +2263,10 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::InstanceOf { .. } => "instance_of",
             crate::ir_contract::Ir3Instruction::InOp { .. } => "in_op",
             crate::ir_contract::Ir3Instruction::Construct { .. } => "construct",
+            crate::ir_contract::Ir3Instruction::ConstructSuper { .. } => "construct_super",
+            crate::ir_contract::Ir3Instruction::RegisterDerivedConstructor { .. } => {
+                "register_derived_constructor"
+            }
             crate::ir_contract::Ir3Instruction::TemplateLiteral { .. } => "template_literal",
             crate::ir_contract::Ir3Instruction::Halt => "halt",
             crate::ir_contract::Ir3Instruction::BeginTry { .. } => "begin_try",

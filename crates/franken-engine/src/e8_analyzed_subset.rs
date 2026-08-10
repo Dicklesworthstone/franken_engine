@@ -157,6 +157,10 @@ pub fn classify_op(op: &Ir1Op) -> OpClassification {
         Ir1Op::Call { .. } => analyzed("call", ANALYZED_CALL),
         Ir1Op::CallMethod { .. } => analyzed("call_method", ANALYZED_CALL),
         Ir1Op::Construct { .. } => analyzed("construct", ANALYZED_CALL),
+        Ir1Op::ConstructSuper { .. } => analyzed("construct_super", ANALYZED_CALL),
+        Ir1Op::RegisterDerivedConstructor { .. } => {
+            analyzed("register_derived_constructor", ANALYZED_VALUE_JOIN)
+        }
         Ir1Op::Return => analyzed("return", ANALYZED_CALL),
         Ir1Op::BinaryOp { .. } => analyzed("binary_op", ANALYZED_VALUE_JOIN),
         Ir1Op::UnaryOp { .. } => analyzed("unary_op", ANALYZED_VALUE_JOIN),

@@ -650,6 +650,86 @@ mod tests {
     }
 
     #[test]
+    fn process_entries_are_redacted_in_journal_diagnostics_but_exact_in_serde() {
+        let request = ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "/secret/journal-command-bd-x85a7-3".to_string(),
+                argv: vec!["secret-journal-argument-bd-x85a7-3".to_string()],
+                env: BTreeMap::from([(
+                    "SECRET_JOURNAL_KEY_BD_X85A7_3".to_string(),
+                    "secret-journal-value-bd-x85a7-3".to_string(),
+                )]),
+                cwd: Some("/secret/journal-cwd-bd-x85a7-3".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: b"secret-journal-stdin-bd-x85a7-3".to_vec(),
+            timeout_millis: Some(250),
+        };
+        let outcome = Ok(ProcessSpawnResponse::Run {
+            exit: ProcessExit {
+                success: true,
+                code: Some(0),
+                signal: None,
+            },
+            stdout: b"secret-journal-stdout-bd-x85a7-3".to_vec(),
+            stderr: b"secret-journal-stderr-bd-x85a7-3".to_vec(),
+        });
+        let entry = HostEffectJournalEntry::ProcessSpawn {
+            request: request.clone(),
+            outcome: outcome.clone(),
+        };
+        let secrets = [
+            "/secret/journal-command-bd-x85a7-3",
+            "secret-journal-argument-bd-x85a7-3",
+            "SECRET_JOURNAL_KEY_BD_X85A7_3",
+            "secret-journal-value-bd-x85a7-3",
+            "/secret/journal-cwd-bd-x85a7-3",
+            "secret-journal-stdin-bd-x85a7-3",
+            "secret-journal-stdout-bd-x85a7-3",
+            "secret-journal-stderr-bd-x85a7-3",
+        ];
+
+        let journal = InMemoryHostEffectJournal::recording();
+        journal.begin_execution().expect("begin recording");
+        let reservation = journal
+            .reserve_process_spawn(&request)
+            .expect("reserve process effect");
+        let reservation_debug = format!("{reservation:?}");
+        journal
+            .complete_process_spawn(reservation, &request, &outcome)
+            .expect("complete process effect");
+        let diagnostics = [
+            format!("{entry:?}"),
+            reservation_debug,
+            format!("{journal:?}"),
+        ];
+        for diagnostic in diagnostics {
+            for secret in secrets {
+                assert!(
+                    !diagnostic.contains(secret),
+                    "journal diagnostic leaked {secret:?}: {diagnostic}"
+                );
+            }
+        }
+
+        let encoded = serde_json::to_value(&entry).expect("serialize journal entry");
+        assert_eq!(
+            encoded["request"]["launch"]["env"]["SECRET_JOURNAL_KEY_BD_X85A7_3"],
+            "secret-journal-value-bd-x85a7-3"
+        );
+        assert_eq!(
+            encoded["outcome"]["Ok"]["stdout"],
+            serde_json::json!(b"secret-journal-stdout-bd-x85a7-3")
+        );
+        assert_eq!(
+            serde_json::from_value::<HostEffectJournalEntry>(encoded)
+                .expect("deserialize journal entry"),
+            entry
+        );
+    }
+
+    #[test]
     fn record_preserves_interleaved_effect_order() {
         let journal = InMemoryHostEffectJournal::recording();
         journal.begin_execution().unwrap();

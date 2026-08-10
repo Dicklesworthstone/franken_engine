@@ -89,7 +89,7 @@ impl Default for ProcessStdio {
 /// `env` augments the policy's fixed environment only after each key is
 /// authorized. The native provider always calls `env_clear`; the host's ambient
 /// environment can never leak into the child.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessLaunch {
     pub executable: String,
@@ -107,6 +107,35 @@ pub struct ProcessLaunch {
     pub shell: bool,
     #[serde(default)]
     pub stdio: ProcessStdio,
+}
+
+impl fmt::Debug for ProcessLaunch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let argv_bytes = self.argv.iter().fold(0usize, |total, argument| {
+            total.saturating_add(argument.len())
+        });
+        let env_key_bytes = self
+            .env
+            .keys()
+            .fold(0usize, |total, key| total.saturating_add(key.len()));
+        let env_value_bytes = self
+            .env
+            .values()
+            .fold(0usize, |total, value| total.saturating_add(value.len()));
+
+        f.debug_struct("ProcessLaunch")
+            .field("executable_bytes", &self.executable.len())
+            .field("argv_count", &self.argv.len())
+            .field("argv_bytes", &argv_bytes)
+            .field("env_count", &self.env.len())
+            .field("env_key_bytes", &env_key_bytes)
+            .field("env_value_bytes", &env_value_bytes)
+            .field("cwd_present", &self.cwd.is_some())
+            .field("cwd_bytes", &self.cwd.as_ref().map_or(0usize, String::len))
+            .field("shell", &self.shell)
+            .field("stdio", &self.stdio)
+            .finish()
+    }
 }
 
 /// Signal names accepted at the typed boundary.
@@ -133,7 +162,7 @@ impl ProcessSignal {
 }
 
 /// Typed process operation crossing the engine/host seam.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "operation", deny_unknown_fields)]
 pub enum ProcessSpawnRequest {
     /// Launch, supply all input, close stdin, and wait for a bounded result.
@@ -166,6 +195,49 @@ pub enum ProcessSpawnRequest {
     },
 }
 
+impl fmt::Debug for ProcessSpawnRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Run {
+                launch,
+                stdin,
+                timeout_millis,
+            } => f
+                .debug_struct("ProcessSpawnRequest::Run")
+                .field("launch", launch)
+                .field("stdin_bytes", &stdin.len())
+                .field("timeout_millis", timeout_millis)
+                .finish(),
+            Self::Spawn { launch } => f
+                .debug_struct("ProcessSpawnRequest::Spawn")
+                .field("launch", launch)
+                .finish(),
+            Self::WriteStdin { handle, data } => f
+                .debug_struct("ProcessSpawnRequest::WriteStdin")
+                .field("handle_bytes", &handle.len())
+                .field("data_bytes", &data.len())
+                .finish(),
+            Self::CloseStdin { handle } => f
+                .debug_struct("ProcessSpawnRequest::CloseStdin")
+                .field("handle_bytes", &handle.len())
+                .finish(),
+            Self::Wait {
+                handle,
+                timeout_millis,
+            } => f
+                .debug_struct("ProcessSpawnRequest::Wait")
+                .field("handle_bytes", &handle.len())
+                .field("timeout_millis", timeout_millis)
+                .finish(),
+            Self::Kill { handle, signal } => f
+                .debug_struct("ProcessSpawnRequest::Kill")
+                .field("handle_bytes", &handle.len())
+                .field("signal", signal)
+                .finish(),
+        }
+    }
+}
+
 impl ProcessSpawnRequest {
     #[must_use]
     pub const fn kind(&self) -> &'static str {
@@ -196,7 +268,7 @@ pub struct ProcessExit {
 }
 
 /// Successful process-provider response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
 pub enum ProcessSpawnResponse {
     Run {
@@ -224,8 +296,56 @@ pub enum ProcessSpawnResponse {
     },
 }
 
+impl fmt::Debug for ProcessSpawnResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Run {
+                exit,
+                stdout,
+                stderr,
+            } => f
+                .debug_struct("ProcessSpawnResponse::Run")
+                .field("exit", exit)
+                .field("stdout_bytes", &stdout.len())
+                .field("stderr_bytes", &stderr.len())
+                .finish(),
+            Self::Spawned { handle } => f
+                .debug_struct("ProcessSpawnResponse::Spawned")
+                .field("handle_bytes", &handle.len())
+                .finish(),
+            Self::StdinWritten { bytes_written } => f
+                .debug_struct("ProcessSpawnResponse::StdinWritten")
+                .field("bytes_written", bytes_written)
+                .finish(),
+            Self::StdinClosed => f.write_str("ProcessSpawnResponse::StdinClosed"),
+            Self::Waited {
+                exit,
+                stdout,
+                stderr,
+            } => f
+                .debug_struct("ProcessSpawnResponse::Waited")
+                .field("exit", exit)
+                .field("stdout_bytes", &stdout.len())
+                .field("stderr_bytes", &stderr.len())
+                .finish(),
+            Self::Killed {
+                signal,
+                exit,
+                stdout,
+                stderr,
+            } => f
+                .debug_struct("ProcessSpawnResponse::Killed")
+                .field("signal", signal)
+                .field("exit", exit)
+                .field("stdout_bytes", &stdout.len())
+                .field("stderr_bytes", &stderr.len())
+                .finish(),
+        }
+    }
+}
+
 /// Stable fail-closed errors for process effects.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
 pub enum ProcessSpawnError {
     Denied {
@@ -268,42 +388,128 @@ pub enum ProcessSpawnError {
     },
 }
 
+impl fmt::Debug for ProcessSpawnError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Denied { reason } => f
+                .debug_struct("ProcessSpawnError::Denied")
+                .field("reason_bytes", &reason.len())
+                .finish(),
+            Self::FlowPolicyBlocked => f.write_str("ProcessSpawnError::FlowPolicyBlocked"),
+            Self::CapabilityMissing { capability } => f
+                .debug_struct("ProcessSpawnError::CapabilityMissing")
+                .field("capability", capability)
+                .finish(),
+            Self::PolicyViolation { code, detail } => f
+                .debug_struct("ProcessSpawnError::PolicyViolation")
+                .field("code_bytes", &code.len())
+                .field("detail_bytes", &detail.len())
+                .finish(),
+            Self::LimitExceeded {
+                limit,
+                actual,
+                maximum,
+            } => f
+                .debug_struct("ProcessSpawnError::LimitExceeded")
+                .field("limit_bytes", &limit.len())
+                .field("actual", actual)
+                .field("maximum", maximum)
+                .finish(),
+            Self::UnknownHandle { handle } => f
+                .debug_struct("ProcessSpawnError::UnknownHandle")
+                .field("handle_bytes", &handle.len())
+                .finish(),
+            Self::InvalidState { detail } => f
+                .debug_struct("ProcessSpawnError::InvalidState")
+                .field("detail_bytes", &detail.len())
+                .finish(),
+            Self::NotImplemented { what } => f
+                .debug_struct("ProcessSpawnError::NotImplemented")
+                .field("what_bytes", &what.len())
+                .finish(),
+            Self::TimedOut { runtime_millis } => f
+                .debug_struct("ProcessSpawnError::TimedOut")
+                .field("runtime_millis", runtime_millis)
+                .finish(),
+            Self::Io { operation, detail } => f
+                .debug_struct("ProcessSpawnError::Io")
+                .field("operation_bytes", &operation.len())
+                .field("detail_bytes", &detail.len())
+                .finish(),
+            Self::ReplayDivergence {
+                index,
+                live_kind,
+                recorded_kind,
+            } => f
+                .debug_struct("ProcessSpawnError::ReplayDivergence")
+                .field("index", index)
+                .field("live_kind_bytes", &live_kind.len())
+                .field("recorded_kind_bytes", &recorded_kind.len())
+                .finish(),
+        }
+    }
+}
+
 impl fmt::Display for ProcessSpawnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Denied { reason } => write!(f, "process spawn denied: {reason}"),
+            Self::Denied { reason } => write!(
+                f,
+                "process spawn denied: redacted reason ({} bytes)",
+                reason.len()
+            ),
             Self::FlowPolicyBlocked => {
                 write!(f, "process spawn denied: FLOW_POLICY_BLOCKED")
             }
             Self::CapabilityMissing { capability } => {
                 write!(f, "process capability missing: {}", capability.as_str())
             }
-            Self::PolicyViolation { code, detail } => {
-                write!(f, "process policy violation {code}: {detail}")
-            }
+            Self::PolicyViolation { code, detail } => write!(
+                f,
+                "process policy violation: redacted code ({} bytes), detail ({} bytes)",
+                code.len(),
+                detail.len()
+            ),
             Self::LimitExceeded {
                 limit,
                 actual,
                 maximum,
-            } => write!(f, "process limit {limit} exceeded: {actual} > {maximum}"),
-            Self::UnknownHandle { handle } => write!(f, "unknown process handle: {handle}"),
-            Self::InvalidState { detail } => write!(f, "invalid process state: {detail}"),
-            Self::NotImplemented { what } => {
-                write!(f, "process operation not implemented: {what}")
+            } => write!(
+                f,
+                "process limit (redacted name, {} bytes) exceeded: {actual} > {maximum}",
+                limit.len()
+            ),
+            Self::UnknownHandle { handle } => {
+                write!(f, "unknown process handle ({} bytes)", handle.len())
             }
+            Self::InvalidState { detail } => write!(
+                f,
+                "invalid process state: redacted detail ({} bytes)",
+                detail.len()
+            ),
+            Self::NotImplemented { what } => write!(
+                f,
+                "process operation not implemented: redacted detail ({} bytes)",
+                what.len()
+            ),
             Self::TimedOut { runtime_millis } => {
                 write!(f, "process timed out after {runtime_millis}ms")
             }
-            Self::Io { operation, detail } => {
-                write!(f, "process I/O error during {operation}: {detail}")
-            }
+            Self::Io { operation, detail } => write!(
+                f,
+                "process I/O error: redacted operation ({} bytes), detail ({} bytes)",
+                operation.len(),
+                detail.len()
+            ),
             Self::ReplayDivergence {
                 index,
                 live_kind,
                 recorded_kind,
             } => write!(
                 f,
-                "process replay divergence at index {index}: live {live_kind} != recorded {recorded_kind}"
+                "process replay divergence at index {index}: redacted live kind ({} bytes) != recorded kind ({} bytes)",
+                live_kind.len(),
+                recorded_kind.len()
             ),
         }
     }
@@ -375,13 +581,16 @@ pub struct ProcessSpawnPolicy {
 impl fmt::Debug for ProcessSpawnPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessSpawnPolicy")
-            .field("allowed_executables", &self.allowed_executables)
-            .field("executable_aliases", &self.executable_aliases)
+            .field("allowed_executable_count", &self.allowed_executables.len())
+            .field("executable_alias_count", &self.executable_aliases.len())
             .field("allow_shell", &self.allow_shell)
-            .field("shell_executable_alias", &self.shell_executable_alias)
-            .field("allowed_env_keys", &self.allowed_env_keys)
-            .field("fixed_env_keys", &self.fixed_env.keys().collect::<Vec<_>>())
-            .field("jailed_cwd_root", &self.jailed_cwd_root)
+            .field(
+                "shell_executable_alias_present",
+                &self.shell_executable_alias.is_some(),
+            )
+            .field("allowed_env_key_count", &self.allowed_env_keys.len())
+            .field("fixed_env_count", &self.fixed_env.len())
+            .field("jailed_cwd_root_bytes", &self.jailed_cwd_root.len())
             .field("limits", &self.limits)
             .field("allowed_signals", &self.allowed_signals)
             .field("allowed_stdio", &self.allowed_stdio)
@@ -533,11 +742,20 @@ impl Drop for ActiveWatchdogPermit {
     }
 }
 
-#[derive(Debug)]
 struct CapturedOutput {
     bytes: Vec<u8>,
     overflowed: bool,
     maximum: u64,
+}
+
+impl fmt::Debug for CapturedOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CapturedOutput")
+            .field("byte_count", &self.bytes.len())
+            .field("overflowed", &self.overflowed)
+            .field("maximum", &self.maximum)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -1349,13 +1567,34 @@ impl Drop for NativeProcessSpawn {
     }
 }
 
-#[derive(Debug)]
 struct ValidatedLaunch {
     executable: PathBuf,
     argv: Vec<String>,
     env: BTreeMap<String, String>,
     cwd: PathBuf,
     stdio: ProcessStdio,
+}
+
+impl fmt::Debug for ValidatedLaunch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let argv_bytes = self.argv.iter().fold(0usize, |total, argument| {
+            total.saturating_add(argument.len())
+        });
+        let env_value_bytes = self
+            .env
+            .values()
+            .fold(0usize, |total, value| total.saturating_add(value.len()));
+
+        f.debug_struct("ValidatedLaunch")
+            .field("executable_bytes", &self.executable.as_os_str().len())
+            .field("argv_count", &self.argv.len())
+            .field("argv_bytes", &argv_bytes)
+            .field("env_count", &self.env.len())
+            .field("env_value_bytes", &env_value_bytes)
+            .field("cwd_bytes", &self.cwd.as_os_str().len())
+            .field("stdio", &self.stdio)
+            .finish()
+    }
 }
 
 fn validate_policy(policy: &ProcessSpawnPolicy) -> Result<(), ProcessSpawnError> {
@@ -2246,6 +2485,207 @@ mod tests {
     }
 
     #[test]
+    fn process_diagnostics_redact_commands_payloads_and_handles() {
+        let executable_secret = "/secret/executable-bd-x85a7-3";
+        let argument_secret = "argument-secret-bd-x85a7-3";
+        let env_key_secret = "ENV_KEY_SECRET_BD_X85A7_3";
+        let env_value_secret = "env-value-secret-bd-x85a7-3";
+        let cwd_secret = "/secret/cwd-bd-x85a7-3";
+        let stdin_secret = "stdin-secret-bd-x85a7-3";
+        let stdout_secret = "stdout-secret-bd-x85a7-3";
+        let stderr_secret = "stderr-secret-bd-x85a7-3";
+        let handle_secret = "opaque-handle-secret-bd-x85a7-3";
+        let detail_secret = "diagnostic-detail-secret-bd-x85a7-3";
+        let secrets = [
+            executable_secret,
+            argument_secret,
+            env_key_secret,
+            env_value_secret,
+            cwd_secret,
+            stdin_secret,
+            stdout_secret,
+            stderr_secret,
+            handle_secret,
+            detail_secret,
+        ];
+        let launch = ProcessLaunch {
+            executable: executable_secret.to_string(),
+            argv: vec![argument_secret.to_string()],
+            env: BTreeMap::from([(env_key_secret.to_string(), env_value_secret.to_string())]),
+            cwd: Some(cwd_secret.to_string()),
+            shell: true,
+            stdio: ProcessStdio::default(),
+        };
+        let request = ProcessSpawnRequest::Run {
+            launch: launch.clone(),
+            stdin: stdin_secret.as_bytes().to_vec(),
+            timeout_millis: Some(123),
+        };
+        let response = ProcessSpawnResponse::Run {
+            exit: ProcessExit {
+                success: false,
+                code: Some(7),
+                signal: None,
+            },
+            stdout: stdout_secret.as_bytes().to_vec(),
+            stderr: stderr_secret.as_bytes().to_vec(),
+        };
+        let handle_request = ProcessSpawnRequest::WriteStdin {
+            handle: handle_secret.to_string(),
+            data: stdin_secret.as_bytes().to_vec(),
+        };
+        let handle_response = ProcessSpawnResponse::Spawned {
+            handle: handle_secret.to_string(),
+        };
+        let errors = [
+            ProcessSpawnError::Denied {
+                reason: detail_secret.to_string(),
+            },
+            ProcessSpawnError::PolicyViolation {
+                code: detail_secret.to_string(),
+                detail: detail_secret.to_string(),
+            },
+            ProcessSpawnError::LimitExceeded {
+                limit: detail_secret.to_string(),
+                actual: 2,
+                maximum: 1,
+            },
+            ProcessSpawnError::UnknownHandle {
+                handle: handle_secret.to_string(),
+            },
+            ProcessSpawnError::InvalidState {
+                detail: detail_secret.to_string(),
+            },
+            ProcessSpawnError::NotImplemented {
+                what: detail_secret.to_string(),
+            },
+            ProcessSpawnError::Io {
+                operation: detail_secret.to_string(),
+                detail: detail_secret.to_string(),
+            },
+            ProcessSpawnError::ReplayDivergence {
+                index: 4,
+                live_kind: detail_secret.to_string(),
+                recorded_kind: detail_secret.to_string(),
+            },
+        ];
+        let policy = ProcessSpawnPolicy {
+            allowed_executables: BTreeMap::from([(executable_secret.to_string(), [7; 32])]),
+            executable_aliases: BTreeMap::from([(
+                argument_secret.to_string(),
+                executable_secret.to_string(),
+            )]),
+            allow_shell: true,
+            shell_executable_alias: Some(argument_secret.to_string()),
+            allowed_env_keys: BTreeSet::from([env_key_secret.to_string()]),
+            fixed_env: BTreeMap::from([(env_key_secret.to_string(), env_value_secret.to_string())]),
+            jailed_cwd_root: cwd_secret.to_string(),
+            ..ProcessSpawnPolicy::default()
+        };
+        let captured = CapturedOutput {
+            bytes: stdout_secret.as_bytes().to_vec(),
+            overflowed: false,
+            maximum: 4096,
+        };
+        let validated = ValidatedLaunch {
+            executable: PathBuf::from(executable_secret),
+            argv: vec![argument_secret.to_string()],
+            env: BTreeMap::from([(env_key_secret.to_string(), env_value_secret.to_string())]),
+            cwd: PathBuf::from(cwd_secret),
+            stdio: ProcessStdio::default(),
+        };
+        let transcript = InMemoryProcessSpawnTranscript::replaying(vec![(
+            request.clone(),
+            Ok(response.clone()),
+        )]);
+
+        let mut rendered = vec![
+            format!("{launch:?}"),
+            format!("{request:?}"),
+            format!("{response:?}"),
+            format!("{handle_request:?}"),
+            format!("{handle_response:?}"),
+            format!("{policy:?}"),
+            format!("{captured:?}"),
+            format!("{validated:?}"),
+            format!("{transcript:?}"),
+        ];
+        for error in &errors {
+            rendered.push(format!("{error:?}"));
+            rendered.push(error.to_string());
+        }
+        for diagnostic in &rendered {
+            for secret in &secrets {
+                assert!(
+                    !diagnostic.contains(secret),
+                    "diagnostic leaked secret {secret:?}: {diagnostic}"
+                );
+            }
+        }
+        assert!(rendered.iter().any(|value| value.contains("stdin_bytes")));
+        assert!(rendered.iter().any(|value| value.contains("stdout_bytes")));
+        assert!(rendered.iter().any(|value| value.contains("handle_bytes")));
+    }
+
+    #[test]
+    fn redacted_diagnostics_do_not_change_canonical_serde() {
+        let request = ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "/canonical/secret-command".to_string(),
+                argv: vec!["secret-argument".to_string()],
+                env: BTreeMap::from([("SECRET_KEY".to_string(), "secret-value".to_string())]),
+                cwd: Some("/canonical/secret-cwd".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: b"secret-stdin".to_vec(),
+            timeout_millis: Some(500),
+        };
+        let response = ProcessSpawnResponse::Run {
+            exit: ProcessExit {
+                success: true,
+                code: Some(0),
+                signal: None,
+            },
+            stdout: b"secret-stdout".to_vec(),
+            stderr: b"secret-stderr".to_vec(),
+        };
+        let error = ProcessSpawnError::UnknownHandle {
+            handle: "secret-handle".to_string(),
+        };
+
+        let request_json = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(
+            request_json["launch"]["executable"],
+            "/canonical/secret-command"
+        );
+        assert_eq!(request_json["launch"]["argv"][0], "secret-argument");
+        assert_eq!(request_json["launch"]["env"]["SECRET_KEY"], "secret-value");
+        assert_eq!(request_json["stdin"], serde_json::json!(b"secret-stdin"));
+        assert_eq!(
+            serde_json::from_value::<ProcessSpawnRequest>(request_json)
+                .expect("deserialize request"),
+            request
+        );
+
+        let response_json = serde_json::to_value(&response).expect("serialize response");
+        assert_eq!(response_json["stdout"], serde_json::json!(b"secret-stdout"));
+        assert_eq!(response_json["stderr"], serde_json::json!(b"secret-stderr"));
+        assert_eq!(
+            serde_json::from_value::<ProcessSpawnResponse>(response_json)
+                .expect("deserialize response"),
+            response
+        );
+
+        let error_json = serde_json::to_value(&error).expect("serialize error");
+        assert_eq!(error_json["handle"], "secret-handle");
+        assert_eq!(
+            serde_json::from_value::<ProcessSpawnError>(error_json).expect("deserialize error"),
+            error
+        );
+    }
+
+    #[test]
     fn empty_default_policy_cannot_install() {
         assert!(NativeProcessSpawn::new(ProcessSpawnPolicy::default()).is_err());
     }
@@ -2264,7 +2704,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn policy_and_provider_debug_redact_fixed_environment_values() {
+    fn policy_and_provider_debug_redact_policy_strings() {
         let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
         policy.authorize_executable(&echo).expect("authorize echo");
@@ -2273,12 +2713,12 @@ mod tests {
             "never-print-this-secret".to_string(),
         );
         let policy_debug = format!("{policy:?}");
-        assert!(policy_debug.contains("API_TOKEN"));
+        assert!(!policy_debug.contains("API_TOKEN"));
         assert!(!policy_debug.contains("never-print-this-secret"));
 
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let provider_debug = format!("{provider:?}");
-        assert!(provider_debug.contains("API_TOKEN"));
+        assert!(!provider_debug.contains("API_TOKEN"));
         assert!(!provider_debug.contains("never-print-this-secret"));
     }
 

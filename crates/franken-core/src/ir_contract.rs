@@ -37,7 +37,9 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.10.0` adds the explicit `GeneratorBodyStart` boundary to serialized
+    /// `0.11.0` adds explicit derived-constructor registration and `super()`
+    /// construction operations to serialized IR1, IR2, and IR3. `0.10.0` adds
+    /// the explicit `GeneratorBodyStart` boundary to serialized
     /// IR1, IR2, and IR3 so generator invocation can initialize parameters before
     /// suspending ahead of the body. `0.9.0` adds optional exact body-local
     /// lexical metadata to serialized IR1 function operations so deferred
@@ -56,7 +58,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 10,
+        minor: 11,
         patch: 0,
     };
 
@@ -403,6 +405,11 @@ pub const IR_ACCESSOR_SET_PREFIX: &str = "__franken_ir_accessor_set__:";
 pub const IR_SUPER_CONSTRUCTOR_PROPERTY: &str = "__franken_ir_super_constructor__";
 /// Private function-object key carrying the parent prototype for `super.method()`.
 pub const IR_SUPER_PROTOTYPE_PROPERTY: &str = "__franken_ir_super_prototype__";
+/// Private function-object marker distinguishing derived constructors from base constructors.
+pub const IR_DERIVED_CONSTRUCTOR_PROPERTY: &str = "__franken_ir_derived_constructor__";
+/// Private function-object marker for the implicit `constructor(...args) { super(...args); }`.
+pub const IR_DEFAULT_DERIVED_CONSTRUCTOR_PROPERTY: &str =
+    "__franken_ir_default_derived_constructor__";
 
 impl Ir1PropertyKey {
     pub fn canonical_value(&self) -> CanonicalValue {
@@ -467,6 +474,12 @@ pub enum Ir1Op {
     /// Call a method on an object: the receiver (below callee on the value
     /// stack) becomes the `this` value in the callee frame.
     CallMethod { arg_count: u32 },
+    /// Invoke the current derived constructor's parent via `[[Construct]]`,
+    /// propagating `new.target` and initializing the current `this` binding.
+    ConstructSuper { arg_count: u32 },
+    /// Install engine-private derived-constructor metadata. Stack input is
+    /// `[..., constructor, parent]`; no guest-visible property is created.
+    RegisterDerivedConstructor { default_constructor: bool },
     /// Return from current function.
     Return,
     /// Import a module by specifier.
@@ -1196,6 +1209,28 @@ impl Ir1Op {
                     CanonicalValue::U64(u64::from(*arg_count)),
                 );
             }
+            Self::ConstructSuper { arg_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("construct_super".to_string()),
+                );
+                map.insert(
+                    "arg_count".to_string(),
+                    CanonicalValue::U64(u64::from(*arg_count)),
+                );
+            }
+            Self::RegisterDerivedConstructor {
+                default_constructor,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("register_derived_constructor".to_string()),
+                );
+                map.insert(
+                    "default_constructor".to_string(),
+                    CanonicalValue::Bool(*default_constructor),
+                );
+            }
             Self::TemplateLiteral { quasi_count } => {
                 map.insert(
                     "op".to_string(),
@@ -1617,6 +1652,15 @@ pub enum Ir3Instruction {
         callee: Reg,
         args: RegRange,
         dst: Reg,
+    },
+    /// Construct the current derived frame's parent with the frame's
+    /// `new.target`, then bind the resulting object as this frame's `this`.
+    ConstructSuper { args: RegRange, dst: Reg },
+    /// Install authenticated constructor metadata in an engine-private slot.
+    RegisterDerivedConstructor {
+        constructor: Reg,
+        parent: Reg,
+        default_constructor: bool,
     },
     /// Initialize deterministic `for..in` enumeration state.
     ForInInit { src: Reg, dst: Reg },
@@ -2444,6 +2488,36 @@ impl Ir3Instruction {
                 );
                 map.insert("args".to_string(), args.canonical_value());
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::ConstructSuper { args, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("construct_super".to_string()),
+                );
+                map.insert("args".to_string(), args.canonical_value());
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::RegisterDerivedConstructor {
+                constructor,
+                parent,
+                default_constructor,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("register_derived_constructor".to_string()),
+                );
+                map.insert(
+                    "constructor".to_string(),
+                    CanonicalValue::U64(u64::from(*constructor)),
+                );
+                map.insert(
+                    "parent".to_string(),
+                    CanonicalValue::U64(u64::from(*parent)),
+                );
+                map.insert(
+                    "default_constructor".to_string(),
+                    CanonicalValue::Bool(*default_constructor),
+                );
             }
             Self::CreateClosure {
                 dst,
@@ -3825,7 +3899,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.10.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.11.0");
     }
 
     #[test]
@@ -3846,7 +3920,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3, 4, 5, 8, 9] {
+        for minor in [1, 2, 3, 4, 5, 8, 9, 10] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -3857,7 +3931,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.10 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.11 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -6290,7 +6364,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 10);
+        assert_eq!(v.minor, 11);
         assert_eq!(v.patch, 0);
     }
 

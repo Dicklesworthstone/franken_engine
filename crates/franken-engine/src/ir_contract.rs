@@ -31,7 +31,11 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.7.0` adds the boundary-crossing `Continue` reason to serialized IR1,
+    /// `0.12.0` adds explicit derived-constructor registration and `super()`
+    /// construction operations to serialized IR1, IR2, and IR3. Engine minors
+    /// `0.8.0` through `0.11.0` are intentionally skipped because those numeric
+    /// versions identify incompatible native `franken-core` IR wires. `0.7.0`
+    /// adds the boundary-crossing `Continue` reason to serialized IR1,
     /// IR2, and IR3 `IteratorClose` operations. `0.6.0` added explicit
     /// unresolved-name load/store operations. Engine minor `0.5.0` is intentionally skipped
     /// because that numeric version already identifies the incompatible native
@@ -42,7 +46,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 7,
+        minor: 12,
         patch: 0,
     };
 
@@ -344,6 +348,14 @@ pub enum Ir1PropertyKey {
     Dynamic,
 }
 
+/// Private constructor-prototype key carrying the parent constructor for `super()`.
+pub const IR_SUPER_CONSTRUCTOR_PROPERTY: &str = "__franken_ir_super_constructor__";
+/// Private constructor-prototype marker distinguishing derived constructors from base constructors.
+pub const IR_DERIVED_CONSTRUCTOR_PROPERTY: &str = "__franken_ir_derived_constructor__";
+/// Private constructor-prototype marker for the implicit derived constructor forwarding path.
+pub const IR_DEFAULT_DERIVED_CONSTRUCTOR_PROPERTY: &str =
+    "__franken_ir_default_derived_constructor__";
+
 impl Ir1PropertyKey {
     pub fn canonical_value(&self) -> CanonicalValue {
         match self {
@@ -451,6 +463,12 @@ pub enum Ir1Op {
     /// Call a method on an object: the receiver (below callee on the value
     /// stack) becomes the `this` value in the callee frame.
     CallMethod { arg_count: u32 },
+    /// Invoke the current derived constructor's parent via `[[Construct]]`,
+    /// propagating `new.target` and initializing the current `this` binding.
+    ConstructSuper { arg_count: u32 },
+    /// Install engine-private derived-constructor metadata. Stack input is
+    /// `[..., constructor, parent]`; no guest-visible property is created.
+    RegisterDerivedConstructor { default_constructor: bool },
     /// Return from current function.
     Return,
     /// Import a module by specifier.
@@ -1015,6 +1033,19 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("construct")),
                 ("arg_count", CanonicalValue::U64(u64::from(*arg_count))),
             ]),
+            Self::ConstructSuper { arg_count } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("construct_super")),
+                ("arg_count", CanonicalValue::U64(u64::from(*arg_count))),
+            ]),
+            Self::RegisterDerivedConstructor {
+                default_constructor,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("register_derived_constructor")),
+                (
+                    "default_constructor",
+                    CanonicalValue::Bool(*default_constructor),
+                ),
+            ]),
             Self::TemplateLiteral { quasi_count } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("template_literal")),
                 ("quasi_count", CanonicalValue::U64(u64::from(*quasi_count))),
@@ -1470,6 +1501,15 @@ pub enum Ir3Instruction {
         callee: Reg,
         args: RegRange,
         dst: Reg,
+    },
+    /// Construct the current derived frame's parent with the frame's
+    /// `new.target`, then bind the resulting object as this frame's `this`.
+    ConstructSuper { args: RegRange, dst: Reg },
+    /// Install authenticated constructor metadata in an engine-private slot.
+    RegisterDerivedConstructor {
+        constructor: Reg,
+        parent: Reg,
+        default_constructor: bool,
     },
     /// Initialize deterministic `for..in` enumeration state.
     ForInInit { src: Reg, dst: Reg },
@@ -2113,6 +2153,24 @@ impl Ir3Instruction {
                 ("callee", CanonicalValue::U64(u64::from(*callee))),
                 ("args", args.canonical_value()),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::ConstructSuper { args, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("construct_super")),
+                ("args", args.canonical_value()),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::RegisterDerivedConstructor {
+                constructor,
+                parent,
+                default_constructor,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("register_derived_constructor")),
+                ("constructor", CanonicalValue::U64(u64::from(*constructor))),
+                ("parent", CanonicalValue::U64(u64::from(*parent))),
+                (
+                    "default_constructor",
+                    CanonicalValue::Bool(*default_constructor),
+                ),
             ]),
             Self::CreateClosure {
                 dst,
@@ -2948,11 +3006,11 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Engine 0.5.0 never existed: that numeric version belongs to the
-    // incompatible native franken-core IR shape. Accepting it here would let a
-    // peer artifact pass the version gate whenever it happened to use only the
-    // overlapping enum variants.
-    if provided.major == 0 && provided.minor == 5 {
+    // Engine 0.5.0 and 0.8.0 through 0.11.0 never existed: those numeric
+    // versions belong to incompatible native franken-core IR shapes. Accepting
+    // one here would let a peer artifact pass the version gate whenever it
+    // happened to use only overlapping enum variants.
+    if provided.major == 0 && matches!(provided.minor, 5 | 8 | 9 | 10 | 11) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3196,7 +3254,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.7.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.12.0");
     }
 
     #[test]
@@ -5260,7 +5318,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 7);
+        assert_eq!(v.minor, 12);
         assert_eq!(v.patch, 0);
     }
 
@@ -6099,7 +6157,7 @@ mod tests {
 
     #[test]
     fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
-        for minor in [1, 2, 3, 4, 6] {
+        for minor in [1, 2, 3, 4, 6, 7] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: IrSchemaVersion::CURRENT.major,
@@ -6113,29 +6171,31 @@ mod tests {
 
             assert!(
                 verify_schema_version(&header).is_ok(),
-                "engine 0.7 readers retain compatibility with 0.{minor} artifacts"
+                "engine 0.12 readers retain compatibility with 0.{minor} artifacts"
             );
         }
     }
 
     #[test]
-    fn verify_schema_version_rejects_skipped_engine_minor_050_bd_0k19b() {
-        let header = IrHeader {
-            schema_version: IrSchemaVersion {
-                major: 0,
-                minor: 5,
-                patch: 0,
-            },
-            level: IrLevel::Ir1,
-            source_hash: None,
-            source_label: "peer-core-wire".to_string(),
-        };
+    fn verify_schema_version_rejects_skipped_core_owned_minors_bd_0k19b() {
+        for minor in [5, 8, 9, 10, 11] {
+            let header = IrHeader {
+                schema_version: IrSchemaVersion {
+                    major: 0,
+                    minor,
+                    patch: 0,
+                },
+                level: IrLevel::Ir1,
+                source_hash: None,
+                source_label: "peer-core-wire".to_string(),
+            };
 
-        let error = verify_schema_version(&header)
-            .expect_err("engine readers must reject the skipped core-owned 0.5 wire");
-        assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
-        assert!(error.message.contains("skipped engine minor"));
-        assert!(error.message.contains("0.5.0"));
+            let error = verify_schema_version(&header)
+                .expect_err("engine readers must reject skipped core-owned wires");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert!(error.message.contains("skipped engine minor"));
+            assert!(error.message.contains(&format!("0.{minor}.0")));
+        }
     }
 
     #[test]
@@ -6201,7 +6261,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.7.0")); // current version
+        assert!(err.message.contains("0.12.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

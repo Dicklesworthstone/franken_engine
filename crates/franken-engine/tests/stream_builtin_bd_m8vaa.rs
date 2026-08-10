@@ -1605,6 +1605,77 @@ fn passthrough_preserves_chunks_and_shared_lifecycle() {
             expected: "prefinish,finish:false:1:false",
         },
         EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 keep explicit-pause prefinish synchronous",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.pause();
+                stream.on('prefinish', () => events.push('prefinish'));
+                events.push('before');
+                stream.end('x');
+                events.push('after');
+                console.log(events.join(','));
+            "#,
+            expected: "before,prefinish,after",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Bun 1.3.14 notifies an empty pull observer before prefinish",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => events.push('readable:' + stream.readableLength));
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('finish', () => {
+                  events.push('finish');
+                  console.log(events.join(','));
+                });
+                stream.end();
+            "#,
+            expected: "readable:0,prefinish,finish",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 reject push from delayed empty-pull prefinish",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => events.push('readable:' + stream.readableLength));
+                stream.on('prefinish', () => {
+                  events.push('prefinish');
+                  events.push('push:' + stream.push('x'));
+                });
+                stream.on('finish', () => events.push('finish'));
+                stream.on('error', (error) => events.push('error:' + error.code));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end();
+            "#,
+            expected: "readable:0,prefinish,push:false,error:ERR_STREAM_PUSH_AFTER_EOF,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 reject callback write from delayed empty-pull prefinish",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => events.push('readable:' + stream.readableLength));
+                stream.on('prefinish', () => {
+                  events.push('prefinish');
+                  events.push('write:' + stream.write('x', (error) => events.push('callback:' + error.code)));
+                });
+                stream.on('finish', () => events.push('finish'));
+                stream.on('error', (error) => events.push('error:' + error.code));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end();
+            "#,
+            expected: "readable:0,prefinish,write:false,callback:ERR_STREAM_WRITE_AFTER_END,error:ERR_STREAM_WRITE_AFTER_END,close",
+        },
+        EvalCase {
             ids: &[],
             description: "prefinish pause cannot revoke an already-flowing end-before-finish commitment",
             source: r#"
@@ -1634,6 +1705,201 @@ fn passthrough_preserves_chunks_and_shared_lifecycle() {
                 stream.end('x');
             "#,
             expected: "prefinish,finish,end,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 order a synchronous pull drain end before finish",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => {
+                  events.push('readable:' + stream.readableFlowing);
+                  const chunk = stream.read();
+                  if (chunk) events.push('read:' + String(chunk));
+                });
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('end', () => events.push('end:' + stream.readableFlowing));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "readable:false,read:x,prefinish,readable:false,end:false,finish,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 do not treat a direct read as listener pull evidence",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.write('x');
+                events.push('read:' + String(stream.read()));
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('end', () => events.push('end'));
+                stream.on('finish', () => { events.push('finish'); console.log(events.join(',')); });
+                stream.end();
+            "#,
+            expected: "read:x,prefinish,finish",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 finish a passive pull listener with unread data",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => events.push('readable:' + stream.readableLength));
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('finish', () => {
+                  events.push('finish:' + stream.readableLength + ':' + stream.readableEnded);
+                  console.log(events.join(','));
+                });
+                stream.end('x');
+            "#,
+            expected: "readable:1,prefinish,readable:1,finish:1:false",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 finish after a partial pull with its remainder unread",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                let consumed = false;
+                stream.on('readable', () => {
+                  events.push('readable:' + stream.readableLength);
+                  if (!consumed) {
+                    consumed = true;
+                    events.push('read:' + String(stream.read(1)));
+                  }
+                });
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('finish', () => {
+                  events.push('finish:' + stream.readableLength + ':' + stream.readableEnded);
+                  console.log(events.join(','));
+                });
+                stream.end('xy');
+            "#,
+            expected: "readable:2,read:x,prefinish,readable:1,finish:1:false",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 reject a prefinish push after committed EOF",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.resume();
+                stream.on('data', (chunk) => events.push('data:' + String(chunk)));
+                stream.on('prefinish', () => {
+                  events.push('prefinish');
+                  events.push('push:' + stream.push('extra'));
+                  stream.pause();
+                  events.push('paused:' + stream.readableFlowing + ':' + stream.readableLength);
+                });
+                stream.on('error', (error) => events.push('error:' + error.code + ':' + error.message));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('end', () => events.push('end'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "data:x,prefinish,push:false,paused:false:0,error:ERR_STREAM_PUSH_AFTER_EOF:stream.push() after EOF,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 reject a prefinish write after committed end",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.resume();
+                stream.on('data', (chunk) => events.push('data:' + String(chunk)));
+                stream.on('prefinish', () => {
+                  events.push('prefinish');
+                  events.push('write:' + stream.write('extra'));
+                  stream.pause();
+                  events.push('paused:' + stream.readableFlowing + ':' + stream.readableLength);
+                });
+                stream.on('error', (error) => events.push('error:' + error.code + ':' + error.message));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('end', () => events.push('end'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "data:x,prefinish,write:false,paused:false:0,error:ERR_STREAM_WRITE_AFTER_END:write after end,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 reject a passive-pull prefinish push after EOF",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => events.push('readable:' + stream.readableLength));
+                stream.on('prefinish', () => {
+                  events.push('prefinish');
+                  events.push('push:' + stream.push('extra'));
+                });
+                stream.on('error', (error) => events.push('error:' + error.code));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "readable:1,prefinish,push:false,error:ERR_STREAM_PUSH_AFTER_EOF,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 reject passive-pull prefinish write callbacks",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('readable', () => events.push('readable:' + stream.readableLength));
+                stream.on('prefinish', () => {
+                  events.push('prefinish');
+                  events.push('write:' + stream.write('extra', (error) => events.push('callback:' + error.code)));
+                });
+                stream.on('error', (error) => events.push('error:' + error.code));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "readable:1,prefinish,write:false,callback:ERR_STREAM_WRITE_AFTER_END,error:ERR_STREAM_WRITE_AFTER_END,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 preserve finish when end destroys PassThrough",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.resume();
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('end', () => { events.push('end'); stream.destroy(); });
+                stream.on('finish', () => events.push('finish'));
+                stream.on('error', (error) => events.push('error:' + error.message));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end();
+            "#,
+            expected: "prefinish,end,finish,close",
+        },
+        EvalCase {
+            ids: &["bd-fw7zd.11"],
+            description: "Node 20.19.4 and Bun 1.3.14 order finish before end-destroy error and close",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.resume();
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('end', () => { events.push('end'); stream.destroy(new Error('boom')); });
+                stream.on('finish', () => events.push('finish'));
+                stream.on('error', (error) => events.push('error:' + error.message));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end();
+            "#,
+            expected: "prefinish,end,finish,error:boom,close",
         },
         EvalCase {
             ids: &[],

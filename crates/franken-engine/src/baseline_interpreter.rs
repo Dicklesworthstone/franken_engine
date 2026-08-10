@@ -7963,6 +7963,11 @@ struct ReadableFromState {
     phase: ReadableFromPumpPhase,
     flowing: bool,
     paused: bool,
+    /// Engine-owned evidence that a non-flowing `read()` consumed at least
+    /// one buffered chunk. PassThrough finalization uses this together with
+    /// an empty queue to distinguish a synchronous pull drain from a passive
+    /// or partial `readable` listener without trusting guest-visible mirrors.
+    nonflowing_read_consumed: bool,
     lifecycle_label: Label,
     to_array_waiter: Option<ReadableToArrayWaiter>,
 }
@@ -8951,6 +8956,10 @@ pub struct InterpreterCore {
     /// The reservation's EventLoop headroom and its map entry are charged
     /// independently so conversion can transfer both without a gap.
     readable_pump_reservations: BTreeMap<ObjectId, ReadablePumpReservation>,
+    /// Current `readable` listener receiver, saved/restored across nested
+    /// synchronous emissions. This authenticates pull-drain observations
+    /// without consulting a forgeable public flow mirror.
+    active_readable_listener_target: Option<ObjectId>,
     /// At most one bounded pipe destination per live Readable. Internal
     /// listener builtins authenticate against this table before forwarding.
     readable_pipe_links: BTreeMap<ObjectId, ReadablePipeLink>,
@@ -9625,6 +9634,7 @@ impl InterpreterCore {
             readable_terminal_states: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
             readable_pump_reservations: BTreeMap::new(),
+            active_readable_listener_target: None,
             readable_pipe_links: BTreeMap::new(),
             readable_pipe_sources: BTreeMap::new(),
             next_readable_pipe_token: 0,
@@ -17374,6 +17384,7 @@ impl InterpreterCore {
     /// release the exact resident state/reservation charges and shared event
     /// records keyed by those ids.
     fn clear_readable_execution_state(&mut self) {
+        self.active_readable_listener_target = None;
         self.clear_readable_pipe_links();
 
         let registrations: Vec<u64> = self.pending_readable_from_pumps.keys().copied().collect();
@@ -17656,6 +17667,7 @@ impl InterpreterCore {
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
             paused: false,
+            nonflowing_read_consumed: false,
             lifecycle_label: source_label,
             to_array_waiter: None,
         };
@@ -17762,6 +17774,7 @@ impl InterpreterCore {
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
             paused: false,
+            nonflowing_read_consumed: false,
             lifecycle_label,
             to_array_waiter: None,
         };
@@ -17913,6 +17926,7 @@ impl InterpreterCore {
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
             paused: false,
+            nonflowing_read_consumed: false,
             lifecycle_label: lifecycle_label.clone(),
             to_array_waiter: None,
         };
@@ -18085,6 +18099,7 @@ impl InterpreterCore {
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
             paused: false,
+            nonflowing_read_consumed: false,
             lifecycle_label: lifecycle_label.clone(),
             to_array_waiter: None,
         };
@@ -18843,20 +18858,33 @@ impl InterpreterCore {
         } else {
             Some(WritableErrorOrigin::Destroy)
         };
-        let retain_terminal_callbacks =
-            current.writes.all_completed() && current.final_status == WritableFinalStatus::Done;
-        let finishing_success_batch = retain_terminal_callbacks
-            && current.terminal_error_origin.is_none()
+        let finishing_after_readable_end = current.writes.all_completed()
             && matches!(
-                current.tick_phase,
-                WritableTickPhase::Finish | WritableTickPhase::Close
-            );
-        let preserved_success_callbacks =
-            if finishing_success_batch && current.tick_phase == WritableTickPhase::Finish {
-                current.end_callback_batch_remaining
-            } else {
-                0
-            };
+                current.flavor,
+                WritableStreamFlavor::PassThrough | WritableStreamFlavor::Transform
+            )
+            && matches!(current.final_status, WritableFinalStatus::Active(_))
+            && current.terminal_error.is_none()
+            && self
+                .readable_from_streams
+                .get(&object_id)
+                .is_some_and(|state| state.phase == ReadableFromPumpPhase::Close);
+        let retain_terminal_callbacks = current.writes.all_completed()
+            && (current.final_status == WritableFinalStatus::Done || finishing_after_readable_end);
+        let finishing_success_batch = finishing_after_readable_end
+            || (retain_terminal_callbacks
+                && current.terminal_error_origin.is_none()
+                && matches!(
+                    current.tick_phase,
+                    WritableTickPhase::Finish | WritableTickPhase::Close
+                ));
+        let preserved_success_callbacks = if finishing_after_readable_end {
+            current.end_callbacks.len()
+        } else if finishing_success_batch && current.tick_phase == WritableTickPhase::Finish {
+            current.end_callback_batch_remaining
+        } else {
+            0
+        };
         let finished_callbacks_before_destroy_error = if finishing_success_batch {
             current
                 .end_callbacks
@@ -18968,9 +18996,10 @@ impl InterpreterCore {
         destroyed.final_status = WritableFinalStatus::Done;
         destroyed.deferred_final_tick_sequence = None;
         destroyed.prefinish_emitted = true;
+        destroyed.finished |= finishing_after_readable_end;
         destroyed.terminal_error = terminal_error;
         destroyed.terminal_error_origin = terminal_error_origin;
-        destroyed.tick_phase = if preserved_success_callbacks > 0 {
+        destroyed.tick_phase = if finishing_after_readable_end || preserved_success_callbacks > 0 {
             WritableTickPhase::Finish
         } else {
             WritableTickPhase::Error
@@ -19065,6 +19094,52 @@ impl InterpreterCore {
         };
         let callback =
             self.writable_callback_arg(args, &[1, 2], Self::estimate_label_bytes(&label))?;
+        let rejected_during_dual_final =
+            self.readable_from_streams
+                .get(&object_id)
+                .is_some_and(|state| {
+                    matches!(
+                        state.phase,
+                        ReadableFromPumpPhase::Data | ReadableFromPumpPhase::End
+                    ) && state.eof_requested
+                })
+                && self.writable_streams.get(&object_id).is_some_and(|state| {
+                    state.end_requested
+                        && matches!(
+                            state.flavor,
+                            WritableStreamFlavor::PassThrough | WritableStreamFlavor::Transform
+                        )
+                        && matches!(
+                            state.final_status,
+                            WritableFinalStatus::Active(_) | WritableFinalStatus::Done
+                        )
+                });
+        if rejected_during_dual_final {
+            let error = self.stream_error_value("ERR_STREAM_WRITE_AFTER_END", "write after end")?;
+            let error_label = if let Some(callback) = callback {
+                self.append_writable_end_callback(object_id, callback, true, label)?;
+                let lifecycle_label = &self
+                    .writable_streams
+                    .get(&object_id)
+                    .expect("rejected dual-stream callback retained its Writable state")
+                    .lifecycle_label;
+                self.clone_dominant_label_with_temporary_budget(
+                    lifecycle_label,
+                    lifecycle_label,
+                    0,
+                )?
+            } else {
+                label
+            };
+            self.record_dual_stream_failure(
+                object_id,
+                error,
+                error_label,
+                WritableErrorOrigin::Write,
+                false,
+            )?;
+            return Ok(Value::Bool(false));
+        }
         if let Some(finished) = self
             .writable_terminal_states
             .get(&object_id)
@@ -19586,9 +19661,11 @@ impl InterpreterCore {
     }
 
     /// A dual-stream callback can fail only after the Writable driver has
-    /// authenticated and activated its completion token. Convert that failure
-    /// into one aggregate terminal transition so neither half can remain live
-    /// waiting for a callback/EOF that will never arrive.
+    /// committed end/EOF. Its final token is normally Active, but an initially
+    /// empty pull lane marks it Done immediately before delayed `prefinish`.
+    /// Convert either failure into one aggregate terminal transition so
+    /// neither half can remain live waiting for a callback/EOF that will never
+    /// arrive.
     fn record_dual_stream_failure(
         &mut self,
         object_id: ObjectId,
@@ -19762,6 +19839,30 @@ impl InterpreterCore {
         module: &Ir3Module,
     ) -> Result<(), InterpreterError> {
         loop {
+            let defer_pull_final = self.writable_streams.get(&object_id).is_some_and(|state| {
+                state.end_requested
+                    && state.final_status == WritableFinalStatus::NotStarted
+                    && state.writes.ready_front().is_none()
+                    && matches!(
+                        state.flavor,
+                        WritableStreamFlavor::PassThrough | WritableStreamFlavor::Transform
+                    )
+            }) && self.has_readable_pull_observer(object_id)
+                && self
+                    .readable_from_streams
+                    .get(&object_id)
+                    .is_some_and(|readable| {
+                        readable.paused
+                            && readable.phase == ReadableFromPumpPhase::Data
+                            && readable.data_readable_pending
+                    });
+            if defer_pull_final {
+                // The Readable pump resumes final activation immediately
+                // after the data notification. Do not arm a placeholder tick:
+                // the pre-loop fixed-point checkpoint would consume it before
+                // the callback whose failure it is meant to clean up.
+                return Ok(());
+            }
             let action = {
                 let Some(state) = self.writable_streams.get(&object_id) else {
                     return Ok(());
@@ -21957,6 +22058,18 @@ impl InterpreterCore {
         state.phase != ReadableFromPumpPhase::SettleToArray && (event != "data" || !state.paused)
     }
 
+    fn has_readable_pull_observer(&self, object_id: ObjectId) -> bool {
+        self.event_listeners
+            .get(&object_id)
+            .and_then(|events| events.get("readable"))
+            .is_some_and(|records| !records.is_empty())
+            || self
+                .event_promise_waiters
+                .get(&object_id)
+                .and_then(|events| events.get("readable"))
+                .is_some_and(|waiters| !waiters.is_empty())
+    }
+
     fn reserve_readable_activation_pump(
         &mut self,
         object_id: ObjectId,
@@ -23327,6 +23440,7 @@ impl InterpreterCore {
             phase: state.phase,
             flowing: state.flowing,
             paused: state.paused,
+            nonflowing_read_consumed: state.nonflowing_read_consumed,
             lifecycle_label: state.lifecycle_label.clone(),
             to_array_waiter: state.to_array_waiter.clone(),
         };
@@ -23650,11 +23764,55 @@ impl InterpreterCore {
         if value == Value::Null {
             return self.readable_request_eof(object_id, trigger_label);
         }
+        let rejected_during_dual_final =
+            self.readable_from_streams
+                .get(&object_id)
+                .is_some_and(|state| {
+                    matches!(
+                        state.phase,
+                        ReadableFromPumpPhase::Data | ReadableFromPumpPhase::End
+                    ) && state.eof_requested
+                })
+                && self.writable_streams.get(&object_id).is_some_and(|state| {
+                    state.end_requested
+                        && matches!(
+                            state.flavor,
+                            WritableStreamFlavor::PassThrough | WritableStreamFlavor::Transform
+                        )
+                        && matches!(
+                            state.final_status,
+                            WritableFinalStatus::Active(_) | WritableFinalStatus::Done
+                        )
+                });
+        if rejected_during_dual_final {
+            let error =
+                self.stream_error_value("ERR_STREAM_PUSH_AFTER_EOF", "stream.push() after EOF")?;
+            self.record_dual_stream_failure(
+                object_id,
+                error,
+                trigger_label,
+                WritableErrorOrigin::Final,
+                false,
+            )?;
+            return Ok(Value::Bool(false));
+        }
         Ok(Value::Bool(self.readable_enqueue_value(
             object_id,
             value,
             trigger_label,
         )?))
+    }
+
+    fn stream_error_value(
+        &mut self,
+        code: &'static str,
+        message: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("Error")?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error_id, "Error", message.to_string())?;
+        self.set_object_property(error_id, "code".to_string(), Value::str(code))?;
+        Ok(Value::Object(error_id))
     }
 
     /// Internal `_write` for the bounded PassThrough identity. Forwarding is
@@ -23742,10 +23900,10 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    /// Internal `_final` requests readable EOF after authenticated `prefinish`.
-    /// The final tick is reserved before guest reentrancy; a flowing readable
-    /// defers it until `end`, while a paused readable consumes it immediately
-    /// so unread data cannot strand `finish`. The readable pump owns `close`.
+    /// Internal `_final` commits readable EOF before authenticated `prefinish`.
+    /// The final tick is reserved before guest reentrancy. Flowing/full pull
+    /// drains consume it after `end`; passive/partial pull consumes it after
+    /// the EOF-readable notice; all other paused lanes finish immediately.
     fn stream_passthrough_final(
         &mut self,
         module: &Ir3Module,
@@ -23795,10 +23953,35 @@ impl InterpreterCore {
             });
         }
         let lifecycle_label = self.writable_invocation_label(args)?;
-        let defer_final_until_end = self
-            .readable_from_streams
-            .get(&object_id)
-            .is_some_and(|state| state.flowing && !state.paused && !state.destroy_requested);
+        let has_pull_observer = self.has_readable_pull_observer(object_id);
+        let (
+            flowing_end_commitment,
+            pull_end_commitment,
+            defer_final_until_readable,
+            defer_prefinish_until_readable,
+        ) = self.readable_from_streams.get(&object_id).map_or(
+            (false, false, false, false),
+            |state| {
+                let flowing_end = !state.destroy_requested && state.flowing && !state.paused;
+                let pull_end = !state.destroy_requested
+                    && state.nonflowing_read_consumed
+                    && state.buffer.is_empty();
+                let empty_pull_notice = !state.destroy_requested
+                    && !flowing_end
+                    && !pull_end
+                    && has_pull_observer
+                    && state.paused
+                    && state.buffer.is_empty();
+                let until_readable = !state.destroy_requested
+                    && !flowing_end
+                    && !pull_end
+                    && has_pull_observer
+                    && state.paused
+                    && (!state.buffer.is_empty() || empty_pull_notice);
+                (flowing_end, pull_end, until_readable, empty_pull_notice)
+            },
+        );
+        let defer_final_until_end = flowing_end_commitment || pull_end_commitment;
         if self
             .writable_streams
             .get(&object_id)
@@ -23817,18 +24000,19 @@ impl InterpreterCore {
                 .deferred_final_tick_sequence = Some(sequence);
             self.next_writable_tick_sequence = next_sequence;
         }
-        // `prefinish` is synchronous guest code and may call pause()/resume().
-        // Node commits ordering from the pre-listener flow state: pausing a
-        // draining stream does not move finish before end, while resuming a
-        // previously paused stream does not move finish after end. Reserve
-        // first and carry that commitment through EOF scheduling.
-        self.emit_writable_prefinish_with_tick(object_id, module, false)?;
+        // EOF is an engine-owned commitment before `prefinish` guest code:
+        // a re-entrant push/write must fail like Node/Bun instead of extending
+        // the readable queue and stranding the already-reserved final tick.
+        // The pre-listener flow/pull snapshot still fixes end-vs-finish order.
         self.readable_request_eof_with_flow_commitment(
             object_id,
             lifecycle_label,
-            defer_final_until_end,
+            flowing_end_commitment,
         )?;
-        if !defer_final_until_end {
+        if !defer_prefinish_until_readable {
+            self.emit_writable_prefinish_with_tick(object_id, module, false)?;
+        }
+        if !defer_final_until_end && !defer_final_until_readable {
             self.writable_final_done(module, &completion, RegRange { start: 0, count: 0 })?;
         }
         Ok(Value::Undefined)
@@ -24008,10 +24192,10 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    /// Node orders a flowing PassThrough's readable `end` before Writable
-    /// `finish`. Keep the authenticated token Active through the End pump,
-    /// then consume its reserved tick without a guest-visible wrapper.
-    fn complete_passthrough_final_after_readable_end(
+    /// Consume a dual stream's engine-owned final token after its committed
+    /// readable boundary: either End for a flowing/full pull drain, or the
+    /// EOF-readable notification that leaves passive/partial data queued.
+    fn complete_deferred_dual_stream_final(
         &mut self,
         object_id: ObjectId,
         module: &Ir3Module,
@@ -24035,6 +24219,55 @@ impl InterpreterCore {
         );
         self.writable_final_done(module, &completion, RegRange { start: 0, count: 0 })?;
         Ok(())
+    }
+
+    /// An asynchronous Readable callback/scheduling failure escapes the
+    /// evaluation boundary, so no later checkpoint may be relied on. Consume
+    /// the already-reserved dual final token without replacing the original
+    /// error. No later checkpoint is reliable after the exception, so convert
+    /// the live Writable directly to its accounted terminal tombstone instead
+    /// of allocating a cleanup tick that could itself strand at sequence
+    /// exhaustion. The ordinary readable abort then releases its half.
+    fn terminalize_deferred_dual_final_after_readable_failure(&mut self, object_id: ObjectId) {
+        let Some(state) = self.writable_streams.get(&object_id) else {
+            return;
+        };
+        if !matches!(
+            state.flavor,
+            WritableStreamFlavor::PassThrough | WritableStreamFlavor::Transform
+        ) {
+            return;
+        }
+        let previous_bytes = Self::estimate_writable_state_bytes(state);
+        let mut state = self
+            .writable_streams
+            .remove(&object_id)
+            .expect("authenticated dual Writable state survived terminalization");
+        let lifecycle_label = std::mem::replace(&mut state.lifecycle_label, Label::Public);
+        let terminal = WritableTerminalState {
+            object_mode: state.object_mode,
+            high_water_mark: state.high_water_mark,
+            end_requested: state.end_requested,
+            finished: state.finished,
+            buffered_length: state.buffered_length,
+            cork_depth: state.cork_depth,
+            accepts_late_end_callback: state.finished || state.terminal_error.is_some(),
+            callbacks: LinkedList::new(),
+            tick_sequence: None,
+            lifecycle_label,
+        };
+        let terminal_bytes = Self::estimate_writable_terminal_state_bytes(&terminal);
+        let previous = self.writable_terminal_states.insert(object_id, terminal);
+        debug_assert!(previous.is_none());
+        let previous_terminal_bytes = previous
+            .as_ref()
+            .map(Self::estimate_writable_terminal_state_bytes)
+            .unwrap_or(0);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_sub(previous_terminal_bytes)
+            .saturating_add(terminal_bytes);
     }
 
     fn stream_passthrough_destroy(
@@ -24372,6 +24605,9 @@ impl InterpreterCore {
                 result
             }
         };
+        if !projected.flowing && self.active_readable_listener_target == Some(object_id) {
+            projected.nonflowing_read_consumed = true;
+        }
         let should_prefetch = !projected.push_only
             && projected.buffer.is_empty()
             && !projected.eof_requested
@@ -25133,14 +25369,14 @@ impl InterpreterCore {
                     } else {
                         snapshot
                     };
-                    let emit_readable = if projected.data_readable_pending {
+                    let (emit_readable, eof_notification) = if projected.data_readable_pending {
                         projected.data_readable_pending = false;
-                        true
+                        (true, false)
                     } else if projected.eof_readable_pending {
                         projected.eof_readable_pending = false;
-                        true
+                        (true, true)
                     } else {
-                        false
+                        (false, false)
                     };
                     if emit_readable {
                         let lifecycle_label = projected.lifecycle_label.clone();
@@ -25155,6 +25391,8 @@ impl InterpreterCore {
                             }
                             return Err(error);
                         }
+                        let previous_readable_listener =
+                            self.active_readable_listener_target.replace(object_id);
                         let emission = self.emit_event_listener_records(
                             module,
                             object_id,
@@ -25162,11 +25400,67 @@ impl InterpreterCore {
                             Vec::new(),
                             lifecycle_label,
                         );
-                        self.finish_readable_pump_after_emission(
-                            object_id,
-                            pump_reserved,
-                            emission,
-                        )?;
+                        self.active_readable_listener_target = previous_readable_listener;
+                        let readable_result = match emission {
+                            Err(listener_error) => {
+                                let _ = self.finish_readable_pump_after_emission(
+                                    object_id,
+                                    pump_reserved,
+                                    Ok(false),
+                                );
+                                self.terminalize_deferred_dual_final_after_readable_failure(
+                                    object_id,
+                                );
+                                return Err(listener_error);
+                            }
+                            Ok(emitted) => self.finish_readable_pump_after_emission(
+                                object_id,
+                                pump_reserved,
+                                Ok(emitted),
+                            ),
+                        };
+                        if let Err(error) = readable_result {
+                            self.terminalize_deferred_dual_final_after_readable_failure(object_id);
+                            return Err(error);
+                        }
+                        if !eof_notification {
+                            // Pull-mode PassThrough/Transform finalization is
+                            // held until the queued data-readable notification
+                            // has run. Starting it here preserves the reference
+                            // `readable -> prefinish -> EOF-readable` sequence.
+                            if let Err(error) = self.drive_writable(object_id, module) {
+                                self.terminalize_deferred_dual_final_after_readable_failure(
+                                    object_id,
+                                );
+                                return Err(error);
+                            }
+                        }
+                        let finish_after_eof_notification = eof_notification
+                            && self
+                                .readable_from_streams
+                                .get(&object_id)
+                                .is_some_and(|state| {
+                                    state.phase == ReadableFromPumpPhase::Data
+                                        && state.eof_requested
+                                        && (!state.buffer.is_empty()
+                                            || !state.nonflowing_read_consumed)
+                                })
+                            && self.writable_streams.get(&object_id).is_some_and(|state| {
+                                matches!(
+                                    state.flavor,
+                                    WritableStreamFlavor::PassThrough
+                                        | WritableStreamFlavor::Transform
+                                ) && matches!(state.final_status, WritableFinalStatus::Active(_))
+                            });
+                        if finish_after_eof_notification {
+                            // A passive/partial pull listener has observed the
+                            // EOF-readable notification but left bytes queued,
+                            // or an initially-empty pull listener has observed
+                            // its sole readable notice. Consume the reserved
+                            // final tick now. A listener that drained buffered
+                            // data instead reaches End first.
+                            self.complete_deferred_dual_stream_final(object_id, module)?;
+                        }
                         return Ok(());
                     }
                     self.settle_readable_pump_reservation(object_id, pull_pump_reserved)?;
@@ -25352,8 +25646,7 @@ impl InterpreterCore {
                 );
                 let readable_result =
                     self.finish_readable_pump_after_emission(object_id, pump_reserved, emission);
-                let writable_result =
-                    self.complete_passthrough_final_after_readable_end(object_id, module);
+                let writable_result = self.complete_deferred_dual_stream_final(object_id, module);
                 readable_result?;
                 writable_result?;
             }
@@ -78890,6 +79183,7 @@ mod async_runtime_tests_current {
             phase: ReadableFromPumpPhase::Data,
             flowing: false,
             paused: false,
+            nonflowing_read_consumed: false,
             lifecycle_label: Label::Public,
             to_array_waiter: None,
         };
@@ -85926,6 +86220,11 @@ mod async_runtime_tests_current {
             panic!("PassThrough constructor must return an object");
         };
         reset
+            .readable_from_streams
+            .get_mut(&reused)
+            .expect("PassThrough readable state before reset")
+            .nonflowing_read_consumed = true;
+        reset
             .schedule_readable_from_pump(reused)
             .expect("pending PassThrough readable pump");
         reset
@@ -86064,13 +86363,379 @@ mod async_runtime_tests_current {
             Err(InterpreterError::InternalError { .. })
         ));
 
-        core.complete_passthrough_final_after_readable_end(passthrough, &module)
+        core.complete_deferred_dual_stream_final(passthrough, &module)
             .expect("reserved final tick remains usable after global exhaustion");
         let state = &core.writable_streams[&passthrough];
         assert_eq!(state.final_status, WritableFinalStatus::Done);
         assert_eq!(state.deferred_final_tick_sequence, None);
         assert_eq!(state.tick_sequence, Some(u64::MAX - 1));
         assert_eq!(core.next_writable_tick_sequence, u64::MAX);
+    }
+
+    #[test]
+    fn passthrough_pull_drain_is_engine_owned_and_defers_final_bd_fw7zd_11() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        core.readable_enqueue_value(passthrough, Value::str("x"), Label::Secret)
+            .expect("secret readable chunk");
+        core.active_readable_listener_target = Some(passthrough);
+        let consumed = core
+            .readable_read(Value::Object(passthrough), RegRange { start: 0, count: 0 })
+            .expect("non-flowing read");
+        core.active_readable_listener_target = None;
+        assert!(matches!(consumed, Value::Object(_)));
+        let readable = &core.readable_from_streams[&passthrough];
+        assert!(readable.nonflowing_read_consumed);
+        assert!(readable.buffer.is_empty());
+        assert_eq!(readable.lifecycle_label, Label::Secret);
+
+        // A forgeable mirror cannot erase the engine-owned pull evidence.
+        core.set_object_property(
+            passthrough,
+            "readableFlowing".to_string(),
+            Value::Bool(true),
+        )
+        .expect("tamper readableFlowing mirror");
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("final completion token");
+        core.writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough writable state")
+            .final_status = WritableFinalStatus::Active(token);
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            passthrough,
+            token,
+        );
+        core.write_reg(0, Value::BuiltinFunction(completion))
+            .expect("final completion register");
+        core.stream_passthrough_final(
+            &module,
+            Value::Object(passthrough),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("pull-drained final");
+
+        let writable = &core.writable_streams[&passthrough];
+        assert_eq!(writable.final_status, WritableFinalStatus::Active(token));
+        assert!(writable.deferred_final_tick_sequence.is_some());
+        assert_eq!(
+            core.readable_from_streams[&passthrough].phase,
+            ReadableFromPumpPhase::End
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_prefinish_push_error_consumes_reserved_final_tick_bd_fw7zd_11() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("final completion token");
+        core.writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough writable state")
+            .final_status = WritableFinalStatus::Active(token);
+        let readable = core
+            .readable_from_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough readable state");
+        readable.flowing = true;
+        readable.paused = false;
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            passthrough,
+            token,
+        );
+        core.write_reg(0, Value::BuiltinFunction(completion))
+            .expect("final completion register");
+        core.next_writable_tick_sequence = 41;
+        core.stream_passthrough_final(
+            &module,
+            Value::Object(passthrough),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("flowing final");
+        assert_eq!(
+            core.writable_streams[&passthrough].deferred_final_tick_sequence,
+            Some(41)
+        );
+
+        core.write_reg_with_label(1, Value::str("extra"), Label::Secret)
+            .expect("secret rejected push");
+        assert_eq!(
+            core.readable_push(Value::Object(passthrough), RegRange { start: 1, count: 1 },)
+                .expect("push after committed EOF"),
+            Value::Bool(false)
+        );
+
+        let writable = &core.writable_streams[&passthrough];
+        assert_eq!(writable.final_status, WritableFinalStatus::Done);
+        assert_eq!(writable.deferred_final_tick_sequence, None);
+        assert_eq!(writable.tick_sequence, Some(41));
+        assert_eq!(
+            writable.terminal_error_origin,
+            Some(WritableErrorOrigin::Final)
+        );
+        assert_eq!(writable.lifecycle_label, Label::Secret);
+        let (Value::Object(error_id), error_label) = writable
+            .terminal_error
+            .as_ref()
+            .expect("retained push-after-EOF error")
+        else {
+            panic!("push-after-EOF error must be an Error object");
+        };
+        assert_eq!(error_label, &Label::Secret);
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_STREAM_PUSH_AFTER_EOF"))
+        );
+        let readable = &core.readable_from_streams[&passthrough];
+        assert_eq!(readable.phase, ReadableFromPumpPhase::DestroyError);
+        assert_eq!(readable.lifecycle_label, Label::Secret);
+        assert_eq!(core.next_writable_tick_sequence, 42);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_throwing_eof_readable_consumes_reserved_final_tick_bd_fw7zd_11() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("throw_from_eof_readable".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        core.readable_enqueue_value(passthrough, Value::str("unread"), Label::Secret)
+            .expect("unread PassThrough chunk");
+        core.insert_event_listener(
+            passthrough,
+            "readable",
+            EventListenerRecord {
+                listener: Value::Function(0),
+                once: false,
+            },
+            false,
+        )
+        .expect("throwing readable listener");
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("final completion token");
+        let writable = core
+            .writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough writable state");
+        writable.end_requested = true;
+        writable.final_status = WritableFinalStatus::Active(token);
+        writable.deferred_final_tick_sequence = Some(u64::MAX - 1);
+        writable.lifecycle_label = Label::Secret;
+        core.next_writable_tick_sequence = u64::MAX;
+        let readable = core
+            .readable_from_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough readable state");
+        readable.flowing = false;
+        readable.paused = true;
+        readable.eof_requested = true;
+        readable.data_readable_pending = false;
+        readable.eof_readable_pending = true;
+
+        let error = core
+            .run_event_loop_until_idle_with_module(Some(&module))
+            .expect_err("throwing EOF-readable listener must escape");
+        assert_eq!(
+            error,
+            InterpreterError::UncaughtException {
+                value: "undefined".to_string()
+            }
+        );
+        assert!(!core.readable_from_streams.contains_key(&passthrough));
+        assert!(!core.writable_streams.contains_key(&passthrough));
+        let writable = &core.writable_terminal_states[&passthrough];
+        assert!(writable.end_requested);
+        assert_eq!(writable.tick_sequence, None);
+        assert_eq!(writable.lifecycle_label, Label::Secret);
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX);
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_throwing_initial_readable_terminalizes_pre_final_lane_bd_fw7zd_11() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("throw_from_initial_readable".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        core.readable_enqueue_value(passthrough, Value::str("unread"), Label::Secret)
+            .expect("initial unread PassThrough chunk");
+        core.insert_event_listener(
+            passthrough,
+            "readable",
+            EventListenerRecord {
+                listener: Value::Function(0),
+                once: false,
+            },
+            false,
+        )
+        .expect("throwing readable listener");
+        let writable = core
+            .writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough writable state");
+        writable.end_requested = true;
+        writable.lifecycle_label = Label::Secret;
+        core.next_writable_tick_sequence = u64::MAX - 1;
+        let readable = core
+            .readable_from_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough readable state");
+        readable.flowing = false;
+        readable.paused = true;
+        assert!(readable.data_readable_pending);
+        core.drive_writable(passthrough, &module)
+            .expect("pre-final pull lane waits for its readable notification");
+        assert_eq!(core.writable_streams[&passthrough].tick_sequence, None);
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX - 1);
+        core.drain_runtime_checkpoint(Some(&module))
+            .expect("top-level checkpoint before the readable turn");
+        assert_eq!(core.writable_streams[&passthrough].tick_sequence, None);
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX - 1);
+
+        let error = core
+            .run_event_loop_until_idle_with_module(Some(&module))
+            .expect_err("throwing initial readable listener must escape");
+        assert_eq!(
+            error,
+            InterpreterError::UncaughtException {
+                value: "undefined".to_string()
+            }
+        );
+        assert!(!core.readable_from_streams.contains_key(&passthrough));
+        assert!(!core.writable_streams.contains_key(&passthrough));
+        let writable = &core.writable_terminal_states[&passthrough];
+        assert!(writable.end_requested);
+        assert_eq!(writable.tick_sequence, None);
+        assert_eq!(writable.lifecycle_label, Label::Secret);
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX - 1);
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_end_destroy_preserves_reserved_finish_lane_bd_fw7zd_11() {
+        for (error, expected_phase) in [
+            (None, ReadableFromPumpPhase::Close),
+            (
+                Some(Value::str("boom")),
+                ReadableFromPumpPhase::DestroyError,
+            ),
+        ] {
+            let mut core = test_interpreter();
+            let Value::Object(passthrough) = core
+                .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+                .expect("PassThrough")
+            else {
+                panic!("PassThrough constructor must return an object");
+            };
+            let token = core
+                .allocate_writable_completion_token()
+                .expect("final completion token");
+            let writable = core
+                .writable_streams
+                .get_mut(&passthrough)
+                .expect("PassThrough writable state");
+            writable.final_status = WritableFinalStatus::Active(token);
+            writable.deferred_final_tick_sequence = Some(73);
+            core.next_writable_tick_sequence = 74;
+            core.readable_from_streams
+                .get_mut(&passthrough)
+                .expect("PassThrough readable state")
+                .phase = ReadableFromPumpPhase::Close;
+
+            let args = if let Some(error) = error {
+                core.write_reg_with_label(0, error, Label::Secret)
+                    .expect("destroy error register");
+                RegRange { start: 0, count: 1 }
+            } else {
+                RegRange { start: 0, count: 0 }
+            };
+            core.stream_passthrough_destroy(Value::Object(passthrough), args)
+                .expect("destroy from end listener");
+
+            let writable = &core.writable_streams[&passthrough];
+            assert_eq!(writable.final_status, WritableFinalStatus::Done);
+            assert_eq!(writable.deferred_final_tick_sequence, None);
+            assert_eq!(writable.tick_sequence, Some(73));
+            assert_eq!(writable.tick_phase, WritableTickPhase::Finish);
+            assert!(writable.finished);
+            assert_eq!(
+                core.fs_object_property(&Value::Object(passthrough), "writableFinished"),
+                Some(Value::Bool(false))
+            );
+            let readable = &core.readable_from_streams[&passthrough];
+            assert!(readable.destroy_requested);
+            assert_eq!(readable.phase, expected_phase);
+            if expected_phase == ReadableFromPumpPhase::DestroyError {
+                assert_eq!(writable.lifecycle_label, Label::Secret);
+                assert_eq!(readable.lifecycle_label, Label::Secret);
+            }
+            assert_eq!(core.next_writable_tick_sequence, 74);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]

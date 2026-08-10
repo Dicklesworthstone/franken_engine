@@ -23570,26 +23570,36 @@ fn join_binding_label(
 
 fn infer_function_capture_label(
     free_vars: &[String],
+    free_var_ids: &[BindingId],
     binding_labels: &BTreeMap<BindingId, Label>,
 ) -> Label {
-    let capture_label = Label::join_all(free_vars.iter().map(|runtime_name| {
-        let origin_id = parse_capture_cell_name(runtime_name)
-            .or_else(|| parse_class_expression_self_capture_name(runtime_name))
-            .map(|(origin_id, _)| origin_id);
-        origin_id.map_or(Label::TopSecret, |binding_id| {
-            binding_labels
-                .get(&binding_id)
-                .cloned()
-                // A recognized lexical capture may precede its first store
-                // (notably `const server = make(() => server.close())`). Start
-                // that fixed-point edge at the same Internal unknown-runtime
-                // floor as an ordinary unresolved binding load; later passes
-                // monotonically join the actual store provenance. Only an
-                // unparseable capture identity takes the fail-high branch.
-                .unwrap_or(Label::Internal)
-        })
-    }))
-    .unwrap_or(Label::Public);
+    let capture_label =
+        Label::join_all(free_vars.iter().enumerate().map(|(index, runtime_name)| {
+            let origin_id = parse_capture_cell_name(runtime_name)
+                .or_else(|| parse_class_expression_self_capture_name(runtime_name))
+                .map(|(origin_id, _)| origin_id)
+                // A class-expression constructor keeps the literal class name as its
+                // self-capture free var so the exact-name closure self-bind can seed
+                // the recursive cycle (bd-g0aok); that literal is unparseable as a
+                // capture-cell identity but its resolved outer binding is carried in
+                // the parallel `free_var_ids`. Prefer that authenticated identity over
+                // failing high, so a plain (non-secret) class no longer poisons its own
+                // binding to TopSecret and block its parameter defaults (bd-4thqe).
+                .or_else(|| free_var_ids.get(index).copied());
+            origin_id.map_or(Label::TopSecret, |binding_id| {
+                binding_labels
+                    .get(&binding_id)
+                    .cloned()
+                    // A recognized lexical capture may precede its first store
+                    // (notably `const server = make(() => server.close())`). Start
+                    // that fixed-point edge at the same Internal unknown-runtime
+                    // floor as an ordinary unresolved binding load; later passes
+                    // monotonically join the actual store provenance. Only a capture
+                    // with no resolvable identity at all takes the fail-high branch.
+                    .unwrap_or(Label::Internal)
+            })
+        }))
+        .unwrap_or(Label::Public);
 
     // Function results are not identity transforms of their captures: the
     // deferred body, caller-supplied parameters, and nested calls can all add
@@ -24335,9 +24345,10 @@ fn simulate_ir2_flow_labels(
             Ir1Op::DeclareFunction {
                 binding_id,
                 free_vars,
+                free_var_ids,
                 ..
             } => {
-                let label = infer_function_capture_label(free_vars, binding_labels);
+                let label = infer_function_capture_label(free_vars, free_var_ids, binding_labels);
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &label);
                 binding_flow_shapes.insert(*binding_id, FlowValueShape::Callable);
                 value_stack.push(fresh_shaped_flow_value(
@@ -24347,8 +24358,12 @@ fn simulate_ir2_flow_labels(
                 ));
                 label
             }
-            Ir1Op::CreateFunction { free_vars, .. } => {
-                let label = infer_function_capture_label(free_vars, binding_labels);
+            Ir1Op::CreateFunction {
+                free_vars,
+                free_var_ids,
+                ..
+            } => {
+                let label = infer_function_capture_label(free_vars, free_var_ids, binding_labels);
                 value_stack.push(fresh_shaped_flow_value(
                     label.clone(),
                     FlowValueShape::Callable,
@@ -32319,14 +32334,31 @@ mod tests {
     fn recognized_forward_capture_uses_internal_fixed_point_seed_bd_bscab_bd_oardi() {
         let labels = BTreeMap::new();
         assert_eq!(
-            infer_function_capture_label(&[capture_cell_name("server", 73)], &labels),
+            infer_function_capture_label(&[capture_cell_name("server", 73)], &[], &labels),
             Label::Internal,
             "a recognized capture preceding its store must converge from the runtime floor"
         );
         assert_eq!(
-            infer_function_capture_label(&["unrecognized-capture".to_string()], &labels),
+            infer_function_capture_label(&["unrecognized-capture".to_string()], &[], &labels),
             Label::TopSecret,
-            "an unauthenticated capture identity must still fail high"
+            "a capture with no resolvable identity at all must still fail high"
+        );
+        // bd-4thqe: a class-expression constructor's self-capture keeps the literal
+        // class name (unparseable as a capture cell) but its resolved outer binding
+        // rides in the parallel `free_var_ids`. That authenticated identity must be
+        // used (Internal fixed-point floor for a plain class), never the TopSecret
+        // fail-high that previously blocked the class's own parameter defaults.
+        assert_eq!(
+            infer_function_capture_label(&["Inner".to_string()], &[41], &labels),
+            Label::Internal,
+            "an id-identified self-capture must floor at Internal, not fail high"
+        );
+        let mut public_class = BTreeMap::new();
+        public_class.insert(41, Label::Public);
+        assert_eq!(
+            infer_function_capture_label(&["Inner".to_string()], &[41], &public_class),
+            Label::Internal,
+            "a plain (Public) class self-capture stays at the Internal function floor"
         );
     }
 

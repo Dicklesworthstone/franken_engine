@@ -845,6 +845,13 @@ pub enum BuiltinFunctionKind {
     SymbolKeyFor,
     SymbolPrototypeToString,
     GeneratorPrototypeNext,
+    // Appended at the tail (ordinals feed the register content hash).
+    /// ES CreateResolvingFunctions resolve capability, bound to a promise
+    /// handle carried in [`BuiltinFunction::bound_object`] (bd-3ose7). Passed
+    /// into a user thenable's `then` so it can settle the adopting promise.
+    PromiseCapabilityResolve,
+    /// ES CreateResolvingFunctions reject capability (bd-3ose7).
+    PromiseCapabilityReject,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -854,6 +861,11 @@ pub struct BuiltinFunction {
     pub kind: BuiltinFunctionKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub module_specifier: String,
+    /// Promise handle a resolve/reject capability is bound to (bd-3ose7).
+    /// `None` for every ordinary builtin; `skip_serializing_if` keeps existing
+    /// serialized forms byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_object: Option<u32>,
 }
 
 impl BuiltinFunction {
@@ -861,6 +873,7 @@ impl BuiltinFunction {
         Self {
             kind: BuiltinFunctionKind::Require,
             module_specifier: module_specifier.into(),
+            bound_object: None,
         }
     }
 
@@ -870,6 +883,7 @@ impl BuiltinFunction {
         Self {
             kind,
             module_specifier: String::new(),
+            bound_object: None,
         }
     }
 
@@ -879,6 +893,7 @@ impl BuiltinFunction {
         Self {
             kind: BuiltinFunctionKind::ArrayIsArray,
             module_specifier: String::new(),
+            bound_object: None,
         }
     }
 
@@ -886,6 +901,7 @@ impl BuiltinFunction {
         Self {
             kind,
             module_specifier: String::new(),
+            bound_object: None,
         }
     }
 
@@ -893,6 +909,19 @@ impl BuiltinFunction {
         Self {
             kind: BuiltinFunctionKind::GeneratorPrototypeNext,
             module_specifier: String::new(),
+            bound_object: None,
+        }
+    }
+
+    /// A resolve/reject capability bound to `promise` (ES
+    /// CreateResolvingFunctions), passed into a user thenable's `then`
+    /// (bd-3ose7). `kind` must be `PromiseCapabilityResolve` or
+    /// `PromiseCapabilityReject`.
+    fn promise_capability(kind: BuiltinFunctionKind, promise: u32) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+            bound_object: Some(promise),
         }
     }
 
@@ -911,6 +940,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SymbolKeyFor => "keyFor",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::GeneratorPrototypeNext => "next",
+            BuiltinFunctionKind::PromiseCapabilityResolve => "resolve",
+            BuiltinFunctionKind::PromiseCapabilityReject => "reject",
         }
     }
 }
@@ -4590,6 +4621,22 @@ impl InterpreterCore {
                 };
                 return self.generator_next(module, *generator_id, argument, argument_label);
             }
+            BuiltinFunctionKind::PromiseCapabilityResolve
+            | BuiltinFunctionKind::PromiseCapabilityReject => {
+                let handle_id = builtin.bound_object.ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "bound promise capability".to_string(),
+                        got: "unbound promise capability function".to_string(),
+                    }
+                })?;
+                let is_resolve = builtin.kind == BuiltinFunctionKind::PromiseCapabilityResolve;
+                let value = self.apply_promise_capability(
+                    crate::promise_model::PromiseHandle(handle_id),
+                    args,
+                    is_resolve,
+                )?;
+                return Ok((value, crate::ifc_artifacts::Label::Public));
+            }
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
             | BuiltinFunctionKind::StringPrototypeCodePointAt
@@ -4631,7 +4678,9 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::SymbolFor
                     | BuiltinFunctionKind::SymbolKeyFor
                     | BuiltinFunctionKind::SymbolPrototypeToString
-                    | BuiltinFunctionKind::GeneratorPrototypeNext => {
+                    | BuiltinFunctionKind::GeneratorPrototypeNext
+                    | BuiltinFunctionKind::PromiseCapabilityResolve
+                    | BuiltinFunctionKind::PromiseCapabilityReject => {
                         unreachable!("handled above")
                     }
                 }
@@ -9279,10 +9328,17 @@ impl InterpreterCore {
                     let promise_handle = match awaited_value {
                         Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                         _ => {
-                            // await non-promise: create a resolved promise with the value
-                            let js_val = Self::value_to_js_value(&awaited_value);
+                            // await non-promise: resolve a fresh promise with the
+                            // value, applying thenable assimilation (bd-3ose7) so
+                            // `await thenable` adopts the thenable's eventual state
+                            // (ES await → PromiseResolve). Non-thenables fulfill
+                            // synchronously, unchanged.
                             let handle = self.promise_store.create();
-                            self.fulfill_promise(handle, js_val, awaited_label.clone())?;
+                            self.resolve_promise_with_value(
+                                handle,
+                                awaited_value,
+                                awaited_label.clone(),
+                            )?;
                             handle
                         }
                     };
@@ -10212,6 +10268,7 @@ impl InterpreterCore {
                         module,
                         method,
                         Value::Object(*iterable_object),
+                        &[],
                     )?;
                     let iterator = self.complete_inline_call(iterator_completion)?;
                     match iterator {
@@ -10305,7 +10362,12 @@ impl InterpreterCore {
             got: "missing module context".to_string(),
         })?;
         let result_completion =
-            self.invoke_inline_method_call(module, next_method, Value::Object(iterator_object))?;
+            self.invoke_inline_method_call(
+                module,
+                next_method,
+                Value::Object(iterator_object),
+                &[],
+            )?;
         let result = self.complete_inline_call(result_completion)?;
         let Value::Object(result_object) = result else {
             return Err(InterpreterError::TypeError {
@@ -10408,6 +10470,7 @@ impl InterpreterCore {
             module,
             return_method,
             Value::Object(iterator_object),
+            &[],
         ) {
             Ok(InlineCallCompletion::Value(value)) => value,
             Ok(InlineCallCompletion::Throw(thrown)) => {
@@ -10467,7 +10530,7 @@ impl InterpreterCore {
         match property {
             Some(RuntimeProperty::Data(value)) => Ok(InlineCallCompletion::Value(value)),
             Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
-                Some(getter) => self.invoke_inline_method_call(module, getter, receiver),
+                Some(getter) => self.invoke_inline_method_call(module, getter, receiver, &[]),
                 None => Ok(InlineCallCompletion::Value(Value::Undefined)),
             },
             None => Ok(InlineCallCompletion::Value(Value::Undefined)),
@@ -10511,6 +10574,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         callee: Value,
         receiver: Value,
+        extra_args: &[Value],
     ) -> Result<InlineCallCompletion, InterpreterError> {
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
@@ -10528,10 +10592,24 @@ impl InterpreterCore {
             catch_target,
             finally_target: None,
         });
+        // Registers: 0 = receiver, 1 = callee, 2 = try-success sentinel,
+        // 3.. = call arguments (bd-3ose7 passes resolve/reject capabilities to
+        // a thenable's `then`). Arguments are written directly before the run
+        // (like receiver/callee), so the wrapper instruction count — and thus
+        // `catch_target` — is unchanged.
+        let arg_count = u32::try_from(extra_args.len()).map_err(|_| {
+            InterpreterError::InstructionOutOfBounds {
+                ip: wrapper_start,
+                count: extra_args.len(),
+            }
+        })?;
         wrapper.instructions.push(Ir3Instruction::CallMethod {
             receiver: 0,
             callee: 1,
-            args: RegRange { start: 2, count: 0 },
+            args: RegRange {
+                start: 3,
+                count: arg_count,
+            },
             dst: 0,
         });
         wrapper.instructions.push(Ir3Instruction::EndTry);
@@ -10570,6 +10648,15 @@ impl InterpreterCore {
             self.sync_estimated_memory_bytes()?;
             self.write_reg(0, receiver)?;
             self.write_reg(1, callee)?;
+            for (offset, arg) in extra_args.iter().enumerate() {
+                let reg = 3u32
+                    .checked_add(u32::try_from(offset).unwrap_or(u32::MAX))
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: 3,
+                        max: self.config.max_registers,
+                    })?;
+                self.write_reg(reg, arg.clone())?;
+            }
             let value = self.run_loop(&wrapper)?;
             let label = self.read_reg_label(0)?;
             Ok(if matches!(self.read_reg(2)?, Value::Bool(true)) {
@@ -11767,6 +11854,68 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Whether a promise handle has left the pending state.
+    fn promise_is_settled(&self, handle: crate::promise_model::PromiseHandle) -> bool {
+        self.promise_store
+            .get(handle)
+            .map(|record| record.state.is_settled())
+            .unwrap_or(false)
+    }
+
+    /// ES2020 25.6.1.3.2 Promise Resolve Function (bd-3ose7). If `value` is a
+    /// thenable (an object whose `then` is a user closure), adopt its eventual
+    /// state by enqueuing a PromiseResolveThenableJob carrying `label`;
+    /// otherwise fulfill directly. The `label` is preserved through resolution
+    /// rather than collapsed to `Public`, keeping data provenance sound.
+    fn resolve_promise_with_value(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        if let Value::Object(object_id) = value {
+            let then = self.prototype_chain_get(object_id, "then")?;
+            if let Value::Closure(then_id) = then {
+                let task = crate::promise_model::Microtask::ResolveThenable {
+                    promise,
+                    then_handler: crate::closure_model::ClosureHandle(then_id),
+                    thenable: Self::value_to_js_value(&value),
+                    label,
+                };
+                self.event_loop.microtasks.enqueue(task);
+                return Ok(());
+            }
+        }
+        self.fulfill_promise(promise, Self::value_to_js_value(&value), label)
+    }
+
+    /// Apply a resolve/reject capability bound to `promise` (ES
+    /// CreateResolvingFunctions). Settling is once-only (`alreadyResolved`): a
+    /// second call after the promise leaves the pending state is a silent
+    /// no-op. The settlement adopts the resolve/reject argument's own IFC
+    /// label so provenance is preserved (bd-3ose7).
+    fn apply_promise_capability(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        args: RegRange,
+        is_resolve: bool,
+    ) -> Result<Value, InterpreterError> {
+        let (argument, argument_label) = self.promise_hostcall_argument(args, 0)?;
+        if self.promise_is_settled(promise) {
+            return Ok(Value::Undefined);
+        }
+        if is_resolve {
+            self.resolve_promise_with_value(promise, argument, argument_label)?;
+        } else {
+            self.reject_promise(
+                promise,
+                Self::value_to_js_value(&argument),
+                argument_label,
+            )?;
+        }
+        Ok(Value::Undefined)
+    }
+
     fn notify_promise_settled(
         &mut self,
         handle: crate::promise_model::PromiseHandle,
@@ -12164,10 +12313,14 @@ impl InterpreterCore {
                         Ok((Value::Promise(h), settlement_label))
                     }
                     _ => {
-                        // Promise.resolve(value) — create a pre-resolved promise.
-                        let js_val = Self::value_to_js_value(&arg0);
+                        // Promise.resolve(value): a pending promise resolved
+                        // with `value`, applying thenable assimilation
+                        // (ES 25.6.4.5.1). A thenable adopts its eventual state
+                        // through a PromiseResolveThenableJob rather than
+                        // fulfilling with the object itself (bd-3ose7); a
+                        // non-thenable fulfills synchronously, unchanged.
                         let handle = self.promise_store.create();
-                        self.fulfill_promise(handle, js_val, arg0_label.clone())?;
+                        self.resolve_promise_with_value(handle, arg0, arg0_label.clone())?;
                         Ok((Value::Promise(handle.0), arg0_label))
                     }
                 }
@@ -12547,18 +12700,58 @@ impl InterpreterCore {
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
-                    then_handler: _,
-                    thenable: _,
-                    label: _task_label,
+                    then_handler,
+                    thenable,
+                    label: task_label,
                 } => {
-                    // Simplified: resolve with undefined (full thenable
-                    // unwrapping requires closure execution which is a
-                    // follow-up bead).
-                    self.fulfill_promise(
-                        promise,
-                        crate::object_model::JsValue::Undefined,
-                        crate::ifc_artifacts::Label::Public,
-                    )?;
+                    // PromiseResolveThenableJob (ES2020 25.6.1.3.1, bd-3ose7):
+                    // call `thenable.then(resolve, reject)` with resolve/reject
+                    // capabilities bound to `promise`. The user `then` runs
+                    // synchronously within this job, so the microtasks it
+                    // schedules and the settle it performs are enqueued in
+                    // program order (preserving nested-microtask ordering). The
+                    // task label is preserved — a throw from `then` rejects the
+                    // promise with the thrown value's label, not `Public`.
+                    let Some(module) = module else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "module context for ResolveThenable job".to_string(),
+                            got: "missing module context".to_string(),
+                        });
+                    };
+                    let thenable_value = Self::js_value_to_value(&thenable);
+                    let resolve_fn = Value::BuiltinFunction(BuiltinFunction::promise_capability(
+                        BuiltinFunctionKind::PromiseCapabilityResolve,
+                        promise.0,
+                    ));
+                    let reject_fn = Value::BuiltinFunction(BuiltinFunction::promise_capability(
+                        BuiltinFunctionKind::PromiseCapabilityReject,
+                        promise.0,
+                    ));
+                    let outcome = self.invoke_inline_method_call(
+                        module,
+                        Value::Closure(then_handler.0),
+                        thenable_value,
+                        &[resolve_fn, reject_fn],
+                    );
+                    match outcome {
+                        Ok(InlineCallCompletion::Value(_)) => {}
+                        Ok(InlineCallCompletion::Throw(thrown)) => {
+                            if !self.promise_is_settled(promise) {
+                                self.reject_promise(
+                                    promise,
+                                    Self::value_to_js_value(&thrown.value),
+                                    thrown.label,
+                                )?;
+                            }
+                        }
+                        Err(error) if Self::is_js_catchable_error(&error) => {
+                            if !self.promise_is_settled(promise) {
+                                let reason = Self::promise_rejection_from_error(&error);
+                                self.reject_promise(promise, reason, task_label.clone())?;
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             }
         }
@@ -17551,6 +17744,30 @@ mod tests {
 
     fn quickjs_test_core() -> InterpreterCore {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    #[test]
+    fn bd_3ose7_resolve_preserves_non_public_settlement_label() {
+        // The ResolveThenable/resolve path must preserve the resolution label
+        // rather than collapse it to Public (the old placeholder settlement).
+        let mut core = quickjs_test_core();
+        let handle = core.promise_store.create();
+        core.resolve_promise_with_value(
+            handle,
+            Value::Int(7),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("resolve a non-thenable value");
+        let record = core.promise_store.get(handle).expect("promise record");
+        assert!(matches!(
+            record.state,
+            crate::promise_model::PromiseState::Fulfilled(_)
+        ));
+        assert_eq!(
+            record.label,
+            crate::ifc_artifacts::Label::Secret,
+            "resolution must preserve the value label, not settle Public"
+        );
     }
 
     fn custom_for_of_handle_for_close(core: &mut InterpreterCore, object: ObjectId) -> Value {
@@ -25503,6 +25720,7 @@ mod tests {
                 Value::BuiltinFunction(BuiltinFunction {
                     kind: BuiltinFunctionKind::Require,
                     module_specifier: "node:path".to_string(),
+                    bound_object: None,
                 }),
                 r#"{"BuiltinFunction":{"kind":"require","module_specifier":"node:path"}}"#
                     .to_string(),

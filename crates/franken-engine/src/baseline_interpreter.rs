@@ -86428,8 +86428,9 @@ mod async_runtime_tests_current {
         assert!(writable.deferred_final_tick_sequence.is_some());
         assert_eq!(
             core.readable_from_streams[&passthrough].phase,
-            ReadableFromPumpPhase::End
+            ReadableFromPumpPhase::Data
         );
+        assert!(core.readable_from_streams[&passthrough].eof_readable_pending);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -86449,10 +86450,12 @@ mod async_runtime_tests_current {
         let token = core
             .allocate_writable_completion_token()
             .expect("final completion token");
-        core.writable_streams
+        let writable = core
+            .writable_streams
             .get_mut(&passthrough)
-            .expect("PassThrough writable state")
-            .final_status = WritableFinalStatus::Active(token);
+            .expect("PassThrough writable state");
+        writable.end_requested = true;
+        writable.final_status = WritableFinalStatus::Active(token);
         let readable = core
             .readable_from_streams
             .get_mut(&passthrough)

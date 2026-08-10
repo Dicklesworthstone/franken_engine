@@ -4623,12 +4623,13 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::PromiseCapabilityResolve
             | BuiltinFunctionKind::PromiseCapabilityReject => {
-                let handle_id = builtin.bound_object.ok_or_else(|| {
-                    InterpreterError::TypeError {
-                        expected: "bound promise capability".to_string(),
-                        got: "unbound promise capability function".to_string(),
-                    }
-                })?;
+                let handle_id =
+                    builtin
+                        .bound_object
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "bound promise capability".to_string(),
+                            got: "unbound promise capability function".to_string(),
+                        })?;
                 let is_resolve = builtin.kind == BuiltinFunctionKind::PromiseCapabilityResolve;
                 let value = self.apply_promise_capability(
                     crate::promise_model::PromiseHandle(handle_id),
@@ -10361,13 +10362,12 @@ impl InterpreterCore {
             expected: "module-backed custom iterator.next".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let result_completion =
-            self.invoke_inline_method_call(
-                module,
-                next_method,
-                Value::Object(iterator_object),
-                &[],
-            )?;
+        let result_completion = self.invoke_inline_method_call(
+            module,
+            next_method,
+            Value::Object(iterator_object),
+            &[],
+        )?;
         let result = self.complete_inline_call(result_completion)?;
         let Value::Object(result_object) = result else {
             return Err(InterpreterError::TypeError {
@@ -11875,10 +11875,17 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         if let Value::Object(object_id) = value {
             let then = self.prototype_chain_get(object_id, "then")?;
-            if let Value::Closure(then_id) = then {
+            if Self::is_sync_callable(&then) {
+                // The `then` function is re-read from the thenable in the job
+                // (a data-property `then` yields the same callable), so a
+                // concrete handle need not be threaded through the microtask —
+                // core represents object methods as `Value::Function` as well
+                // as `Value::Closure`, and only the latter fits a
+                // `ClosureHandle`. `then_handler` is therefore an unused
+                // placeholder here.
                 let task = crate::promise_model::Microtask::ResolveThenable {
                     promise,
-                    then_handler: crate::closure_model::ClosureHandle(then_id),
+                    then_handler: crate::closure_model::ClosureHandle(0),
                     thenable: Self::value_to_js_value(&value),
                     label,
                 };
@@ -11907,11 +11914,7 @@ impl InterpreterCore {
         if is_resolve {
             self.resolve_promise_with_value(promise, argument, argument_label)?;
         } else {
-            self.reject_promise(
-                promise,
-                Self::value_to_js_value(&argument),
-                argument_label,
-            )?;
+            self.reject_promise(promise, Self::value_to_js_value(&argument), argument_label)?;
         }
         Ok(Value::Undefined)
     }
@@ -12700,7 +12703,7 @@ impl InterpreterCore {
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
-                    then_handler,
+                    then_handler: _,
                     thenable,
                     label: task_label,
                 } => {
@@ -12719,6 +12722,22 @@ impl InterpreterCore {
                         });
                     };
                     let thenable_value = Self::js_value_to_value(&thenable);
+                    // Re-read `then` from the thenable (same callable for a
+                    // data property); it may be a `Value::Function` or
+                    // `Value::Closure`, both of which CallMethod invokes.
+                    let then_fn = match thenable_value {
+                        Value::Object(object_id) => self.prototype_chain_get(object_id, "then")?,
+                        _ => Value::Undefined,
+                    };
+                    if !Self::is_sync_callable(&then_fn) {
+                        // The thenable's `then` was removed/replaced with a
+                        // non-callable after the job was queued: fulfill with
+                        // the thenable itself, matching a non-thenable value.
+                        if !self.promise_is_settled(promise) {
+                            self.fulfill_promise(promise, thenable.clone(), task_label.clone())?;
+                        }
+                        continue;
+                    }
                     let resolve_fn = Value::BuiltinFunction(BuiltinFunction::promise_capability(
                         BuiltinFunctionKind::PromiseCapabilityResolve,
                         promise.0,
@@ -12729,7 +12748,7 @@ impl InterpreterCore {
                     ));
                     let outcome = self.invoke_inline_method_call(
                         module,
-                        Value::Closure(then_handler.0),
+                        then_fn,
                         thenable_value,
                         &[resolve_fn, reject_fn],
                     );
@@ -17747,17 +17766,99 @@ mod tests {
     }
 
     #[test]
+    fn bd_3ose7_resolve_detects_thenable_and_enqueues_job() {
+        // An object with a callable `then` must be detected as a thenable:
+        // resolve leaves the promise PENDING (a ResolveThenable job enqueued),
+        // not synchronously fulfilled with the object.
+        let mut core = quickjs_test_core();
+        let thenable = core
+            .alloc_object_with_prototype(None)
+            .expect("allocate thenable object");
+        core.set_object_property(
+            thenable,
+            "then".to_string(),
+            Value::BuiltinFunction(BuiltinFunction::array_is_array()),
+        )
+        .expect("install a callable `then`");
+        let handle = core.promise_store.create();
+        core.resolve_promise_with_value(
+            handle,
+            Value::Object(thenable),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("resolve a thenable");
+        assert!(
+            !core.promise_is_settled(handle),
+            "a thenable must be assimilated (pending) rather than fulfilled directly"
+        );
+    }
+
+    #[test]
+    fn bd_3ose7_resolve_capability_settles_once_preserving_label() {
+        // The resolve capability passed into a thenable's `then` settles the
+        // bound promise with the argument's value and label, and only once
+        // (ES `alreadyResolved`). This is the settle mechanism the
+        // ResolveThenable job relies on.
+        let mut core = quickjs_test_core();
+        let handle = core.promise_store.create();
+        core.write_reg_with_label(
+            0,
+            Value::str("resolved-value"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("seed the resolve argument");
+        let result = core
+            .apply_promise_capability(handle, RegRange { start: 0, count: 1 }, true)
+            .expect("apply resolve capability");
+        assert_eq!(result, Value::Undefined);
+
+        let record = core.promise_store.get(handle).expect("promise record");
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Fulfilled(js)
+                if matches!(js, crate::object_model::JsValue::Str(s) if s == "resolved-value")
+        ));
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+
+        // Once-guard: a second resolve with a different value is a no-op.
+        core.write_reg_with_label(0, Value::str("second"), crate::ifc_artifacts::Label::Public)
+            .expect("seed second argument");
+        core.apply_promise_capability(handle, RegRange { start: 0, count: 1 }, true)
+            .expect("second resolve is inert");
+        let record = core.promise_store.get(handle).expect("promise record");
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Fulfilled(js)
+                if matches!(js, crate::object_model::JsValue::Str(s) if s == "resolved-value")
+        ));
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn bd_3ose7_reject_capability_rejects_with_label() {
+        let mut core = quickjs_test_core();
+        let handle = core.promise_store.create();
+        core.write_reg_with_label(0, Value::str("boom"), crate::ifc_artifacts::Label::Secret)
+            .expect("seed the reject reason");
+        core.apply_promise_capability(handle, RegRange { start: 0, count: 1 }, false)
+            .expect("apply reject capability");
+        let record = core.promise_store.get(handle).expect("promise record");
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Rejected(js)
+                if matches!(js, crate::object_model::JsValue::Str(s) if s == "boom")
+        ));
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
     fn bd_3ose7_resolve_preserves_non_public_settlement_label() {
         // The ResolveThenable/resolve path must preserve the resolution label
         // rather than collapse it to Public (the old placeholder settlement).
         let mut core = quickjs_test_core();
         let handle = core.promise_store.create();
-        core.resolve_promise_with_value(
-            handle,
-            Value::Int(7),
-            crate::ifc_artifacts::Label::Secret,
-        )
-        .expect("resolve a non-thenable value");
+        core.resolve_promise_with_value(handle, Value::Int(7), crate::ifc_artifacts::Label::Secret)
+            .expect("resolve a non-thenable value");
         let record = core.promise_store.get(handle).expect("promise record");
         assert!(matches!(
             record.state,

@@ -182,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 12);
+    assert_eq!(v.minor, 14);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.12.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.14.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -277,7 +277,7 @@ fn schema_version_0120_accepts_engine_history_but_rejects_core_owned_minors_bd_g
     verify_schema_version(&header(12)).expect("current minor must be accepted");
     let error = verify_schema_version(&header(13)).expect_err("future minor must be rejected");
     assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
-    assert!(error.message.contains("0.12.0"));
+    assert!(error.message.contains("0.14.0"));
 }
 
 // ============================================================================

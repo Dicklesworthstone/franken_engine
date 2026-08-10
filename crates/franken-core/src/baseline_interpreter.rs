@@ -2345,6 +2345,18 @@ struct ClosureValue {
     captured_env: Vec<ScopeFrame>,
 }
 
+/// Private, per-closure state installed by `DefineMethod`.
+///
+/// This cannot be represented by guest-visible properties or keyed by a
+/// function-table index: evaluating one method body more than once produces
+/// distinct closures with distinct inferred names and `[[HomeObject]]` values.
+#[derive(Debug, Clone)]
+struct ClosureMethodMetadata {
+    home_object: ObjectId,
+    name: JsString,
+    definition_label: crate::ifc_artifacts::Label,
+}
+
 /// A call stack frame.
 #[derive(Debug, Clone)]
 struct CallFrame {
@@ -3554,6 +3566,9 @@ pub struct InterpreterCore {
     scope_chain: ScopeChain,
     /// Closure store: maps closure IDs to captured environments.
     closures: Vec<ClosureValue>,
+    /// Non-forgeable concise-method identity and `[[HomeObject]]`, keyed by
+    /// closure ID so independently evaluated method definitions never alias.
+    closure_method_metadata: BTreeMap<u32, ClosureMethodMetadata>,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
@@ -3670,6 +3685,7 @@ impl InterpreterCore {
             last_post_run_seed: None,
             scope_chain: ScopeChain::new(),
             closures: Vec::new(),
+            closure_method_metadata: BTreeMap::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
             async_generators: Vec::new(),
@@ -6288,7 +6304,15 @@ impl InterpreterCore {
             } else {
                 None
             };
-            let super_value = self.method_super_value(&callee_val, &this_value)?;
+            let (super_value, super_label) =
+                if let Some(binding) = self.concise_method_super_binding(&callee_val)? {
+                    binding
+                } else {
+                    (
+                        self.method_super_value(&callee_val, &this_value)?,
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                };
             self.call_stack.push(CallFrame {
                 return_ip,
                 return_reg,
@@ -6299,7 +6323,7 @@ impl InterpreterCore {
                 new_target_value: Value::Undefined,
                 new_target_label: crate::ifc_artifacts::Label::Public,
                 super_value,
-                super_label: crate::ifc_artifacts::Label::Public,
+                super_label,
                 construct_this: None,
                 derived_constructor: false,
                 this_initialized: true,
@@ -7881,15 +7905,31 @@ impl InterpreterCore {
                                     |frame| (frame.this_value.clone(), frame.this_label.clone()),
                                 );
                                 // Arrow closures inherit `this` from the defining frame.
-                                let (call_this, call_this_label) = if captured_env.is_some() {
+                                let is_concise_method = matches!(
+                                    &callee_val,
+                                    Value::Closure(closure_id)
+                                        if self.closure_method_metadata.contains_key(closure_id)
+                                );
+                                let (call_this, call_this_label) = if is_concise_method {
+                                    (Value::Undefined, crate::ifc_artifacts::Label::Public)
+                                } else if captured_env.is_some() {
                                     (frame_this, frame_this_label)
                                 } else {
                                     (Value::Undefined, crate::ifc_artifacts::Label::Public)
                                 };
-                                let super_value = self.function_super_value(
-                                    &callee_val,
-                                    IR_SUPER_PROTOTYPE_PROPERTY,
-                                )?;
+                                let (super_value, super_label) = if let Some(binding) =
+                                    self.concise_method_super_binding(&callee_val)?
+                                {
+                                    binding
+                                } else {
+                                    (
+                                        self.function_super_value(
+                                            &callee_val,
+                                            IR_SUPER_PROTOTYPE_PROPERTY,
+                                        )?,
+                                        callee_label,
+                                    )
+                                };
 
                                 self.call_stack.push(CallFrame {
                                     return_ip: self.ip + 1,
@@ -7901,7 +7941,7 @@ impl InterpreterCore {
                                     new_target_value: Value::Undefined,
                                     new_target_label: crate::ifc_artifacts::Label::Public,
                                     super_value,
-                                    super_label: callee_label,
+                                    super_label,
                                     construct_this: None,
                                     derived_constructor: false,
                                     this_initialized: true,
@@ -8218,7 +8258,16 @@ impl InterpreterCore {
                         )?;
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        let (super_value, super_label) = if let Some(binding) =
+                            self.concise_method_super_binding(&callee_val)?
+                        {
+                            binding
+                        } else {
+                            (
+                                self.method_super_value(&callee_val, &receiver_val)?,
+                                callee_label,
+                            )
+                        };
                         if matches!(&callee_val, Value::AsyncFunction(_)) {
                             self.enter_async_function_call(AsyncCallSetup {
                                 function_index: func_idx,
@@ -8229,7 +8278,7 @@ impl InterpreterCore {
                                 this_value: receiver_val,
                                 this_label: receiver_label,
                                 super_value,
-                                super_label: callee_label,
+                                super_label,
                                 result_register: dst,
                             })?;
                             return Ok(true);
@@ -8258,7 +8307,7 @@ impl InterpreterCore {
                             new_target_value: Value::Undefined,
                             new_target_label: crate::ifc_artifacts::Label::Public,
                             super_value,
-                            super_label: callee_label,
+                            super_label,
                             construct_this: None,
                             derived_constructor: false,
                             this_initialized: true,
@@ -8621,6 +8670,40 @@ impl InterpreterCore {
                     if !called_accessor {
                         self.ip += 1;
                     }
+                }
+                Ir3Instruction::DefineMethod { obj, key, func } => {
+                    let obj_val = self.read_reg(obj)?;
+                    let key_val = self.read_reg(key)?;
+                    let func_val = self.read_reg(func)?;
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
+                    let definition_label = self
+                        .read_reg_label(obj)?
+                        .join(&self.read_reg_label(key)?)
+                        .join(&self.read_reg_label(func)?);
+
+                    match obj_val {
+                        Value::Object(object_id) => {
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                object_id,
+                                &property_key,
+                            )?;
+                            self.define_method_property(
+                                object_id,
+                                property_key,
+                                func_val,
+                                definition_label,
+                            )?;
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    }
+                    self.ip += 1;
                 }
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
@@ -10655,6 +10738,16 @@ impl InterpreterCore {
                 ))
             }
             function_like if Self::function_object_key(&function_like).is_some() => {
+                if let Value::Closure(closure_id) = &function_like
+                    && self.closure_method_metadata.contains_key(closure_id)
+                    && matches!(
+                        &key,
+                        RuntimePropertyKey::String(name) if name.as_str() == Some("name")
+                    )
+                {
+                    self.preflight_legacy_property_key_for_hook(&key)?;
+                    return Ok(Value::Bool(true));
+                }
                 let Some(object_id) = self.function_object_id(&function_like) else {
                     self.preflight_legacy_property_key_for_hook(&key)?;
                     return Ok(Value::Bool(false));
@@ -11789,6 +11882,20 @@ impl InterpreterCore {
             && let Some(value) = Self::symbol_constructor_property_value(key)
         {
             self.write_reg(dst, value)?;
+            return Ok(false);
+        }
+
+        let method_name = if matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("name"))
+            && let Value::Closure(closure_id) = &receiver
+        {
+            self.closure_method_metadata
+                .get(closure_id)
+                .map(|metadata| (metadata.name.clone(), metadata.definition_label.clone()))
+        } else {
+            None
+        };
+        if let Some((name, label)) = method_name {
+            self.write_reg_with_label(dst, Value::Str(name), label)?;
             return Ok(false);
         }
 
@@ -13967,6 +14074,21 @@ impl InterpreterCore {
             }
             "builtin:ObjectGetOwnPropertyNames" => {
                 let this = self.required_arg(args, 0, "object")?;
+                if let Value::Closure(closure_id) = &this
+                    && self.closure_method_metadata.contains_key(closure_id)
+                {
+                    let mut values = vec![Value::str("name")];
+                    if let Some(object_id) = self.function_object_id(&this) {
+                        values.extend(
+                            self.heap[object_id.0 as usize]
+                                .own_exact_property_keys()
+                                .into_iter()
+                                .filter(|key| key.as_str() != Some("name"))
+                                .map(Value::Str),
+                        );
+                    }
+                    return Ok(Value::Object(self.alloc_array_from_values(&values)?));
+                }
                 let object_id = self.expect_object(this, "object")?;
                 let object = self
                     .heap
@@ -13997,19 +14119,40 @@ impl InterpreterCore {
             }
             "builtin:ReflectOwnKeys" => {
                 let this = self.required_arg(args, 0, "object")?;
-                let values = self
-                    .object_like_storage_id(&this, "object")?
-                    .map(|object_id| {
-                        self.heap[object_id.0 as usize]
-                            .own_runtime_property_keys()
-                            .into_iter()
-                            .map(|key| match key {
-                                RuntimePropertyKey::String(key) => Value::Str(key),
-                                RuntimePropertyKey::Symbol(symbol) => Value::Symbol(symbol),
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let has_virtual_name = if let Value::Closure(closure_id) = &this
+                    && self.closure_method_metadata.contains_key(closure_id)
+                {
+                    true
+                } else {
+                    false
+                };
+                let mut values = if has_virtual_name {
+                    vec![Value::str("name")]
+                } else {
+                    Vec::new()
+                };
+                values.extend(
+                    self.object_like_storage_id(&this, "object")?
+                        .map(|object_id| {
+                            self.heap[object_id.0 as usize]
+                                .own_runtime_property_keys()
+                                .into_iter()
+                                .filter(|key| {
+                                    !matches!(
+                                        key,
+                                        RuntimePropertyKey::String(key)
+                                            if key.as_str() == Some("name")
+                                                && has_virtual_name
+                                    )
+                                })
+                                .map(|key| match key {
+                                    RuntimePropertyKey::String(key) => Value::Str(key),
+                                    RuntimePropertyKey::Symbol(symbol) => Value::Symbol(symbol),
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                );
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
             "builtin:ObjectAssign" => self.object_assign(args),
@@ -15288,6 +15431,14 @@ impl InterpreterCore {
         })
     }
 
+    fn estimate_closure_method_metadata_entry_bytes(metadata: &ClosureMethodMetadata) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<u32>() as u64)
+            .saturating_add(std::mem::size_of::<ObjectId>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(&metadata.name))
+            .saturating_add(Self::estimate_label_bytes(&metadata.definition_label))
+    }
+
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = frame
             .bindings
@@ -15727,6 +15878,12 @@ impl InterpreterCore {
                         MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
                             .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
                     })
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.closure_method_metadata
+                    .values()
+                    .map(Self::estimate_closure_method_metadata_entry_bytes)
                     .sum::<u64>(),
             )
             .saturating_add(
@@ -16214,6 +16371,68 @@ impl InterpreterCore {
         }
     }
 
+    fn inferred_method_name(&self, key: &RuntimePropertyKey) -> JsString {
+        match key {
+            RuntimePropertyKey::String(name) => name.clone(),
+            RuntimePropertyKey::Symbol(symbol) => self.symbol_description(*symbol).map_or_else(
+                || JsString::from(""),
+                |description| {
+                    JsString::from("[")
+                        .concat(&description)
+                        .concat(&JsString::from("]"))
+                },
+            ),
+        }
+    }
+
+    /// Install an ordinary data property and its private per-closure method
+    /// identity atomically under the interpreter's total-memory budget.
+    fn define_method_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        function: Value,
+        definition_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
+        let Value::Closure(closure_id) = function else {
+            return Err(InterpreterError::TypeError {
+                expected: "fresh closure for concise method definition".to_string(),
+                got: function.type_name().to_string(),
+            });
+        };
+        self.closures
+            .get(closure_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid concise-method closure".to_string(),
+                got: format!("closure#{closure_id} not found"),
+            })?;
+        if self.closure_method_metadata.contains_key(&closure_id) {
+            return Err(InterpreterError::TypeError {
+                expected: "unregistered concise-method closure".to_string(),
+                got: format!("closure#{closure_id} already has a [[HomeObject]]"),
+            });
+        }
+
+        let name = self.inferred_method_name(&key);
+        self.closure_method_metadata.insert(
+            closure_id,
+            ClosureMethodMetadata {
+                home_object: object_id,
+                name,
+                definition_label,
+            },
+        );
+        if let Err(error) =
+            self.set_object_runtime_property(object_id, key, Value::Closure(closure_id))
+        {
+            self.closure_method_metadata.remove(&closure_id);
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn set_object_string_property(
         &mut self,
         object_id: ObjectId,
@@ -16511,7 +16730,11 @@ impl InterpreterCore {
                         got: format!("closure#{closure_id} not found"),
                     }
                 })?;
-                Ok(Some(FunctionObjectKey::Closure(*closure_id)))
+                if self.closure_method_metadata.contains_key(closure_id) {
+                    Ok(None)
+                } else {
+                    Ok(Some(FunctionObjectKey::Closure(*closure_id)))
+                }
             }
             Value::BuiltinFunction(builtin) => Ok(Some(FunctionObjectKey::Builtin(builtin.kind))),
             _ => Ok(None),
@@ -16664,6 +16887,31 @@ impl InterpreterCore {
         Ok(parent_prototype
             .map(Value::Object)
             .unwrap_or(Value::Undefined))
+    }
+
+    /// Resolve a concise method's lexical `super` base from its private
+    /// `[[HomeObject]]`. The object's current prototype is consulted at call
+    /// time, so moving the method to another receiver does not retarget
+    /// `super`.
+    fn concise_method_super_binding(
+        &self,
+        callee: &Value,
+    ) -> Result<Option<(Value, crate::ifc_artifacts::Label)>, InterpreterError> {
+        let Value::Closure(closure_id) = callee else {
+            return Ok(None);
+        };
+        let Some(metadata) = self.closure_method_metadata.get(closure_id) else {
+            return Ok(None);
+        };
+        let home = self.heap.get(metadata.home_object.0 as usize).ok_or(
+            InterpreterError::ObjectNotFound {
+                id: metadata.home_object.0,
+            },
+        )?;
+        Ok(Some((
+            home.prototype.map(Value::Object).unwrap_or(Value::Null),
+            metadata.definition_label.clone(),
+        )))
     }
 
     fn ensure_function_object(
@@ -28795,6 +29043,222 @@ mod tests {
             }
             _ => panic!("Expected CapabilityDenied error"),
         }
+    }
+
+    fn lower_concise_method_source_bd_gqaa4(source: &str, label: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("concise-method source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, label);
+        let ctx = LoweringContext::new(
+            format!("trace-{label}"),
+            format!("decision-{label}"),
+            format!("policy-{label}"),
+        );
+        lower_ir0_to_ir3(&ir0, &ctx)
+            .expect("concise-method source should lower")
+            .ir3
+    }
+
+    #[test]
+    fn concise_object_method_preserves_receiver_bd_gqaa4() {
+        let module = lower_concise_method_source_bd_gqaa4(
+            "const object = { value: 41, method() { return this.value + 1; } };\nobject.method();",
+            "concise-method-receiver.js",
+        );
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::DefineMethod { .. })),
+            "method lowering must retain its semantic carrier"
+        );
+
+        let result = quickjs_test_core()
+            .execute(&module)
+            .expect("receiver-aware concise method should execute");
+        assert_eq!(result.value, Value::Int(42));
+    }
+
+    #[test]
+    fn concise_object_method_infers_ordinary_and_computed_names_bd_gqaa4() {
+        for (source, expected, label) in [
+            (
+                "({ ordinary() { return 1; } }).ordinary.name;",
+                "ordinary",
+                "concise-method-name.js",
+            ),
+            (
+                "const key = \"computed\";\n({ [key]() { return 1; } })[key].name;",
+                "computed",
+                "computed-concise-method-name.js",
+            ),
+        ] {
+            let module = lower_concise_method_source_bd_gqaa4(source, label);
+            let result = quickjs_test_core()
+                .execute(&module)
+                .expect("concise method name should be readable");
+            assert_eq!(result.value, Value::str(expected));
+        }
+
+        let own_name = lower_concise_method_source_bd_gqaa4(
+            "\"name\" in ({ method() {} }).method;",
+            "concise-method-own-name.js",
+        );
+        assert_eq!(
+            quickjs_test_core().execute(&own_name).unwrap().value,
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn concise_object_method_has_no_prototype_and_is_not_constructable_bd_gqaa4() {
+        let no_prototype = lower_concise_method_source_bd_gqaa4(
+            "({ method() {} }).method.prototype;",
+            "concise-method-no-prototype.js",
+        );
+        assert_eq!(
+            quickjs_test_core().execute(&no_prototype).unwrap().value,
+            Value::Undefined
+        );
+
+        let construct = lower_concise_method_source_bd_gqaa4(
+            "const method = ({ method() {} }).method;\nnew method();",
+            "concise-method-nonconstructable.js",
+        );
+        assert!(matches!(
+            quickjs_test_core().execute(&construct),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn concise_object_method_super_uses_home_object_not_receiver_bd_gqaa4() {
+        let mut core = quickjs_test_core();
+        let base = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(base, "value".to_string(), Value::Int(7))
+            .unwrap();
+        let unrelated_base = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(unrelated_base, "value".to_string(), Value::Int(99))
+            .unwrap();
+        let home = core.alloc_object_with_prototype(Some(base)).unwrap();
+        let receiver = core
+            .alloc_object_with_prototype(Some(unrelated_base))
+            .unwrap();
+        core.registers[1] = Value::Object(home);
+        core.registers[2] = Value::Object(receiver);
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        function_index: 0,
+                        capture_count: 0,
+                        dst: 3,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 4,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::DefineMethod {
+                        obj: 1,
+                        key: 4,
+                        func: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 2,
+                        key: 4,
+                        val: 3,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 2,
+                        key: 4,
+                        dst: 5,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 5,
+                        args: RegRange { start: 6, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadSuper { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                ],
+                vec!["method".to_string(), "value".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 0,
+                    frame_size: 3,
+                    name: None,
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            ))
+            .expect("moved concise method should resolve super from its home object");
+
+        assert_eq!(result.value, Value::Int(7));
+    }
+
+    #[test]
+    fn concise_object_method_definition_label_reaches_inferred_name_bd_gqaa4() {
+        let mut core = quickjs_test_core();
+        let home = core.alloc_object_with_prototype(None).unwrap();
+        core.write_reg_with_label(0, Value::Object(home), crate::ifc_artifacts::Label::Secret)
+            .unwrap();
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::CreateClosure {
+                        function_index: 0,
+                        capture_count: 0,
+                        dst: 2,
+                    },
+                    Ir3Instruction::DefineMethod {
+                        obj: 0,
+                        key: 1,
+                        func: 2,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 3,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 2,
+                        key: 3,
+                        dst: 4,
+                    },
+                    Ir3Instruction::Return { value: 4 },
+                    Ir3Instruction::LoadUndefined { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["secretMethod".to_string(), "name".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 6,
+                    arity: 0,
+                    frame_size: 1,
+                    name: None,
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            ))
+            .expect("method name should retain its definition label");
+
+        assert_eq!(result.value, Value::str("secretMethod"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
     }
 
     // -- ES2015 Class Semantics Tests (bd-6a61n.1.3) --

@@ -5968,6 +5968,18 @@ struct ClosureValue {
     captured_env: Vec<ScopeFrame>,
 }
 
+/// Private, per-closure state installed by `DefineMethod`.
+///
+/// This must not live in guest-visible properties or be keyed by a function
+/// table index: one compiled method body can be evaluated repeatedly with a
+/// different inferred name and [[HomeObject]] on every closure occurrence.
+#[derive(Debug, Clone)]
+struct ClosureMethodMetadata {
+    home_object: ObjectId,
+    name: JsString,
+    definition_label: Label,
+}
+
 type RestoredAbruptCompletionState = (Option<(Value, Label)>, Option<LabeledReturn>);
 
 /// A call stack frame.
@@ -5998,6 +6010,11 @@ struct CallFrame {
     super_value: Value,
     /// IFC label paired with `super_value`.
     super_label: Label,
+    /// Concise methods retain their actual [[HomeObject]] so each `LoadSuper`
+    /// observes that object's current internal prototype, including changes
+    /// made after method entry. Class-constructor frames use `None` and retain
+    /// the explicit `super_value` carrier above.
+    super_home_object: Option<ObjectId>,
     /// For constructor calls (`new`): the `this` object allocated before
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
@@ -8901,6 +8918,9 @@ pub struct InterpreterCore {
     runtime_name_references: Vec<RuntimeNameReference>,
     /// Closure store: maps closure IDs to captured environments.
     closures: Vec<ClosureValue>,
+    /// Non-forgeable concise-method identity and [[HomeObject]], keyed by the
+    /// closure occurrence produced while evaluating the object literal.
+    closure_method_metadata: BTreeMap<u32, ClosureMethodMetadata>,
     /// Program provenance for closures created by the live interpreter. Test
     /// fixtures that seed the private closure table directly intentionally
     /// have no entry and retain same-module behavior.
@@ -9672,6 +9692,7 @@ impl InterpreterCore {
             generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
             closures: Vec::new(),
+            closure_method_metadata: BTreeMap::new(),
             closure_module_origins: BTreeMap::new(),
             closure_generated_function_artifacts: BTreeMap::new(),
             module_reentrant_call_depth: 0,
@@ -27595,6 +27616,7 @@ impl InterpreterCore {
         // between runs routes through the non-repeat fresh-seed path.
         self.iterators.clear();
         self.closures.clear();
+        self.closure_method_metadata.clear();
         self.closure_module_origins.clear();
         self.closure_generated_function_artifacts.clear();
         self.generators.clear();
@@ -33627,7 +33649,7 @@ impl InterpreterCore {
                     self.join_pending_hostcall_stream_label(*object_id)?;
                 }
                 Ok(Value::Bool(
-                    self.object_own_property_contains(&receiver, &property),
+                    self.object_own_property_is_enumerable(&receiver, &property),
                 ))
             }
             BuiltinFunctionKind::ObjectPrototypeValueOf => {
@@ -35879,6 +35901,7 @@ impl InterpreterCore {
             new_target_label,
             super_value,
             super_label,
+            super_home_object: None,
             construct_this,
             derived_constructor,
             this_initialized,
@@ -36128,6 +36151,7 @@ impl InterpreterCore {
                 new_target_label: Label::Public,
                 super_value: Value::Undefined,
                 super_label: Label::Public,
+                super_home_object: None,
                 construct_this: None,
                 derived_constructor: false,
                 this_initialized: true,
@@ -37690,6 +37714,8 @@ impl InterpreterCore {
                             } else {
                                 (Value::Undefined, Label::Public)
                             };
+                            let (super_value, super_label, super_home_object) =
+                                self.concise_method_super_binding(&callee_val)?;
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -37703,8 +37729,9 @@ impl InterpreterCore {
                                 this_label: call_this_label,
                                 new_target_value: Value::Undefined,
                                 new_target_label: Label::Public,
-                                super_value: Value::Undefined,
-                                super_label: Label::Public,
+                                super_value,
+                                super_label,
+                                super_home_object,
                                 construct_this: None,
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -37887,11 +37914,20 @@ impl InterpreterCore {
                                     (frame.this_value.clone(), frame.this_label.clone())
                                 });
                             // Arrow closures inherit `this` from the defining frame.
-                            let (call_this, call_this_label) = if captured_env.is_some() {
+                            let is_concise_method = matches!(
+                                &callee_val,
+                                Value::Closure(closure_id)
+                                    if self.closure_method_metadata.contains_key(closure_id)
+                            );
+                            let (call_this, call_this_label) = if is_concise_method {
+                                (Value::Undefined, Label::Public)
+                            } else if captured_env.is_some() {
                                 (frame_this, frame_this_label)
                             } else {
                                 (Value::Undefined, Label::Public)
                             };
+                            let (super_value, super_label, super_home_object) =
+                                self.concise_method_super_binding(&callee_val)?;
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -37905,8 +37941,9 @@ impl InterpreterCore {
                                 this_label: call_this_label,
                                 new_target_value: Value::Undefined,
                                 new_target_label: Label::Public,
-                                super_value: Value::Undefined,
-                                super_label: Label::Public,
+                                super_value,
+                                super_label,
+                                super_home_object,
                                 construct_this: None,
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -38265,6 +38302,7 @@ impl InterpreterCore {
                                 new_target_label: Label::Public,
                                 super_value: Value::Undefined,
                                 super_label: Label::Public,
+                                super_home_object: None,
                                 construct_this: None,
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -38398,6 +38436,8 @@ impl InterpreterCore {
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
                     let receiver_label =
                         self.clone_register_label_with_temporary_budget(receiver)?;
+                    let (super_value, super_label, super_home_object) =
+                        self.concise_method_super_binding(&callee_val)?;
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: dst,
@@ -38407,8 +38447,9 @@ impl InterpreterCore {
                         this_label: receiver_label,
                         new_target_value: Value::Undefined,
                         new_target_label: Label::Public,
-                        super_value: Value::Undefined,
-                        super_label: Label::Public,
+                        super_value,
+                        super_label,
+                        super_home_object,
                         construct_this: None,
                         derived_constructor: false,
                         this_initialized: true,
@@ -38644,7 +38685,14 @@ impl InterpreterCore {
                         self.preflight_legacy_property_key_for_hook(&property_key)?;
                     }
 
-                    let mut result_label = self.binary_operation_label(dst, obj)?;
+                    let mut result_label = self.binary_operation_label(obj, key)?;
+                    if let Value::Closure(closure_id) = &obj_val
+                        && let Some(method) = self.closure_method_metadata.get(closure_id)
+                    {
+                        let method_label = method.definition_label.clone();
+                        result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &method_label)?;
+                    }
                     if let Some(binary_storage_label) =
                         object_id.and_then(|id| self.binary_storage_label_ref(id))
                     {
@@ -38982,6 +39030,45 @@ impl InterpreterCore {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
                                 got: obj_val.type_name().to_string(),
+                            });
+                        }
+                    }
+                    self.ip += 1;
+                }
+                Ir3Instruction::DefineMethod { obj, key, func } => {
+                    let obj_val = self.read_reg(obj)?;
+                    let key_val = self.read_reg(key)?;
+                    let func_val = self.read_reg(func)?;
+                    let property_key = self.executable_property_key_from_value(&key_val);
+                    let mut definition_label =
+                        self.clone_register_label_with_temporary_budget(obj)?;
+                    let key_label = self.get_register_label(key)?.clone();
+                    definition_label =
+                        self.join_owned_label_with_temporary_budget(definition_label, &key_label)?;
+                    let function_label = self.get_register_label(func)?.clone();
+                    definition_label = self.join_owned_label_with_temporary_budget(
+                        definition_label,
+                        &function_label,
+                    )?;
+
+                    match obj_val {
+                        Value::Object(object_id) => {
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                object_id,
+                                &property_key,
+                            )?;
+                            self.define_method_property(
+                                object_id,
+                                property_key,
+                                func_val,
+                                definition_label,
+                            )?;
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: other.type_name().to_string(),
                             });
                         }
                     }
@@ -39429,6 +39516,19 @@ impl InterpreterCore {
                     let callee_val = self.read_reg(callee)?;
                     let callee_label = self.clone_register_label_with_temporary_budget(callee)?;
 
+                    if matches!(&callee_val, Value::Closure(_))
+                        && !self.is_constructible_value(&callee_val)
+                    {
+                        let error = InterpreterError::TypeError {
+                            expected: "constructible function".to_string(),
+                            got: "concise method".to_string(),
+                        };
+                        match self.route_isolated_explicit_throw(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        }
+                    }
+
                     // `new f(...)` where `f` was produced by the `Function`
                     // constructor (bd-8enww.3.3 AC#4). v1 deliberately refuses
                     // [[Construct]] on generated functions deterministically:
@@ -39633,6 +39733,7 @@ impl InterpreterCore {
                                 new_target_label: callee_label,
                                 super_value: Value::Undefined,
                                 super_label: Label::Public,
+                                super_home_object: None,
                                 construct_this: Some(this_val.clone()),
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -39798,12 +39899,29 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadSuper { dst } => {
-                    let (super_value, super_label) = self
+                    let (mut super_value, mut super_label, super_home_object) = self
                         .call_stack
                         .last()
-                        .map_or((Value::Undefined, Label::Public), |frame| {
-                            (frame.super_value.clone(), frame.super_label.clone())
+                        .map_or((Value::Undefined, Label::Public, None), |frame| {
+                            (
+                                frame.super_value.clone(),
+                                frame.super_label.clone(),
+                                frame.super_home_object,
+                            )
                         });
+                    if let Some(home_object) = super_home_object {
+                        let home = self
+                            .heap
+                            .get(home_object.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: home_object.0 })?;
+                        super_value = home.prototype.map(Value::Object).unwrap_or(Value::Null);
+                        if let Some(home_label) =
+                            self.binary_storage_label_ref(home_object).cloned()
+                        {
+                            super_label = self
+                                .join_owned_label_with_temporary_budget(super_label, &home_label)?;
+                        }
+                    }
                     self.write_reg_with_label(dst, super_value, super_label)?;
                     self.ip += 1;
                 }
@@ -40986,6 +41104,12 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
         let constructor = self.read_reg(rhs)?;
+        if !self.is_constructible_value(&constructor) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructible function".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
         let prototype = match constructor {
             Value::Function(func_idx) => self.ensure_function_prototype(module, func_idx)?,
             Value::Closure(closure_id) => {
@@ -41040,6 +41164,17 @@ impl InterpreterCore {
                     0,
                 )?))
             }
+            Value::Function(_) => Ok(Value::Bool(matches!(
+                key.as_str(),
+                Some("name" | "prototype")
+            ))),
+            Value::Closure(closure_id) => Ok(Value::Bool(
+                if self.closure_method_metadata.contains_key(&closure_id) {
+                    key.as_str() == Some("name")
+                } else {
+                    matches!(key.as_str(), Some("name" | "prototype"))
+                },
+            )),
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
                 got: other.type_name().to_string(),
@@ -43568,9 +43703,6 @@ impl InterpreterCore {
     }
 
     fn object_own_property_contains(&self, receiver: &Value, property: &Value) -> bool {
-        let Value::Object(object_id) = receiver else {
-            return false;
-        };
         let property_key = self.executable_property_key_from_value(property);
         if self
             .validate_executable_property_key(&property_key)
@@ -43578,6 +43710,22 @@ impl InterpreterCore {
         {
             return false;
         }
+        if let Some(key) = property_key.as_str() {
+            match receiver {
+                Value::Function(_) => return matches!(key, "name" | "prototype"),
+                Value::Closure(closure_id) => {
+                    return if self.closure_method_metadata.contains_key(closure_id) {
+                        key == "name"
+                    } else {
+                        matches!(key, "name" | "prototype")
+                    };
+                }
+                _ => {}
+            }
+        }
+        let Value::Object(object_id) = receiver else {
+            return false;
+        };
         if let RuntimePropertyKey::String(key) = &property_key
             && !self.writable_own_runtime_property_visible(*object_id, key)
         {
@@ -43587,6 +43735,15 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| object.contains_own_runtime_property(&property_key))
             .unwrap_or(false)
+    }
+
+    fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
+        if matches!(receiver, Value::Function(_) | Value::Closure(_)) {
+            // Function `name`/`prototype` are virtual non-enumerable own
+            // properties; concise methods expose only `name`.
+            return false;
+        }
+        self.object_own_property_contains(receiver, property)
     }
 
     fn object_prototype_value_of_value(&self, receiver: Value) -> Value {
@@ -52616,6 +52773,69 @@ impl InterpreterCore {
         self.set_object_runtime_property(object_id, key, accessor)
     }
 
+    fn inferred_method_name(&self, key: &RuntimePropertyKey) -> JsString {
+        match key {
+            RuntimePropertyKey::String(name) => name.clone(),
+            RuntimePropertyKey::Symbol(symbol) => self.symbol_description(*symbol).map_or_else(
+                || JsString::from(""),
+                |description| {
+                    JsString::from("[")
+                        .concat(&description)
+                        .concat(&JsString::from("]"))
+                },
+            ),
+        }
+    }
+
+    /// Install an ordinary data property and its private per-closure method
+    /// identity as one budgeted operation. Reserving the metadata first makes
+    /// a later property-allocation refusal rollback without publishing either
+    /// half of the method definition.
+    fn define_method_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        function: Value,
+        definition_label: Label,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
+        let Value::Closure(closure_id) = function else {
+            return Err(InterpreterError::TypeError {
+                expected: "fresh closure for concise method definition".to_string(),
+                got: function.type_name().to_string(),
+            });
+        };
+        self.closures
+            .get(closure_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid concise-method closure".to_string(),
+                got: format!("closure#{closure_id} not found"),
+            })?;
+        if self.closure_method_metadata.contains_key(&closure_id) {
+            return Err(InterpreterError::TypeError {
+                expected: "unregistered concise-method closure".to_string(),
+                got: format!("closure#{closure_id} already has a [[HomeObject]]"),
+            });
+        }
+
+        let metadata = ClosureMethodMetadata {
+            home_object: object_id,
+            name: self.inferred_method_name(&key),
+            definition_label,
+        };
+        let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
+        self.apply_memory_component_delta(0, metadata_bytes)?;
+        if let Err(error) =
+            self.set_object_runtime_property(object_id, key, Value::Closure(closure_id))
+        {
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(metadata_bytes);
+            return Err(error);
+        }
+        self.closure_method_metadata.insert(closure_id, metadata);
+        Ok(())
+    }
+
     fn dispatch_timer_hostcall(
         &mut self,
         cap: &str,
@@ -60012,17 +60232,13 @@ impl InterpreterCore {
                 }
 
                 let this_val = self.read_reg(args.start)?;
-                let obj_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-objects return false
-                };
-
                 let prop_val = self.read_reg(args.start + 1)?;
-                self.join_pending_hostcall_stream_label(obj_id)?;
-                Ok(Value::Bool(self.object_own_property_contains(
-                    &Value::Object(obj_id),
-                    &prop_val,
-                )))
+                if let Value::Object(obj_id) = &this_val {
+                    self.join_pending_hostcall_stream_label(*obj_id)?;
+                }
+                Ok(Value::Bool(
+                    self.object_own_property_contains(&this_val, &prop_val),
+                ))
             }
             "builtin:ArrayPrototypeSort" => {
                 // Array.prototype.sort([compareFunction]) implementation (consolidated for builtin IDs 28, 248, 385)
@@ -60945,16 +61161,20 @@ impl InterpreterCore {
                     });
                 }
                 let target = self.read_reg(args.start)?;
-                let is_constructor = match &target {
-                    Value::Function(_) | Value::Closure(_) => true,
-                    Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
-                    _ => false,
-                };
-                if !is_constructor {
+                if !self.is_constructible_value(&target) {
                     return Err(InterpreterError::TypeError {
                         expected: "constructor function".to_string(),
                         got: target.type_name().to_string(),
                     });
+                }
+                if args.count >= 3 {
+                    let new_target = self.read_reg(args.start + 2)?;
+                    if !self.is_constructible_value(&new_target) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "constructible Reflect.construct newTarget".to_string(),
+                            got: new_target.type_name().to_string(),
+                        });
+                    }
                 }
                 let arguments_list_register =
                     args.start
@@ -67505,6 +67725,7 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
             .saturating_add(Self::estimate_value_bytes(&frame.super_value))
             .saturating_add(Self::estimate_label_bytes(&frame.super_label))
+            .saturating_add(std::mem::size_of::<Option<ObjectId>>() as u64)
             .saturating_add(
                 frame
                     .construct_this
@@ -67545,6 +67766,7 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
             .saturating_add(Self::estimate_value_bytes(&frame.super_value))
             .saturating_add(Self::estimate_label_bytes(&frame.super_label))
+            .saturating_add(std::mem::size_of::<Option<ObjectId>>() as u64)
             .saturating_add(
                 frame
                     .construct_this
@@ -67785,6 +68007,14 @@ impl InterpreterCore {
         Self::saturating_sum(closures.iter().map(Self::estimate_closure_bytes))
     }
 
+    fn estimate_closure_method_metadata_entry_bytes(metadata: &ClosureMethodMetadata) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<u32>() as u64)
+            .saturating_add(std::mem::size_of::<ObjectId>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(&metadata.name))
+            .saturating_add(Self::estimate_label_bytes(&metadata.definition_label))
+    }
+
     fn registers_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes))
     }
@@ -67854,6 +68084,11 @@ impl InterpreterCore {
 
     fn closures_memory_bytes(&self) -> u64 {
         Self::estimate_closures_bytes(&self.closures)
+            .saturating_add(Self::saturating_sum(
+                self.closure_method_metadata
+                    .values()
+                    .map(Self::estimate_closure_method_metadata_entry_bytes),
+            ))
             .saturating_add(Self::saturating_sum(
                 self.closure_module_origins.values().map(|origin| {
                     (std::mem::size_of::<u32>() as u64)
@@ -69743,6 +69978,12 @@ impl InterpreterCore {
         module: &Ir3Module,
         closure_id: u32,
     ) -> Result<ObjectId, InterpreterError> {
+        if self.closure_method_metadata.contains_key(&closure_id) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructible closure".to_string(),
+                got: format!("concise method closure#{closure_id}"),
+            });
+        }
         self.closures
             .get(closure_id as usize)
             .ok_or_else(|| InterpreterError::TypeError {
@@ -69762,12 +70003,51 @@ impl InterpreterCore {
     fn constructor_function_index(&self, value: &Value) -> Result<u32, InterpreterError> {
         match value {
             Value::Function(index) => Ok(*index),
-            Value::Closure(closure_id) => self.closure_function_index(*closure_id),
+            Value::Closure(closure_id)
+                if !self.closure_method_metadata.contains_key(closure_id) =>
+            {
+                self.closure_function_index(*closure_id)
+            }
             _ => Err(InterpreterError::TypeError {
                 expected: "constructor function".to_string(),
                 got: value.type_name().to_string(),
             }),
         }
+    }
+
+    fn is_constructible_value(&self, value: &Value) -> bool {
+        match value {
+            Value::Function(_) => true,
+            Value::Closure(closure_id) => {
+                self.closures.get(*closure_id as usize).is_some()
+                    && !self.closure_method_metadata.contains_key(closure_id)
+            }
+            Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
+            _ => false,
+        }
+    }
+
+    fn concise_method_super_binding(
+        &mut self,
+        callee: &Value,
+    ) -> Result<(Value, Label, Option<ObjectId>), InterpreterError> {
+        let Value::Closure(closure_id) = callee else {
+            return Ok((Value::Undefined, Label::Public, None));
+        };
+        let Some(metadata) = self.closure_method_metadata.get(closure_id).cloned() else {
+            return Ok((Value::Undefined, Label::Public, None));
+        };
+        let home = self.heap.get(metadata.home_object.0 as usize).ok_or(
+            InterpreterError::ObjectNotFound {
+                id: metadata.home_object.0,
+            },
+        )?;
+        let super_value = home.prototype.map(Value::Object).unwrap_or(Value::Null);
+        let mut super_label = metadata.definition_label;
+        if let Some(home_label) = self.binary_storage_label_ref(metadata.home_object).cloned() {
+            super_label = self.join_owned_label_with_temporary_budget(super_label, &home_label)?;
+        }
+        Ok((super_value, super_label, Some(metadata.home_object)))
     }
 
     fn constructor_prototype_for_value(
@@ -69779,7 +70059,11 @@ impl InterpreterCore {
             Value::Function(function_index) => {
                 self.ensure_function_prototype(module, *function_index)
             }
-            Value::Closure(closure_id) => self.ensure_closure_prototype(module, *closure_id),
+            Value::Closure(closure_id)
+                if !self.closure_method_metadata.contains_key(closure_id) =>
+            {
+                self.ensure_closure_prototype(module, *closure_id)
+            }
             _ => Err(InterpreterError::TypeError {
                 expected: "constructor function".to_string(),
                 got: value.type_name().to_string(),
@@ -70082,6 +70366,13 @@ impl InterpreterCore {
         closure_id: u32,
         key: &str,
     ) -> Result<Value, InterpreterError> {
+        if let Some(metadata) = self.closure_method_metadata.get(&closure_id) {
+            return Ok(match key {
+                "name" => Value::Str(metadata.name.clone()),
+                "prototype" => Value::Undefined,
+                _ => Value::Undefined,
+            });
+        }
         if key == "prototype" {
             Ok(Value::Object(
                 self.ensure_closure_prototype(module, closure_id)?,
@@ -78059,6 +78350,43 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn concise_method_name_prototype_and_constructability_bd_gqaa4() {
+        let (value, core) = execute_exception_source_with_core_bd_bvgmr(
+            r#"let key="computed"; let o={plain(){return 1;},[key](){return 2;},[Symbol.iterator](){return 3;}}; let caught=false; try { new o.plain(); } catch(e) { caught=true; } o.plain.name+"|"+o[key].name+"|"+o[Symbol.iterator].name+"|"+Object.hasOwn(o.plain,"prototype")+"|"+typeof o.plain.prototype+"|"+caught;"#,
+        );
+
+        assert_eq!(
+            value,
+            Value::str("plain|computed|[Symbol.iterator]|false|undefined|true")
+        );
+        assert_eq!(core.closure_method_metadata.len(), 3);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "private method metadata must remain exactly memory-accounted"
+        );
+    }
+
+    #[test]
+    fn concise_method_super_uses_home_but_dynamic_receiver_bd_gqaa4() {
+        let (value, core) = execute_exception_source_with_core_bd_bvgmr(
+            r#"let key="computed"; let base={value(){return 40;}}; let owner={__proto__:base,plain(){return super.value()+this.delta;},[key](){return super.value()+this.delta+1;}}; let alien={delta:2,__proto__:{value(){return 100;}}}; alien.plain=owner.plain; alien.computed=owner[key]; alien.plain()*100+alien.computed;"#,
+        );
+
+        assert_eq!(value, Value::Int(4243));
+        assert_eq!(core.closure_method_metadata.len(), 4);
+    }
+
+    #[test]
+    fn concise_method_super_observes_home_prototype_change_during_call_bd_gqaa4() {
+        let (value, _) = execute_exception_source_with_core_bd_bvgmr(
+            "let a={value(){return 1;}}; let b={value(){return 9;}}; let owner={__proto__:a,m(){owner.__proto__=b;return super.value();}}; owner.m();",
+        );
+
+        assert_eq!(value, Value::Int(9));
+    }
+
+    #[test]
     fn escaped_finally_completion_records_are_balanced_bd_bvgmr() {
         let (value, core) = execute_exception_source_with_core_bd_bvgmr(
             "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
@@ -78520,6 +78848,7 @@ mod async_runtime_tests_current {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -80353,6 +80682,7 @@ mod async_runtime_tests_current {
             new_target_label: new_target_label.clone(),
             super_value,
             super_label: super_label.clone(),
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -94392,6 +94722,7 @@ mod function_prototype_call_apply_tests_current {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -100382,6 +100713,11 @@ mod tests {
             func: 4,
             kind: AccessorKind::Get,
         });
+        assert_exact_instruction_rejected(Ir3Instruction::DefineMethod {
+            obj: 1,
+            key: 2,
+            func: 4,
+        });
 
         let hook = Arc::new(RecordingHook::allow_all());
         let mut core = InterpreterCore::new(test_quickjs_config(), "well-formed-hook");
@@ -105034,6 +105370,7 @@ mod tests {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -105209,6 +105546,7 @@ mod tests {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -105391,6 +105729,7 @@ mod tests {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -105490,6 +105829,7 @@ mod tests {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,
@@ -106251,6 +106591,7 @@ mod tests {
             new_target_label: Label::Public,
             super_value: Value::Undefined,
             super_label: Label::Public,
+            super_home_object: None,
             construct_this: None,
             derived_constructor: false,
             this_initialized: true,

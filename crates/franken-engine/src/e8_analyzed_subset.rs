@@ -168,6 +168,7 @@ pub fn classify_op(op: &Ir1Op) -> OpClassification {
         Ir1Op::GetProperty { .. } => analyzed("get_property", ANALYZED_PROPERTY),
         Ir1Op::SetProperty { .. } => analyzed("set_property", ANALYZED_PROPERTY),
         Ir1Op::DefineAccessor { .. } => analyzed("define_accessor", ANALYZED_PROPERTY),
+        Ir1Op::DefineMethod { .. } => analyzed("define_method", ANALYZED_PROPERTY),
         Ir1Op::DeleteProperty { .. } => analyzed("delete_property", ANALYZED_PROPERTY),
         Ir1Op::NewArray { .. } => analyzed("new_array", ANALYZED_VALUE_JOIN),
         Ir1Op::NewObject { .. } => analyzed("new_object", ANALYZED_VALUE_JOIN),

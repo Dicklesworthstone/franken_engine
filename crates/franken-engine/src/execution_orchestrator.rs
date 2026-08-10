@@ -3358,6 +3358,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::GetProperty { .. } => "get_property",
             crate::ir_contract::Ir3Instruction::SetProperty { .. } => "set_property",
             crate::ir_contract::Ir3Instruction::DefineAccessor { .. } => "define_accessor",
+            crate::ir_contract::Ir3Instruction::DefineMethod { .. } => "define_method",
             crate::ir_contract::Ir3Instruction::DeleteProperty { .. } => "delete_property",
             crate::ir_contract::Ir3Instruction::NewObject { .. } => "new_object",
             crate::ir_contract::Ir3Instruction::NewArray { .. } => "new_array",

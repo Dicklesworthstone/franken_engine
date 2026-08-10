@@ -6,6 +6,17 @@
 //! denial path.
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::declassification_pipeline::{
+    AuthenticationPolicy, CryptographicCipherAlgorithm, CryptographicCipherMode,
+    CryptographicKeyPurpose, CryptographicReleaseSink, CryptographicTransformOutputClass,
+    CryptographicTransformReleaseContext, CryptographicTransformReleaseError,
+    CryptographicTransformReleaseGuard, CryptographicTransformReleaseRequest,
+    DeclassificationPipeline, LossAssessment,
+};
+use frankenengine_engine::ifc_artifacts::{
+    DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
+};
+use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
 fn eval_console(source: &str) -> String {
     let mut engine = HybridRouter::default();
@@ -25,6 +36,87 @@ fn eval_error(source: &str) -> String {
     match engine.eval(source) {
         Ok(outcome) => panic!("expected eval failure for {source:?}, got {outcome:?}"),
         Err(error) => error.to_string(),
+    }
+}
+
+const CRYPTO_RELEASE_TIME_MS: u64 = 1_700_000_000_000;
+
+fn crypto_release_policy() -> FlowPolicy {
+    FlowPolicy {
+        policy_id: "crypto-release-policy".to_string(),
+        extension_id: "crypto-release-extension".to_string(),
+        label_classes: [Label::Public, Label::Secret].into_iter().collect(),
+        clearance_classes: [Label::Public, Label::Secret].into_iter().collect(),
+        allowed_flows: vec![],
+        prohibited_flows: vec![],
+        declassification_routes: vec![DeclassificationRoute {
+            route_id: "crypto.ciphertext.release".to_string(),
+            source_label: Label::Secret,
+            target_clearance: Label::Public,
+            conditions: vec!["authenticated_ciphertext_only".to_string()],
+        }],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
+        epoch_id: 1,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    }
+}
+
+fn low_crypto_release_loss() -> LossAssessment {
+    LossAssessment {
+        expected_loss_milli: 1_000,
+        data_sensitivity_bps: 8_000,
+        sink_exposure_bps: 2_000,
+        historical_abuse_detected: false,
+        summary: "authenticated ciphertext only".to_string(),
+    }
+}
+
+fn gcm_release_request() -> CryptographicTransformReleaseRequest {
+    CryptographicTransformReleaseRequest {
+        request_id: "crypto-release-1".to_string(),
+        extension_id: "crypto-release-extension".to_string(),
+        output_class: CryptographicTransformOutputClass::Ciphertext,
+        output_bytes: vec![0xfd, 0xd8, 0x17, 0x51, 0x3d, 0xe8, 0x96, 0x6c],
+        source_labels: vec![Label::Secret],
+        sink_clearance: Label::Public,
+        requested_route_id: "crypto.ciphertext.release".to_string(),
+        decision_contract_id: "crypto-release-contract".to_string(),
+        algorithm: CryptographicCipherAlgorithm::Aes,
+        mode: CryptographicCipherMode::Gcm,
+        key_purpose: CryptographicKeyPurpose::DataEncryption,
+        key_strength_bits: 256,
+        iv_nonce_policy:
+            frankenengine_engine::declassification_pipeline::IvNoncePolicy::UniquePerKey,
+        iv_or_nonce: vec![2; 12],
+        authentication_policy: AuthenticationPolicy::AeadTag128,
+        authentication_tag: vec![3; 16],
+        sink: CryptographicReleaseSink::Console,
+        site: "crypto_builtin_bd_2z157::console.log".to_string(),
+        replay_identity: "eval-crypto-release-1".to_string(),
+        timestamp_ms: CRYPTO_RELEASE_TIME_MS,
+    }
+}
+
+fn release_context(
+    request: &CryptographicTransformReleaseRequest,
+) -> CryptographicTransformReleaseContext {
+    CryptographicTransformReleaseContext {
+        extension_id: request.extension_id.clone(),
+        source_labels: request.source_labels.clone(),
+        sink_clearance: request.sink_clearance.clone(),
+        decision_contract_id: request.decision_contract_id.clone(),
+        algorithm: request.algorithm,
+        mode: request.mode,
+        key_purpose: request.key_purpose,
+        key_strength_bits: request.key_strength_bits,
+        iv_nonce_policy: request.iv_nonce_policy,
+        iv_or_nonce: request.iv_or_nonce.clone(),
+        authentication_policy: request.authentication_policy,
+        authentication_tag: request.authentication_tag.clone(),
+        sink: request.sink.clone(),
+        site: request.site.clone(),
+        replay_identity: request.replay_identity.clone(),
     }
 }
 
@@ -442,6 +534,109 @@ fn secret_markers_remain_fail_closed_across_kdf_and_cipher_egress() {
             "secret-bearing crypto output must remain fail closed for {source:?}: {error}"
         );
     }
+}
+
+#[test]
+fn raw_kdf_and_unauthenticated_ciphertext_cannot_obtain_release_receipts() {
+    let signing_key = SigningKey::from_bytes([73; 32]).expect("valid signing key");
+    let policy = crypto_release_policy();
+    let loss = low_crypto_release_loss();
+    let mut pipeline = DeclassificationPipeline::default();
+
+    let mut kdf_request = gcm_release_request();
+    kdf_request.output_class = CryptographicTransformOutputClass::DerivedKeyMaterial;
+    kdf_request.key_purpose = CryptographicKeyPurpose::KeyDerivation;
+    assert_eq!(
+        pipeline.process_cryptographic_transform_release(
+            &kdf_request,
+            &policy,
+            &loss,
+            &signing_key,
+        ),
+        Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied)
+    );
+
+    let mut cbc_request = gcm_release_request();
+    cbc_request.mode = CryptographicCipherMode::Cbc;
+    cbc_request.iv_nonce_policy =
+        frankenengine_engine::declassification_pipeline::IvNoncePolicy::Fixed;
+    cbc_request.iv_or_nonce = vec![2; 16];
+    cbc_request.authentication_policy = AuthenticationPolicy::None;
+    cbc_request.authentication_tag.clear();
+    assert_eq!(
+        pipeline.process_cryptographic_transform_release(
+            &cbc_request,
+            &policy,
+            &loss,
+            &signing_key,
+        ),
+        Err(CryptographicTransformReleaseError::UnauthenticatedCiphertextReleaseDenied)
+    );
+    assert!(pipeline.cryptographic_transform_receipts().is_empty());
+}
+
+#[test]
+fn exact_authenticated_ciphertext_receipt_is_sink_bound_and_one_use() {
+    let signing_key = SigningKey::from_bytes([74; 32]).expect("valid signing key");
+    let request = gcm_release_request();
+    let mut pipeline = DeclassificationPipeline::default();
+    let receipt = pipeline
+        .process_cryptographic_transform_release(
+            &request,
+            &crypto_release_policy(),
+            &low_crypto_release_loss(),
+            &signing_key,
+        )
+        .expect("valid AES-256-GCM ciphertext should receive exact release authorization");
+    assert_eq!(
+        pipeline.cryptographic_transform_receipts(),
+        [receipt.clone()]
+    );
+    receipt
+        .verify(&signing_key.verification_key())
+        .expect("receipt signature must cover the transform contract");
+
+    let mut guard = CryptographicTransformReleaseGuard::default();
+    guard.trust_authorizer_for_contract(
+        request.decision_contract_id.clone(),
+        signing_key.verification_key(),
+    );
+    let context = release_context(&request);
+
+    let mut wrong_site = context.clone();
+    wrong_site.site = "different::network_sink".to_string();
+    assert_eq!(
+        guard.release_ciphertext(
+            &receipt,
+            &request.output_bytes,
+            &wrong_site,
+            CRYPTO_RELEASE_TIME_MS,
+        ),
+        Err(CryptographicTransformReleaseError::ContextMismatch { field: "site" })
+    );
+    assert_eq!(
+        guard.release_ciphertext(
+            &receipt,
+            b"tampered ciphertext",
+            &context,
+            CRYPTO_RELEASE_TIME_MS,
+        ),
+        Err(CryptographicTransformReleaseError::OutputMismatch)
+    );
+
+    let released = guard
+        .release_ciphertext(
+            &receipt,
+            &request.output_bytes,
+            &context,
+            CRYPTO_RELEASE_TIME_MS,
+        )
+        .expect("exact receipt should release only its bound ciphertext");
+    assert_eq!(released, request.output_bytes);
+    assert_eq!(
+        guard.release_ciphertext(&receipt, &released, &context, CRYPTO_RELEASE_TIME_MS,),
+        Err(CryptographicTransformReleaseError::ReplayDetected)
+    );
 }
 
 #[test]

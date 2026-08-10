@@ -13,16 +13,22 @@
 //! Plan reference: Section 10.15 item 9I.7, bd-3hkk.
 //! Dependencies: bd-1ovk (IFC artifact schemas), 10.5 (decision contracts).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::deterministic_serde::{CanonicalValue, SchemaHash};
+use crate::engine_object_id::ObjectDomain;
+use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{
     DeclassificationDecision, DeclassificationReceipt, FlowPolicy, IfcSchemaVersion,
     IfcValidationError, Label,
 };
-use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use crate::signature_preimage::{
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_object,
+    verify_signature,
+};
 
 // ---------------------------------------------------------------------------
 // DeclassificationRequest — input to the pipeline
@@ -52,6 +58,474 @@ pub struct DeclassificationRequest {
     pub is_emergency: bool,
     /// Timestamp (unix ms).
     pub timestamp_ms: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Cryptographic transform release contract (bd-0y3b6)
+// ---------------------------------------------------------------------------
+
+/// Security class of a deterministic cryptographic transform output.
+///
+/// Raw derived-key material is represented so callers receive an explicit,
+/// auditable refusal instead of being able to misclassify it as ciphertext.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CryptographicTransformOutputClass {
+    Ciphertext,
+    DerivedKeyMaterial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CryptographicCipherAlgorithm {
+    Aes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CryptographicCipherMode {
+    Cbc,
+    Gcm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CryptographicKeyPurpose {
+    DataEncryption,
+    KeyDerivation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IvNoncePolicy {
+    /// The nonce is unique for the key and was selected outside guest control.
+    UniquePerKey,
+    /// A fixed/reused IV or nonce. This is never releasable by this contract.
+    Fixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuthenticationPolicy {
+    /// AEAD with a 128-bit authentication tag.
+    AeadTag128,
+    /// No authentication. This is never releasable by this contract.
+    None,
+}
+
+/// Concrete sink bound into a ciphertext-release receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CryptographicReleaseSink {
+    Console,
+    Network { endpoint: String },
+}
+
+/// Request to mint an exact, one-use ciphertext release receipt.
+///
+/// The request deliberately carries no plaintext or key bytes. It binds the
+/// already-produced output plus the non-secret transform parameters needed to
+/// prove that the release is authenticated ciphertext rather than raw KDF/key
+/// material or unauthenticated CBC output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CryptographicTransformReleaseRequest {
+    pub request_id: String,
+    pub extension_id: String,
+    pub output_class: CryptographicTransformOutputClass,
+    pub output_bytes: Vec<u8>,
+    pub source_labels: Vec<Label>,
+    pub sink_clearance: Label,
+    pub requested_route_id: String,
+    pub decision_contract_id: String,
+    pub algorithm: CryptographicCipherAlgorithm,
+    pub mode: CryptographicCipherMode,
+    pub key_purpose: CryptographicKeyPurpose,
+    pub key_strength_bits: u16,
+    pub iv_nonce_policy: IvNoncePolicy,
+    pub iv_or_nonce: Vec<u8>,
+    pub authentication_policy: AuthenticationPolicy,
+    pub authentication_tag: Vec<u8>,
+    pub sink: CryptographicReleaseSink,
+    pub site: String,
+    pub replay_identity: String,
+    pub timestamp_ms: u64,
+}
+
+/// Signed authorization for exactly one authenticated-ciphertext release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CryptographicTransformReleaseReceipt {
+    pub receipt_id: String,
+    pub extension_id: String,
+    pub output_class: CryptographicTransformOutputClass,
+    pub output_hash: ContentHash,
+    pub output_length: u64,
+    pub source_labels: Vec<Label>,
+    pub source_label: Label,
+    pub sink_clearance: Label,
+    pub declassification_route_ref: String,
+    pub decision_contract_id: String,
+    pub algorithm: CryptographicCipherAlgorithm,
+    pub mode: CryptographicCipherMode,
+    pub key_purpose: CryptographicKeyPurpose,
+    pub key_strength_bits: u16,
+    pub iv_nonce_policy: IvNoncePolicy,
+    pub iv_or_nonce: Vec<u8>,
+    pub authentication_policy: AuthenticationPolicy,
+    pub authentication_tag: Vec<u8>,
+    pub sink: CryptographicReleaseSink,
+    pub site: String,
+    pub replay_identity: String,
+    pub authorized_by: VerificationKey,
+    pub timestamp_ms: u64,
+    pub not_before_ms: u64,
+    pub not_after_ms: u64,
+    pub signature: Signature,
+}
+
+/// Actual release-site facts that must match the signed receipt exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CryptographicTransformReleaseContext {
+    pub extension_id: String,
+    pub source_labels: Vec<Label>,
+    pub sink_clearance: Label,
+    pub decision_contract_id: String,
+    pub algorithm: CryptographicCipherAlgorithm,
+    pub mode: CryptographicCipherMode,
+    pub key_purpose: CryptographicKeyPurpose,
+    pub key_strength_bits: u16,
+    pub iv_nonce_policy: IvNoncePolicy,
+    pub iv_or_nonce: Vec<u8>,
+    pub authentication_policy: AuthenticationPolicy,
+    pub authentication_tag: Vec<u8>,
+    pub sink: CryptographicReleaseSink,
+    pub site: String,
+    pub replay_identity: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CryptographicTransformReleaseError {
+    DerivedKeyMaterialReleaseDenied,
+    UnauthenticatedCiphertextReleaseDenied,
+    InvalidRequest {
+        detail: String,
+    },
+    PolicyUnavailable {
+        reason: String,
+    },
+    NoMatchingRoute,
+    LossExceedsThreshold {
+        expected_loss_milli: u64,
+        threshold_milli: u64,
+    },
+    SigningError {
+        detail: String,
+    },
+    UntrustedAuthorizer,
+    InvalidReceipt {
+        detail: String,
+    },
+    ContextMismatch {
+        field: &'static str,
+    },
+    OutputMismatch,
+    ReplayDetected,
+}
+
+impl fmt::Display for CryptographicTransformReleaseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DerivedKeyMaterialReleaseDenied => {
+                write!(f, "raw KDF-derived key material is never releasable")
+            }
+            Self::UnauthenticatedCiphertextReleaseDenied => write!(
+                f,
+                "ciphertext release requires authenticated encryption with a unique nonce"
+            ),
+            Self::InvalidRequest { detail } => {
+                write!(f, "invalid crypto release request: {detail}")
+            }
+            Self::PolicyUnavailable { reason } => write!(f, "policy unavailable: {reason}"),
+            Self::NoMatchingRoute => write!(f, "no matching crypto declassification route"),
+            Self::LossExceedsThreshold {
+                expected_loss_milli,
+                threshold_milli,
+            } => write!(
+                f,
+                "loss {expected_loss_milli} exceeds threshold {threshold_milli}"
+            ),
+            Self::SigningError { detail } => write!(f, "receipt signing failed: {detail}"),
+            Self::UntrustedAuthorizer => write!(f, "receipt authorizer is not trusted"),
+            Self::InvalidReceipt { detail } => {
+                write!(f, "invalid crypto release receipt: {detail}")
+            }
+            Self::ContextMismatch { field } => {
+                write!(
+                    f,
+                    "crypto release receipt does not match release-site field {field}"
+                )
+            }
+            Self::OutputMismatch => write!(f, "ciphertext bytes do not match the signed receipt"),
+            Self::ReplayDetected => write!(f, "crypto release receipt was already consumed"),
+        }
+    }
+}
+
+impl std::error::Error for CryptographicTransformReleaseError {}
+
+fn canonical_source_labels(labels: &[Label]) -> Vec<Label> {
+    let mut labels = labels.to_vec();
+    labels.sort_by(|left, right| {
+        left.level()
+            .cmp(&right.level())
+            .then_with(|| left.to_string().cmp(&right.to_string()))
+    });
+    labels.dedup();
+    labels
+}
+
+fn aggregate_source_label(labels: &[Label]) -> Option<Label> {
+    labels
+        .iter()
+        .cloned()
+        .reduce(|left, right| left.join(&right))
+}
+
+fn validate_nonblank_crypto_field(
+    field: &'static str,
+    value: &str,
+) -> Result<(), CryptographicTransformReleaseError> {
+    if value.trim().is_empty() {
+        return Err(CryptographicTransformReleaseError::InvalidRequest {
+            detail: format!("{field} must not be blank"),
+        });
+    }
+    Ok(())
+}
+
+impl CryptographicReleaseSink {
+    fn validate(&self) -> Result<(), CryptographicTransformReleaseError> {
+        if let Self::Network { endpoint } = self {
+            validate_nonblank_crypto_field("network endpoint", endpoint)?;
+        }
+        Ok(())
+    }
+}
+
+impl CryptographicTransformReleaseReceipt {
+    pub fn content_hash(&self) -> ContentHash {
+        ContentHash::compute(&self.preimage_bytes())
+    }
+
+    pub fn validate_at(&self, now_ms: u64) -> Result<(), CryptographicTransformReleaseError> {
+        for (field, value) in [
+            ("receipt_id", self.receipt_id.as_str()),
+            ("extension_id", self.extension_id.as_str()),
+            (
+                "declassification_route_ref",
+                self.declassification_route_ref.as_str(),
+            ),
+            ("decision_contract_id", self.decision_contract_id.as_str()),
+            ("site", self.site.as_str()),
+            ("replay_identity", self.replay_identity.as_str()),
+        ] {
+            validate_nonblank_crypto_field(field, value)?;
+        }
+        self.sink.validate()?;
+        if self.output_class != CryptographicTransformOutputClass::Ciphertext {
+            return Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied);
+        }
+        if self.output_length == 0 {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "output must not be empty".to_string(),
+            });
+        }
+        let canonical_labels = canonical_source_labels(&self.source_labels);
+        let Some(aggregate_label) = aggregate_source_label(&canonical_labels) else {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "source_labels must not be empty".to_string(),
+            });
+        };
+        if canonical_labels != self.source_labels || aggregate_label != self.source_label {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "source label binding is not canonical".to_string(),
+            });
+        }
+        if self.source_label.can_flow_to(&self.sink_clearance) {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "receipt does not describe a cross-label release".to_string(),
+            });
+        }
+        if self.algorithm != CryptographicCipherAlgorithm::Aes
+            || self.mode != CryptographicCipherMode::Gcm
+            || self.key_purpose != CryptographicKeyPurpose::DataEncryption
+            || self.key_strength_bits != 256
+            || self.iv_nonce_policy != IvNoncePolicy::UniquePerKey
+            || self.iv_or_nonce.len() != 12
+            || self.authentication_policy != AuthenticationPolicy::AeadTag128
+            || self.authentication_tag.len() != 16
+        {
+            return Err(CryptographicTransformReleaseError::UnauthenticatedCiphertextReleaseDenied);
+        }
+        if self.not_before_ms > self.not_after_ms
+            || now_ms < self.not_before_ms
+            || now_ms > self.not_after_ms
+        {
+            return Err(CryptographicTransformReleaseError::InvalidReceipt {
+                detail: "receipt is outside its signed validity window".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn sign(
+        &mut self,
+        key: &SigningKey,
+    ) -> Result<(), crate::signature_preimage::SignatureError> {
+        self.validate_at(self.timestamp_ms).map_err(|error| {
+            crate::signature_preimage::SignatureError::NonCanonicalObject {
+                detail: error.to_string(),
+            }
+        })?;
+        self.signature = sign_object(self, key)?;
+        Ok(())
+    }
+
+    pub fn verify(
+        &self,
+        key: &VerificationKey,
+    ) -> Result<(), crate::signature_preimage::SignatureError> {
+        self.validate_at(self.timestamp_ms).map_err(|error| {
+            crate::signature_preimage::SignatureError::NonCanonicalObject {
+                detail: error.to_string(),
+            }
+        })?;
+        verify_signature(key, &self.preimage_bytes(), &self.signature)
+    }
+}
+
+fn cryptographic_transform_release_receipt_schema() -> &'static SchemaHash {
+    use std::sync::LazyLock;
+    static HASH: LazyLock<SchemaHash> = LazyLock::new(|| {
+        SchemaHash::from_definition(b"ifc_cryptographic_transform_release_receipt_v1")
+    });
+    &HASH
+}
+
+impl SignaturePreimage for CryptographicTransformReleaseReceipt {
+    fn signature_domain(&self) -> ObjectDomain {
+        ObjectDomain::EvidenceRecord
+    }
+
+    fn signature_schema(&self) -> &SchemaHash {
+        cryptographic_transform_release_receipt_schema()
+    }
+
+    fn unsigned_view(&self) -> CanonicalValue {
+        let mut copy = self.clone();
+        copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
+    }
+}
+
+/// Stateful, fail-closed release boundary. A successful call returns the exact
+/// ciphertext bytes and permanently consumes the receipt's replay identity.
+#[derive(Debug, Default)]
+pub struct CryptographicTransformReleaseGuard {
+    trusted_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
+    consumed_receipts: BTreeSet<(String, String, String)>,
+}
+
+impl CryptographicTransformReleaseGuard {
+    pub fn trust_authorizer_for_contract(
+        &mut self,
+        decision_contract_id: impl Into<String>,
+        authorizer: VerificationKey,
+    ) {
+        self.trusted_authorizers
+            .entry(decision_contract_id.into())
+            .or_default()
+            .insert(authorizer);
+    }
+
+    pub fn release_ciphertext(
+        &mut self,
+        receipt: &CryptographicTransformReleaseReceipt,
+        ciphertext: &[u8],
+        context: &CryptographicTransformReleaseContext,
+        now_ms: u64,
+    ) -> Result<Vec<u8>, CryptographicTransformReleaseError> {
+        let authorizer_is_trusted = self
+            .trusted_authorizers
+            .get(&context.decision_contract_id)
+            .is_some_and(|keys| keys.contains(&receipt.authorized_by));
+        if !authorizer_is_trusted {
+            return Err(CryptographicTransformReleaseError::UntrustedAuthorizer);
+        }
+        receipt.verify(&receipt.authorized_by).map_err(|error| {
+            CryptographicTransformReleaseError::InvalidReceipt {
+                detail: error.to_string(),
+            }
+        })?;
+        receipt.validate_at(now_ms)?;
+
+        let canonical_context_labels = canonical_source_labels(&context.source_labels);
+        for mismatch in [
+            (receipt.extension_id != context.extension_id, "extension_id"),
+            (
+                receipt.source_labels != canonical_context_labels,
+                "source_labels",
+            ),
+            (
+                receipt.sink_clearance != context.sink_clearance,
+                "sink_clearance",
+            ),
+            (
+                receipt.decision_contract_id != context.decision_contract_id,
+                "decision_contract_id",
+            ),
+            (receipt.algorithm != context.algorithm, "algorithm"),
+            (receipt.mode != context.mode, "mode"),
+            (receipt.key_purpose != context.key_purpose, "key_purpose"),
+            (
+                receipt.key_strength_bits != context.key_strength_bits,
+                "key_strength_bits",
+            ),
+            (
+                receipt.iv_nonce_policy != context.iv_nonce_policy,
+                "iv_nonce_policy",
+            ),
+            (receipt.iv_or_nonce != context.iv_or_nonce, "iv_or_nonce"),
+            (
+                receipt.authentication_policy != context.authentication_policy,
+                "authentication_policy",
+            ),
+            (
+                receipt.authentication_tag != context.authentication_tag,
+                "authentication_tag",
+            ),
+            (receipt.sink != context.sink, "sink"),
+            (receipt.site != context.site, "site"),
+            (
+                receipt.replay_identity != context.replay_identity,
+                "replay_identity",
+            ),
+        ] {
+            if mismatch.0 {
+                return Err(CryptographicTransformReleaseError::ContextMismatch {
+                    field: mismatch.1,
+                });
+            }
+        }
+
+        if receipt.output_length != ciphertext.len() as u64
+            || receipt.output_hash != ContentHash::compute(ciphertext)
+        {
+            return Err(CryptographicTransformReleaseError::OutputMismatch);
+        }
+
+        let replay_key = (
+            receipt.decision_contract_id.clone(),
+            receipt.replay_identity.clone(),
+            receipt.receipt_id.clone(),
+        );
+        if !self.consumed_receipts.insert(replay_key) {
+            return Err(CryptographicTransformReleaseError::ReplayDetected);
+        }
+        Ok(ciphertext.to_vec())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +747,8 @@ pub struct DeclassificationPipeline {
     events: Vec<PipelineEvent>,
     /// Emitted receipts.
     receipts: Vec<DeclassificationReceipt>,
+    /// Exact, one-use cryptographic transform release receipts.
+    cryptographic_transform_receipts: Vec<CryptographicTransformReleaseReceipt>,
     /// Active emergency grants.
     emergency_grants: BTreeMap<String, EmergencyGrant>,
     /// Decision count for statistics.
@@ -299,6 +775,7 @@ impl DeclassificationPipeline {
             config,
             events: Vec::new(),
             receipts: Vec::new(),
+            cryptographic_transform_receipts: Vec::new(),
             emergency_grants: BTreeMap::new(),
             decision_count: 0,
             allow_count: 0,
@@ -429,6 +906,129 @@ impl DeclassificationPipeline {
         Ok(receipt)
     }
 
+    /// Issue an exact, one-use receipt for authenticated ciphertext release.
+    ///
+    /// Raw KDF output and unauthenticated/fixed-IV ciphertext are hard denials;
+    /// the ordinary label on those values remains unchanged and sink enforcement
+    /// therefore continues to fail closed.
+    pub fn process_cryptographic_transform_release(
+        &mut self,
+        request: &CryptographicTransformReleaseRequest,
+        policy: &FlowPolicy,
+        loss: &LossAssessment,
+        signing_key: &SigningKey,
+    ) -> Result<CryptographicTransformReleaseReceipt, CryptographicTransformReleaseError> {
+        if request.output_class == CryptographicTransformOutputClass::DerivedKeyMaterial {
+            return Err(CryptographicTransformReleaseError::DerivedKeyMaterialReleaseDenied);
+        }
+        for (field, value) in [
+            ("request_id", request.request_id.as_str()),
+            ("extension_id", request.extension_id.as_str()),
+            ("requested_route_id", request.requested_route_id.as_str()),
+            (
+                "decision_contract_id",
+                request.decision_contract_id.as_str(),
+            ),
+            ("site", request.site.as_str()),
+            ("replay_identity", request.replay_identity.as_str()),
+        ] {
+            validate_nonblank_crypto_field(field, value)?;
+        }
+        request.sink.validate()?;
+        if request.output_bytes.is_empty() {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "output must not be empty".to_string(),
+            });
+        }
+        if request.algorithm != CryptographicCipherAlgorithm::Aes
+            || request.mode != CryptographicCipherMode::Gcm
+            || request.key_purpose != CryptographicKeyPurpose::DataEncryption
+            || request.key_strength_bits != 256
+            || request.iv_nonce_policy != IvNoncePolicy::UniquePerKey
+            || request.iv_or_nonce.len() != 12
+            || request.authentication_policy != AuthenticationPolicy::AeadTag128
+            || request.authentication_tag.len() != 16
+        {
+            return Err(CryptographicTransformReleaseError::UnauthenticatedCiphertextReleaseDenied);
+        }
+
+        let source_labels = canonical_source_labels(&request.source_labels);
+        let Some(source_label) = aggregate_source_label(&source_labels) else {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "source_labels must not be empty".to_string(),
+            });
+        };
+        if source_label.can_flow_to(&request.sink_clearance) {
+            return Err(CryptographicTransformReleaseError::InvalidRequest {
+                detail: "release does not cross an IFC label boundary".to_string(),
+            });
+        }
+        if policy.extension_id != request.extension_id {
+            return Err(CryptographicTransformReleaseError::PolicyUnavailable {
+                reason: format!(
+                    "policy extension {} does not match request extension {}",
+                    policy.extension_id, request.extension_id
+                ),
+            });
+        }
+        let route_matches = policy.declassification_routes.iter().any(|route| {
+            route.route_id == request.requested_route_id
+                && route.source_label == source_label
+                && route.target_clearance == request.sink_clearance
+        });
+        if !route_matches {
+            return Err(CryptographicTransformReleaseError::NoMatchingRoute);
+        }
+        if !loss.below_threshold(self.config.loss_threshold_milli) {
+            return Err(CryptographicTransformReleaseError::LossExceedsThreshold {
+                expected_loss_milli: loss.expected_loss_milli,
+                threshold_milli: self.config.loss_threshold_milli,
+            });
+        }
+
+        let mut receipt = CryptographicTransformReleaseReceipt {
+            receipt_id: format!("crypto-rcpt-{}", request.request_id),
+            extension_id: request.extension_id.clone(),
+            output_class: request.output_class,
+            output_hash: ContentHash::compute(&request.output_bytes),
+            output_length: request.output_bytes.len() as u64,
+            source_labels,
+            source_label,
+            sink_clearance: request.sink_clearance.clone(),
+            declassification_route_ref: request.requested_route_id.clone(),
+            decision_contract_id: request.decision_contract_id.clone(),
+            algorithm: request.algorithm,
+            mode: request.mode,
+            key_purpose: request.key_purpose,
+            key_strength_bits: request.key_strength_bits,
+            iv_nonce_policy: request.iv_nonce_policy,
+            iv_or_nonce: request.iv_or_nonce.clone(),
+            authentication_policy: request.authentication_policy,
+            authentication_tag: request.authentication_tag.clone(),
+            sink: request.sink.clone(),
+            site: request.site.clone(),
+            replay_identity: request.replay_identity.clone(),
+            authorized_by: signing_key.verification_key(),
+            timestamp_ms: request.timestamp_ms,
+            not_before_ms: request.timestamp_ms,
+            not_after_ms: request
+                .timestamp_ms
+                .saturating_add(self.config.emergency_max_duration_ms),
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(signing_key).map_err(|error| {
+            CryptographicTransformReleaseError::SigningError {
+                detail: error.to_string(),
+            }
+        })?;
+
+        self.decision_count += 1;
+        self.allow_count += 1;
+        self.latest_timestamp_ms = self.latest_timestamp_ms.max(request.timestamp_ms);
+        self.cryptographic_transform_receipts.push(receipt.clone());
+        Ok(receipt)
+    }
+
     /// Check for an active emergency grant.
     pub fn check_emergency_grant(
         &self,
@@ -471,6 +1071,11 @@ impl DeclassificationPipeline {
     /// View emitted receipts.
     pub fn receipts(&self) -> &[DeclassificationReceipt] {
         &self.receipts
+    }
+
+    /// View emitted cryptographic transform release receipts.
+    pub fn cryptographic_transform_receipts(&self) -> &[CryptographicTransformReleaseReceipt] {
+        &self.cryptographic_transform_receipts
     }
 
     /// Pipeline statistics.

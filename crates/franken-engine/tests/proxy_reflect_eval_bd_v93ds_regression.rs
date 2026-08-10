@@ -90,3 +90,21 @@ fn object_keys_on_trapless_proxy_falls_through_to_target_bd_9trje() {
         "x,y"
     );
 }
+
+#[test]
+fn for_in_enumerates_proxy_keys_through_traps_bd_9trje() {
+    // for-in over a Proxy yields its enumerable own String keys via the ownKeys
+    // + getOwnPropertyDescriptor traps ('b' is marked non-enumerable).
+    let src = "const target = { a: 1, b: 2 };\
+               const handler = {\
+                   ownKeys(t) { return Reflect.ownKeys(t); },\
+                   getOwnPropertyDescriptor(t, k) {\
+                       return { value: t[k], enumerable: k !== 'b', configurable: true };\
+                   }\
+               };\
+               const p = new Proxy(target, handler);\
+               let out = [];\
+               for (const k in p) { out.push(k); }\
+               out.join(',');";
+    assert_eq!(eval_value(src), "a");
+}

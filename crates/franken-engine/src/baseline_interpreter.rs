@@ -36497,7 +36497,7 @@ impl InterpreterCore {
                 Ir3Instruction::ForInInit { src, dst } => {
                     let result_label = self.unary_operation_label(src)?;
                     let value = self.read_reg(src)?;
-                    let iterator = self.init_for_in_iterator(value)?;
+                    let iterator = self.init_for_in_iterator(Some(module), value)?;
                     // Carry the iterable's IFC label onto the iterator register
                     // so the keys it yields stay tainted.
                     self.write_reg_with_label(dst, iterator, result_label)?;
@@ -40360,7 +40360,11 @@ impl InterpreterCore {
         });
     }
 
-    fn init_for_in_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
+    fn init_for_in_iterator(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
         let Value::Object(object_id) = value else {
             return Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -40368,7 +40372,7 @@ impl InterpreterCore {
             });
         };
 
-        let keys = self.collect_for_in_keys(object_id)?;
+        let keys = self.collect_for_in_keys(module, object_id)?;
         let trace_index =
             self.start_iteration_trace(IterationKind::ForIn, format!("object:{}", object_id.0));
         let object_ref = self.iteration_ref_for_object(object_id);
@@ -43667,6 +43671,40 @@ impl InterpreterCore {
             }
         }
         Ok(result)
+    }
+
+    /// The next `[[GetPrototypeOf]]` link in a for-in chain walk, honoring the
+    /// Proxy `getPrototypeOf` trap and falling through to the target when the
+    /// trap is absent; ordinary objects use their stored prototype (bd-9trje).
+    fn proxy_aware_prototype_link(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return Ok(self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.prototype));
+        };
+        match self.invoke_proxy_trap(
+            module,
+            handler,
+            "getPrototypeOf",
+            vec![Value::Object(target)],
+        )? {
+            // Trap absent: the target's prototype governs.
+            None => Ok(self
+                .heap
+                .get(target.0 as usize)
+                .and_then(|object| object.prototype)),
+            Some(Value::Object(prototype_id)) => Ok(Some(prototype_id)),
+            Some(Value::Null) => Ok(None),
+            Some(other) => Err(InterpreterError::TypeError {
+                expected: "object or null from Proxy.getPrototypeOf".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
     }
 
     /// Snapshot a source object's typed own-key order, read each value through
@@ -68187,7 +68225,11 @@ impl InterpreterCore {
             .ok_or(InterpreterError::IteratorNotFound { handle })
     }
 
-    fn collect_for_in_keys(&self, object_id: ObjectId) -> Result<Vec<JsString>, InterpreterError> {
+    fn collect_for_in_keys(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
         let mut seen = BTreeSet::new();
         let mut visited = BTreeSet::new();
@@ -68198,17 +68240,28 @@ impl InterpreterCore {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 break;
             }
-            let object = self
-                .heap
-                .get(id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            for key in object.properties.exact_keys() {
-                if self.writable_own_runtime_property_visible(id, &key) && seen.insert(key.clone())
-                {
-                    keys.push(key);
+            if self.active_proxy_record(id)?.is_some() {
+                // bd-9trje: enumerate a Proxy level's enumerable String keys via
+                // the ownKeys + getOwnPropertyDescriptor traps.
+                for key in self.proxy_own_enumerable_string_keys(module, id)? {
+                    if seen.insert(key.clone()) {
+                        keys.push(key);
+                    }
+                }
+            } else {
+                let object = self
+                    .heap
+                    .get(id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+                for key in object.properties.exact_keys() {
+                    if self.writable_own_runtime_property_visible(id, &key)
+                        && seen.insert(key.clone())
+                    {
+                        keys.push(key);
+                    }
                 }
             }
-            current = object.prototype;
+            current = self.proxy_aware_prototype_link(module, id)?;
             depth += 1;
         }
 
@@ -110876,7 +110929,7 @@ mod tests {
         );
 
         assert_eq!(
-            core.collect_for_in_keys(object_id).unwrap(),
+            core.collect_for_in_keys(None, object_id).unwrap(),
             expected_keys
                 .iter()
                 .map(|key| JsString::from(key.as_str()))
@@ -110914,7 +110967,10 @@ mod tests {
             .expect("exact property should fit");
         }
 
-        assert_eq!(core.collect_for_in_keys(object).unwrap(), expected_keys);
+        assert_eq!(
+            core.collect_for_in_keys(None, object).unwrap(),
+            expected_keys
+        );
         assert_eq!(
             core.ordinary_own_property_key_values(object).unwrap(),
             expected_keys
@@ -110934,7 +110990,7 @@ mod tests {
             .unwrap();
         }
         let iterator = core
-            .init_for_in_iterator(Value::Object(iteration_object))
+            .init_for_in_iterator(None, Value::Object(iteration_object))
             .unwrap();
         assert_eq!(
             core.advance_for_in_iterator(iterator.clone()).unwrap(),

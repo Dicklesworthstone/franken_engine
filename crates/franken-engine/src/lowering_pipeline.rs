@@ -26852,8 +26852,8 @@ mod tests {
             .expect("IR1->IR2 should succeed")
             .module;
         let context = LoweringContext::new("trace-az056", "decision-az056", "policy-az056");
-        let artifact = build_ir2_flow_proof_artifact(&ir2, &context)
-            .expect("flow artifact should succeed");
+        let artifact =
+            build_ir2_flow_proof_artifact(&ir2, &context).expect("flow artifact should succeed");
 
         assert!(
             artifact.denied_flows.is_empty(),

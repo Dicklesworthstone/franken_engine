@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    FunctionParam, ImportClause, MethodDefinition, MethodKind, ObjectPatternProperty, ParseGoal,
-    SourceSpan, Statement, UnaryOperator, UpdateOperator, VariableDeclarationKind,
+    FunctionParam, ImportClause, MethodDefinition, MethodKind, ObjectPatternProperty,
+    ObjectPropertyKind, ParseGoal, SourceSpan, Statement, UnaryOperator, UpdateOperator,
+    VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -21,8 +22,9 @@ use crate::ir_contract::{
     IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir1Literal, Ir1Module, Ir1Op,
     Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel,
     IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries, verify_ir1_source,
-    verify_ir2_derived_constructor_schema, verify_ir2_generator_boundaries,
+    verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries,
+    verify_ir1_method_definition_schema, verify_ir1_source, verify_ir2_derived_constructor_schema,
+    verify_ir2_generator_boundaries, verify_ir2_method_definition_schema,
     verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
@@ -5863,6 +5865,7 @@ pub fn lower_ir1_to_ir2(
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_method_definition_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_generator_boundaries(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
@@ -6202,6 +6205,7 @@ pub fn lower_ir2_to_ir3(
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_method_definition_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_generator_boundaries(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
@@ -7044,6 +7048,32 @@ pub fn lower_ir2_to_ir3(
                     val,
                 });
                 value_stack.push(val);
+            }
+            Ir1Op::DefineMethod { key } => {
+                let func = value_stack.pop().unwrap_or(0);
+                let (obj, key_reg) = match key {
+                    Ir1PropertyKey::Static(key) => {
+                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = alloc_register(&mut register_cursor);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key.clone());
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        (obj, key_reg)
+                    }
+                    Ir1PropertyKey::Dynamic => {
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
+                        (obj, key_reg)
+                    }
+                };
+                ir3.instructions.push(Ir3Instruction::DefineMethod {
+                    obj,
+                    key: key_reg,
+                    func,
+                });
+                value_stack.push(obj);
             }
             Ir1Op::DeleteProperty { key } => {
                 let (obj, key_reg) = match key {
@@ -8516,6 +8546,32 @@ pub fn lower_ir2_to_ir3(
                         val: value,
                     });
                     fn_value_stack.push(value);
+                }
+                Ir1Op::DefineMethod { key } => {
+                    let func = fn_value_stack.pop().unwrap_or(0);
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(key) => {
+                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let key_reg = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant(&mut ir3.constant_pool, key.clone());
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: key_reg,
+                                pool_index,
+                            });
+                            (obj, key_reg)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let key_reg = fn_value_stack.pop().unwrap_or(0);
+                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            (obj, key_reg)
+                        }
+                    };
+                    ir3.instructions.push(Ir3Instruction::DefineMethod {
+                        obj,
+                        key: key_reg,
+                        func,
+                    });
+                    fn_value_stack.push(obj);
                 }
                 Ir1Op::DeleteProperty { key } => {
                     let (obj, key_reg) = match key {
@@ -11930,15 +11986,19 @@ fn lower_expression_to_ir1(
             }
         }
         Expression::ObjectLiteral(properties) => {
-            // Check if any property is a spread ({...obj})
+            // Data-only literals retain the compact batch path. Spreads and
+            // concise methods require an incrementally retained target object.
             let has_spread = properties
                 .iter()
                 .any(|prop| matches!(&prop.value, Expression::SpreadElement(_)));
+            let has_method = properties
+                .iter()
+                .any(|prop| prop.kind == ObjectPropertyKind::Method);
 
-            if has_spread {
-                // With spreads, use incremental approach:
+            if has_spread || has_method {
+                // With spreads/methods, use incremental construction:
                 // 1. Create empty object
-                // 2. For each property: SetProperty or SpreadIntoObject
+                // 2. Apply each entry in source order while retaining it.
                 ops.push(Ir1Op::NewObject { count: 0 });
                 for prop in properties {
                     if let Expression::SpreadElement(inner) = &prop.value {
@@ -11953,8 +12013,36 @@ fn lower_expression_to_ir1(
                             label_counter,
                         )?;
                         ops.push(Ir1Op::SpreadIntoObject);
+                    } else if prop.kind == ObjectPropertyKind::Method {
+                        // Computed keys are evaluated exactly once, before the
+                        // function value is created, matching PropertyDefinitionEvaluation.
+                        let key = if prop.computed {
+                            lower_expression_to_ir1(
+                                &prop.key,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?;
+                            Ir1PropertyKey::Dynamic
+                        } else {
+                            Ir1PropertyKey::Static(canonical_static_object_property_key(&prop.key)?)
+                        };
+                        lower_expression_to_ir1(
+                            &prop.value,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::DefineMethod { key });
                     } else {
-                        // Normal property - emit key and value, then set
+                        // Data property - emit key and value, then merge a
+                        // one-property temporary object into the target.
                         if prop.computed {
                             lower_expression_to_ir1(
                                 &prop.key,
@@ -11980,11 +12068,9 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        // Build a single-property object and merge it into the
-                        // target. A bare SetProperty would consume the target
-                        // and leave the assigned value on the stack, which is
-                        // correct for assignment expressions but breaks mixed
-                        // object literals such as {...source, key: value}
+                        // A bare SetProperty would consume the target and leave
+                        // the assigned value on the stack, which is correct for
+                        // assignments but breaks incremental object literals
                         // (bd-oca1s, bd-ibsn4).
                         ops.push(Ir1Op::NewObject { count: 1 });
                         ops.push(Ir1Op::SpreadIntoObject);
@@ -12465,6 +12551,7 @@ fn classify_ir1_op(
         ),
         Ir1Op::GetProperty { .. }
         | Ir1Op::SetProperty { .. }
+        | Ir1Op::DefineMethod { .. }
         | Ir1Op::DeleteProperty { .. }
         | Ir1Op::CopyDataProperties { .. } => (EffectBoundary::ReadEffect, None, None),
         Ir1Op::ForInInit
@@ -12771,8 +12858,8 @@ mod tests {
         BreakStatement, CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration,
         ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
         FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, LabeledStatement,
-        MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal,
-        ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+        MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty, ObjectPropertyKind,
+        ParseGoal, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
         ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
         VariableDeclarationKind, VariableDeclarator, WhileStatement,
     };
@@ -16216,6 +16303,7 @@ mod tests {
             value: Expression::NumericLiteral(1),
             computed: false,
             shorthand: false,
+            kind: ObjectPropertyKind::Data,
         }]));
         let result = lower_ir0_to_ir1(&ir0).expect("object should lower");
         assert!(
@@ -16228,7 +16316,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_object_method_shorthand_preserves_computed_key_order_bd_vjmy7() {
+    fn lower_object_method_shorthand_defines_methods_in_source_order_bd_gqaa4() {
         let tree = CanonicalEs2020Parser
             .parse(
                 "({ next() { return 1; }, [Symbol.iterator]() { return this; } })",
@@ -16247,6 +16335,21 @@ mod tests {
             .filter_map(|(index, op)| matches!(op, Ir1Op::CreateFunction { .. }).then_some(index))
             .collect::<Vec<_>>();
         assert_eq!(create_indices.len(), 2);
+        let define_methods = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| match op {
+                Ir1Op::DefineMethod { key } => Some((index, key)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            define_methods.as_slice(),
+            [
+                (_, Ir1PropertyKey::Static(key)),
+                (_, Ir1PropertyKey::Dynamic)
+            ] if key == "next"
+        ));
         let symbol_index = ops
             .iter()
             .position(|op| {
@@ -16259,13 +16362,55 @@ mod tests {
                 )
             })
             .expect("computed Symbol.iterator key must materialize exactly");
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::HostCall {
+                        capability,
+                        arg_count: 0,
+                    } if capability == "builtin:SymbolIterator"
+                ))
+                .count(),
+            1,
+            "computed method key must be evaluated exactly once"
+        );
         let object_index = ops
             .iter()
-            .position(|op| matches!(op, Ir1Op::NewObject { count: 2 }))
-            .expect("both method properties must build one two-entry object");
-        assert!(create_indices[0] < symbol_index);
+            .position(|op| matches!(op, Ir1Op::NewObject { count: 0 }))
+            .expect("method literal must start with one retained empty object");
+        assert!(object_index < create_indices[0]);
+        assert!(create_indices[0] < define_methods[0].0);
+        assert!(define_methods[0].0 < symbol_index);
         assert!(symbol_index < create_indices[1]);
-        assert!(create_indices[1] < object_index);
+        assert!(create_indices[1] < define_methods[1].0);
+
+        let ir2 = lower_ir1_to_ir2(&result.module)
+            .expect("object method IR1 should lower to IR2")
+            .module;
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("object method IR2 should lower to IR3")
+            .module;
+        let object_reg = ir3
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Ir3Instruction::NewObject { dst } => Some(*dst),
+                _ => None,
+            })
+            .expect("incremental method lowering must allocate the target object");
+        let ir3_methods = ir3
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Ir3Instruction::DefineMethod { obj, key, func } => Some((*obj, *key, *func)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ir3_methods.len(), 2);
+        assert!(ir3_methods.iter().all(|(obj, _, _)| *obj == object_reg));
+        assert_ne!(ir3_methods[0].1, ir3_methods[1].1);
+        assert_ne!(ir3_methods[0].2, ir3_methods[1].2);
     }
 
     #[test]
@@ -16276,6 +16421,7 @@ mod tests {
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }];
             if with_spread {
                 let spread =
@@ -16285,6 +16431,7 @@ mod tests {
                     value: spread,
                     computed: false,
                     shorthand: true,
+                    kind: ObjectPropertyKind::Data,
                 });
             }
 
@@ -16362,6 +16509,7 @@ mod tests {
                 value: Expression::NumericLiteral(1),
                 computed: true,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }])))
             .expect("exact computed object key should lower");
         assert!(computed_object.module.ops.iter().any(|op| matches!(
@@ -16377,6 +16525,7 @@ mod tests {
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }])))
             .expect("exact static object key should lower");
         assert!(static_object.module.ops.iter().any(|op| matches!(
@@ -16442,6 +16591,7 @@ mod tests {
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }]));
             let result = lower_ir0_to_ir1(&ir0).expect("canonical float property key should lower");
             assert!(result.module.ops.iter().any(|op| matches!(

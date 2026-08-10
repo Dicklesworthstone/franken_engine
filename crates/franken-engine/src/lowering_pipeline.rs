@@ -59,8 +59,9 @@ use crate::ir_contract::{
     Ir1Literal, Ir1Module, Ir1Op, Ir1OpSpanEntry, Ir1PropertyKey, Ir2Module, Ir2Op,
     Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg,
     RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_derived_constructor_schema, verify_ir1_source,
-    verify_ir2_derived_constructor_schema, verify_ir3_specialization, verify_schema_version,
+    verify_ir1_derived_constructor_schema, verify_ir1_object_method_schema, verify_ir1_source,
+    verify_ir2_derived_constructor_schema, verify_ir2_object_method_schema,
+    verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
 use crate::parser::{
@@ -6161,6 +6162,7 @@ pub fn lower_ir1_to_ir2(
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
     ir2.header.schema_version = ir1.header.schema_version;
@@ -6407,6 +6409,7 @@ pub fn lower_ir2_to_ir3(
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_object_method_schema(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
             instruction_index: usize,
@@ -7513,6 +7516,32 @@ pub fn lower_ir2_to_ir3(
                     key: key_reg,
                     func,
                     kind: *kind,
+                });
+                value_stack.push(obj);
+            }
+            Ir1Op::DefineMethod { key } => {
+                let func = pop_lowering_value(&mut value_stack)?;
+                let (obj, key_reg) = match key {
+                    Ir1PropertyKey::Static(key) => {
+                        let obj = pop_lowering_value(&mut value_stack)?;
+                        let key_reg = alloc_register(&mut register_cursor);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        (obj, key_reg)
+                    }
+                    Ir1PropertyKey::Dynamic => {
+                        let key_reg = pop_lowering_value(&mut value_stack)?;
+                        let obj = pop_lowering_value(&mut value_stack)?;
+                        (obj, key_reg)
+                    }
+                };
+                ir3.instructions.push(Ir3Instruction::DefineMethod {
+                    obj,
+                    key: key_reg,
+                    func,
                 });
                 value_stack.push(obj);
             }
@@ -8952,6 +8981,32 @@ pub fn lower_ir2_to_ir3(
                         key: key_reg,
                         func,
                         kind: *kind,
+                    });
+                    fn_value_stack.push(obj);
+                }
+                Ir1Op::DefineMethod { key } => {
+                    let func = pop_lowering_value(&mut fn_value_stack)?;
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(k) => {
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
+                            let kr = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: kr,
+                                pool_index,
+                            });
+                            (obj, kr)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let kr = pop_lowering_value(&mut fn_value_stack)?;
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
+                            (obj, kr)
+                        }
+                    };
+                    ir3.instructions.push(Ir3Instruction::DefineMethod {
+                        obj,
+                        key: key_reg,
+                        func,
                     });
                     fn_value_stack.push(obj);
                 }
@@ -12436,6 +12491,51 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+                && matches!(object.as_ref(), Expression::Super)
+            {
+                let arg_count = u32::try_from(arguments.len()).map_err(|_| {
+                    LoweringPipelineError::TooManyArguments {
+                        count: arguments.len(),
+                        max: u32::MAX as usize,
+                    }
+                })?;
+                // Lookup starts at [[PrototypeOf]]([[HomeObject]]), while the
+                // actual call receiver remains the activation's dynamic this.
+                ops.push(Ir1Op::LoadSuper);
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
+                ops.push(Ir1Op::LoadThis);
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::CallMethod { arg_count });
+                return Ok(());
+            }
             // Spread in call arguments (bd-hsv77): `f(a, ...xs, b)` must expand
             // the spread into positional args. Build the argument array (reusing
             // the array-literal spread lowering) and dispatch via
@@ -14426,10 +14526,10 @@ fn lower_expression_to_ir1_inner(
             let has_spread = properties
                 .iter()
                 .any(|prop| matches!(&prop.value, Expression::SpreadElement(_)));
-            let has_accessor = properties
+            let has_incremental_definition = properties
                 .iter()
                 .any(|prop| prop.kind != ObjectPropertyKind::Data);
-            let needs_incremental = has_spread || has_accessor;
+            let needs_incremental = has_spread || has_incremental_definition;
 
             if needs_incremental {
                 // With spreads/accessors, use incremental approach:
@@ -14497,6 +14597,35 @@ fn lower_expression_to_ir1_inner(
                                 ops.push(Ir1Op::NewObject { count: 1 });
                                 ops.push(Ir1Op::SpreadIntoObject);
                             }
+                            ObjectPropertyKind::Method => {
+                                let property_key = if prop.computed {
+                                    lower_expression_to_ir1(
+                                        &prop.key,
+                                        ops,
+                                        bindings,
+                                        binding_lookup,
+                                        binding_index,
+                                        root_scope_id,
+                                        label_counter,
+                                        span_table,
+                                    )?;
+                                    Ir1PropertyKey::Dynamic
+                                } else {
+                                    let key_str = canonical_static_object_property_key(&prop.key)?;
+                                    Ir1PropertyKey::Static(key_str)
+                                };
+                                lower_expression_to_ir1(
+                                    &prop.value,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    root_scope_id,
+                                    label_counter,
+                                    span_table,
+                                )?;
+                                ops.push(Ir1Op::DefineMethod { key: property_key });
+                            }
                             ObjectPropertyKind::Get | ObjectPropertyKind::Set => {
                                 let property_key = if prop.computed {
                                     lower_expression_to_ir1(
@@ -14527,7 +14656,9 @@ fn lower_expression_to_ir1_inner(
                                 let kind = match prop.kind {
                                     ObjectPropertyKind::Get => AccessorKind::Get,
                                     ObjectPropertyKind::Set => AccessorKind::Set,
-                                    ObjectPropertyKind::Data => unreachable!(),
+                                    ObjectPropertyKind::Data | ObjectPropertyKind::Method => {
+                                        unreachable!()
+                                    }
                                 };
                                 ops.push(Ir1Op::DefineAccessor {
                                     key: property_key,
@@ -24087,6 +24218,7 @@ fn ir1_exception_flow_label(
         | Ir1Op::GetProperty { .. }
         | Ir1Op::SetProperty { .. }
         | Ir1Op::DefineAccessor { .. }
+        | Ir1Op::DefineMethod { .. }
         | Ir1Op::DeleteProperty { .. }
         | Ir1Op::BinaryOp { .. }
         | Ir1Op::UnaryOp { .. }
@@ -24445,7 +24577,7 @@ fn simulate_ir2_flow_labels(
                 value_stack.push(value);
                 label
             }
-            Ir1Op::DefineAccessor { key, .. } => {
+            Ir1Op::DefineAccessor { key, .. } | Ir1Op::DefineMethod { key } => {
                 let function = pop_flow_value(&mut value_stack)?;
                 let mut inputs = vec![function];
                 if matches!(key, Ir1PropertyKey::Dynamic) {
@@ -33364,6 +33496,73 @@ mod tests {
             }),
             "object getter literal must lower to DefineAccessor"
         );
+    }
+
+    #[test]
+    fn lower_object_literal_method_emits_define_method_bd_gqaa4() {
+        let method = Expression::Function {
+            name: None,
+            params: Vec::new(),
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(Expression::NumericLiteral(11)),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            is_async: false,
+            is_generator: false,
+        };
+        let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+            key: Expression::Identifier("value".into()),
+            value: method,
+            computed: false,
+            shorthand: false,
+            kind: ObjectPropertyKind::Method,
+        }]));
+        let result = lower_ir0_to_ir1(&ir0).expect("object method should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::NewObject { count: 0 }
+        )));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::DefineMethod {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "value"
+        )));
+    }
+
+    #[test]
+    fn lower_object_method_super_call_keeps_dynamic_this_bd_gqaa4() {
+        let ops = lower_script_source_ops(
+            "let owner={value(){return super.value();}};",
+            "object_method_super.js",
+        );
+        let body_ops = ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::CreateFunction { body_ops, .. } => Some(body_ops),
+                _ => None,
+            })
+            .expect("method closure body should be retained in IR1");
+        let load_super = body_ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::LoadSuper))
+            .expect("super lookup base must be loaded");
+        let get_property = body_ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::GetProperty { .. }))
+            .expect("super property must be resolved");
+        let load_this = body_ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::LoadThis))
+            .expect("dynamic receiver must be loaded separately");
+        let call_method = body_ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::CallMethod { .. }))
+            .expect("super property must be invoked as a method");
+        assert!(load_super < get_property && get_property < load_this && load_this < call_method);
     }
 
     #[test]

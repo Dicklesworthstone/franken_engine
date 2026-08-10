@@ -20,9 +20,10 @@ use crate::ast::{
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
     ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, NamedExportClause,
-    ObjectPatternProperty, ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase,
-    SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, UpdateOperator,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
+    ObjectPatternProperty, ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan,
+    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
+    UnaryOperator, UpdateOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator, WhileStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::js_string::JsString;
@@ -11216,6 +11217,7 @@ fn parse_object_literal(
                 value: spread,
                 computed: false,
                 shorthand: true,
+                kind: ObjectPropertyKind::Data,
             });
         } else if let Some(colon_idx) = find_top_level_colon_with_context(
             p,
@@ -11260,17 +11262,19 @@ fn parse_object_literal(
                 value,
                 computed,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             });
         } else if let Some((key, value, computed)) =
             try_parse_object_method(p, span, context, recursion_depth)?
         {
-            // The currently supported object-method subset desugars to a data
-            // property whose value is an ordinary anonymous function.
+            // Preserve the concise-method distinction even though the body
+            // payload shares the ordinary function-expression representation.
             properties.push(ObjectProperty {
                 key,
                 value,
                 computed,
                 shorthand: false,
+                kind: ObjectPropertyKind::Method,
             });
         } else {
             // Shorthand property: { x } means { x: x }
@@ -11297,6 +11301,7 @@ fn parse_object_literal(
                 value,
                 computed: false,
                 shorthand: true,
+                kind: ObjectPropertyKind::Data,
             });
         }
     }
@@ -11306,10 +11311,10 @@ fn parse_object_literal(
 /// Parse the ordinary object-literal method subset: `name(params) { body }`
 /// and `[expression](params) { body }`.
 ///
-/// The AST currently represents this subset as a data property containing an
-/// anonymous ordinary function. Async, generator, accessor, and full
-/// `[[HomeObject]]` method semantics are outside this bounded engine-twin syntax
-/// subset.
+/// The function payload remains an anonymous ordinary-function-shaped body, but
+/// the enclosing [`ObjectPropertyKind::Method`] carrier preserves the semantic
+/// distinction needed by later lowering/runtime slices. Async, generator, and
+/// accessor forms remain outside this bounded subset.
 fn try_parse_object_method(
     part: &str,
     span: &SourceSpan,
@@ -18866,7 +18871,7 @@ strict"; var static = 1; }"#,
     }
 
     #[test]
-    fn object_literal_methods_parse_to_canonical_function_properties_bd_vjmy7() {
+    fn object_literal_methods_preserve_explicit_method_kind_bd_gqaa4() {
         let methods = parse_script(
             r#"({ next(value) { return value; }, [Symbol.iterator]() { return this; }, "x("() { return 3; }, 1() { return 4; } })"#,
         );
@@ -18877,6 +18882,11 @@ strict"; var static = 1; }"#,
         assert!(!properties[0].computed);
         assert!(properties[1].computed);
         assert!(properties.iter().all(|property| !property.shorthand));
+        assert!(
+            properties
+                .iter()
+                .all(|property| property.kind == ObjectPropertyKind::Method)
+        );
         let Expression::Function {
             name,
             params,
@@ -18911,10 +18921,18 @@ strict"; var static = 1; }"#,
         let explicit_functions = parse_script(
             r#"({ next: function(value) { return value; }, [Symbol.iterator]: function() { return this; }, "x(": function() { return 3; }, 1: function() { return 4; } })"#,
         );
-        assert_eq!(
+        let Expression::ObjectLiteral(explicit_properties) = first_expr(&explicit_functions) else {
+            panic!("expected explicit-function object literal");
+        };
+        assert!(
+            explicit_properties
+                .iter()
+                .all(|property| property.kind == ObjectPropertyKind::Data)
+        );
+        assert_ne!(
             first_expr(&methods).canonical_value(),
             first_expr(&explicit_functions).canonical_value(),
-            "the supported method subset must have one deterministic desugared AST"
+            "concise methods must remain canonically distinct from function-valued data properties"
         );
     }
 
@@ -18932,7 +18950,8 @@ strict"; var static = 1; }"#,
         assert!(
             properties
                 .iter()
-                .all(|property| matches!(&property.value, Expression::Function { .. }))
+                .all(|property| property.kind == ObjectPropertyKind::Method
+                    && matches!(&property.value, Expression::Function { .. }))
         );
     }
 
@@ -18958,6 +18977,7 @@ strict"; var static = 1; }"#,
                 &properties[0].key,
                 Expression::Identifier(name) if name == expected_name
             ));
+            assert_eq!(properties[0].kind, ObjectPropertyKind::Method);
         }
     }
 
@@ -18971,7 +18991,8 @@ strict"; var static = 1; }"#,
         assert!(
             properties
                 .iter()
-                .all(|property| matches!(&property.value, Expression::Function { .. }))
+                .all(|property| property.kind == ObjectPropertyKind::Method
+                    && matches!(&property.value, Expression::Function { .. }))
         );
 
         let parser = CanonicalEs2020Parser;
@@ -19012,6 +19033,38 @@ strict"; var static = 1; }"#,
         };
         assert_eq!(properties.len(), 4);
         assert!(properties.iter().all(|property| property.computed));
+        assert!(
+            properties
+                .iter()
+                .all(|property| property.kind == ObjectPropertyKind::Method)
+        );
+        assert!(matches!(
+            &properties[0].key,
+            Expression::Member {
+                object,
+                property,
+                computed: false,
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == "Symbol")
+                && matches!(property.as_ref(), Expression::Identifier(name) if name == "iterator")
+        ));
+        assert!(matches!(
+            &properties[1].key,
+            Expression::Member {
+                object,
+                property,
+                computed: true,
+            } if matches!(object.as_ref(), Expression::Identifier(name) if name == "nested")
+                && matches!(property.as_ref(), Expression::Identifier(name) if name == "key")
+        ));
+        assert!(matches!(
+            &properties[2].key,
+            Expression::StringLiteral(value) if value.as_str() == Some("]")
+        ));
+        assert!(matches!(
+            &properties[3].key,
+            Expression::TemplateLiteral { quasis, expressions }
+                if quasis == &[JsString::from("]")] && expressions.is_empty()
+        ));
 
         let parser = CanonicalEs2020Parser;
         for source in [
@@ -19026,6 +19079,27 @@ strict"; var static = 1; }"#,
                 .parse(source, ParseGoal::Script)
                 .expect_err("invalid computed/trailing method syntax must be rejected");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        }
+    }
+
+    #[test]
+    fn computed_object_method_key_calls_are_preserved_once_in_source_order_bd_gqaa4() {
+        let tree = parse_script(r#"({ [record("first")]() {}, [record("second")]() {} })"#);
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected computed-method object literal");
+        };
+
+        assert_eq!(properties.len(), 2);
+        for (property, expected_argument) in properties.iter().zip(["first", "second"]) {
+            assert!(property.computed);
+            assert_eq!(property.kind, ObjectPropertyKind::Method);
+            assert!(matches!(
+                &property.key,
+                Expression::Call { callee, arguments }
+                    if matches!(callee.as_ref(), Expression::Identifier(name) if name == "record")
+                        && matches!(arguments.as_slice(), [Expression::StringLiteral(value)]
+                            if value.as_str() == Some(expected_argument))
+            ));
         }
     }
 

@@ -2091,6 +2091,10 @@ struct ParseExecutionContext<'a> {
     pattern_depth: u64,
     /// Whether the current parsing context is in strict mode.
     strict_mode: bool,
+    /// True only while parsing an object concise method (or a lexically nested
+    /// arrow). Bare `super` remains invalid; this admits only `super.x` and
+    /// `super[x]` where the resulting closure receives a [[HomeObject]].
+    super_property_allowed: bool,
 }
 
 impl<'a> ParseExecutionContext<'a> {
@@ -2866,6 +2870,7 @@ fn parse_source(
         statement_depth: 0,
         pattern_depth: 0,
         strict_mode: goal == ParseGoal::Module,
+        super_property_allowed: false,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -6466,16 +6471,20 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if object_src == "super" {
+        if object_src == "super" && !context.super_property_allowed {
             return Some(Err(unsupported_expression_syntax_error(
                 "super expressions are not supported",
                 span,
                 context,
             )));
         }
-        let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
-            Ok(e) => e,
-            Err(e) => return Some(Err(e)),
+        let object = if object_src == "super" {
+            Expression::Super
+        } else {
+            match parse_expression(object_src, span, context, recursion_depth + 1) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            }
         };
         let property = match parse_expression(prop_src.trim(), span, context, recursion_depth + 1) {
             Ok(e) => e,
@@ -6514,7 +6523,7 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if object_src == "super" {
+        if object_src == "super" && !context.super_property_allowed {
             return Some(Err(unsupported_expression_syntax_error(
                 "super expressions are not supported",
                 span,
@@ -6528,9 +6537,13 @@ fn try_parse_postfix(
             return Some(Ok(Expression::ImportMeta));
         }
         if !object_src.is_empty() && is_identifier(property_src) {
-            let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
+            let object = if object_src == "super" {
+                Expression::Super
+            } else {
+                match parse_expression(object_src, span, context, recursion_depth + 1) {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e)),
+                }
             };
             return Some(Ok(if optional {
                 Expression::OptionalMember {
@@ -7085,14 +7098,15 @@ fn parse_object_literal(
         } else if let Some((key, value, computed)) =
             try_parse_object_method(p, span, context, recursion_depth)?
         {
-            // Method shorthand: `name(params){body}` or `[expr](params){body}`,
-            // desugared to a data property whose value is a function expression.
+            // Method shorthand: `name(params){body}` or `[expr](params){body}`.
+            // Preserve the method distinction for [[HomeObject]], inferred name,
+            // prototype suppression, and non-constructability semantics (bd-gqaa4).
             properties.push(ObjectProperty {
                 key,
                 value,
                 computed,
                 shorthand: false,
-                kind: ObjectPropertyKind::Data,
+                kind: ObjectPropertyKind::Method,
             });
         } else {
             // Shorthand property: { x } means { x: x }
@@ -7180,7 +7194,12 @@ fn try_parse_object_method(
             let after = after.trim_start();
             if after.starts_with('(') {
                 let key = parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
-                let value = parse_function_expression(after, span, context, recursion_depth + 1)?;
+                let value = parse_object_method_function_expression(
+                    after,
+                    span,
+                    context,
+                    recursion_depth + 1,
+                )?;
                 return Ok(Some((key, value, true)));
             }
         }
@@ -7206,7 +7225,12 @@ fn try_parse_object_method(
     } else {
         return Ok(None);
     };
-    let value = parse_function_expression(&part[paren_idx..], span, context, recursion_depth + 1)?;
+    let value = parse_object_method_function_expression(
+        &part[paren_idx..],
+        span,
+        context,
+        recursion_depth + 1,
+    )?;
     Ok(Some((key, value, false)))
 }
 
@@ -9986,7 +10010,26 @@ fn parse_function_expression(
     rest: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    parse_function_expression_with_super(rest, span, context, recursion_depth, false)
+}
+
+fn parse_object_method_function_expression(
+    rest: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    parse_function_expression_with_super(rest, span, context, recursion_depth, true)
+}
+
+fn parse_function_expression_with_super(
+    rest: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
     _recursion_depth: u64,
+    super_property_allowed: bool,
 ) -> ParseResult<Expression> {
     let rest = rest.trim_start();
     let is_generator = rest.starts_with('*');
@@ -10035,11 +10078,15 @@ fn parse_function_expression(
         )
     })?;
     let goal = ParseGoal::Script;
-    let (params, body_stmts) = with_function_strict_mode(body_src, false, context, |context| {
+    let saved_super_property_allowed = context.super_property_allowed;
+    context.super_property_allowed = super_property_allowed;
+    let parsed = with_function_strict_mode(body_src, false, context, |context| {
         let params = parse_arrow_params(params_src, span, context)?;
         let body = parse_body_statements(body_src, goal, span, context)?;
         Ok((params, body))
-    })?;
+    });
+    context.super_property_allowed = saved_super_property_allowed;
+    let (params, body_stmts) = parsed?;
 
     Ok(Expression::Function {
         name,
@@ -14985,6 +15032,7 @@ mod tests {
             statement_depth: 0,
             pattern_depth: 0,
             strict_mode: false,
+            super_property_allowed: false,
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }
@@ -15476,8 +15524,8 @@ mod tests {
 
     #[test]
     fn object_literal_plain_method_shorthand() {
-        // bd-bg9l1.27.3 / DISC-003: `name() {}` must parse as a method (a data
-        // property whose value is a function), not a shorthand identifier.
+        // bd-bg9l1.27.3 / DISC-003 / bd-gqaa4: `name() {}` must retain its
+        // method identity, not collapse to a data property or shorthand identifier.
         let tree = parse_script("({ next() { return 1; } })");
         match first_expr(&tree) {
             Expression::ObjectLiteral(properties) => {
@@ -15485,6 +15533,7 @@ mod tests {
                 let prop = &properties[0];
                 assert!(!prop.computed);
                 assert!(!prop.shorthand);
+                assert_eq!(prop.kind, ObjectPropertyKind::Method);
                 assert!(matches!(&prop.key, Expression::Identifier(n) if n == "next"));
                 assert!(
                     matches!(&prop.value, Expression::Function { .. }),
@@ -15494,6 +15543,17 @@ mod tests {
             }
             other => panic!("expected ObjectLiteral, got {other:?}"),
         }
+
+        let explicit = parse_script("({ next: function() { return 1; } })");
+        let Expression::ObjectLiteral(explicit_properties) = first_expr(&explicit) else {
+            panic!("expected explicit-function object literal");
+        };
+        assert_eq!(explicit_properties[0].kind, ObjectPropertyKind::Data);
+        assert_ne!(
+            first_expr(&tree).canonical_value(),
+            first_expr(&explicit).canonical_value(),
+            "concise method syntax must remain distinct from a function-valued data property"
+        );
     }
 
     #[test]
@@ -15507,6 +15567,7 @@ mod tests {
                 let prop = &properties[0];
                 assert!(prop.computed);
                 assert!(!prop.shorthand);
+                assert_eq!(prop.kind, ObjectPropertyKind::Method);
                 assert!(matches!(&prop.key, Expression::Member { .. }));
                 assert!(
                     matches!(&prop.value, Expression::Function { .. }),
@@ -15516,6 +15577,45 @@ mod tests {
             }
             other => panic!("expected ObjectLiteral, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn object_method_super_property_is_contextual_bd_gqaa4() {
+        let tree = parse_script("({ value() { return super.value(); } })");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        let Expression::Function { body, .. } = &properties[0].value else {
+            panic!("expected concise-method function body");
+        };
+        let Statement::Return(ReturnStatement {
+            argument: Some(Expression::Call { callee, .. }),
+            ..
+        }) = &body.body[0]
+        else {
+            panic!("expected return of super method call");
+        };
+        assert!(matches!(
+            callee.as_ref(),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::Super)
+        ));
+
+        assert!(
+            CanonicalEs2020Parser
+                .parse("super.value()", ParseGoal::Script)
+                .is_err(),
+            "super-property syntax must remain rejected without method context"
+        );
+        assert!(
+            CanonicalEs2020Parser
+                .parse(
+                    "({ value() { return function () { return super.value(); }; } })",
+                    ParseGoal::Script,
+                )
+                .is_err(),
+            "an ordinary nested function must not inherit the method's super binding"
+        );
     }
 
     #[test]

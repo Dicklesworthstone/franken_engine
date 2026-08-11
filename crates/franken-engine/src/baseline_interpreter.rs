@@ -39035,9 +39035,9 @@ impl InterpreterCore {
                     // (dst, obj) to (obj, key) — dropping (dst) alone would let a
                     // Public property read lower a dst that already held Secret
                     // (bd-0zybl regression).
-                    let prior_dst_label = self.clone_register_label_with_temporary_budget(dst)?;
-                    result_label = self
-                        .join_owned_label_with_temporary_budget(result_label, &prior_dst_label)?;
+                    let prior_dst_label = self.get_register_label(dst)?;
+                    result_label =
+                        self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
                     self.write_reg_with_label(dst, prop, result_label)?;
                     self.ip += 1;
                 }
@@ -92830,6 +92830,65 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "GetProperty join must not lower a dst that already holds higher taint"
+        );
+    }
+
+    /// bd-gqaa4/bd-0zybl: the conservative prior-dst join must not clone a
+    /// losing attacker-sized label while the already-owned result label is
+    /// live. The exact ceiling below admits the small dominant result label
+    /// but refuses the obsolete two-clone implementation.
+    #[test]
+    fn get_property_prior_dst_join_clones_only_the_dominant_label_bd_gqaa4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        let dominant_label = Label::Custom {
+            name: "dominant".to_string(),
+            level: 9,
+        };
+        let losing_large_label = Label::Custom {
+            name: "losing-prior-dst-label".repeat(128),
+            level: 8,
+        };
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(1))])
+            .expect("test object allocation should succeed");
+        core.write_reg_with_label(0, Value::Object(object), dominant_label.clone())
+            .expect("object register should be writable");
+        core.write_reg_with_label(1, Value::str("data"), Label::Public)
+            .expect("key register should be writable");
+        core.write_reg_with_label(2, Value::Undefined, losing_large_label)
+            .expect("dst register should be writable");
+        let before = core
+            .sync_estimated_memory_bytes()
+            .expect("fixture accounting should synchronize");
+        core.config.max_total_memory_bytes =
+            before.saturating_add(InterpreterCore::estimate_label_bytes(&dominant_label));
+
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::Halted),
+            "the one-clone dominant-label join should reach the fixture halt"
+        );
+
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("dst register label should exist"),
+            &dominant_label
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "temporary join storage must not escape into retained accounting"
         );
     }
 

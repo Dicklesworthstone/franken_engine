@@ -4311,14 +4311,19 @@ mod tests {
                 r#"let key="computed";let o={plain(){},[key](){}};o.plain.name+"|"+o[key].name;"#,
             ),
             EngineCoreCorpusCase::new(
-                "concise_method_nonconstructable_without_prototype",
-                r#"let o={plain(){}};let caught=false;try{new o.plain();}catch(e){caught=true;}typeof o.plain.prototype+"|"+caught;"#,
+                "concise_method_without_prototype",
+                r#"let o={plain(){}};typeof o.plain.prototype;"#,
             ),
             EngineCoreCorpusCase::new(
                 "concise_method_home_object_and_dynamic_this",
                 r#"let key="computed";let base={value(){return 40;}};let owner={plain(){return super.value()+this.delta;},[key](){return super.value()+this.delta+1;}};owner.__proto__=base;let alien={delta:2};alien.plain=owner.plain;alien.computed=owner[key];alien.plain()*100+alien.computed();"#,
             ),
         ];
+        // Nonconstructability is pinned directly in both interpreter suites.
+        // The twin oracle intentionally classifies a backend exception as
+        // inconclusive, so this corpus compares the complementary successful
+        // observation (`prototype` is absent) instead of disguising that
+        // harness limitation with a try/catch wrapper.
         for case in &corpus {
             let case_report = run_engine_core_differential_oracle(std::slice::from_ref(case), 64);
             assert!(

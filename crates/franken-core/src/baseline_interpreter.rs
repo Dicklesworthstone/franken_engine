@@ -8654,19 +8654,26 @@ impl InterpreterCore {
                     };
                     // bd-ojvo1 (core parity): a value read from an own string
                     // property carries the IFC provenance it was written with,
-                    // not merely the owning object's label. Raise dst's label by
-                    // the stored own-property label when it is non-Public (no-op
-                    // otherwise), so a Secret value written to a lower-labeled
-                    // object does not launder back out on a later read.
+                    // AND the reading of a property of a labeled object is at
+                    // least as sensitive as that object (bd-0zybl-class object
+                    // join, previously absent in the core twin's property read).
+                    // Raise dst's label by (own/inherited property label) JOIN
+                    // (object register label) JOIN (key register label) when the
+                    // join is non-Public (no-op otherwise), so neither a Secret
+                    // value written to a lower-labeled object nor a read off a
+                    // Secret object launders back out as Public.
                     if let Value::Object(oid) = &obj_val
                         && let RuntimePropertyKey::String(js_key) = &property_key
                         && let Some(key_str) = js_key.as_str()
                     {
-                        let prop_label = self.own_property_label(*oid, key_str);
-                        if !matches!(prop_label, crate::ifc_artifacts::Label::Public) {
+                        let raise = self
+                            .own_property_label(*oid, key_str)
+                            .join(&self.read_reg_label(obj)?)
+                            .join(&self.read_reg_label(key)?);
+                        if !matches!(raise, crate::ifc_artifacts::Label::Public) {
                             let current = self.read_reg_label(dst)?;
                             let value = self.read_reg(dst)?;
-                            self.write_reg_with_label(dst, value, current.join(&prop_label))?;
+                            self.write_reg_with_label(dst, value, current.join(&raise))?;
                         }
                     }
                     if !called_accessor {
@@ -18893,6 +18900,51 @@ mod tests {
                 .expect("dst register label should exist"),
             crate::ifc_artifacts::Label::Secret,
             "an inherited Secret property must read back Secret through the prototype chain (bd-ojvo1)"
+        );
+    }
+
+    /// bd-0zybl-class (core parity): reading any property of a Secret object is
+    /// at least as sensitive as the object itself, even when the property value
+    /// carries a Public label. Core's property read previously dropped the
+    /// object's label entirely.
+    #[test]
+    fn get_property_of_secret_object_carries_object_label_bd_0zybl() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("data".into());
+
+        let mut core = quickjs_test_core();
+        let secret_obj = core
+            .alloc_object_with_properties(&[("data", Value::Int(1))])
+            .expect("object allocation should succeed");
+        core.write_reg_with_label(
+            0,
+            Value::Object(secret_obj),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("object register should be settable");
+
+        core.execute(&module)
+            .expect("property read off a secret object should execute");
+
+        assert_eq!(
+            core.read_reg_label(2)
+                .expect("dst register label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "a property read off a Secret object must be at least Secret (bd-0zybl-class core parity)"
         );
     }
 

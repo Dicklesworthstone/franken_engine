@@ -15195,24 +15195,58 @@ impl InterpreterCore {
                     .heap
                     .get(source_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: source_id.0 })?;
-                object
-                    .own_runtime_property_keys()
-                    .into_iter()
-                    .filter_map(|key| match &key {
-                        RuntimePropertyKey::String(string_key) => object
-                            .properties
-                            .get_exact(string_key)
-                            .cloned()
-                            .map(|value| (key, value)),
-                        RuntimePropertyKey::Symbol(symbol) => object
-                            .properties
-                            .baseline_symbol_property(*symbol)
-                            .and_then(|property| match property {
-                                BaselineSymbolProperty::Data(value) => Some((key, value.clone())),
-                                BaselineSymbolProperty::Accessor { .. } => None,
-                            }),
-                    })
-                    .collect::<Vec<_>>()
+                // bd-jv7qk: this non-resumable route has no `&Ir3Module` /
+                // continuation context, so it cannot invoke a property getter
+                // the way the resumable `execute_object_assign` does. Rather
+                // than silently dropping an enumerable own accessor key — which
+                // would let this route diverge from the resumable one and lose
+                // the getter's observable result — fail closed. Both String
+                // accessors (`baseline_exact_string_accessors` sidecar) and
+                // Symbol accessors are refused here; only data-valued own keys
+                // are copyable without running user code.
+                let mut copied: Vec<(RuntimePropertyKey, Value)> = Vec::new();
+                for key in object.own_runtime_property_keys() {
+                    match &key {
+                        RuntimePropertyKey::String(string_key) => {
+                            if let Some(value) = object.properties.get_exact(string_key).cloned() {
+                                copied.push((key, value));
+                            } else if object
+                                .properties
+                                .baseline_exact_string_accessor(string_key)
+                                .is_some()
+                            {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "resumable Object.assign for accessor-valued source \
+                                               properties (getter must run)"
+                                        .to_string(),
+                                    got:
+                                        "non-resumable Object.assign route cannot invoke a String \
+                                          accessor getter"
+                                            .to_string(),
+                                });
+                            }
+                        }
+                        RuntimePropertyKey::Symbol(symbol) => {
+                            match object.properties.baseline_symbol_property(*symbol) {
+                                Some(BaselineSymbolProperty::Data(value)) => {
+                                    copied.push((key, value.clone()));
+                                }
+                                Some(BaselineSymbolProperty::Accessor { .. }) => {
+                                    return Err(InterpreterError::TypeError {
+                                        expected: "resumable Object.assign for accessor-valued \
+                                                   source properties (getter must run)"
+                                            .to_string(),
+                                        got: "non-resumable Object.assign route cannot invoke a \
+                                              Symbol accessor getter"
+                                            .to_string(),
+                                    });
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                }
+                copied
             };
             for (key, value) in properties {
                 self.set_object_runtime_property(target_id, key, value)?;
@@ -20644,6 +20678,68 @@ mod tests {
             Some(BaselineSymbolProperty::Data(Value::Int(41)))
         ));
         assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn non_resumable_object_assign_fails_closed_on_symbol_accessor_bd_jv7qk() {
+        // bd-jv7qk divergence pin: the resumable route
+        // (symbol_accessor_object_assign_runs_getter_then_setter_once_bd_n8eta_4_3)
+        // invokes the Symbol accessor getter. The non-resumable
+        // `object_assign` dispatch route cannot run a getter (no module
+        // context), so it must fail closed rather than silently drop the
+        // enumerable own key — the two routes may no longer disagree by
+        // silently copying-vs-dropping the same key.
+        let mut core = quickjs_test_core();
+        let symbol = core.allocate_private_symbol(None).unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_symbol_property(
+            source,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(source);
+        assert!(
+            matches!(
+                core.dispatch_builtin_hostcall(
+                    "builtin:ObjectAssign",
+                    RegRange { start: 0, count: 2 }
+                ),
+                Err(InterpreterError::TypeError { .. })
+            ),
+            "non-resumable Object.assign must refuse a Symbol accessor source, not silently drop it"
+        );
+        // The accessor key was neither copied nor mutated on the target.
+        assert!(
+            core.heap[target.0 as usize]
+                .properties
+                .baseline_symbol_property(symbol)
+                .is_none()
+        );
+
+        // Data-valued Symbol keys remain copyable on the same route — only
+        // accessors (which require running user code) are refused.
+        let mut core = quickjs_test_core();
+        let symbol = core.allocate_private_symbol(None).unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_symbol_property(source, symbol, BaselineSymbolProperty::Data(Value::Int(9)))
+            .unwrap();
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(source);
+        core.dispatch_builtin_hostcall("builtin:ObjectAssign", RegRange { start: 0, count: 2 })
+            .unwrap();
+        assert!(matches!(
+            core.heap[target.0 as usize]
+                .properties
+                .baseline_symbol_property(symbol),
+            Some(BaselineSymbolProperty::Data(Value::Int(9)))
+        ));
     }
 
     #[test]

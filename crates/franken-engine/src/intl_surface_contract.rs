@@ -3549,7 +3549,21 @@ mod tests {
 
     fn roots() -> (PathBuf, PathBuf) {
         let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let node = engine.join("../franken_node");
+        // `env!("CARGO_MANIFEST_DIR")` is baked in at compile time, so the
+        // sibling `franken_node` resolves next to the engine checkout only in a
+        // normal clone. A detached `git worktree` under a scratch directory has
+        // no sibling repo, which made `generate_contract` fail with FE-INTL-1001
+        // (missing `franken_node/crates/franken-node/Cargo.toml`) and produced a
+        // spurious ~20-test RED that looked like a committed-HEAD regression
+        // (bd-97sl8). Fall back to the canonical deployed hint (identical to the
+        // real sibling in a normal checkout) so this conformance gate is
+        // runnable from an isolated worktree instead of reading a phantom path.
+        let sibling = engine.join("../franken_node");
+        let node = if sibling.join("crates/franken-node/Cargo.toml").exists() {
+            sibling
+        } else {
+            PathBuf::from("/dp/franken_node")
+        };
         (engine, node)
     }
 

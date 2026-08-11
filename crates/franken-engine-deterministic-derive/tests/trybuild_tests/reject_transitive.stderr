@@ -11,11 +11,11 @@ help: the trait `Deterministic` is not implemented for `NonDeterministicInner`
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `Deterministic`:
              ()
+             (A,)
              (A, B)
              (A, B, C)
              (A, B, C, D)
              (A, B, C, D, E)
-             (A,)
              Arc<T>
              BTreeMap<K, V>
            and $N others

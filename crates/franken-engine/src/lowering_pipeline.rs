@@ -17844,9 +17844,13 @@ fn crypto_object_control_flow_statement_has_rejected_use(
     // rejected (bd-5l5ye).
     let was_active = active.remove(alias);
     let result = match statement {
-        Statement::Block(block) => {
-            crypto_object_alias_has_rejected_use(&block.body, alias, surface, binding_lookup, active)
-        }
+        Statement::Block(block) => crypto_object_alias_has_rejected_use(
+            &block.body,
+            alias,
+            surface,
+            binding_lookup,
+            active,
+        ),
         Statement::If(if_statement) => {
             module_alias_expr_has_rejected_use(&if_statement.condition, alias, surface)
                 || crypto_object_control_flow_statement_has_rejected_use(

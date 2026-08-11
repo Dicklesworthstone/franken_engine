@@ -1098,6 +1098,12 @@ pub struct ObjectId(pub u32);
 pub struct HeapObject {
     /// Data properties in ECMAScript own-key order with deterministic lookup.
     pub properties: OrderedStringMap<Value>,
+    /// Per-own-string-property IFC labels (bd-ojvo1, core-twin parity with the
+    /// engine slice). A missing entry denotes `Label::Public`, so this map stays
+    /// sparse and serialization/construction are unchanged for the common case.
+    /// Without it, a `Secret` value written to a property of a lower-labeled
+    /// object would launder back out as the object's label on later reads.
+    property_labels: OrderedStringMap<crate::ifc_artifacts::Label>,
     /// Accessor descriptor storage, parallel to `properties` so the baseline
     /// heap can model the object_model accessor/data split.
     pub accessors: BTreeMap<String, AccessorProperty>,
@@ -1179,6 +1185,11 @@ impl Serialize for HeapObject {
             + if has_accessors { 1 } else { 0 }
             + if order.is_some() { 1 } else { 0 }
             + if symbol_properties.is_empty() { 0 } else { 1 }
+            + if self.property_labels.is_empty() {
+                0
+            } else {
+                1
+            }
             + if has_constructor_metadata { 4 } else { 0 };
         let mut object = serializer.serialize_struct("HeapObject", field_count)?;
         object.serialize_field("properties", &self.properties)?;
@@ -1210,6 +1221,9 @@ impl Serialize for HeapObject {
         if let Some(order) = &order {
             object.serialize_field("own_string_key_order", order)?;
         }
+        if !self.property_labels.is_empty() {
+            object.serialize_field("property_labels", &self.property_labels)?;
+        }
         if !symbol_properties.is_empty() {
             object.serialize_field("symbol_properties", &symbol_properties)?;
         }
@@ -1240,6 +1254,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_default_derived_constructor: bool,
             #[serde(default)]
             own_string_key_order: Option<Vec<JsString>>,
+            #[serde(default)]
+            property_labels: OrderedStringMap<crate::ifc_artifacts::Label>,
             #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
         }
@@ -1276,6 +1292,7 @@ impl<'de> Deserialize<'de> for HeapObject {
         }
         let mut object = Self {
             properties: wire.properties,
+            property_labels: wire.property_labels,
             accessors: BTreeMap::new(),
             prototype: wire.prototype,
             constructor_function: wire.constructor_function,
@@ -3973,6 +3990,7 @@ impl InterpreterCore {
         while self.heap.len() <= slot_idx {
             self.heap.push(HeapObject {
                 properties: OrderedStringMap::new(),
+                property_labels: OrderedStringMap::new(),
                 accessors: std::collections::BTreeMap::new(),
                 prototype: None,
                 constructor_function: None,
@@ -8634,6 +8652,23 @@ impl InterpreterCore {
                             });
                         }
                     };
+                    // bd-ojvo1 (core parity): a value read from an own string
+                    // property carries the IFC provenance it was written with,
+                    // not merely the owning object's label. Raise dst's label by
+                    // the stored own-property label when it is non-Public (no-op
+                    // otherwise), so a Secret value written to a lower-labeled
+                    // object does not launder back out on a later read.
+                    if let Value::Object(oid) = &obj_val
+                        && let RuntimePropertyKey::String(js_key) = &property_key
+                        && let Some(key_str) = js_key.as_str()
+                    {
+                        let prop_label = self.own_property_label(*oid, key_str);
+                        if !matches!(prop_label, crate::ifc_artifacts::Label::Public) {
+                            let current = self.read_reg_label(dst)?;
+                            let value = self.read_reg(dst)?;
+                            self.write_reg_with_label(dst, value, current.join(&prop_label))?;
+                        }
+                    }
                     if !called_accessor {
                         self.ip += 1;
                     }
@@ -8667,6 +8702,18 @@ impl InterpreterCore {
                             });
                         }
                     };
+                    // bd-ojvo1 (core parity): record the written value's IFC
+                    // label on the own string property so a later read recovers
+                    // the value's provenance, not merely the object's label.
+                    // Only a committed data-property write (no accessor call).
+                    if !called_accessor
+                        && let Value::Object(oid) = &obj_val
+                        && let RuntimePropertyKey::String(js_key) = &property_key
+                        && let Some(key_str) = js_key.as_str()
+                    {
+                        let value_label = self.read_reg_label(val)?;
+                        self.set_own_property_label(*oid, key_str, &value_label);
+                    }
                     if !called_accessor {
                         self.ip += 1;
                     }
@@ -15276,6 +15323,37 @@ impl InterpreterCore {
             .unwrap_or(Value::Undefined))
     }
 
+    /// Record the IFC label of a written own string property (bd-ojvo1). Sparse:
+    /// a `Public` label is stored as absence, so unlabeled (Public) writes never
+    /// grow the map. This stops a `Secret` value written to a lower-labeled
+    /// object's property from laundering back out as the object's label on a
+    /// later read.
+    fn set_own_property_label(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        label: &crate::ifc_artifacts::Label,
+    ) {
+        if let Some(object) = self.heap.get_mut(object_id.0 as usize) {
+            if matches!(label, crate::ifc_artifacts::Label::Public) {
+                object.property_labels.remove(key);
+            } else {
+                object
+                    .property_labels
+                    .insert(key.to_string(), label.clone());
+            }
+        }
+    }
+
+    /// The stored IFC label of an own string property, or `Public` when the
+    /// property is absent, inherited, or carries no recorded provenance.
+    fn own_property_label(&self, object_id: ObjectId, key: &str) -> crate::ifc_artifacts::Label {
+        self.heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.property_labels.get(key).cloned())
+            .unwrap_or(crate::ifc_artifacts::Label::Public)
+    }
+
     fn read_reg_label(&self, reg: u32) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
         if reg >= self.config.max_registers {
             return Err(InterpreterError::RegisterOutOfBounds {
@@ -18694,6 +18772,57 @@ mod tests {
                 if matches!(js, crate::object_model::JsValue::Str(s) if s == "boom")
         ));
         assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    /// bd-ojvo1 (core-twin parity with engine eb53fd9e8): a Secret value written
+    /// to a Public object's own property must read back as (at least) Secret,
+    /// not laundered down to the object's Public label.
+    #[test]
+    fn set_property_persists_value_label_so_get_does_not_launder_bd_ojvo1() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("leaked".into());
+
+        let mut core = quickjs_test_core();
+        let public_obj = core
+            .alloc_object_with_properties(&[])
+            .expect("test object allocation should succeed");
+        core.write_reg_with_label(
+            0,
+            Value::Object(public_obj),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("object register should be settable");
+        core.write_reg_with_label(2, Value::Int(42), crate::ifc_artifacts::Label::Secret)
+            .expect("written value register should be settable");
+
+        core.execute(&module)
+            .expect("set then get off a public object should execute");
+
+        assert_eq!(
+            core.read_reg_label(3)
+                .expect("dst register label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
+        );
     }
 
     #[test]

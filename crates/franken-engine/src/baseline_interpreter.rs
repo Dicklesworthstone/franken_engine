@@ -5980,6 +5980,23 @@ struct ClosureMethodMetadata {
     definition_label: Label,
 }
 
+/// Lexically captured `super` binding for a closure created while a concise
+/// method frame is active.
+///
+/// The source parser permits `super` in nested arrows, including arrows that
+/// escape the method invocation. Keeping this state beside the closure
+/// occurrence (rather than borrowing the invocation-time caller frame) makes
+/// that binding survive after the defining method returns. The HomeObject is
+/// retained instead of its then-current prototype so later prototype changes
+/// remain observable.
+#[derive(Debug, Clone)]
+struct ClosureLexicalSuperMetadata {
+    home_object: ObjectId,
+    definition_label: Label,
+    this_value: Value,
+    this_label: Label,
+}
+
 type RestoredAbruptCompletionState = (Option<(Value, Label)>, Option<LabeledReturn>);
 
 /// A call stack frame.
@@ -8921,6 +8938,11 @@ pub struct InterpreterCore {
     /// Non-forgeable concise-method identity and [[HomeObject]], keyed by the
     /// closure occurrence produced while evaluating the object literal.
     closure_method_metadata: BTreeMap<u32, ClosureMethodMetadata>,
+    /// Non-forgeable lexical `super` binding captured by closures created in a
+    /// concise-method frame. Parser context prevents ordinary nested functions
+    /// from containing `super`; this private carrier serves the nested-arrow
+    /// lane without exposing a guest-writable marker.
+    closure_lexical_super_metadata: BTreeMap<u32, ClosureLexicalSuperMetadata>,
     /// Program provenance for closures created by the live interpreter. Test
     /// fixtures that seed the private closure table directly intentionally
     /// have no entry and retain same-module behavior.
@@ -9693,6 +9715,7 @@ impl InterpreterCore {
             runtime_name_references: Vec::new(),
             closures: Vec::new(),
             closure_method_metadata: BTreeMap::new(),
+            closure_lexical_super_metadata: BTreeMap::new(),
             closure_module_origins: BTreeMap::new(),
             closure_generated_function_artifacts: BTreeMap::new(),
             module_reentrant_call_depth: 0,
@@ -26362,12 +26385,10 @@ impl InterpreterCore {
         };
         let previous_label_bytes = Self::estimate_label_bytes(previous_label);
         let context_dominates = self
-            .active_inline_callback_context_label
-            .as_ref()
+            .active_execution_context_label()
             .is_some_and(|context| context > &label);
         let next_label_bytes = if context_dominates {
-            self.active_inline_callback_context_label
-                .as_ref()
+            self.active_execution_context_label()
                 .map(Self::estimate_label_bytes)
                 .unwrap_or(0)
         } else {
@@ -26388,15 +26409,15 @@ impl InterpreterCore {
         let previous_label =
             std::mem::replace(&mut self.register_labels[actual_reg], Label::Public);
         drop(previous_label);
-        self.register_labels[actual_reg] = if context_dominates {
+        let next_label = if context_dominates {
             drop(label);
-            self.active_inline_callback_context_label
-                .as_ref()
+            self.active_execution_context_label()
                 .expect("dominant inline callback context was checked")
                 .clone()
         } else {
             label
         };
+        self.register_labels[actual_reg] = next_label;
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
@@ -26904,7 +26925,43 @@ impl InterpreterCore {
         &self,
         reg: u32,
     ) -> Result<Label, InterpreterError> {
+        self.clone_register_label_with_additional_temporary_budget(reg, 0)
+    }
+
+    fn clone_register_label_with_additional_temporary_budget(
+        &self,
+        reg: u32,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<Label, InterpreterError> {
         let label = self.get_register_label(reg)?;
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes.saturating_add(Self::estimate_label_bytes(label)),
+        )?;
+        Ok(label.clone())
+    }
+
+    /// Dominant PC-style label for the currently executing callback or
+    /// HomeObject-bound closure. A method selected through a secret definition
+    /// key/prototype must taint literals, throws, and zero-argument effects in
+    /// its body, not only the explicit argument registers it happens to read.
+    fn active_execution_context_label(&self) -> Option<&Label> {
+        let mut winner = self.active_inline_callback_context_label.as_ref();
+        for frame in self
+            .call_stack
+            .iter()
+            .filter(|frame| frame.super_home_object.is_some())
+        {
+            if winner.is_none_or(|current| &frame.super_label > current) {
+                winner = Some(&frame.super_label);
+            }
+        }
+        winner
+    }
+
+    fn clone_active_execution_context_label(&self) -> Result<Label, InterpreterError> {
+        let Some(label) = self.active_execution_context_label() else {
+            return Ok(Label::Public);
+        };
         self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
         Ok(label.clone())
     }
@@ -26917,7 +26974,7 @@ impl InterpreterCore {
         &self,
         args: crate::ir_contract::RegRange,
     ) -> Result<Label, InterpreterError> {
-        let mut joined: Option<&Label> = None;
+        let mut joined: Option<&Label> = self.active_execution_context_label();
         for i in 0..args.count {
             let reg = args
                 .start
@@ -27617,6 +27674,7 @@ impl InterpreterCore {
         self.iterators.clear();
         self.closures.clear();
         self.closure_method_metadata.clear();
+        self.closure_lexical_super_metadata.clear();
         self.closure_module_origins.clear();
         self.closure_generated_function_artifacts.clear();
         self.generators.clear();
@@ -33957,6 +34015,15 @@ impl InterpreterCore {
         return_val: Value,
         return_label: Label,
     ) -> Result<Option<LabeledReturn>, InterpreterError> {
+        let return_label = if let Some(frame) = self
+            .call_stack
+            .last()
+            .filter(|frame| frame.super_home_object.is_some())
+        {
+            self.join_owned_label_with_temporary_budget(return_label, &frame.super_label)?
+        } else {
+            return_label
+        };
         let current_depth = self.call_stack.len();
         // A function can return from inside an active try block before `EndTry`
         // executes. Those catch frames belong to the returning callee and must
@@ -36953,7 +37020,10 @@ impl InterpreterCore {
             };
             (thrown, thrown_label)
         } else if Self::js_catchable_error_name(&err).is_some() {
-            (self.native_error_to_thrown_value(&err)?, Label::Public)
+            (
+                self.native_error_to_thrown_value(&err)?,
+                self.clone_active_execution_context_label()?,
+            )
         } else {
             return Ok(Some(err));
         };
@@ -37029,18 +37099,25 @@ impl InterpreterCore {
                             || self.nearest_async_call_depth().is_some()) =>
                 {
                     let thrown = self.native_error_to_thrown_value(&err)?;
+                    let thrown_label = self.clone_active_execution_context_label()?;
                     self.pending_finally_entry = None;
                     self.suspend_current_abrupt_completion()?;
-                    // Engine-constructed error values (native faults surfaced
-                    // as JS-catchable errors) carry no data-flow taint.
-                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
+                    // A native fault is control-dependent on the active method
+                    // or callback PC even when its Error object is engine-built.
+                    self.replace_pending_abrupt_slots(
+                        Some((thrown.clone(), thrown_label.clone())),
+                        None,
+                    )?;
                     match self.pop_exception_target_frame()? {
                         Some(frame) => {
                             self.select_exception_target(Some(module), frame);
                             // Re-enter dispatch at the handler.
                         }
                         None => {
-                            if self.reject_nearest_async_boundary(thrown.clone(), Label::Public)? {
+                            if self.reject_nearest_async_boundary(
+                                thrown.clone(),
+                                thrown_label.clone(),
+                            )? {
                                 continue;
                             }
                             // `has_active_catch_frame` raced/changed: surface
@@ -37662,6 +37739,10 @@ impl InterpreterCore {
                         self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                        let captured_env_bytes = captured_env
+                            .as_ref()
+                            .map(|env| Self::estimate_scope_chain_bytes(env))
+                            .unwrap_or(0);
 
                         // Everything after Promise creation is one instruction
                         // transaction. A later scope/register refusal must not
@@ -37689,33 +37770,45 @@ impl InterpreterCore {
                                     result_promise,
                                 })?;
                             async_object_created = true;
-                            self.write_reg(dst, Value::Promise(result_promise))?;
-
-                            let scope_depth = self.scope_chain.depth();
-                            let captured_env_bytes = captured_env
-                                .as_ref()
-                                .map(|env| Self::estimate_scope_chain_bytes(env))
-                                .unwrap_or(0);
-                            let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                            let (super_value, super_label, super_home_object) = self
+                                .closure_super_binding(&callee_val, callee, captured_env_bytes)?;
+                            self.write_reg_with_label(
+                                dst,
+                                Value::Promise(result_promise),
+                                super_label,
+                            )?;
+                            let super_label = self
+                                .clone_register_label_with_additional_temporary_budget(
+                                    dst,
                                     captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-                            let (frame_this, frame_this_label) = self
-                                .call_stack
-                                .last()
-                                .map_or((Value::Undefined, Label::Public), |frame| {
-                                    (frame.this_value.clone(), frame.this_label.clone())
-                                });
-                            let (call_this, call_this_label) = if captured_env.is_some() {
-                                (frame_this, frame_this_label)
+                                )?;
+                            let binding_temporary_bytes = captured_env_bytes
+                                .saturating_add(Self::estimate_label_bytes(&super_label));
+                            let lexical_this = self.clone_closure_lexical_this_binding(
+                                &callee_val,
+                                binding_temporary_bytes,
+                            )?;
+                            let (call_this, call_this_label) = if let Some(binding) = lexical_this {
+                                binding
+                            } else if captured_env.is_some() {
+                                self.clone_inherited_this_binding(binding_temporary_bytes)?
                             } else {
                                 (Value::Undefined, Label::Public)
                             };
-                            let (super_value, super_label, super_home_object) =
-                                self.concise_method_super_binding(&callee_val)?;
+                            let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
+                                .saturating_add(Self::estimate_label_bytes(&call_this_label));
+
+                            let scope_depth = self.scope_chain.depth();
+                            let saved_chain = if captured_env.is_some() {
+                                Some(
+                                    self.snapshot_scope_chain_with_temporary_budget(
+                                        binding_temporary_bytes
+                                            .saturating_add(call_this_temporary_bytes),
+                                    )?,
+                                )
+                            } else {
+                                None
+                            };
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -37893,41 +37986,45 @@ impl InterpreterCore {
                             // entire caller scope chain so it can be
                             // restored on return (the closure replaces
                             // the chain with its captured environment).
-                            let scope_depth = self.scope_chain.depth();
                             let captured_env_bytes = captured_env
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-                            // For plain calls, this_value is undefined.
-                            // Method calls set this via the CallMethod instruction (TODO).
-                            let (frame_this, frame_this_label) = self
-                                .call_stack
-                                .last()
-                                .map_or((Value::Undefined, Label::Public), |frame| {
-                                    (frame.this_value.clone(), frame.this_label.clone())
-                                });
-                            // Arrow closures inherit `this` from the defining frame.
+                            let (super_value, super_label, super_home_object) = self
+                                .closure_super_binding(&callee_val, callee, captured_env_bytes)?;
+                            let binding_temporary_bytes = captured_env_bytes
+                                .saturating_add(Self::estimate_label_bytes(&super_label));
+                            let lexical_this = self.clone_closure_lexical_this_binding(
+                                &callee_val,
+                                binding_temporary_bytes,
+                            )?;
                             let is_concise_method = matches!(
                                 &callee_val,
                                 Value::Closure(closure_id)
                                     if self.closure_method_metadata.contains_key(closure_id)
                             );
-                            let (call_this, call_this_label) = if is_concise_method {
+                            let (call_this, call_this_label) = if let Some(binding) = lexical_this {
+                                binding
+                            } else if is_concise_method {
                                 (Value::Undefined, Label::Public)
                             } else if captured_env.is_some() {
-                                (frame_this, frame_this_label)
+                                self.clone_inherited_this_binding(binding_temporary_bytes)?
                             } else {
                                 (Value::Undefined, Label::Public)
                             };
-                            let (super_value, super_label, super_home_object) =
-                                self.concise_method_super_binding(&callee_val)?;
+                            let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
+                                .saturating_add(Self::estimate_label_bytes(&call_this_label));
+                            let scope_depth = self.scope_chain.depth();
+                            let saved_chain = if captured_env.is_some() {
+                                Some(
+                                    self.snapshot_scope_chain_with_temporary_budget(
+                                        binding_temporary_bytes
+                                            .saturating_add(call_this_temporary_bytes),
+                                    )?,
+                                )
+                            } else {
+                                None
+                            };
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -38248,6 +38345,10 @@ impl InterpreterCore {
                         self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                        let captured_env_bytes = captured_env
+                            .as_ref()
+                            .map(|env| Self::estimate_scope_chain_bytes(env))
+                            .unwrap_or(0);
 
                         let previous_estimated_bytes = self.estimated_memory_bytes;
                         let setup_snapshot = self.snapshot_module_execution()?;
@@ -38271,38 +38372,65 @@ impl InterpreterCore {
                                     result_promise,
                                 })?;
                             async_object_created = true;
-                            self.write_reg(dst, Value::Promise(result_promise))?;
+                            let (super_value, super_label, super_home_object) = self
+                                .closure_super_binding(&callee_val, callee, captured_env_bytes)?;
+                            let binding_temporary_bytes = captured_env_bytes
+                                .saturating_add(Self::estimate_label_bytes(&super_label));
+                            let lexical_this = self.clone_closure_lexical_this_binding(
+                                &callee_val,
+                                binding_temporary_bytes,
+                            )?;
+                            let (call_this, call_this_label) = if let Some(binding) = lexical_this {
+                                binding
+                            } else {
+                                self.clone_receiver_this_binding(
+                                    &receiver_val,
+                                    receiver,
+                                    binding_temporary_bytes,
+                                )?
+                            };
+                            let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
+                                .saturating_add(Self::estimate_label_bytes(&call_this_label));
+                            self.write_reg_with_label(
+                                dst,
+                                Value::Promise(result_promise),
+                                super_label,
+                            )?;
+                            let super_label = self
+                                .clone_register_label_with_additional_temporary_budget(
+                                    dst,
+                                    captured_env_bytes.saturating_add(call_this_temporary_bytes),
+                                )?;
 
                             let scope_depth = self.scope_chain.depth();
-                            let captured_env_bytes = captured_env
-                                .as_ref()
-                                .map(|env| Self::estimate_scope_chain_bytes(env))
-                                .unwrap_or(0);
                             let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
+                                Some(
+                                    self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes
+                                            .saturating_add(call_this_temporary_bytes)
+                                            .saturating_add(Self::estimate_label_bytes(
+                                                &super_label,
+                                            )),
+                                    )?,
+                                )
                             } else {
                                 None
                             };
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
-                            let receiver_label =
-                                self.clone_register_label_with_temporary_budget(receiver)?;
-
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
-                                this_value: receiver_val.clone(),
-                                this_label: receiver_label,
+                                this_value: call_this,
+                                this_label: call_this_label,
                                 new_target_value: Value::Undefined,
                                 new_target_label: Label::Public,
-                                super_value: Value::Undefined,
-                                super_label: Label::Public,
-                                super_home_object: None,
+                                super_value,
+                                super_label,
+                                super_home_object,
                                 construct_this: None,
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -38421,30 +38549,45 @@ impl InterpreterCore {
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                    let scope_depth = self.scope_chain.depth();
                     let captured_env_bytes = captured_env
                         .as_ref()
                         .map(|env| Self::estimate_scope_chain_bytes(env))
                         .unwrap_or(0);
+                    let (super_value, super_label, super_home_object) =
+                        self.closure_super_binding(&callee_val, callee, captured_env_bytes)?;
+                    let binding_temporary_bytes =
+                        captured_env_bytes.saturating_add(Self::estimate_label_bytes(&super_label));
+                    let lexical_this = self
+                        .clone_closure_lexical_this_binding(&callee_val, binding_temporary_bytes)?;
+                    let (call_this, call_this_label) = if let Some(binding) = lexical_this {
+                        binding
+                    } else {
+                        self.clone_receiver_this_binding(
+                            &receiver_val,
+                            receiver,
+                            binding_temporary_bytes,
+                        )?
+                    };
+                    let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
+                        .saturating_add(Self::estimate_label_bytes(&call_this_label));
+                    let scope_depth = self.scope_chain.depth();
                     let saved_chain = if captured_env.is_some() {
-                        Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+                        Some(self.snapshot_scope_chain_with_temporary_budget(
+                            binding_temporary_bytes.saturating_add(call_this_temporary_bytes),
+                        )?)
                     } else {
                         None
                     };
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let previous_closure_bytes = self.closures_memory_bytes();
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
-                    let receiver_label =
-                        self.clone_register_label_with_temporary_budget(receiver)?;
-                    let (super_value, super_label, super_home_object) =
-                        self.concise_method_super_binding(&callee_val)?;
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: dst,
                         register_base: self.register_base,
                         function_index: Some(func_idx),
-                        this_value: receiver_val.clone(),
-                        this_label: receiver_label,
+                        this_value: call_this,
+                        this_label: call_this_label,
                         new_target_value: Value::Undefined,
                         new_target_label: Label::Public,
                         super_value,
@@ -38497,7 +38640,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
-                    let return_label = self.get_register_label(value)?.clone();
+                    let return_label = self.clone_register_label_with_temporary_budget(value)?;
                     // A return from inside a finally overrides any in-flight
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
@@ -38689,9 +38832,10 @@ impl InterpreterCore {
                     if let Value::Closure(closure_id) = &obj_val
                         && let Some(method) = self.closure_method_metadata.get(closure_id)
                     {
-                        let method_label = method.definition_label.clone();
-                        result_label = self
-                            .join_owned_label_with_temporary_budget(result_label, &method_label)?;
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &method.definition_label,
+                        )?;
                     }
                     if let Some(binary_storage_label) =
                         object_id.and_then(|id| self.binary_storage_label_ref(id))
@@ -38867,6 +39011,14 @@ impl InterpreterCore {
                             });
                         }
                     };
+                    if let Value::Closure(closure_id) = &prop
+                        && let Some(method) = self.closure_method_metadata.get(closure_id)
+                    {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &method.definition_label,
+                        )?;
+                    }
                     // IFC: the read value's confidentiality is bounded below by
                     // the source object's label — a property of a Secret object
                     // is itself at least Secret. Join the object register's
@@ -39040,16 +39192,19 @@ impl InterpreterCore {
                     let key_val = self.read_reg(key)?;
                     let func_val = self.read_reg(func)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
-                    let mut definition_label =
-                        self.clone_register_label_with_temporary_budget(obj)?;
-                    let key_label = self.get_register_label(key)?.clone();
-                    definition_label =
-                        self.join_owned_label_with_temporary_budget(definition_label, &key_label)?;
-                    let function_label = self.get_register_label(func)?.clone();
-                    definition_label = self.join_owned_label_with_temporary_budget(
+                    let mut definition_label = self.get_register_label(obj)?;
+                    for candidate in [
+                        self.get_register_label(key)?,
+                        self.get_register_label(func)?,
+                    ] {
+                        if candidate > definition_label {
+                            definition_label = candidate;
+                        }
+                    }
+                    self.check_temporary_memory_budget(Self::estimate_label_bytes(
                         definition_label,
-                        &function_label,
-                    )?;
+                    ))?;
+                    let definition_label = definition_label.clone();
 
                     match obj_val {
                         Value::Object(object_id) => {
@@ -39899,27 +40054,32 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadSuper { dst } => {
-                    let (mut super_value, mut super_label, super_home_object) = self
-                        .call_stack
-                        .last()
-                        .map_or((Value::Undefined, Label::Public, None), |frame| {
+                    let (mut super_value, mut super_label, super_home_object) =
+                        if let Some(frame) = self.call_stack.last() {
+                            self.check_temporary_memory_budget(Self::estimate_label_bytes(
+                                &frame.super_label,
+                            ))?;
                             (
                                 frame.super_value.clone(),
                                 frame.super_label.clone(),
                                 frame.super_home_object,
                             )
-                        });
+                        } else {
+                            (Value::Undefined, Label::Public, None)
+                        };
                     if let Some(home_object) = super_home_object {
                         let home = self
                             .heap
                             .get(home_object.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: home_object.0 })?;
                         super_value = home.prototype.map(Value::Object).unwrap_or(Value::Null);
-                        if let Some(home_label) =
-                            self.binary_storage_label_ref(home_object).cloned()
-                        {
+                        if let Some(home_label) = self.binary_storage_label_ref(home_object) {
                             super_label = self
-                                .join_owned_label_with_temporary_budget(super_label, &home_label)?;
+                                .join_owned_label_with_temporary_budget(super_label, home_label)?;
+                        }
+                        if let Some(home_label) = self.object_mutation_labels.get(&home_object) {
+                            super_label = self
+                                .join_owned_label_with_temporary_budget(super_label, home_label)?;
                         }
                     }
                     self.write_reg_with_label(dst, super_value, super_label)?;
@@ -39952,7 +40112,12 @@ impl InterpreterCore {
                     // bd-0zybl under-tainting family). Capture the source
                     // register's label so `EnterCatch` re-establishes it on
                     // the catch binding instead of leaving a stale label.
-                    let thrown_label = self.get_register_label(value)?.clone();
+                    let mut thrown_label =
+                        self.clone_register_label_with_temporary_budget(value)?;
+                    if let Some(context) = self.active_execution_context_label() {
+                        thrown_label =
+                            self.join_owned_label_with_temporary_budget(thrown_label, context)?;
+                    }
                     self.pending_finally_entry = None;
                     self.suspend_current_abrupt_completion()?;
                     self.replace_pending_abrupt_slots(
@@ -40079,7 +40244,15 @@ impl InterpreterCore {
                     // bindings, so we just clear them.
                     let previous_estimated_memory_bytes = self.estimated_memory_bytes;
                     let previous_closure_bytes = self.closures_memory_bytes();
-                    let captured_env = self.snapshot_scope_chain()?;
+                    let lexical_super_metadata =
+                        self.capture_current_lexical_super_metadata(module, function_index)?;
+                    let lexical_super_temporary_bytes = lexical_super_metadata
+                        .as_ref()
+                        .map(Self::estimate_closure_lexical_super_metadata_entry_bytes)
+                        .unwrap_or(0);
+                    let captured_env = self.snapshot_scope_chain_with_temporary_budget(
+                        lexical_super_temporary_bytes,
+                    )?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
@@ -40091,8 +40264,13 @@ impl InterpreterCore {
                         captured_env,
                     });
                     self.record_closure_program_provenance(closure_id, module);
+                    if let Some(metadata) = lexical_super_metadata {
+                        self.closure_lexical_super_metadata
+                            .insert(closure_id, metadata);
+                    }
                     if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
                         self.remove_closure_program_provenance(closure_id);
                         return Err(err);
                     }
@@ -40100,6 +40278,7 @@ impl InterpreterCore {
                     // look up the correct closure instance.
                     if let Err(err) = self.write_reg(dst, Value::Closure(closure_id)) {
                         self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
                         self.remove_closure_program_provenance(closure_id);
                         self.estimated_memory_bytes = previous_estimated_memory_bytes;
                         return Err(err);
@@ -40156,7 +40335,15 @@ impl InterpreterCore {
                         capture_count as usize,
                     )?;
                     let previous_estimated_memory_bytes = self.estimated_memory_bytes;
-                    let captured_env = self.snapshot_scope_chain()?;
+                    let lexical_super_metadata =
+                        self.capture_current_lexical_super_metadata(module, function_index)?;
+                    let lexical_super_temporary_bytes = lexical_super_metadata
+                        .as_ref()
+                        .map(Self::estimate_closure_lexical_super_metadata_entry_bytes)
+                        .unwrap_or(0);
+                    let captured_env = self.snapshot_scope_chain_with_temporary_budget(
+                        lexical_super_temporary_bytes,
+                    )?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
@@ -40169,13 +40356,19 @@ impl InterpreterCore {
                         captured_env,
                     });
                     self.record_closure_program_provenance(closure_id, module);
+                    if let Some(metadata) = lexical_super_metadata {
+                        self.closure_lexical_super_metadata
+                            .insert(closure_id, metadata);
+                    }
                     if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
                         self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
                         self.remove_closure_program_provenance(closure_id);
                         return Err(err);
                     }
                     if let Err(err) = self.write_reg(dst, Value::AsyncFunction(closure_id)) {
                         self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
                         self.remove_closure_program_provenance(closure_id);
                         self.estimated_memory_bytes = previous_estimated_memory_bytes;
                         return Err(err);
@@ -66508,12 +66701,10 @@ impl InterpreterCore {
         let previous_label = self.register_labels.get(actual_reg);
         let previous_label_bytes = previous_label.map(Self::estimate_label_bytes).unwrap_or(0);
         let context_dominates = self
-            .active_inline_callback_context_label
-            .as_ref()
+            .active_execution_context_label()
             .is_some_and(|context| previous_label.is_none_or(|current| context > current));
         let next_label_bytes = if context_dominates {
-            self.active_inline_callback_context_label
-                .as_ref()
+            self.active_execution_context_label()
                 .map(Self::estimate_label_bytes)
                 .unwrap_or(0)
         } else {
@@ -66548,11 +66739,11 @@ impl InterpreterCore {
             let previous_label =
                 std::mem::replace(&mut self.register_labels[actual_reg], Label::Public);
             drop(previous_label);
-            self.register_labels[actual_reg] = self
-                .active_inline_callback_context_label
-                .as_ref()
+            let next_label = self
+                .active_execution_context_label()
                 .expect("dominant inline callback context was checked")
                 .clone();
+            self.register_labels[actual_reg] = next_label;
         }
         self.estimated_memory_bytes = projected;
         Ok(())
@@ -66582,12 +66773,10 @@ impl InterpreterCore {
             .map(Self::estimate_label_bytes)
             .unwrap_or(0);
         let context_dominates = self
-            .active_inline_callback_context_label
-            .as_ref()
+            .active_execution_context_label()
             .is_some_and(|context| context > &label);
         let next_label_bytes = if context_dominates {
-            self.active_inline_callback_context_label
-                .as_ref()
+            self.active_execution_context_label()
                 .map(Self::estimate_label_bytes)
                 .unwrap_or(0)
         } else {
@@ -66616,15 +66805,15 @@ impl InterpreterCore {
         let previous_label =
             std::mem::replace(&mut self.register_labels[actual_reg], Label::Public);
         drop(previous_label);
-        self.register_labels[actual_reg] = if context_dominates {
+        let next_label = if context_dominates {
             drop(label);
-            self.active_inline_callback_context_label
-                .as_ref()
+            self.active_execution_context_label()
                 .expect("dominant inline callback context was checked")
                 .clone()
         } else {
             label
         };
+        self.register_labels[actual_reg] = next_label;
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
@@ -68015,6 +68204,17 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&metadata.definition_label))
     }
 
+    fn estimate_closure_lexical_super_metadata_entry_bytes(
+        metadata: &ClosureLexicalSuperMetadata,
+    ) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<u32>() as u64)
+            .saturating_add(std::mem::size_of::<ObjectId>() as u64)
+            .saturating_add(Self::estimate_label_bytes(&metadata.definition_label))
+            .saturating_add(Self::estimate_value_bytes(&metadata.this_value))
+            .saturating_add(Self::estimate_label_bytes(&metadata.this_label))
+    }
+
     fn registers_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes))
     }
@@ -68088,6 +68288,11 @@ impl InterpreterCore {
                 self.closure_method_metadata
                     .values()
                     .map(Self::estimate_closure_method_metadata_entry_bytes),
+            ))
+            .saturating_add(Self::saturating_sum(
+                self.closure_lexical_super_metadata
+                    .values()
+                    .map(Self::estimate_closure_lexical_super_metadata_entry_bytes),
             ))
             .saturating_add(Self::saturating_sum(
                 self.closure_module_origins.values().map(|origin| {
@@ -70027,27 +70232,208 @@ impl InterpreterCore {
         }
     }
 
-    fn concise_method_super_binding(
-        &mut self,
-        callee: &Value,
-    ) -> Result<(Value, Label, Option<ObjectId>), InterpreterError> {
-        let Value::Closure(closure_id) = callee else {
-            return Ok((Value::Undefined, Label::Public, None));
-        };
-        let Some(metadata) = self.closure_method_metadata.get(closure_id).cloned() else {
-            return Ok((Value::Undefined, Label::Public, None));
-        };
-        let home = self.heap.get(metadata.home_object.0 as usize).ok_or(
-            InterpreterError::ObjectNotFound {
-                id: metadata.home_object.0,
-            },
-        )?;
-        let super_value = home.prototype.map(Value::Object).unwrap_or(Value::Null);
-        let mut super_label = metadata.definition_label;
-        if let Some(home_label) = self.binary_storage_label_ref(metadata.home_object).cloned() {
-            super_label = self.join_owned_label_with_temporary_budget(super_label, &home_label)?;
+    fn function_uses_lexical_super(
+        &self,
+        module: &Ir3Module,
+        function_index: u32,
+    ) -> Result<bool, InterpreterError> {
+        let function_count = module.function_table.len();
+        let temporary_bytes = u64::try_from(function_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(
+                (std::mem::size_of::<bool>()
+                    + std::mem::size_of::<usize>()
+                    + std::mem::size_of::<(usize, usize)>() * 2) as u64,
+            )
+            .saturating_add(
+                (std::mem::size_of::<Vec<bool>>()
+                    + std::mem::size_of::<Vec<usize>>()
+                    + std::mem::size_of::<Vec<(usize, usize)>>() * 2) as u64,
+            );
+        self.check_temporary_memory_budget(temporary_bytes)?;
+
+        let root = function_index as usize;
+        if root >= function_count {
+            return Ok(false);
         }
-        Ok((super_value, super_label, Some(metadata.home_object)))
+        let mut ordered_entries: Vec<(usize, usize)> = module
+            .function_table
+            .iter()
+            .enumerate()
+            .map(|(index, function)| (function.entry as usize, index))
+            .collect();
+        ordered_entries.sort_unstable();
+        let mut function_ranges = vec![(0usize, 0usize); function_count];
+        let mut offset = 0;
+        while offset < ordered_entries.len() {
+            let start = ordered_entries[offset].0;
+            let mut next = offset + 1;
+            while next < ordered_entries.len() && ordered_entries[next].0 == start {
+                next += 1;
+            }
+            let end = ordered_entries
+                .get(next)
+                .map(|(entry, _)| *entry)
+                .unwrap_or(module.instructions.len())
+                .min(module.instructions.len());
+            for (_, index) in &ordered_entries[offset..next] {
+                function_ranges[*index] = (start, end);
+            }
+            offset = next;
+        }
+        let mut visited = vec![false; function_count];
+        let mut worklist = Vec::with_capacity(function_count);
+        visited[root] = true;
+        worklist.push(root);
+        while let Some(current) = worklist.pop() {
+            let (start, end) = function_ranges[current];
+            let Some(body) = module.instructions.get(start..end) else {
+                continue;
+            };
+            for instruction in body {
+                match instruction {
+                    Ir3Instruction::LoadSuper { .. } => return Ok(true),
+                    Ir3Instruction::CreateClosure { function_index, .. }
+                    | Ir3Instruction::CreateAsyncFunction { function_index, .. } => {
+                        let child = *function_index as usize;
+                        if child < function_count && !visited[child] {
+                            visited[child] = true;
+                            worklist.push(child);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn capture_current_lexical_super_metadata(
+        &self,
+        module: &Ir3Module,
+        function_index: u32,
+    ) -> Result<Option<ClosureLexicalSuperMetadata>, InterpreterError> {
+        if !self.function_uses_lexical_super(module, function_index)? {
+            return Ok(None);
+        }
+        let Some(frame) = self
+            .call_stack
+            .last()
+            .filter(|frame| frame.super_home_object.is_some())
+        else {
+            return Ok(None);
+        };
+        self.check_temporary_memory_budget(
+            Self::estimate_label_bytes(&frame.super_label)
+                .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+                .saturating_add(Self::estimate_label_bytes(&frame.this_label)),
+        )?;
+        Ok(Some(ClosureLexicalSuperMetadata {
+            home_object: frame
+                .super_home_object
+                .expect("filtered concise-method frame has a HomeObject"),
+            definition_label: frame.super_label.clone(),
+            this_value: frame.this_value.clone(),
+            this_label: frame.this_label.clone(),
+        }))
+    }
+
+    fn clone_closure_lexical_this_binding(
+        &self,
+        callee: &Value,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<Option<(Value, Label)>, InterpreterError> {
+        let closure_id = match callee {
+            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => closure_id,
+            _ => return Ok(None),
+        };
+        let Some(metadata) = self.closure_lexical_super_metadata.get(closure_id) else {
+            return Ok(None);
+        };
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes
+                .saturating_add(Self::estimate_value_bytes(&metadata.this_value))
+                .saturating_add(Self::estimate_label_bytes(&metadata.this_label)),
+        )?;
+        Ok(Some((
+            metadata.this_value.clone(),
+            metadata.this_label.clone(),
+        )))
+    }
+
+    fn clone_inherited_this_binding(
+        &self,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let Some(frame) = self.call_stack.last() else {
+            return Ok((Value::Undefined, Label::Public));
+        };
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes
+                .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+                .saturating_add(Self::estimate_label_bytes(&frame.this_label)),
+        )?;
+        Ok((frame.this_value.clone(), frame.this_label.clone()))
+    }
+
+    fn clone_receiver_this_binding(
+        &self,
+        receiver_value: &Value,
+        receiver_register: u32,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let receiver_label = self.get_register_label(receiver_register)?;
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes
+                .saturating_add(Self::estimate_value_bytes(receiver_value))
+                .saturating_add(Self::estimate_label_bytes(receiver_label)),
+        )?;
+        Ok((receiver_value.clone(), receiver_label.clone()))
+    }
+
+    fn closure_super_binding(
+        &self,
+        callee: &Value,
+        callee_register: u32,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<(Value, Label, Option<ObjectId>), InterpreterError> {
+        let closure_id = match callee {
+            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => closure_id,
+            _ => return Ok((Value::Undefined, Label::Public, None)),
+        };
+        let (home_object, definition_label) =
+            if let Some(metadata) = self.closure_method_metadata.get(closure_id) {
+                (metadata.home_object, &metadata.definition_label)
+            } else if let Some(metadata) = self.closure_lexical_super_metadata.get(closure_id) {
+                (metadata.home_object, &metadata.definition_label)
+            } else {
+                return Ok((Value::Undefined, Label::Public, None));
+            };
+        let home = self
+            .heap
+            .get(home_object.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: home_object.0 })?;
+        let super_value = home.prototype.map(Value::Object).unwrap_or(Value::Null);
+        let mut dominant_label = definition_label;
+        if let Some(home_label) = self.binary_storage_label_ref(home_object) {
+            if home_label > dominant_label {
+                dominant_label = home_label;
+            }
+        }
+        if let Some(home_label) = self.object_mutation_labels.get(&home_object) {
+            if home_label > dominant_label {
+                dominant_label = home_label;
+            }
+        }
+        let callee_label = self.get_register_label(callee_register)?;
+        if callee_label > dominant_label {
+            dominant_label = callee_label;
+        }
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes
+                .saturating_add(Self::estimate_label_bytes(dominant_label)),
+        )?;
+        Ok((super_value, dominant_label.clone(), Some(home_object)))
     }
 
     fn constructor_prototype_for_value(
@@ -78320,7 +78706,10 @@ mod async_runtime_tests_current {
         );
     }
 
-    fn execute_exception_source_with_core_bd_bvgmr(source: &str) -> (Value, InterpreterCore) {
+    fn execute_exception_source_with_core_bd_bvgmr(
+        source: &str,
+        grant_builtin: bool,
+    ) -> (Value, InterpreterCore) {
         let syntax_tree = CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
@@ -78342,6 +78731,13 @@ mod async_runtime_tests_current {
         .expect("finally ownership regression source should lower")
         .ir3;
         let mut core = test_interpreter();
+        if grant_builtin {
+            // The concise-method identity fixture defines `[Symbol.iterator]()`;
+            // keep that authority scoped to the one Symbol-specific case.
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::Builtin);
+        }
         let value = core
             .execute(&module)
             .expect("finally ownership regression should execute")
@@ -78351,28 +78747,43 @@ mod async_runtime_tests_current {
 
     #[test]
     fn concise_method_name_prototype_and_constructability_bd_gqaa4() {
-        let (value, core) = execute_exception_source_with_core_bd_bvgmr(
-            r#"let key="computed"; let o={plain(){return 1;},[key](){return 2;},[Symbol.iterator](){return 3;}}; let caught=false; try { new o.plain(); } catch(e) { caught=true; } o.plain.name+"|"+o[key].name+"|"+o[Symbol.iterator].name+"|"+Object.hasOwn(o.plain,"prototype")+"|"+typeof o.plain.prototype+"|"+caught;"#,
+        let (ordinary, ordinary_core) = execute_exception_source_with_core_bd_bvgmr(
+            r#"let o={plain(){return 1;}}; o.plain.name+"|"+("prototype" in o.plain)+"|"+typeof o.plain.prototype;"#,
+            false,
         );
-
+        assert_eq!(ordinary, Value::str("plain|false|undefined"));
+        assert_eq!(ordinary_core.closure_method_metadata.len(), 1);
         assert_eq!(
-            value,
-            Value::str("plain|computed|[Symbol.iterator]|false|undefined|true")
-        );
-        assert_eq!(core.closure_method_metadata.len(), 3);
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes(),
+            ordinary_core.estimated_memory_bytes(),
+            ordinary_core.recompute_estimated_memory_bytes(),
             "private method metadata must remain exactly memory-accounted"
         );
+
+        let (computed, _) = execute_exception_source_with_core_bd_bvgmr(
+            r#"let key="computed"; let o={[key](){return 2;}}; o[key].name;"#,
+            false,
+        );
+        assert_eq!(computed, Value::str("computed"));
+
+        let (symbol, _) = execute_exception_source_with_core_bd_bvgmr(
+            r#"let o={[Symbol.iterator](){return 3;}}; o[Symbol.iterator].name;"#,
+            true,
+        );
+        assert_eq!(symbol, Value::str("[Symbol.iterator]"));
+
+        let (construct, _) = execute_exception_source_with_core_bd_bvgmr(
+            "let o={plain(){return 1;}}; let caught=false; try { new o.plain(); } catch(e) { caught=true; } caught;",
+            false,
+        );
+        assert_eq!(construct, Value::Bool(true));
     }
 
     #[test]
     fn concise_method_super_uses_home_but_dynamic_receiver_bd_gqaa4() {
         let (value, core) = execute_exception_source_with_core_bd_bvgmr(
-            r#"let key="computed"; let base={value(){return 40;}}; let owner={__proto__:base,plain(){return super.value()+this.delta;},[key](){return super.value()+this.delta+1;}}; let alien={delta:2,__proto__:{value(){return 100;}}}; alien.plain=owner.plain; alien.computed=owner[key]; alien.plain()*100+alien.computed;"#,
+            r#"let key="computed"; let base={value(){return 40;}}; let owner={plain(){return super.value()+this.delta;},[key](){return super.value()+this.delta+1;}}; owner.__proto__=base; let alien={delta:2}; alien.__proto__={value(){return 100;}}; alien.plain=owner.plain; alien.computed=owner[key]; alien.plain()*100+alien.computed();"#,
+            false,
         );
-
         assert_eq!(value, Value::Int(4243));
         assert_eq!(core.closure_method_metadata.len(), 4);
     }
@@ -78380,18 +78791,558 @@ mod async_runtime_tests_current {
     #[test]
     fn concise_method_super_observes_home_prototype_change_during_call_bd_gqaa4() {
         let (value, _) = execute_exception_source_with_core_bd_bvgmr(
-            "let a={value(){return 1;}}; let b={value(){return 9;}}; let owner={__proto__:a,m(){owner.__proto__=b;return super.value();}}; owner.m();",
+            "let a={value(){return 1;}}; let b={value(){return 9;}}; let owner={m(){owner.__proto__=b;return super.value();}}; owner.__proto__=a; owner.m();",
+            false,
+        );
+        assert_eq!(value, Value::Int(9));
+    }
+
+    #[test]
+    fn escaped_arrow_retains_lexical_method_home_object_bd_gqaa4() {
+        let (value, core) = execute_exception_source_with_core_bd_bvgmr(
+            "let saved=undefined; let base={value(){return this.x;}}; let owner={m(){saved=()=>super.value();}}; owner.__proto__=base; let alien={x:7,m:owner.m}; alien.m(); saved();",
+            false,
+        );
+        assert_eq!(value, Value::Int(7));
+        assert_eq!(core.closure_lexical_super_metadata.len(), 1);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "escaped lexical-super metadata must remain exactly accounted"
+        );
+    }
+
+    #[test]
+    fn nested_escaped_arrows_transitively_retain_lexical_super_bd_gqaa4() {
+        let (value, core) = execute_exception_source_with_core_bd_bvgmr(
+            "let base={value(){return this.x;}}; let owner={m(){return ()=>()=>super.value();}}; owner.__proto__=base; let alien={x:7,m:owner.m}; let outer=alien.m(); let inner=outer(); inner();",
+            false,
+        );
+        assert_eq!(value, Value::Int(7));
+        assert_eq!(core.closure_lexical_super_metadata.len(), 2);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn lexical_super_descendant_scan_is_iterative_and_budgeted_bd_gqaa4() {
+        const FUNCTION_COUNT: usize = 2_048;
+        let instructions = (0..FUNCTION_COUNT)
+            .map(|index| {
+                if index + 1 == FUNCTION_COUNT {
+                    Ir3Instruction::LoadSuper { dst: 0 }
+                } else {
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: (index + 1) as u32,
+                        capture_count: 0,
+                    }
+                }
+            })
+            .collect();
+        let functions = (0..FUNCTION_COUNT)
+            .map(|index| Ir3FunctionDesc {
+                entry: index as u32,
+                arity: 0,
+                frame_size: 1,
+                name: None,
+                is_generator: false,
+                rest_param_index: None,
+            })
+            .collect();
+        let module = test_module_with_functions(instructions, functions);
+        let mut core = test_interpreter();
+        assert_eq!(
+            core.function_uses_lexical_super(&module, 0),
+            Ok(true),
+            "a long acyclic closure chain must complete without native recursion"
         );
 
-        assert_eq!(value, Value::Int(9));
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("descendant-scan fixture should fit before strict refusal");
+        core.config.max_total_memory_bytes = baseline;
+        assert!(matches!(
+            core.function_uses_lexical_super(&module, 0),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+    }
+
+    #[test]
+    fn escaped_async_arrow_promise_inherits_method_definition_label_bd_gqaa4() {
+        for call_as_method in [false, true] {
+            let async_call = if call_as_method {
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 5,
+                    args: RegRange {
+                        start: 11,
+                        count: 0,
+                    },
+                    dst: 10,
+                }
+            } else {
+                Ir3Instruction::Call {
+                    callee: 5,
+                    args: RegRange {
+                        start: 11,
+                        count: 0,
+                    },
+                    dst: 10,
+                }
+            };
+            let mut module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::NewObject { dst: 0 },
+                    Ir3Instruction::CreateClosure {
+                        dst: 2,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::DefineMethod {
+                        obj: 0,
+                        key: 6,
+                        func: 2,
+                    },
+                    Ir3Instruction::NewObject { dst: 3 },
+                    Ir3Instruction::SetProperty {
+                        obj: 3,
+                        key: 9,
+                        val: 0,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 3,
+                        key: 7,
+                        val: 8,
+                    },
+                    Ir3Instruction::CreateClosure {
+                        dst: 2,
+                        function_index: 1,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::DefineMethod {
+                        obj: 3,
+                        key: 1,
+                        func: 2,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 3,
+                        key: 1,
+                        dst: 4,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 3,
+                        callee: 4,
+                        args: RegRange {
+                            start: 11,
+                            count: 0,
+                        },
+                        dst: 5,
+                    },
+                    async_call,
+                    Ir3Instruction::Return { value: 10 },
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 2,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                    Ir3Instruction::LoadSuper { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadThis { dst: 3 },
+                    Ir3Instruction::CallMethod {
+                        receiver: 3,
+                        callee: 2,
+                        args: RegRange { start: 4, count: 0 },
+                        dst: 4,
+                    },
+                    Ir3Instruction::AsyncReturn { value_reg: 4 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 12,
+                        arity: 0,
+                        frame_size: 3,
+                        name: Some("base_value".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 16,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("secret_method".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 18,
+                        arity: 0,
+                        frame_size: 5,
+                        name: Some("escaped_async_arrow".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            );
+            module.constant_pool = vec!["x".into(), "value".into()];
+            let mut core = test_interpreter();
+            core.write_reg_with_label(1, Value::str("m"), Label::Secret)
+                .expect("secret computed method key should fit");
+            for (register, value) in [
+                (6, Value::str("value")),
+                (7, Value::str("x")),
+                (8, Value::Int(7)),
+                (9, Value::str("__proto__")),
+            ] {
+                core.write_reg(register, value)
+                    .expect("async lexical-this fixture register should fit");
+            }
+            core.ensure_module_record(&module, &module.header.source_label)
+                .expect("async lexical-this module provenance should be retained");
+
+            let completion = core
+                .run_loop_labeled(&module)
+                .expect("escaped async arrow should publish its result Promise");
+            let Value::Promise(promise_id) = completion.value else {
+                panic!("expected escaped async result Promise");
+            };
+            assert_eq!(completion.label, Label::Secret);
+            assert_eq!(core.get_register_label(10), Ok(&Label::Secret));
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(promise_id))
+                    .expect("escaped async result Promise should remain recorded")
+                    .state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7))
+            );
+            assert_eq!(core.closure_lexical_super_metadata.len(), 1);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    fn secret_method_fixture_bd_gqaa4(
+        function_body: Vec<Ir3Instruction>,
+    ) -> (Ir3Module, InterpreterCore) {
+        let function_entry = 10;
+        let mut instructions = vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::CreateClosure {
+                dst: 2,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::DefineMethod {
+                obj: 0,
+                key: 1,
+                func: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 3,
+            },
+            Ir3Instruction::BeginTry {
+                catch_target: 8,
+                finally_target: None,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 0,
+                callee: 3,
+                args: RegRange { start: 5, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::Return { value: 4 },
+            Ir3Instruction::EnterCatch { dst: 4 },
+            Ir3Instruction::Return { value: 4 },
+        ];
+        instructions.extend(function_body);
+        let module = test_module_with_functions(
+            instructions,
+            vec![Ir3FunctionDesc {
+                entry: function_entry,
+                arity: 0,
+                frame_size: 1,
+                name: Some("secret_method".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.write_reg_with_label(1, Value::str("m"), Label::Secret)
+            .expect("secret computed method key should fit");
+        (module, core)
+    }
+
+    #[test]
+    fn method_definition_context_taints_returns_throws_and_zero_arg_effects_bd_gqaa4() {
+        let (return_module, mut return_core) = secret_method_fixture_bd_gqaa4(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 11 },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        assert_eq!(
+            return_core
+                .run_loop(&return_module)
+                .expect("secret-selected method return should execute"),
+            Value::Int(11)
+        );
+        assert_eq!(return_core.get_register_label(4), Ok(&Label::Secret));
+        assert_eq!(
+            return_core.estimated_memory_bytes(),
+            return_core.recompute_estimated_memory_bytes()
+        );
+
+        let (throw_module, mut throw_core) =
+            secret_method_fixture_bd_gqaa4(vec![Ir3Instruction::Throw { value: 0 }]);
+        assert_eq!(
+            throw_core
+                .run_loop(&throw_module)
+                .expect("secret-selected method throw should be caught"),
+            Value::Undefined
+        );
+        assert_eq!(throw_core.get_register_label(4), Ok(&Label::Secret));
+
+        let (mut native_fault_module, mut native_fault_core) =
+            secret_method_fixture_bd_gqaa4(vec![
+                Ir3Instruction::LoadNull { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+            ]);
+        native_fault_module.constant_pool.push("x".into());
+        assert!(matches!(
+            native_fault_core
+                .run_loop(&native_fault_module)
+                .expect("secret-selected native fault should be caught"),
+            Value::Object(_)
+        ));
+        assert_eq!(native_fault_core.get_register_label(4), Ok(&Label::Secret));
+
+        let (effect_module, mut effect_core) = secret_method_fixture_bd_gqaa4(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("console:log".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        effect_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
+        assert_eq!(
+            effect_core
+                .run_loop(&effect_module)
+                .expect("secret-selected zero-argument effect should execute"),
+            Value::Undefined
+        );
+        assert_eq!(effect_core.get_register_label(4), Ok(&Label::Secret));
+    }
+
+    #[test]
+    fn method_definition_context_crosses_plain_helper_effect_bd_gqaa4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::CreateClosure {
+                    dst: 2,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::DefineMethod {
+                    obj: 0,
+                    key: 1,
+                    func: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 5,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 9,
+                    finally_target: None,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 3,
+                    args: RegRange { start: 5, count: 1 },
+                    dst: 4,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::EnterCatch { dst: 4 },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("console:log".to_string()),
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 11,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("secret_method".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 13,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("plain_helper".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
+        core.write_reg_with_label(1, Value::str("m"), Label::Secret)
+            .expect("secret computed method key should fit");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("plain helper effect should execute under method context"),
+            Value::Undefined
+        );
+        assert_eq!(core.get_register_label(4), Ok(&Label::Secret));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn method_custom_label_refusal_is_atomic_and_exact_bd_gqaa4() {
+        fn fixture() -> (InterpreterCore, ObjectId, u64) {
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_prototype(None)
+                .expect("method owner should allocate");
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.write_reg_with_label(
+                0,
+                Value::Object(object),
+                Label::Custom {
+                    name: "method-owner-label".repeat(256),
+                    level: 6,
+                },
+            )
+            .expect("custom owner label should fit before refusal");
+            core.write_reg_with_label(
+                1,
+                Value::str("m"),
+                Label::Custom {
+                    name: "method-definition-label".repeat(256),
+                    level: 7,
+                },
+            )
+            .expect("custom key label should fit before refusal");
+            core.write_reg(2, Value::Closure(0))
+                .expect("method closure register should fit");
+            let baseline = core
+                .sync_estimated_memory_bytes()
+                .expect("seeded method fixture should fit");
+            (core, object, baseline)
+        }
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::DefineMethod {
+                obj: 0,
+                key: 1,
+                func: 2,
+            }],
+            Vec::new(),
+        );
+
+        let (mut control, _, _) = fixture();
+        control
+            .run_loop(&module)
+            .expect("one dominant definition-label clone should fit");
+        let exact_retained_ceiling = control.estimated_memory_bytes();
+        let (mut exact, _, _) = fixture();
+        exact.config.max_total_memory_bytes = exact_retained_ceiling;
+        exact
+            .run_loop(&module)
+            .expect("two source labels must not cause two simultaneous clones");
+        assert_eq!(exact.estimated_memory_bytes(), exact_retained_ceiling);
+
+        let (mut core, object, baseline) = fixture();
+        core.config.max_total_memory_bytes = baseline;
+
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            core.heap[object.0 as usize].properties.get("m").is_none(),
+            "temporary-label refusal must not publish the data property"
+        );
+        assert!(core.closure_method_metadata.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
     fn escaped_finally_completion_records_are_balanced_bd_bvgmr() {
         let (value, core) = execute_exception_source_with_core_bd_bvgmr(
             "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
+            false,
         );
-
         assert_eq!(value, Value::str("outer"));
         assert!(core.pending_exception.is_none());
         assert!(core.pending_return.is_none());
@@ -78409,6 +79360,7 @@ mod async_runtime_tests_current {
     fn same_finally_catch_and_normal_nested_entry_preserve_owner_bd_bvgmr() {
         let (exception_value, exception_core) = execute_exception_source_with_core_bd_bvgmr(
             "let log=\"\"; try { try { throw \"outer\"; } finally { try { throw \"new\"; } catch(e) { log=e+\";\"; } log=log+\"after;\"; } } catch(e) { log=log+e; } log;",
+            false,
         );
         assert_eq!(exception_value, Value::str("new;after;outer"));
         assert!(exception_core.pending_exception.is_none());
@@ -78419,6 +79371,7 @@ mod async_runtime_tests_current {
 
         let (return_value, return_core) = execute_exception_source_with_core_bd_bvgmr(
             "function f(){ try { return \"outer\"; } finally { while(true) { try {} finally { break; } } } } f();",
+            false,
         );
         assert_eq!(return_value, Value::str("outer"));
         assert!(return_core.pending_exception.is_none());

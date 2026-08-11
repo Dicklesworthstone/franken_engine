@@ -4304,6 +4304,45 @@ mod tests {
     }
 
     #[test]
+    fn concise_method_identity_and_home_object_agree_between_twins_bd_gqaa4() {
+        let corpus = vec![
+            EngineCoreCorpusCase::new(
+                "concise_method_inferred_names",
+                r#"let key="computed";let o={plain(){},[key](){}};o.plain.name+"|"+o[key].name;"#,
+            ),
+            EngineCoreCorpusCase::new(
+                "concise_method_nonconstructable_without_prototype",
+                r#"let o={plain(){}};let caught=false;try{new o.plain();}catch(e){caught=true;}typeof o.plain.prototype+"|"+caught;"#,
+            ),
+            EngineCoreCorpusCase::new(
+                "concise_method_home_object_and_dynamic_this",
+                r#"let key="computed";let base={value(){return 40;}};let owner={plain(){return super.value()+this.delta;},[key](){return super.value()+this.delta+1;}};owner.__proto__=base;let alien={delta:2};alien.plain=owner.plain;alien.computed=owner[key];alien.plain()*100+alien.computed();"#,
+            ),
+        ];
+        for case in &corpus {
+            let case_report = run_engine_core_differential_oracle(std::slice::from_ref(case), 64);
+            assert!(
+                !case_report.has_defects(),
+                "{}: {:?}",
+                case.case_id,
+                case_report.defects
+            );
+            assert_eq!(
+                case_report.agreements, 1,
+                "{} was inconclusive",
+                case.case_id
+            );
+            assert_eq!(case_report.inconclusive, 0, "{}", case.case_id);
+            assert!(case_report.accounting_is_consistent(), "{}", case.case_id);
+        }
+        let report = run_engine_core_differential_oracle(&corpus, 64);
+        assert!(!report.has_defects(), "{:?}", report.defects);
+        assert_eq!(report.agreements, corpus.len());
+        assert_eq!(report.inconclusive, 0);
+        assert!(report.accounting_is_consistent());
+    }
+
+    #[test]
     fn consumed_postfix_update_now_agrees_after_bd_xi3bk() {
         // bd-xi3bk regression guard at the oracle level. A consumed postfix update
         // `var x = i++` must yield i's PRIOR value (5) in BOTH lanes: franken-core

@@ -15600,6 +15600,18 @@ mod tests {
             Expression::Member { object, .. }
                 if matches!(object.as_ref(), Expression::Super)
         ));
+        CanonicalEs2020Parser
+            .parse(
+                "let saved; ({ value() { saved = () => super.value(); } })",
+                ParseGoal::Script,
+            )
+            .expect("a nested arrow must retain the enclosing method's super context");
+        CanonicalEs2020Parser
+            .parse(
+                "let saved; ({ value() { saved = async () => super.value(); } })",
+                ParseGoal::Script,
+            )
+            .expect("a nested async arrow must retain the enclosing method's super context");
 
         assert!(
             CanonicalEs2020Parser

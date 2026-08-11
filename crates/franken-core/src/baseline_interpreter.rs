@@ -15347,11 +15347,35 @@ impl InterpreterCore {
 
     /// The stored IFC label of an own string property, or `Public` when the
     /// property is absent, inherited, or carries no recorded provenance.
+    /// The stored IFC label of the string property `key` resolved through the
+    /// prototype chain (bd-ojvo1): the label recorded on the FIRST object in the
+    /// chain that owns `key` (so shadowing is respected — a receiver's own
+    /// property wins over an inherited one, matching value resolution), or
+    /// `Public` when absent or unlabeled. This attributes an inherited
+    /// property's provenance to the object that holds it, not merely the
+    /// receiver. Over-labels (never under-labels) in exotic accessor cases.
     fn own_property_label(&self, object_id: ObjectId, key: &str) -> crate::ifc_artifacts::Label {
-        self.heap
-            .get(object_id.0 as usize)
-            .and_then(|object| object.property_labels.get(key).cloned())
-            .unwrap_or(crate::ifc_artifacts::Label::Public)
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                break;
+            };
+            if object.contains_own_property(key) {
+                return object
+                    .property_labels
+                    .get(key)
+                    .cloned()
+                    .unwrap_or(crate::ifc_artifacts::Label::Public);
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+        crate::ifc_artifacts::Label::Public
     }
 
     fn read_reg_label(&self, reg: u32) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
@@ -18822,6 +18846,53 @@ mod tests {
                 .expect("dst register label should exist"),
             crate::ifc_artifacts::Label::Secret,
             "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
+        );
+    }
+
+    /// bd-ojvo1: an inherited Secret data property must carry its label to a read
+    /// through a child object — own_property_label walks the prototype chain to
+    /// the object that actually owns the property.
+    #[test]
+    fn get_property_inherits_prototype_property_label_bd_ojvo1() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("inherited".into());
+
+        let mut core = quickjs_test_core();
+        let proto = core
+            .alloc_object_with_properties(&[("inherited", Value::Int(7))])
+            .expect("prototype allocation should succeed");
+        core.heap[proto.0 as usize]
+            .property_labels
+            .insert("inherited".to_string(), crate::ifc_artifacts::Label::Secret);
+        let child = core
+            .alloc_object_with_properties(&[])
+            .expect("child allocation should succeed");
+        core.heap[child.0 as usize].prototype = Some(proto);
+        core.write_reg_with_label(0, Value::Object(child), crate::ifc_artifacts::Label::Public)
+            .expect("child register should be settable");
+
+        core.execute(&module)
+            .expect("inherited property read should execute");
+
+        assert_eq!(
+            core.read_reg_label(2)
+                .expect("dst register label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "an inherited Secret property must read back Secret through the prototype chain (bd-ojvo1)"
         );
     }
 

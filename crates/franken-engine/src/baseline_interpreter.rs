@@ -2923,18 +2923,86 @@ impl BuiltinFunctionKind {
 
 /// First-class builtin callable value with the module provenance needed for
 /// deterministic CommonJS resolution.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct BuiltinModuleSpecifier(Option<Arc<str>>);
+
+impl BuiltinModuleSpecifier {
+    fn from_nonempty(value: &str) -> Self {
+        if value.is_empty() {
+            Self::default()
+        } else {
+            Self(Some(Arc::from(value)))
+        }
+    }
+}
+
+impl std::ops::Deref for BuiltinModuleSpecifier {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap_or_default()
+    }
+}
+
+impl AsRef<str> for BuiltinModuleSpecifier {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl From<&str> for BuiltinModuleSpecifier {
+    fn from(value: &str) -> Self {
+        Self::from_nonempty(value)
+    }
+}
+
+impl From<String> for BuiltinModuleSpecifier {
+    fn from(value: String) -> Self {
+        Self::from_nonempty(&value)
+    }
+}
+
+impl From<Arc<str>> for BuiltinModuleSpecifier {
+    fn from(value: Arc<str>) -> Self {
+        if value.is_empty() {
+            Self::default()
+        } else {
+            Self(Some(value))
+        }
+    }
+}
+
+impl Serialize for BuiltinModuleSpecifier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for BuiltinModuleSpecifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from_nonempty(&value))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BuiltinFunction {
     pub kind: BuiltinFunctionKind,
-    #[serde(default, skip_serializing_if = "arc_str_is_empty")]
-    pub module_specifier: Arc<str>,
+    #[serde(default, skip_serializing_if = "builtin_module_specifier_is_empty")]
+    pub module_specifier: BuiltinModuleSpecifier,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iterator_handle: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bound_object: Option<u32>,
 }
 
-fn arc_str_is_empty(value: &Arc<str>) -> bool {
+fn builtin_module_specifier_is_empty(value: &BuiltinModuleSpecifier) -> bool {
     value.is_empty()
 }
 
@@ -2942,7 +3010,7 @@ impl BuiltinFunction {
     fn new_kind(kind: BuiltinFunctionKind) -> Self {
         Self {
             kind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -2961,9 +3029,10 @@ impl BuiltinFunction {
     }
 
     fn require(module_specifier: impl AsRef<str>) -> Self {
+        let module_specifier = module_specifier.as_ref();
         Self {
             kind: BuiltinFunctionKind::Require,
-            module_specifier: Arc::from(module_specifier.as_ref()),
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(module_specifier),
             iterator_handle: None,
             bound_object: None,
         }
@@ -2976,7 +3045,7 @@ impl BuiltinFunction {
     fn date_constructor(property_object: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::DateConstructor,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: Some(property_object.0),
         }
@@ -2985,7 +3054,7 @@ impl BuiltinFunction {
     fn generated_function(owner_program_id: ContentHash, artifact_id: ContentHash) -> Self {
         Self {
             kind: BuiltinFunctionKind::GeneratedFunction,
-            module_specifier: Arc::from(format!(
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(&format!(
                 "genfn:v1:{}:{}",
                 owner_program_id.to_hex(),
                 artifact_id.to_hex()
@@ -2998,7 +3067,7 @@ impl BuiltinFunction {
     fn iterator_next(iterator_handle: u32) -> Self {
         Self {
             kind: BuiltinFunctionKind::IteratorNext,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: Some(iterator_handle),
             bound_object: None,
         }
@@ -3007,7 +3076,7 @@ impl BuiltinFunction {
     fn iterator_self(iterator_handle: u32) -> Self {
         Self {
             kind: BuiltinFunctionKind::IteratorSelf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: Some(iterator_handle),
             bound_object: None,
         }
@@ -3016,7 +3085,7 @@ impl BuiltinFunction {
     fn string_char_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCharAt,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3025,7 +3094,7 @@ impl BuiltinFunction {
     fn string_is_well_formed() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringIsWellFormed,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3034,7 +3103,7 @@ impl BuiltinFunction {
     fn string_to_well_formed() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringToWellFormed,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3052,7 +3121,7 @@ impl BuiltinFunction {
     fn timer_handle_method(kind: BuiltinFunctionKind, handle_object: ObjectId) -> Self {
         Self {
             kind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: Some(handle_object.0),
         }
@@ -3061,7 +3130,7 @@ impl BuiltinFunction {
     fn writable_completion(kind: BuiltinFunctionKind, object_id: ObjectId, token: u32) -> Self {
         Self {
             kind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: Some(token),
             bound_object: Some(object_id.0),
         }
@@ -3079,7 +3148,7 @@ impl BuiltinFunction {
         ));
         Self {
             kind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: Some(token),
             bound_object: Some(destination.0),
         }
@@ -3092,7 +3161,7 @@ impl BuiltinFunction {
         ));
         Self {
             kind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: Some(token),
             bound_object: Some(stage.0),
         }
@@ -3101,7 +3170,7 @@ impl BuiltinFunction {
     fn emitter_once_wrapper(property_object: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::EmitterOnceWrapper,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: Some(property_object.0),
         }
@@ -3110,7 +3179,7 @@ impl BuiltinFunction {
     fn string_char_code_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCharCodeAt,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3119,7 +3188,7 @@ impl BuiltinFunction {
     fn string_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringAt,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3128,7 +3197,7 @@ impl BuiltinFunction {
     fn string_to_upper_case() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringToUpperCase,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3137,7 +3206,7 @@ impl BuiltinFunction {
     fn string_to_lower_case() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringToLowerCase,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3146,7 +3215,7 @@ impl BuiltinFunction {
     fn string_trim() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringTrim,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3155,7 +3224,7 @@ impl BuiltinFunction {
     fn string_split() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringSplit,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3164,7 +3233,7 @@ impl BuiltinFunction {
     fn string_includes() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringIncludes,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3173,7 +3242,7 @@ impl BuiltinFunction {
     fn string_starts_with() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringStartsWith,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3182,7 +3251,7 @@ impl BuiltinFunction {
     fn string_ends_with() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringEndsWith,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3191,7 +3260,7 @@ impl BuiltinFunction {
     fn string_index_of() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringIndexOf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3200,7 +3269,7 @@ impl BuiltinFunction {
     fn string_last_index_of() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringLastIndexOf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3209,7 +3278,7 @@ impl BuiltinFunction {
     fn string_slice() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringSlice,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3218,7 +3287,7 @@ impl BuiltinFunction {
     fn string_substring() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringSubstring,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3227,7 +3296,7 @@ impl BuiltinFunction {
     fn string_substr() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringSubstr,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3236,7 +3305,7 @@ impl BuiltinFunction {
     fn string_replace() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringReplace,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3245,7 +3314,7 @@ impl BuiltinFunction {
     fn string_match() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringMatch,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3254,7 +3323,7 @@ impl BuiltinFunction {
     fn string_search() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringSearch,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3263,7 +3332,7 @@ impl BuiltinFunction {
     fn string_repeat() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringRepeat,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3272,7 +3341,7 @@ impl BuiltinFunction {
     fn string_trim_start() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringTrimStart,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3281,7 +3350,7 @@ impl BuiltinFunction {
     fn string_trim_end() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringTrimEnd,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3290,7 +3359,7 @@ impl BuiltinFunction {
     fn string_replace_all() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringReplaceAll,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3299,7 +3368,7 @@ impl BuiltinFunction {
     fn string_code_point_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCodePointAt,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3308,7 +3377,7 @@ impl BuiltinFunction {
     fn string_locale_compare() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringLocaleCompare,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3317,7 +3386,7 @@ impl BuiltinFunction {
     fn string_normalize() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringNormalize,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3326,7 +3395,7 @@ impl BuiltinFunction {
     fn string_pad_start() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringPadStart,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3335,7 +3404,7 @@ impl BuiltinFunction {
     fn string_pad_end() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringPadEnd,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3344,7 +3413,7 @@ impl BuiltinFunction {
     fn number_to_fixed() -> Self {
         Self {
             kind: BuiltinFunctionKind::NumberToFixed,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3353,7 +3422,7 @@ impl BuiltinFunction {
     fn number_to_string() -> Self {
         Self {
             kind: BuiltinFunctionKind::NumberToString,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3362,7 +3431,7 @@ impl BuiltinFunction {
     fn number_value_of() -> Self {
         Self {
             kind: BuiltinFunctionKind::NumberValueOf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3375,7 +3444,7 @@ impl BuiltinFunction {
     fn array_push() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayPush,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3384,7 +3453,7 @@ impl BuiltinFunction {
     fn array_pop() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayPop,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3393,7 +3462,7 @@ impl BuiltinFunction {
     fn array_shift() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayShift,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3402,7 +3471,7 @@ impl BuiltinFunction {
     fn array_unshift() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayUnshift,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3411,7 +3480,7 @@ impl BuiltinFunction {
     fn array_index_of() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayIndexOf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3420,7 +3489,7 @@ impl BuiltinFunction {
     fn array_includes() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayIncludes,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3429,7 +3498,7 @@ impl BuiltinFunction {
     fn array_reverse() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayReverse,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3438,7 +3507,7 @@ impl BuiltinFunction {
     fn array_to_reversed() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayToReversed,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3447,7 +3516,7 @@ impl BuiltinFunction {
     fn array_to_sorted() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayToSorted,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3456,7 +3525,7 @@ impl BuiltinFunction {
     fn array_with() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayWith,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3465,7 +3534,7 @@ impl BuiltinFunction {
     fn array_to_spliced() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayToSpliced,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3474,7 +3543,7 @@ impl BuiltinFunction {
     fn array_fill() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFill,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3483,7 +3552,7 @@ impl BuiltinFunction {
     fn array_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayAt,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3492,7 +3561,7 @@ impl BuiltinFunction {
     fn array_flat() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFlat,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3501,7 +3570,7 @@ impl BuiltinFunction {
     fn array_join() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayJoin,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3510,7 +3579,7 @@ impl BuiltinFunction {
     fn array_for_each() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayForEach,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3519,7 +3588,7 @@ impl BuiltinFunction {
     fn array_map() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayMap,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3528,7 +3597,7 @@ impl BuiltinFunction {
     fn array_filter() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFilter,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3537,7 +3606,7 @@ impl BuiltinFunction {
     fn array_find() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3546,7 +3615,7 @@ impl BuiltinFunction {
     fn array_find_index() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFindIndex,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3555,7 +3624,7 @@ impl BuiltinFunction {
     fn array_find_last() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFindLast,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3564,7 +3633,7 @@ impl BuiltinFunction {
     fn array_find_last_index() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFindLastIndex,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3573,7 +3642,7 @@ impl BuiltinFunction {
     fn array_flat_map() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayFlatMap,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3582,7 +3651,7 @@ impl BuiltinFunction {
     fn array_copy_within() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayCopyWithin,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3591,7 +3660,7 @@ impl BuiltinFunction {
     fn array_some() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArraySome,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3600,7 +3669,7 @@ impl BuiltinFunction {
     fn array_every() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayEvery,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3609,7 +3678,7 @@ impl BuiltinFunction {
     fn array_reduce() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayReduce,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3618,7 +3687,7 @@ impl BuiltinFunction {
     fn array_reduce_right() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayReduceRight,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3627,7 +3696,7 @@ impl BuiltinFunction {
     fn array_sort() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArraySort,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3636,7 +3705,7 @@ impl BuiltinFunction {
     fn array_concat() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayConcat,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3645,7 +3714,7 @@ impl BuiltinFunction {
     fn array_slice_method() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArraySliceMethod,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3654,7 +3723,7 @@ impl BuiltinFunction {
     fn array_last_index_of() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayLastIndexOf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3663,7 +3732,7 @@ impl BuiltinFunction {
     fn array_splice() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArraySplice,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3672,7 +3741,7 @@ impl BuiltinFunction {
     fn array_entries() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayEntries,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3681,7 +3750,7 @@ impl BuiltinFunction {
     fn array_keys() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayKeys,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3690,7 +3759,7 @@ impl BuiltinFunction {
     fn array_values() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayValues,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3699,7 +3768,7 @@ impl BuiltinFunction {
     fn map_set() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapSet,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3708,7 +3777,7 @@ impl BuiltinFunction {
     fn map_get() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapGet,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3717,7 +3786,7 @@ impl BuiltinFunction {
     fn map_has() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapHas,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3726,7 +3795,7 @@ impl BuiltinFunction {
     fn map_delete() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapDelete,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3735,7 +3804,7 @@ impl BuiltinFunction {
     fn set_add() -> Self {
         Self {
             kind: BuiltinFunctionKind::SetAdd,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3744,7 +3813,7 @@ impl BuiltinFunction {
     fn set_has() -> Self {
         Self {
             kind: BuiltinFunctionKind::SetHas,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3753,7 +3822,7 @@ impl BuiltinFunction {
     fn set_delete() -> Self {
         Self {
             kind: BuiltinFunctionKind::SetDelete,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3762,7 +3831,7 @@ impl BuiltinFunction {
     fn map_clear() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapClear,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3771,7 +3840,7 @@ impl BuiltinFunction {
     fn set_clear() -> Self {
         Self {
             kind: BuiltinFunctionKind::SetClear,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3780,7 +3849,7 @@ impl BuiltinFunction {
     fn date_get_time() -> Self {
         Self {
             kind: BuiltinFunctionKind::DateGetTime,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3790,7 +3859,7 @@ impl BuiltinFunction {
     fn client_request_write() -> Self {
         Self {
             kind: BuiltinFunctionKind::ClientRequestWrite,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3800,7 +3869,7 @@ impl BuiltinFunction {
     fn client_request_end() -> Self {
         Self {
             kind: BuiltinFunctionKind::ClientRequestEnd,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3810,7 +3879,7 @@ impl BuiltinFunction {
     fn emitter_on() -> Self {
         Self {
             kind: BuiltinFunctionKind::EmitterOn,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3819,7 +3888,7 @@ impl BuiltinFunction {
     fn performance_now() -> Self {
         Self {
             kind: BuiltinFunctionKind::PerformanceNow,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3828,7 +3897,7 @@ impl BuiltinFunction {
     fn data_view_get_uint8() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewGetUint8,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3837,7 +3906,7 @@ impl BuiltinFunction {
     fn data_view_set_uint8() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewSetUint8,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3846,7 +3915,7 @@ impl BuiltinFunction {
     fn data_view_get_int32() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewGetInt32,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3855,7 +3924,7 @@ impl BuiltinFunction {
     fn data_view_set_int32() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewSetInt32,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3864,7 +3933,7 @@ impl BuiltinFunction {
     fn data_view_get_uint32() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewGetUint32,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3873,7 +3942,7 @@ impl BuiltinFunction {
     fn data_view_set_uint32() -> Self {
         Self {
             kind: BuiltinFunctionKind::DataViewSetUint32,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3882,7 +3951,7 @@ impl BuiltinFunction {
     fn typed_array_set() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArraySet,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3891,7 +3960,7 @@ impl BuiltinFunction {
     fn typed_array_subarray() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArraySubarray,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3900,7 +3969,7 @@ impl BuiltinFunction {
     fn typed_array_slice() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArraySlice,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3909,7 +3978,7 @@ impl BuiltinFunction {
     fn typed_array_fill() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayFill,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3918,7 +3987,7 @@ impl BuiltinFunction {
     fn typed_array_copy_within() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayCopyWithin,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3927,7 +3996,7 @@ impl BuiltinFunction {
     fn typed_array_entries() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayEntries,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3936,7 +4005,7 @@ impl BuiltinFunction {
     fn typed_array_keys() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayKeys,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3945,7 +4014,7 @@ impl BuiltinFunction {
     fn typed_array_values() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayValues,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3954,7 +4023,7 @@ impl BuiltinFunction {
     fn typed_array_unsupported_method() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayUnsupportedMethod,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3963,7 +4032,7 @@ impl BuiltinFunction {
     fn promise_resolve() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseResolve,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3972,7 +4041,7 @@ impl BuiltinFunction {
     fn promise_reject() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseReject,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3981,7 +4050,7 @@ impl BuiltinFunction {
     fn promise_all() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseAll,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3990,7 +4059,7 @@ impl BuiltinFunction {
     fn promise_race() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseRace,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -3999,7 +4068,7 @@ impl BuiltinFunction {
     fn promise_all_settled() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseAllSettled,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4008,7 +4077,7 @@ impl BuiltinFunction {
     fn promise_any() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseAny,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4017,7 +4086,7 @@ impl BuiltinFunction {
     fn promise_then() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseThen,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4026,7 +4095,7 @@ impl BuiltinFunction {
     fn promise_catch() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseCatch,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4035,7 +4104,7 @@ impl BuiltinFunction {
     fn promise_finally() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseFinally,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4044,7 +4113,7 @@ impl BuiltinFunction {
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4053,7 +4122,7 @@ impl BuiltinFunction {
     fn console_error() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleError,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4062,7 +4131,7 @@ impl BuiltinFunction {
     fn console_warn() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleWarn,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4071,7 +4140,7 @@ impl BuiltinFunction {
     fn console_info() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleInfo,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4080,7 +4149,7 @@ impl BuiltinFunction {
     fn proxy_revoke(proxy_id: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::ProxyRevoke,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: Some(proxy_id.0),
         }
@@ -4089,7 +4158,7 @@ impl BuiltinFunction {
     fn regexp_test() -> Self {
         Self {
             kind: BuiltinFunctionKind::RegExpTest,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4098,7 +4167,7 @@ impl BuiltinFunction {
     fn object_has_own_property() -> Self {
         Self {
             kind: BuiltinFunctionKind::ObjectHasOwnProperty,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4107,7 +4176,7 @@ impl BuiltinFunction {
     fn object_property_is_enumerable() -> Self {
         Self {
             kind: BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4116,7 +4185,7 @@ impl BuiltinFunction {
     fn object_value_of() -> Self {
         Self {
             kind: BuiltinFunctionKind::ObjectPrototypeValueOf,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -4125,7 +4194,7 @@ impl BuiltinFunction {
     fn object_to_string() -> Self {
         Self {
             kind: BuiltinFunctionKind::ObjectPrototypeToString,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         }
@@ -5108,6 +5177,15 @@ pub(crate) fn value_contains_symbol(value: &Value) -> bool {
 }
 
 fn validate_symbol_value(state: &RuntimeSymbolState, value: &Value) -> Result<(), String> {
+    match value {
+        Value::Symbol(id) if !state.contains(*id) => {
+            return Err(format!("unresolved Symbol id {}", id.0));
+        }
+        Value::Symbol(_) => return Ok(()),
+        Value::Accessor { .. } => {}
+        _ => return Ok(()),
+    }
+
     let mut stack = vec![value];
     let mut visited = BTreeSet::new();
     while let Some(value) = stack.pop() {
@@ -5941,6 +6019,12 @@ impl ScopeChain {
             return self.frames.pop();
         }
         None
+    }
+
+    fn current(&self) -> Result<&ScopeFrame, InterpreterError> {
+        self.frames.last().ok_or(InterpreterError::InternalError {
+            details: "scope chain unexpectedly empty".to_string(),
+        })
     }
 
     fn current_mut(&mut self) -> Result<&mut ScopeFrame, InterpreterError> {
@@ -8864,6 +8948,11 @@ pub struct InterpreterCore {
     /// Live execution-seed reservations are held separately in
     /// `execution_seed_reservation_ledger` and joined at every admission gate.
     estimated_memory_bytes: u64,
+    /// Stack-local register carriers owned by the two legacy synchronous
+    /// callback interpreters. Keeping this separate from retained base memory
+    /// makes every nested allocation gate see the temporary owner while still
+    /// allowing exact release on every callback exit (bd-aw8td).
+    simple_callback_temporary_bytes: u64,
     /// Resident ownership held by nested module/callback snapshots while the
     /// corresponding active core fields are temporarily replaced.
     module_snapshot_in_flight_bytes: u64,
@@ -9751,6 +9840,7 @@ impl InterpreterCore {
             call_stack: Vec::new(),
             heap: SeedTrackedField::new(Vec::new()),
             estimated_memory_bytes,
+            simple_callback_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
             iterators: Vec::new(),
@@ -26281,7 +26371,9 @@ impl InterpreterCore {
     }
 
     fn total_memory_bytes_from_base(&self, base_bytes: u64) -> u64 {
-        base_bytes.saturating_add(self.live_execution_seed_reserved_bytes())
+        base_bytes
+            .saturating_add(self.live_execution_seed_reserved_bytes())
+            .saturating_add(self.simple_callback_temporary_bytes)
     }
 
     fn prune_dead_pending_execution_seeds(&mut self) {
@@ -28978,11 +29070,19 @@ impl InterpreterCore {
         exports_object: ObjectId,
         module_specifier: Option<&str>,
     ) -> Result<(), InterpreterError> {
-        let (filename_value, dirname_value) = self
-            .cjs_filename_dirname(module_specifier.or(self.current_module_specifier.as_deref()));
-        let require_value = Value::BuiltinFunction(BuiltinFunction::require(
+        let _ = self.scope_chain.current()?;
+        let filename_specifier = module_specifier.or(self.current_module_specifier.as_deref());
+        self.check_temporary_memory_budget(self.cjs_binding_construction_peak_bytes(
+            filename_specifier,
             module_specifier.unwrap_or_default(),
-        ));
+        ))?;
+        let (filename_value, dirname_value) = self.cjs_filename_dirname(filename_specifier);
+        let already_owned_temporary_bytes = Self::estimate_value_bytes(&filename_value)
+            .saturating_add(Self::estimate_value_bytes(&dirname_value));
+        let require_value = Value::BuiltinFunction(self.construct_require_builtin(
+            module_specifier.unwrap_or_default(),
+            already_owned_temporary_bytes,
+        )?);
 
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let mut replaced = Vec::with_capacity(5);
@@ -29031,13 +29131,92 @@ impl InterpreterCore {
         let Some(specifier) = module_specifier else {
             return (Value::Undefined, Value::Undefined);
         };
-        let dirname = Path::new(specifier)
+        let dirname = self.cjs_dirname_view(specifier);
+        (Value::str(specifier), Value::str(dirname))
+    }
+
+    fn cjs_dirname_view<'a>(&'a self, specifier: &'a str) -> &'a str {
+        Path::new(specifier)
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
-            .map(|path| path.display().to_string())
-            .or_else(|| self.config.module_root.clone())
-            .unwrap_or_default();
-        (Value::str(specifier), Value::str(dirname))
+            .and_then(Path::to_str)
+            .or(self.config.module_root.as_deref())
+            .unwrap_or_default()
+    }
+
+    fn cjs_binding_construction_peak_bytes(
+        &self,
+        filename_specifier: Option<&str>,
+        require_specifier: &str,
+    ) -> u64 {
+        let path_payload_bytes = filename_specifier.map_or(0, |specifier| {
+            Self::estimate_string_bytes(specifier).saturating_add(Self::estimate_string_bytes(
+                self.cjs_dirname_view(specifier),
+            ))
+        });
+        let require_payload_bytes = (!require_specifier.is_empty())
+            .then(|| Self::estimate_string_bytes(require_specifier))
+            .unwrap_or(0);
+        let names = ["require", "exports", "module", "__filename", "__dirname"];
+        let rollback_slots = u64::try_from(names.len().saturating_mul(std::mem::size_of::<(
+            String,
+            Option<ScopeBinding>,
+            Option<ScopeBindingState>,
+        )>()))
+        .unwrap_or(u64::MAX);
+        let binding_and_name_bytes = Self::saturating_sum(names.into_iter().map(|name| {
+            MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+                .saturating_add(Self::estimate_string_bytes(name).saturating_mul(2))
+        }));
+        path_payload_bytes
+            .saturating_add(require_payload_bytes)
+            .saturating_add(rollback_slots)
+            .saturating_add(binding_and_name_bytes)
+    }
+
+    fn construct_require_builtin(
+        &self,
+        module_specifier: &str,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<BuiltinFunction, InterpreterError> {
+        let construction_bytes = if module_specifier.is_empty() {
+            0
+        } else {
+            already_owned_temporary_bytes
+                .saturating_add(Self::estimate_string_bytes(module_specifier))
+        };
+        self.check_temporary_memory_budget(construction_bytes)?;
+        Ok(BuiltinFunction::require(module_specifier))
+    }
+
+    fn set_cjs_require_property(
+        &mut self,
+        module_object: ObjectId,
+        module_specifier: &str,
+    ) -> Result<(), InterpreterError> {
+        let object =
+            self.heap
+                .get(module_object.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound {
+                    id: module_object.0,
+                })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
+        const REQUIRE_KEY: &str = "require";
+        let key_bytes = Self::estimate_string_bytes(REQUIRE_KEY);
+        let require_bytes = if module_specifier.is_empty() {
+            0
+        } else {
+            Self::estimate_string_bytes(module_specifier)
+        };
+        self.check_temporary_memory_budget(key_bytes.saturating_add(require_bytes))?;
+        let key = REQUIRE_KEY.to_string();
+        let require = self.construct_require_builtin(module_specifier, key_bytes)?;
+        self.set_object_property(module_object, key, Value::BuiltinFunction(require))
     }
 
     fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
@@ -29491,6 +29670,11 @@ impl InterpreterCore {
             "exports".to_string(),
             Value::Object(exports_object),
         )?;
+        self.check_temporary_memory_budget(
+            Self::estimate_string_bytes(module_specifier).saturating_add(
+                Self::estimate_string_bytes(self.cjs_dirname_view(module_specifier)),
+            ),
+        )?;
         let (filename_value, dirname_value) = self.cjs_filename_dirname(Some(module_specifier));
         self.set_object_property(module_object, "id".to_string(), filename_value.clone())?;
         self.set_object_property(
@@ -29504,11 +29688,7 @@ impl InterpreterCore {
             .unwrap_or(Value::Null);
         self.set_object_property(module_object, "parent".to_string(), parent_value)?;
         self.set_object_property(module_object, "loaded".to_string(), Value::Bool(false))?;
-        self.set_object_property(
-            module_object,
-            "require".to_string(),
-            Value::BuiltinFunction(BuiltinFunction::require(module_specifier)),
-        )?;
+        self.set_cjs_require_property(module_object, module_specifier)?;
         let context = CjsModuleContext {
             module_object,
             exports_object,
@@ -37446,6 +37626,9 @@ impl InterpreterCore {
                     count: module.instructions.len(),
                 },
             )?;
+            if let Ir3Instruction::LoadBigInt { dst, value } = instr_ref {
+                self.preflight_bigint_literal_write(*dst, value)?;
+            }
             let instr = instr_ref.clone();
             self.instructions_executed += 1;
 
@@ -37518,6 +37701,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::Add { dst, lhs, rhs } => {
+                    let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_add(lhs, rhs)?;
                     self.write_reg_with_label(dst, result, result_label)?;
@@ -51415,6 +51599,28 @@ impl InterpreterCore {
         element_index: usize,
         array_id: ObjectId,
     ) -> Result<Value, InterpreterError> {
+        let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
+        let result = self.invoke_simple_reduce_callback_inner(
+            module,
+            callback,
+            accumulator,
+            current_value,
+            element_index,
+            array_id,
+        );
+        self.simple_callback_temporary_bytes = previous_callback_temporary_bytes;
+        result
+    }
+
+    fn invoke_simple_reduce_callback_inner(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        accumulator: Value,
+        current_value: Value,
+        element_index: usize,
+        array_id: ObjectId,
+    ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed reducer callback".to_string(),
             got: "Array.prototype.reduce called without module context".to_string(),
@@ -51461,7 +51667,15 @@ impl InterpreterCore {
                 table_size: module.function_table.len() as u32,
             },
         )?;
+        let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
         let register_count = self.config.max_registers as usize;
+        let register_carrier_bytes = u64::try_from(register_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX));
+        self.check_temporary_memory_budget(register_carrier_bytes)?;
+        self.simple_callback_temporary_bytes = self
+            .simple_callback_temporary_bytes
+            .saturating_add(register_carrier_bytes);
         let mut local_registers = vec![Value::Undefined; register_count];
         Self::write_local_register(&mut local_registers, 0, accumulator)?;
         Self::write_local_register(&mut local_registers, 1, current_value)?;
@@ -51470,14 +51684,20 @@ impl InterpreterCore {
 
         let mut instruction_pointer = function.entry as usize;
         for _step in 0..self.config.instruction_budget {
-            let instruction = module
-                .instructions
-                .get(instruction_pointer)
-                .ok_or(InterpreterError::InstructionOutOfBounds {
+            self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
+                .saturating_add(Self::simple_callback_register_bytes(&local_registers));
+            let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
+                InterpreterError::InstructionOutOfBounds {
                     ip: instruction_pointer,
                     count: module.instructions.len(),
-                })?
-                .clone();
+                },
+            )?;
+            if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
+                self.check_temporary_memory_budget(Self::bigint_literal_construction_peak_bytes(
+                    value,
+                ))?;
+            }
+            let instruction = instruction_ref.clone();
             match instruction {
                 Ir3Instruction::LoadInt { dst, value } => {
                     Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
@@ -51689,6 +51909,26 @@ impl InterpreterCore {
         current_value: Value,
         element_index: usize,
     ) -> Result<Value, InterpreterError> {
+        let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
+        let result = self.invoke_simple_array_from_callback_inner(
+            module,
+            callback,
+            this_arg,
+            current_value,
+            element_index,
+        );
+        self.simple_callback_temporary_bytes = previous_callback_temporary_bytes;
+        result
+    }
+
+    fn invoke_simple_array_from_callback_inner(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        this_arg: Value,
+        current_value: Value,
+        element_index: usize,
+    ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Array.from mapper callback".to_string(),
             got: "Array.from called without module context".to_string(),
@@ -51717,7 +51957,15 @@ impl InterpreterCore {
                 table_size: module.function_table.len() as u32,
             },
         )?;
+        let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
         let register_count = self.config.max_registers as usize;
+        let register_carrier_bytes = u64::try_from(register_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX));
+        self.check_temporary_memory_budget(register_carrier_bytes)?;
+        self.simple_callback_temporary_bytes = self
+            .simple_callback_temporary_bytes
+            .saturating_add(register_carrier_bytes);
         let mut local_registers = vec![Value::Undefined; register_count];
         Self::write_local_register(&mut local_registers, 0, current_value)?;
         Self::write_local_register(
@@ -51728,14 +51976,20 @@ impl InterpreterCore {
 
         let mut instruction_pointer = function.entry as usize;
         for _step in 0..self.config.instruction_budget {
-            let instruction = module
-                .instructions
-                .get(instruction_pointer)
-                .ok_or(InterpreterError::InstructionOutOfBounds {
+            self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
+                .saturating_add(Self::simple_callback_register_bytes(&local_registers));
+            let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
+                InterpreterError::InstructionOutOfBounds {
                     ip: instruction_pointer,
                     count: module.instructions.len(),
-                })?
-                .clone();
+                },
+            )?;
+            if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
+                self.check_temporary_memory_budget(Self::bigint_literal_construction_peak_bytes(
+                    value,
+                ))?;
+            }
+            let instruction = instruction_ref.clone();
             match instruction {
                 Ir3Instruction::LoadInt { dst, value } => {
                     Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
@@ -52709,15 +52963,26 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         let max_registers = registers.len() as u32;
-        let slot =
-            registers
-                .get_mut(register as usize)
-                .ok_or(InterpreterError::RegisterOutOfBounds {
-                    register,
-                    max: max_registers,
-                })?;
-        *slot = value;
+        let register_index = register as usize;
+        if register_index >= registers.len() {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register,
+                max: max_registers,
+            });
+        }
+        registers[register_index] = value;
         Ok(())
+    }
+
+    fn simple_callback_register_bytes(registers: &[Value]) -> u64 {
+        u64::try_from(registers.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX))
+            .saturating_add(Self::saturating_sum(
+                registers
+                    .iter()
+                    .map(Self::estimate_execution_seed_value_bytes),
+            ))
     }
 
     fn eval_add_values(&self, left: &Value, right: &Value) -> Result<Value, InterpreterError> {
@@ -52725,9 +52990,16 @@ impl InterpreterCore {
             (Value::Int(left_int), Value::Int(right_int)) => {
                 Ok(Value::Int(left_int.wrapping_add(*right_int)))
             }
-            (Value::BigInt(left_bigint), Value::BigInt(right_bigint)) => Ok(Value::BigInt(
-                Arc::from(Self::add_bigint_decimal(left_bigint, right_bigint)),
-            )),
+            (Value::BigInt(left_bigint), Value::BigInt(right_bigint)) => {
+                self.check_temporary_memory_budget(Self::bigint_add_construction_peak_bytes(
+                    left_bigint,
+                    right_bigint,
+                ))?;
+                Ok(Value::BigInt(Arc::from(Self::add_bigint_decimal(
+                    left_bigint,
+                    right_bigint,
+                ))))
+            }
             (Value::Float(left_float), Value::Float(right_float)) => Ok(Value::Float(
                 Float64::new(left_float.inner() + right_float.inner()),
             )),
@@ -53238,15 +53510,115 @@ impl InterpreterCore {
                     .map_or_else(|| key.diagnostic(), |key| format!("import.meta.{key}")),
             });
         }
-        let existing = self
+        let heap_index = object_id.0 as usize;
+        let object = self
             .heap
-            .get(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .own_runtime_property_value(&key);
-        let (get, set) = match existing {
-            Some(Value::Accessor { get, set }) => (get, set),
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
+        validate_symbol_value(&self.symbol_state, &func).map_err(|got| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol value".to_string(),
+                got,
+            }
+        })?;
+
+        if let RuntimePropertyKey::Symbol(symbol) = key {
+            let (get, set) = match object
+                .properties
+                .baseline_symbol_property(core_symbol_id(symbol))
+            {
+                Some(BaselineSymbolProperty::Accessor { get, set }) => (get.clone(), set.clone()),
+                _ => (None, None),
+            };
+            let property = match kind {
+                AccessorKind::Get => BaselineSymbolProperty::Accessor {
+                    get: Some(func),
+                    set,
+                },
+                AccessorKind::Set => BaselineSymbolProperty::Accessor {
+                    get,
+                    set: Some(func),
+                },
+            };
+            let previous_property_bytes =
+                Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
+            let next_property_bytes = Self::estimate_projected_symbol_property_map_bytes(
+                &object.properties,
+                symbol,
+                &property,
+            );
+            self.check_temporary_memory_budget(previous_property_bytes.max(next_property_bytes))?;
+            let mut projected_properties = object.properties.clone();
+            projected_properties.insert_baseline_symbol_property(core_symbol_id(symbol), property);
+            let requested_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_property_bytes)
+                .saturating_add(next_property_bytes);
+            self.mutate_heap(|heap| heap[heap_index].properties = projected_properties);
+            self.estimated_memory_bytes = requested_bytes;
+            self.gc_write_barrier(object_id);
+            return Ok(());
+        }
+
+        let RuntimePropertyKey::String(key) = key else {
+            unreachable!("RuntimePropertyKey variants are exhaustive")
+        };
+        if object.is_array && key.as_str() == Some("length") {
+            return Err(InterpreterError::RangeError {
+                message: "invalid array length accessor".to_string(),
+            });
+        }
+        let (get, set) = match object.properties.get_exact(&key) {
+            Some(Value::Accessor { get, set }) => (get.clone(), set.clone()),
             _ => (None, None),
         };
+        let arc_value_bytes = u64::try_from(std::mem::size_of::<Value>())
+            .unwrap_or(u64::MAX)
+            .saturating_add(
+                u64::try_from(2usize.saturating_mul(std::mem::size_of::<usize>()))
+                    .unwrap_or(u64::MAX),
+            );
+        let new_edge_bytes =
+            arc_value_bytes.saturating_add(Self::estimate_execution_seed_value_bytes(&func));
+        let preserved_edge_bytes = match kind {
+            AccessorKind::Get => set.as_ref(),
+            AccessorKind::Set => get.as_ref(),
+        }
+        .map_or(0, |endpoint| {
+            arc_value_bytes.saturating_add(Self::estimate_execution_seed_value_bytes(endpoint))
+        });
+        let prospective_accessor_bytes = new_edge_bytes.saturating_add(preserved_edge_bytes);
+        let has_exact_only_properties = object.properties.exact_len() != object.properties.len();
+        let ordinary_key = key.as_str().filter(|_| !has_exact_only_properties);
+        let previous_property_bytes =
+            Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
+        let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
+            &object.properties,
+            &key,
+            prospective_accessor_bytes,
+        );
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_property_bytes)
+            .saturating_add(next_property_bytes);
+        let construction_peak = ordinary_key.map_or_else(
+            || {
+                new_edge_bytes
+                    .saturating_add(previous_property_bytes)
+                    .max(next_property_bytes)
+            },
+            |key| new_edge_bytes.saturating_add(Self::estimate_string_bytes(key)),
+        );
+        self.check_temporary_memory_budget(construction_peak)?;
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
         let accessor = match kind {
             AccessorKind::Get => Value::Accessor {
                 get: Some(Arc::new(func)),
@@ -53257,7 +53629,35 @@ impl InterpreterCore {
                 set: Some(Arc::new(func)),
             },
         };
-        self.set_object_runtime_property(object_id, key, accessor)
+        let mut projected_cached_dense_length = object.cached_dense_length;
+        if object.is_array && projected_cached_dense_length.is_some() {
+            if let Some(index) = key.as_str().and_then(Self::canonical_array_index_key) {
+                if index > projected_cached_dense_length.unwrap_or(0) {
+                    projected_cached_dense_length = None;
+                }
+            } else {
+                projected_cached_dense_length = None;
+            }
+        }
+        if let Some(key) = ordinary_key {
+            let key = key.to_string();
+            self.mutate_heap(|heap| {
+                let object = &mut heap[heap_index];
+                object.properties.insert(key, accessor);
+                object.cached_dense_length = projected_cached_dense_length;
+            });
+        } else {
+            let mut projected_properties = object.properties.clone();
+            projected_properties.insert_exact(key, accessor);
+            self.mutate_heap(|heap| {
+                let object = &mut heap[heap_index];
+                object.properties = projected_properties;
+                object.cached_dense_length = projected_cached_dense_length;
+            });
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        self.gc_write_barrier(object_id);
+        Ok(())
     }
 
     fn inferred_method_name(&self, key: &RuntimePropertyKey) -> JsString {
@@ -66971,6 +67371,121 @@ impl InterpreterCore {
             .unwrap_or(Value::Undefined))
     }
 
+    fn bigint_literal_construction_peak_bytes(value: &str) -> u64 {
+        // The dispatch clone owns a `String` while `Arc<str>` copies the same
+        // digits into its ArcInner allocation.
+        Self::estimate_string_bytes(value).saturating_mul(2)
+    }
+
+    fn bigint_add_output_bound_bytes(lhs: &str, rhs: &str) -> u64 {
+        let output_len = lhs
+            .trim_start_matches('-')
+            .len()
+            .max(rhs.trim_start_matches('-').len())
+            .saturating_add(2);
+        MEMORY_ESTIMATE_STRING_BASE_BYTES
+            .saturating_add(u64::try_from(output_len).unwrap_or(u64::MAX))
+    }
+
+    fn bigint_add_construction_peak_bytes(lhs: &str, rhs: &str) -> u64 {
+        // Unsigned arithmetic transfers its Vec into a String. A negative
+        // result may instead overlap that String with sign formatting; Arc
+        // conversion later overlaps only the final String. At no point are
+        // three result-sized buffers live together.
+        Self::bigint_add_output_bound_bytes(lhs, rhs).saturating_mul(2)
+    }
+
+    fn preflight_register_write_bytes(
+        &self,
+        reg: u32,
+        new_value_bytes: u64,
+        explicit_label: Option<&Label>,
+    ) -> Result<(), InterpreterError> {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = self.register_base + reg as usize;
+        let previous_value_bytes = self
+            .registers
+            .get(actual_reg)
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0);
+        let previous_label = self.register_labels.get(actual_reg);
+        let previous_label_bytes = previous_label.map(Self::estimate_label_bytes).unwrap_or(0);
+        let next_label = match explicit_label {
+            Some(label) => Some(
+                self.active_execution_context_label()
+                    .filter(|context| *context > label)
+                    .unwrap_or(label),
+            ),
+            None => self
+                .active_execution_context_label()
+                .filter(|context| previous_label.is_none_or(|current| *context > current))
+                .or(previous_label),
+        };
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_value_bytes)
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(new_value_bytes)
+            .saturating_add(next_label.map(Self::estimate_label_bytes).unwrap_or(0));
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        Ok(())
+    }
+
+    fn preflight_bigint_literal_write(
+        &self,
+        dst: u32,
+        value: &str,
+    ) -> Result<(), InterpreterError> {
+        self.preflight_register_write_bytes(dst, Self::estimate_string_bytes(value), None)?;
+        let actual_reg = self.register_base + dst as usize;
+        let previous_label = self.register_labels.get(actual_reg);
+        let context_label_bytes = self
+            .active_execution_context_label()
+            .filter(|context| previous_label.is_none_or(|current| *context > current))
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.check_temporary_memory_budget(
+            Self::bigint_literal_construction_peak_bytes(value).saturating_add(context_label_bytes),
+        )
+    }
+
+    fn preflight_bigint_add(
+        &self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+    ) -> Result<Option<u64>, InterpreterError> {
+        let left = self.read_reg(lhs)?;
+        let right = self.read_reg(rhs)?;
+        let (Value::BigInt(left), Value::BigInt(right)) = (&left, &right) else {
+            return Ok(None);
+        };
+        let lhs_label = self.get_register_label(lhs)?;
+        let rhs_label = self.get_register_label(rhs)?;
+        let winner = if lhs_label >= rhs_label {
+            lhs_label
+        } else {
+            rhs_label
+        };
+        let peak = Self::bigint_add_construction_peak_bytes(left, right);
+        self.preflight_register_write_bytes(
+            dst,
+            Self::bigint_add_output_bound_bytes(left, right),
+            Some(winner),
+        )?;
+        self.check_temporary_memory_budget(
+            peak.saturating_add(Self::estimate_label_bytes(winner)),
+        )?;
+        Ok(Some(peak))
+    }
+
     fn write_reg(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         if reg >= self.config.max_registers {
             return Err(InterpreterError::RegisterOutOfBounds {
@@ -67234,7 +67749,6 @@ impl InterpreterCore {
             let estimate = match current {
                 Value::BigInt(digits) => Self::estimate_string_bytes(digits),
                 Value::Str(text) => Self::estimate_js_string_bytes(text),
-                // Even an empty `Arc<str>` owns an ArcInner allocation.
                 Value::BuiltinFunction(builtin) => {
                     Self::estimate_string_bytes(&builtin.module_specifier)
                 }
@@ -67359,6 +67873,136 @@ impl InterpreterCore {
                         })
                 }),
         ))
+    }
+
+    fn estimate_ordered_property_map_bytes_nonalloc(properties: &OrderedStringMap<Value>) -> u64 {
+        Self::estimate_execution_seed_ordered_value_map_bytes(properties)
+    }
+
+    fn estimate_projected_string_accessor_map_bytes(
+        properties: &OrderedStringMap<Value>,
+        target: &JsString,
+        accessor_bytes: u64,
+    ) -> u64 {
+        let exact_order_is_active =
+            properties.exact_len() != properties.len() || target.as_str().is_none();
+        let well_formed = Self::saturating_sum(
+            properties
+                .well_formed_data_entries()
+                .filter(|(key, _)| target.as_str() != Some(key.as_str()))
+                .map(|(key, value)| {
+                    let owned_key_copies = if exact_order_is_active
+                        && Self::canonical_array_index_key(key).is_none()
+                    {
+                        4
+                    } else {
+                        2
+                    };
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(
+                            Self::estimate_string_bytes(key).saturating_mul(owned_key_copies),
+                        )
+                        .saturating_add(Self::estimate_execution_seed_value_bytes(value))
+                }),
+        );
+        let exact_only = Self::saturating_sum(
+            properties
+                .exact_only_data_entries()
+                .filter(|(key, _)| *key != target)
+                .map(|(key, value)| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_js_string_bytes(key).saturating_mul(3))
+                        .saturating_add(Self::estimate_execution_seed_value_bytes(value))
+                }),
+        );
+        let symbols = Self::saturating_sum(properties.baseline_symbol_properties().map(
+            |(_, property)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2))
+                    .saturating_add(match property {
+                        BaselineSymbolProperty::Data(value) => {
+                            Self::estimate_execution_seed_value_bytes(value)
+                        }
+                        BaselineSymbolProperty::Accessor { get, set } => get
+                            .as_ref()
+                            .map(Self::estimate_execution_seed_value_bytes)
+                            .unwrap_or(0)
+                            .saturating_add(
+                                set.as_ref()
+                                    .map(Self::estimate_execution_seed_value_bytes)
+                                    .unwrap_or(0),
+                            ),
+                    })
+            },
+        ));
+        let target_bytes = match target.as_str() {
+            Some(key) => {
+                let owned_key_copies =
+                    if exact_order_is_active && Self::canonical_array_index_key(key).is_none() {
+                        4
+                    } else {
+                        2
+                    };
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(
+                        Self::estimate_string_bytes(key).saturating_mul(owned_key_copies),
+                    )
+                    .saturating_add(accessor_bytes)
+            }
+            None => MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_js_string_bytes(target).saturating_mul(3))
+                .saturating_add(accessor_bytes),
+        };
+        well_formed
+            .saturating_add(exact_only)
+            .saturating_add(symbols)
+            .saturating_add(target_bytes)
+    }
+
+    fn estimate_projected_symbol_property_map_bytes(
+        properties: &OrderedStringMap<Value>,
+        target: SymbolId,
+        next: &BaselineSymbolProperty<Value>,
+    ) -> u64 {
+        let previous = properties
+            .baseline_symbol_property(core_symbol_id(target))
+            .map_or(0, |property| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2))
+                    .saturating_add(match property {
+                        BaselineSymbolProperty::Data(value) => {
+                            Self::estimate_execution_seed_value_bytes(value)
+                        }
+                        BaselineSymbolProperty::Accessor { get, set } => get
+                            .as_ref()
+                            .map(Self::estimate_execution_seed_value_bytes)
+                            .unwrap_or(0)
+                            .saturating_add(
+                                set.as_ref()
+                                    .map(Self::estimate_execution_seed_value_bytes)
+                                    .unwrap_or(0),
+                            ),
+                    })
+            });
+        let next = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2))
+            .saturating_add(match next {
+                BaselineSymbolProperty::Data(value) => {
+                    Self::estimate_execution_seed_value_bytes(value)
+                }
+                BaselineSymbolProperty::Accessor { get, set } => get
+                    .as_ref()
+                    .map(Self::estimate_execution_seed_value_bytes)
+                    .unwrap_or(0)
+                    .saturating_add(
+                        set.as_ref()
+                            .map(Self::estimate_execution_seed_value_bytes)
+                            .unwrap_or(0),
+                    ),
+            });
+        Self::estimate_ordered_property_map_bytes_nonalloc(properties)
+            .saturating_sub(previous)
+            .saturating_add(next)
     }
 
     fn estimate_execution_seed_ordered_label_map_bytes(labels: &OrderedStringMap<Label>) -> u64 {
@@ -75742,7 +76386,11 @@ mod async_runtime_tests_current {
         match (original, cloned) {
             (Value::BigInt(left), Value::BigInt(right)) => assert!(Arc::ptr_eq(left, right)),
             (Value::BuiltinFunction(left), Value::BuiltinFunction(right)) => {
-                assert!(Arc::ptr_eq(&left.module_specifier, &right.module_specifier));
+                match (&left.module_specifier.0, &right.module_specifier.0) {
+                    (Some(left), Some(right)) => assert!(Arc::ptr_eq(left, right)),
+                    (None, None) => {}
+                    other => panic!("builtin provenance clone diverged: {other:?}"),
+                }
             }
             (
                 Value::Accessor {
@@ -81915,7 +82563,7 @@ mod async_runtime_tests_current {
                 BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray)
             )),
             InterpreterCore::estimate_string_bytes(""),
-            "an empty Arc-backed module name still owns its ArcInner allocation"
+            "empty provenance keeps a conservative logical owner charge"
         );
 
         let malformed = JsString::from_code_units(&[0xD800]);
@@ -100286,6 +100934,826 @@ mod tests {
     }
 
     #[test]
+    fn bigint_load_preflights_instruction_clone_and_arc_bd_aw8td() {
+        let digits = "9".repeat(512);
+        let module = test_module(vec![
+            Ir3Instruction::LoadBigInt {
+                dst: 0,
+                value: digits.clone(),
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let fixture = || {
+            let mut core = quickjs_test_core();
+            core.sync_estimated_memory_bytes()
+                .expect("BigInt load fixture accounting");
+            let seed = core
+                .capture_execution_seed()
+                .expect("BigInt load fixture seed reservation");
+            (core, seed)
+        };
+        let peak = InterpreterCore::bigint_literal_construction_peak_bytes(&digits);
+
+        let (mut one_short, one_short_seed) = fixture();
+        let baseline = one_short.estimated_memory_bytes();
+        one_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
+        assert!(matches!(
+            one_short.run_loop(&module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(one_short.ip, 0);
+        assert_eq!(one_short.instructions_executed, 0);
+        assert_eq!(
+            one_short.read_reg(0).expect("destination register"),
+            Value::Undefined
+        );
+        assert_eq!(one_short.estimated_memory_bytes(), baseline);
+        drop(one_short_seed);
+
+        let (mut exact, exact_seed) = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        exact.config.max_total_memory_bytes = exact_baseline.saturating_add(peak);
+        assert_eq!(exact.run_loop(&module), Err(InterpreterError::Halted));
+        assert_eq!(
+            exact.read_reg(0).expect("loaded BigInt"),
+            Value::BigInt(Arc::from(digits))
+        );
+        assert!(exact.estimated_memory_bytes() <= exact.config.max_total_memory_bytes);
+        drop(exact_seed);
+    }
+
+    #[test]
+    fn bigint_add_preflights_label_decimal_scratch_and_arc_bd_aw8td() {
+        let lhs = "9".repeat(384);
+        let rhs = "1".to_string();
+        let label = Label::Custom {
+            name: "bigint-add-label".repeat(64),
+            level: 8,
+        };
+        let module = test_module(vec![
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let fixture = || {
+            let mut core = quickjs_test_core();
+            core.write_reg_with_label(1, Value::BigInt(Arc::from(lhs.as_str())), label.clone())
+                .expect("left BigInt fixture");
+            core.write_reg(2, Value::BigInt(Arc::from(rhs.as_str())))
+                .expect("right BigInt fixture");
+            core.write_reg_with_label(0, Value::Int(77), Label::Internal)
+                .expect("destination sentinel");
+            core.sync_estimated_memory_bytes()
+                .expect("BigInt add fixture accounting");
+            core
+        };
+        let peak = InterpreterCore::bigint_add_construction_peak_bytes(&lhs, &rhs)
+            .saturating_add(InterpreterCore::estimate_label_bytes(&label));
+
+        let mut one_short = fixture();
+        let baseline = one_short.estimated_memory_bytes();
+        one_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
+        assert!(matches!(
+            one_short.run_loop(&module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(one_short.ip, 0);
+        assert_eq!(
+            one_short.read_reg(0).expect("destination sentinel"),
+            Value::Int(77)
+        );
+        assert_eq!(
+            one_short.get_register_label(0).expect("destination label"),
+            &Label::Internal
+        );
+        assert_eq!(one_short.estimated_memory_bytes(), baseline);
+
+        let mut exact = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        exact.config.max_total_memory_bytes = exact_baseline.saturating_add(peak);
+        assert_eq!(exact.run_loop(&module), Err(InterpreterError::Halted));
+        let Value::BigInt(result) = exact.read_reg(0).expect("BigInt sum") else {
+            panic!("BigInt add must publish a BigInt")
+        };
+        assert_eq!(result.as_ref(), format!("1{}", "0".repeat(384)));
+        assert_eq!(exact.get_register_label(0).expect("sum label"), &label);
+    }
+
+    fn bigint_callback_fixture() -> (InterpreterCore, Ir3Module, String, String) {
+        let left = "8".repeat(256);
+        let right = "1".repeat(256);
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadBigInt {
+                    dst: 4,
+                    value: left.clone(),
+                },
+                Ir3Instruction::LoadBigInt {
+                    dst: 5,
+                    value: right.clone(),
+                },
+                Ir3Instruction::Add {
+                    dst: 6,
+                    lhs: 4,
+                    rhs: 5,
+                },
+                Ir3Instruction::Return { value: 6 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 4,
+                frame_size: 7,
+                name: Some("bigint_callback".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.config.max_registers = 8;
+        core.sync_estimated_memory_bytes()
+            .expect("callback fixture accounting");
+        (core, module, left, right)
+    }
+
+    fn bigint_callback_peak(core: &InterpreterCore, left: &str, right: &str) -> u64 {
+        u64::from(core.config.max_registers)
+            .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX))
+            .saturating_add(InterpreterCore::estimate_string_bytes(left))
+            .saturating_add(InterpreterCore::estimate_string_bytes(right))
+            .saturating_add(InterpreterCore::bigint_add_construction_peak_bytes(
+                left, right,
+            ))
+    }
+
+    #[test]
+    fn callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td() {
+        let (mut reduce_short, module, left, right) = bigint_callback_fixture();
+        let peak = bigint_callback_peak(&reduce_short, &left, &right);
+        let baseline = reduce_short.estimated_memory_bytes();
+        reduce_short.config.max_total_memory_bytes =
+            baseline.saturating_add(peak).saturating_sub(1);
+        assert!(matches!(
+            reduce_short.invoke_simple_reduce_callback(
+                Some(&module),
+                &Value::Function(0),
+                Value::Int(0),
+                Value::Int(1),
+                0,
+                ObjectId(0),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(reduce_short.simple_callback_temporary_bytes, 0);
+        assert_eq!(
+            reduce_short.estimated_memory_bytes(),
+            reduce_short.recompute_estimated_memory_bytes()
+        );
+
+        let (mut reduce_exact, module, left, right) = bigint_callback_fixture();
+        let peak = bigint_callback_peak(&reduce_exact, &left, &right);
+        let baseline = reduce_exact.estimated_memory_bytes();
+        reduce_exact.config.max_total_memory_bytes = baseline.saturating_add(peak);
+        assert!(matches!(
+            reduce_exact
+                .invoke_simple_reduce_callback(
+                    Some(&module),
+                    &Value::Function(0),
+                    Value::Int(0),
+                    Value::Int(1),
+                    0,
+                    ObjectId(0),
+                )
+                .expect("reducer callback at exact construction ceiling"),
+            Value::BigInt(_)
+        ));
+        assert_eq!(reduce_exact.simple_callback_temporary_bytes, 0);
+
+        let (mut map_short, module, left, right) = bigint_callback_fixture();
+        let peak = bigint_callback_peak(&map_short, &left, &right);
+        let baseline = map_short.estimated_memory_bytes();
+        map_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
+        assert!(matches!(
+            map_short.invoke_simple_array_from_callback(
+                Some(&module),
+                &Value::Function(0),
+                Value::Undefined,
+                Value::Int(1),
+                0,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(map_short.simple_callback_temporary_bytes, 0);
+
+        let (mut map_exact, module, left, right) = bigint_callback_fixture();
+        let peak = bigint_callback_peak(&map_exact, &left, &right);
+        let baseline = map_exact.estimated_memory_bytes();
+        map_exact.config.max_total_memory_bytes = baseline.saturating_add(peak);
+        assert!(matches!(
+            map_exact
+                .invoke_simple_array_from_callback(
+                    Some(&module),
+                    &Value::Function(0),
+                    Value::Undefined,
+                    Value::Int(1),
+                    0,
+                )
+                .expect("Array.from callback at exact construction ceiling"),
+            Value::BigInt(_)
+        ));
+        assert_eq!(map_exact.simple_callback_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn require_and_accessor_first_construction_are_budget_atomic_bd_aw8td() {
+        let empty_left = BuiltinFunction::new_kind(BuiltinFunctionKind::MathAbs);
+        let empty_right = BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayPush);
+        assert!(empty_left.module_specifier.is_empty());
+        assert!(empty_right.module_specifier.is_empty());
+        assert!(empty_left.module_specifier.0.is_none());
+        assert!(empty_right.module_specifier.0.is_none());
+        let empty_wire = serde_json::to_string(&empty_left).expect("serialize empty builtin");
+        assert!(!empty_wire.contains("module_specifier"));
+        assert_eq!(
+            serde_json::from_str::<BuiltinFunction>(&empty_wire)
+                .expect("roundtrip empty builtin")
+                .module_specifier
+                .as_ref(),
+            ""
+        );
+
+        let specifier = format!("/fixture/{}/entry.cjs", "nested/".repeat(64));
+        let dirname = Path::new(&specifier)
+            .parent()
+            .expect("absolute fixture has a parent")
+            .display()
+            .to_string();
+        let cjs_names = ["require", "exports", "module", "__filename", "__dirname"];
+        let cjs_fixture = || {
+            let mut core = quickjs_test_core();
+            let module_object = core
+                .alloc_object_with_prototype(None)
+                .expect("CJS module fixture object");
+            let exports_object = core
+                .alloc_object_with_prototype(None)
+                .expect("CJS exports fixture object");
+            let frame = core.scope_chain.current_mut().expect("CJS fixture scope");
+            for name in cjs_names {
+                frame.bindings.insert(
+                    name.to_string(),
+                    ScopeBinding::with_state(
+                        BindingKind::Var,
+                        Value::str(format!("old-{name}-{}", "x".repeat(2048))),
+                        true,
+                    ),
+                );
+            }
+            core.sync_estimated_memory_bytes()
+                .expect("CJS fixture accounting");
+            (core, module_object, exports_object)
+        };
+        let rollback_slots = u64::try_from(cjs_names.len().saturating_mul(std::mem::size_of::<(
+            String,
+            Option<ScopeBinding>,
+            Option<ScopeBindingState>,
+        )>()))
+        .unwrap_or(u64::MAX);
+        let binding_and_name_bytes = cjs_names.into_iter().fold(0u64, |total, name| {
+            total.saturating_add(
+                MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+                    .saturating_add(InterpreterCore::estimate_string_bytes(name).saturating_mul(2)),
+            )
+        });
+        let require_peak = InterpreterCore::estimate_string_bytes(&specifier)
+            .saturating_mul(2)
+            .saturating_add(InterpreterCore::estimate_string_bytes(&dirname))
+            .saturating_add(rollback_slots)
+            .saturating_add(binding_and_name_bytes);
+
+        let (mut require_short, module_object, exports_object) = cjs_fixture();
+        let baseline = require_short.estimated_memory_bytes();
+        let bindings_before = cjs_names.map(|name| {
+            require_short
+                .scope_chain
+                .resolve(name)
+                .expect("seeded CJS binding")
+                .1
+                .value()
+                .expect("seeded CJS value")
+        });
+        let requested = baseline.saturating_add(require_peak);
+        require_short.config.max_total_memory_bytes = requested.saturating_sub(1);
+        assert_eq!(
+            require_short.insert_cjs_bindings(module_object, exports_object, Some(&specifier),),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: requested,
+                max_bytes: requested.saturating_sub(1),
+                requested_heap_objects: require_short.heap_object_count_u32(),
+                max_heap_objects: require_short.config.max_heap_objects,
+            })
+        );
+        assert_eq!(
+            cjs_names.map(|name| {
+                require_short
+                    .scope_chain
+                    .resolve(name)
+                    .expect("CJS binding after refusal")
+                    .1
+                    .value()
+                    .expect("CJS value after refusal")
+            }),
+            bindings_before
+        );
+        assert_eq!(require_short.estimated_memory_bytes(), baseline);
+
+        let (mut require_exact, module_object, exports_object) = cjs_fixture();
+        let baseline = require_exact.estimated_memory_bytes();
+        require_exact.config.max_total_memory_bytes = baseline.saturating_add(require_peak);
+        require_exact
+            .insert_cjs_bindings(module_object, exports_object, Some(&specifier))
+            .expect("CJS bindings at exact require construction ceiling");
+        let binding_value = |core: &InterpreterCore, name: &str| {
+            core.scope_chain
+                .resolve(name)
+                .expect("installed CJS binding")
+                .1
+                .value()
+                .expect("installed CJS value")
+        };
+        let Value::BuiltinFunction(require) = binding_value(&require_exact, "require") else {
+            panic!("require binding must be callable")
+        };
+        assert_eq!(require.kind, BuiltinFunctionKind::Require);
+        assert_eq!(require.module_specifier.as_ref(), specifier);
+        assert_eq!(
+            binding_value(&require_exact, "__filename"),
+            Value::str(specifier.clone())
+        );
+        assert_eq!(
+            binding_value(&require_exact, "__dirname"),
+            Value::str(dirname)
+        );
+        assert_eq!(
+            binding_value(&require_exact, "module"),
+            Value::Object(module_object)
+        );
+        assert_eq!(
+            binding_value(&require_exact, "exports"),
+            Value::Object(exports_object)
+        );
+        assert_eq!(
+            require_exact.estimated_memory_bytes(),
+            require_exact.recompute_estimated_memory_bytes()
+        );
+
+        let cjs_property_fixture = || {
+            let mut core = quickjs_test_core();
+            let module_object = core
+                .alloc_object_with_prototype(None)
+                .expect("CJS require-property object");
+            core.set_object_property(
+                module_object,
+                "require".to_string(),
+                Value::str("old-require".repeat(256)),
+            )
+            .expect("seed old CJS require property");
+            core.sync_estimated_memory_bytes()
+                .expect("CJS require-property accounting");
+            (core, module_object)
+        };
+        let property_key_bytes = InterpreterCore::estimate_string_bytes("require");
+        let property_peak =
+            property_key_bytes.saturating_add(InterpreterCore::estimate_string_bytes(&specifier));
+
+        let (mut property_key_short, module_object) = cjs_property_fixture();
+        let baseline = property_key_short.estimated_memory_bytes();
+        let property_requested = baseline.saturating_add(property_peak);
+        let key_short_max = baseline
+            .saturating_add(property_key_bytes)
+            .saturating_sub(1);
+        let wire_before = serde_json::to_string(&property_key_short.heap[module_object.0 as usize])
+            .expect("serialize CJS property before key-boundary refusal");
+        property_key_short.config.max_total_memory_bytes = key_short_max;
+        assert_eq!(
+            property_key_short.set_cjs_require_property(module_object, &specifier),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: property_requested,
+                max_bytes: key_short_max,
+                requested_heap_objects: property_key_short.heap_object_count_u32(),
+                max_heap_objects: property_key_short.config.max_heap_objects,
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&property_key_short.heap[module_object.0 as usize])
+                .expect("serialize CJS property after key-boundary refusal"),
+            wire_before
+        );
+        assert_eq!(property_key_short.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            property_key_short.estimated_memory_bytes(),
+            property_key_short.recompute_estimated_memory_bytes()
+        );
+
+        let (mut property_short, module_object) = cjs_property_fixture();
+        let baseline = property_short.estimated_memory_bytes();
+        let property_requested = baseline.saturating_add(property_peak);
+        let wire_before = serde_json::to_string(&property_short.heap[module_object.0 as usize])
+            .expect("serialize CJS property before refusal");
+        property_short.config.max_total_memory_bytes = property_requested.saturating_sub(1);
+        assert_eq!(
+            property_short.set_cjs_require_property(module_object, &specifier),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: property_requested,
+                max_bytes: property_requested.saturating_sub(1),
+                requested_heap_objects: property_short.heap_object_count_u32(),
+                max_heap_objects: property_short.config.max_heap_objects,
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&property_short.heap[module_object.0 as usize])
+                .expect("serialize CJS property after refusal"),
+            wire_before
+        );
+        assert_eq!(property_short.estimated_memory_bytes(), baseline);
+
+        let (mut property_exact, module_object) = cjs_property_fixture();
+        property_exact.config.max_total_memory_bytes = property_exact
+            .estimated_memory_bytes()
+            .saturating_add(property_peak);
+        property_exact
+            .set_cjs_require_property(module_object, &specifier)
+            .expect("CJS require property at exact construction ceiling");
+        let Value::BuiltinFunction(require) = property_exact.heap[module_object.0 as usize]
+            .properties
+            .get("require")
+            .expect("installed CJS require property")
+        else {
+            panic!("CJS require property must be callable")
+        };
+        assert_eq!(require.kind, BuiltinFunctionKind::Require);
+        assert_eq!(require.module_specifier.as_ref(), specifier);
+        assert_eq!(
+            property_exact.estimated_memory_bytes(),
+            property_exact.recompute_estimated_memory_bytes()
+        );
+
+        let accessor_fixture = || {
+            let mut core = quickjs_test_core();
+            let object = core
+                .alloc_object_with_prototype(None)
+                .expect("accessor fixture object");
+            core.sync_estimated_memory_bytes()
+                .expect("accessor fixture accounting");
+            (core, object)
+        };
+        let (mut one_short, object) = accessor_fixture();
+        let key = JsString::from("value");
+        let arc_value_bytes = u64::try_from(std::mem::size_of::<Value>())
+            .unwrap_or(u64::MAX)
+            .saturating_add(
+                u64::try_from(2usize.saturating_mul(std::mem::size_of::<usize>()))
+                    .unwrap_or(u64::MAX),
+            );
+        let previous_map = InterpreterCore::estimate_ordered_property_map_bytes_nonalloc(
+            &one_short.heap[object.0 as usize].properties,
+        );
+        assert_eq!(previous_map, 0);
+        let next_map = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(InterpreterCore::estimate_string_bytes("value").saturating_mul(2))
+            .saturating_add(arc_value_bytes);
+        let baseline = one_short.estimated_memory_bytes();
+        let retained = baseline
+            .saturating_sub(previous_map)
+            .saturating_add(next_map);
+        let construction = baseline
+            .saturating_add(arc_value_bytes)
+            .saturating_add(InterpreterCore::estimate_string_bytes("value"));
+        let requested = retained.max(construction);
+        one_short.config.max_total_memory_bytes = requested.saturating_sub(1);
+        assert_eq!(
+            one_short.define_accessor_property(
+                object,
+                RuntimePropertyKey::String(key.clone()),
+                Value::Function(0),
+                AccessorKind::Get,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: requested,
+                max_bytes: requested.saturating_sub(1),
+                requested_heap_objects: one_short.heap_object_count_u32(),
+                max_heap_objects: one_short.config.max_heap_objects,
+            })
+        );
+        assert!(
+            one_short.heap[object.0 as usize]
+                .properties
+                .get("value")
+                .is_none()
+        );
+        assert_eq!(one_short.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short.recompute_estimated_memory_bytes()
+        );
+
+        let (mut exact, object) = accessor_fixture();
+        exact.config.max_total_memory_bytes = requested;
+        exact
+            .define_accessor_property(
+                object,
+                RuntimePropertyKey::String(key),
+                Value::Function(0),
+                AccessorKind::Get,
+            )
+            .expect("accessor first construction at exact ceiling");
+        assert!(matches!(
+            exact.heap[object.0 as usize].properties.get("value"),
+            Some(Value::Accessor {
+                get: Some(_),
+                set: None
+            })
+        ));
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn accessor_merge_exact_activation_and_symbol_storage_are_atomic_bd_aw8td() {
+        let arc_value_bytes = u64::try_from(std::mem::size_of::<Value>())
+            .unwrap_or(u64::MAX)
+            .saturating_add(
+                u64::try_from(2usize.saturating_mul(std::mem::size_of::<usize>()))
+                    .unwrap_or(u64::MAX),
+            );
+
+        let ordinary_fixture = || {
+            let mut core = quickjs_test_core();
+            let object = core
+                .alloc_object_with_prototype(None)
+                .expect("ordinary accessor merge object");
+            core.define_accessor_property(
+                object,
+                RuntimePropertyKey::String(JsString::from("value")),
+                Value::Function(1),
+                AccessorKind::Get,
+            )
+            .expect("ordinary getter setup");
+            core.sync_estimated_memory_bytes()
+                .expect("ordinary accessor merge accounting");
+            (core, object)
+        };
+        let (mut ordinary_short, object) = ordinary_fixture();
+        let key = JsString::from("value");
+        let previous_map = InterpreterCore::estimate_ordered_property_map_bytes_nonalloc(
+            &ordinary_short.heap[object.0 as usize].properties,
+        );
+        let entry_without_accessor = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(InterpreterCore::estimate_string_bytes("value").saturating_mul(2));
+        assert_eq!(
+            previous_map,
+            entry_without_accessor.saturating_add(arc_value_bytes)
+        );
+        let next_map = entry_without_accessor.saturating_add(arc_value_bytes.saturating_mul(2));
+        let baseline = ordinary_short.estimated_memory_bytes();
+        let retained = baseline
+            .saturating_sub(previous_map)
+            .saturating_add(next_map);
+        let construction = baseline
+            .saturating_add(arc_value_bytes)
+            .saturating_add(InterpreterCore::estimate_string_bytes("value"));
+        let requested = retained.max(construction);
+        let getter_before = match ordinary_short.heap[object.0 as usize]
+            .properties
+            .get("value")
+        {
+            Some(Value::Accessor {
+                get: Some(getter), ..
+            }) => getter.clone(),
+            other => panic!("ordinary getter fixture is malformed: {other:?}"),
+        };
+        ordinary_short.config.max_total_memory_bytes = requested.saturating_sub(1);
+        assert_eq!(
+            ordinary_short.define_accessor_property(
+                object,
+                RuntimePropertyKey::String(key.clone()),
+                Value::Function(2),
+                AccessorKind::Set,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: requested,
+                max_bytes: requested.saturating_sub(1),
+                requested_heap_objects: ordinary_short.heap_object_count_u32(),
+                max_heap_objects: ordinary_short.config.max_heap_objects,
+            })
+        );
+        match ordinary_short.heap[object.0 as usize]
+            .properties
+            .get("value")
+        {
+            Some(Value::Accessor {
+                get: Some(getter),
+                set: None,
+            }) => assert!(Arc::ptr_eq(getter, &getter_before)),
+            other => panic!("ordinary getter changed after refusal: {other:?}"),
+        }
+        assert_eq!(ordinary_short.estimated_memory_bytes(), baseline);
+
+        let (mut ordinary_exact, object) = ordinary_fixture();
+        ordinary_exact.config.max_total_memory_bytes = requested;
+        ordinary_exact
+            .define_accessor_property(
+                object,
+                RuntimePropertyKey::String(key),
+                Value::Function(2),
+                AccessorKind::Set,
+            )
+            .expect("ordinary setter merge at exact construction ceiling");
+        assert!(matches!(
+            ordinary_exact.heap[object.0 as usize]
+                .properties
+                .get("value"),
+            Some(Value::Accessor {
+                get: Some(_),
+                set: Some(_),
+            })
+        ));
+        assert_eq!(
+            ordinary_exact.estimated_memory_bytes(),
+            ordinary_exact.recompute_estimated_memory_bytes()
+        );
+
+        let exact_fixture = || {
+            let mut core = quickjs_test_core();
+            let object = core
+                .alloc_object_with_prototype(None)
+                .expect("exact accessor activation object");
+            core.set_object_property(object, "alpha".to_string(), Value::Int(1))
+                .expect("first ordinary property");
+            core.set_object_property(object, "beta".to_string(), Value::Int(2))
+                .expect("second ordinary property");
+            core.sync_estimated_memory_bytes()
+                .expect("exact accessor activation accounting");
+            (core, object)
+        };
+        let exact_key = JsString::from_code_units(&[0xD800]);
+        let (mut exact_short, object) = exact_fixture();
+        let previous_map = InterpreterCore::estimate_ordered_property_map_bytes_nonalloc(
+            &exact_short.heap[object.0 as usize].properties,
+        );
+        let next_map = ["alpha", "beta"]
+            .into_iter()
+            .fold(0u64, |total, key| {
+                total.saturating_add(
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                        InterpreterCore::estimate_string_bytes(key).saturating_mul(4),
+                    ),
+                )
+            })
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(InterpreterCore::estimate_js_string_bytes(&exact_key).saturating_mul(3))
+            .saturating_add(arc_value_bytes);
+        let baseline = exact_short.estimated_memory_bytes();
+        let retained = baseline
+            .saturating_sub(previous_map)
+            .saturating_add(next_map);
+        let construction =
+            baseline.saturating_add(arc_value_bytes.saturating_add(previous_map).max(next_map));
+        let requested = retained.max(construction);
+        let order_before = exact_short.heap[object.0 as usize].properties.exact_keys();
+        exact_short.config.max_total_memory_bytes = requested.saturating_sub(1);
+        assert_eq!(
+            exact_short.define_accessor_property(
+                object,
+                RuntimePropertyKey::String(exact_key.clone()),
+                Value::Function(3),
+                AccessorKind::Get,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: requested,
+                max_bytes: requested.saturating_sub(1),
+                requested_heap_objects: exact_short.heap_object_count_u32(),
+                max_heap_objects: exact_short.config.max_heap_objects,
+            })
+        );
+        assert_eq!(
+            exact_short.heap[object.0 as usize].properties.exact_keys(),
+            order_before
+        );
+        assert_eq!(exact_short.estimated_memory_bytes(), baseline);
+
+        let (mut exact_success, object) = exact_fixture();
+        exact_success.config.max_total_memory_bytes = requested;
+        exact_success
+            .define_accessor_property(
+                object,
+                RuntimePropertyKey::String(exact_key.clone()),
+                Value::Function(3),
+                AccessorKind::Get,
+            )
+            .expect("first exact accessor at exact construction ceiling");
+        assert_eq!(
+            exact_success.heap[object.0 as usize]
+                .properties
+                .exact_keys(),
+            vec![JsString::from("alpha"), JsString::from("beta"), exact_key]
+        );
+        assert_eq!(
+            exact_success.estimated_memory_bytes(),
+            exact_success.recompute_estimated_memory_bytes()
+        );
+
+        let symbol_fixture = || {
+            let mut core = quickjs_test_core();
+            let object = core
+                .alloc_object_with_prototype(None)
+                .expect("symbol accessor object");
+            let symbol = core
+                .allocate_private_symbol(Some(JsString::from("accessor")))
+                .expect("symbol accessor key");
+            core.define_accessor_property(
+                object,
+                RuntimePropertyKey::Symbol(symbol),
+                Value::Function(4),
+                AccessorKind::Get,
+            )
+            .expect("symbol getter setup");
+            core.sync_estimated_memory_bytes()
+                .expect("symbol accessor accounting");
+            (core, object, symbol)
+        };
+        let (mut symbol_short, object, symbol) = symbol_fixture();
+        let previous_map = InterpreterCore::estimate_ordered_property_map_bytes_nonalloc(
+            &symbol_short.heap[object.0 as usize].properties,
+        );
+        let next_property = BaselineSymbolProperty::Accessor {
+            get: Some(Value::Function(4)),
+            set: Some(Value::Function(5)),
+        };
+        let next_map = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2));
+        assert_eq!(previous_map, next_map);
+        let baseline = symbol_short.estimated_memory_bytes();
+        let retained = baseline
+            .saturating_sub(previous_map)
+            .saturating_add(next_map);
+        let requested = retained.max(baseline.saturating_add(previous_map.max(next_map)));
+        symbol_short.config.max_total_memory_bytes = requested.saturating_sub(1);
+        assert_eq!(
+            symbol_short.define_accessor_property(
+                object,
+                RuntimePropertyKey::Symbol(symbol),
+                Value::Function(5),
+                AccessorKind::Set,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: requested,
+                max_bytes: requested.saturating_sub(1),
+                requested_heap_objects: symbol_short.heap_object_count_u32(),
+                max_heap_objects: symbol_short.config.max_heap_objects,
+            })
+        );
+        assert_eq!(
+            symbol_short.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_property(core_symbol_id(symbol)),
+            Some(&BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(4)),
+                set: None,
+            })
+        );
+        assert_eq!(symbol_short.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            symbol_short.estimated_memory_bytes(),
+            symbol_short.recompute_estimated_memory_bytes()
+        );
+
+        let (mut symbol_exact, object, symbol) = symbol_fixture();
+        symbol_exact.config.max_total_memory_bytes = requested;
+        symbol_exact
+            .define_accessor_property(
+                object,
+                RuntimePropertyKey::Symbol(symbol),
+                Value::Function(5),
+                AccessorKind::Set,
+            )
+            .expect("symbol setter merge at exact clone ceiling");
+        assert_eq!(
+            symbol_exact.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_property(core_symbol_id(symbol)),
+            Some(&next_property)
+        );
+        assert_eq!(
+            symbol_exact.estimated_memory_bytes(),
+            symbol_exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn crypto_brand_lifecycle_label_and_memory_are_private_bd_2z157() {
         let mut core = quickjs_test_core();
         let forged = core
@@ -116303,7 +117771,7 @@ mod string_intrinsic_table_parity_tests {
         let range = load_args(core, args);
         let builtin = BuiltinFunction {
             kind,
-            module_specifier: Arc::from(""),
+            module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
         };

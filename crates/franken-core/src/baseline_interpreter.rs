@@ -16768,12 +16768,32 @@ impl InterpreterCore {
         &mut self,
         value: &Value,
     ) -> Result<(bool, bool, Value, crate::ifc_artifacts::Label), InterpreterError> {
-        let prototype = self.function_prototype_for_value(value)?.ok_or_else(|| {
-            InterpreterError::TypeError {
-                expected: "constructor function".to_string(),
-                got: value.type_name().to_string(),
-            }
-        })?;
+        // Inspect derived-constructor flags on an ALREADY-materialized
+        // prototype only. A function whose prototype has not been materialized
+        // cannot have been registered as a derived constructor (registration
+        // materializes it), so it is non-derived by construction. Materializing
+        // the prototype here purely to read the flags is a non-transactional
+        // heap side effect on paths that later refuse setup (e.g. a denied
+        // rest-param allocation): the Construct dispatch probes derived-ness
+        // before its call-setup snapshot, so a premature prototype allocation
+        // survived rollback and regressed bd-ur3tk.9's "leaves setup unchanged"
+        // (denied/malformed constructor rest) heap invariant.
+        let Some(function_key) = self.function_prototype_key_for_value(value)? else {
+            return Ok((
+                false,
+                false,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            ));
+        };
+        let Some(&prototype) = self.function_prototypes.get(&function_key) else {
+            return Ok((
+                false,
+                false,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            ));
+        };
         let object = self
             .heap
             .get(prototype.0 as usize)

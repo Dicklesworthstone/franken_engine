@@ -1423,6 +1423,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::EvidenceCompressionCoder { .. }
         | OrchestratorError::EvidenceCompressionEncode { .. }
         | OrchestratorError::EvidenceCompressionKraft { .. }
+        | OrchestratorError::AdaptiveRoutingDecisionInvalid { .. }
         | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::WitnessSealing { .. }
         | OrchestratorError::InvalidModuleRoot { .. }
@@ -2566,5 +2567,14 @@ mod tests {
             comparison,
             (ParityVerdict::Mismatch, Some(MismatchKind::FailureClass))
         );
+    }
+
+    #[test]
+    fn adaptive_routing_decision_failure_is_classified_as_runtime_bd_wftp1() {
+        let error = OrchestratorError::AdaptiveRoutingDecisionInvalid {
+            detail: "decision digest mismatch".to_string(),
+        };
+
+        assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
     }
 }

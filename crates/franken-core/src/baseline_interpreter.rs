@@ -15389,19 +15389,38 @@ impl InterpreterCore {
 
     /// The stored IFC label of an own Symbol-keyed property, or `Public` when
     /// absent or unlabeled.
+    /// The stored IFC label of a Symbol-keyed property resolved through the
+    /// prototype chain (bd-ojvo1): the label on the FIRST object that owns the
+    /// Symbol property (shadowing respected), or `Public` when absent/unlabeled.
     fn own_symbol_property_label(
         &self,
         object_id: ObjectId,
         symbol: SymbolId,
     ) -> crate::ifc_artifacts::Label {
-        self.heap
-            .get(object_id.0 as usize)
-            .and_then(|object| object.property_labels.baseline_symbol_property(symbol))
-            .and_then(|property| match property {
-                BaselineSymbolProperty::Data(label) => Some(label.clone()),
-                _ => None,
-            })
-            .unwrap_or(crate::ifc_artifacts::Label::Public)
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                break;
+            };
+            if object.properties.baseline_symbol_property(symbol).is_some() {
+                return object
+                    .property_labels
+                    .baseline_symbol_property(symbol)
+                    .and_then(|property| match property {
+                        BaselineSymbolProperty::Data(label) => Some(label.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or(crate::ifc_artifacts::Label::Public);
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+        crate::ifc_artifacts::Label::Public
     }
 
     /// The stored IFC label of an own string property, or `Public` when the
@@ -19103,6 +19122,11 @@ mod tests {
             .alloc_object_with_properties(&[])
             .expect("object allocation should succeed");
         let symbol = SymbolId(1);
+        // The object must OWN the Symbol property (a value present) for its
+        // label to resolve, matching a real SetProperty write.
+        core.heap[obj.0 as usize]
+            .properties
+            .insert_baseline_symbol_property(symbol, BaselineSymbolProperty::Data(Value::Int(7)));
 
         core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Secret);
         assert_eq!(

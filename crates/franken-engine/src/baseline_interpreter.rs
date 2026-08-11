@@ -39028,7 +39028,16 @@ impl InterpreterCore {
                     // value, enabling IFC confinement bypass — bd-0zybl, sibling
                     // of the HostCall gap bd-n2mjy). Conservative join (not bare
                     // overwrite) so a dst already carrying higher taint is never
-                    // lowered by a property read.
+                    // lowered by a property read. The seed join above covers the
+                    // object and key operands; re-join the dst register's prior
+                    // label here so the conservative (non-lowering) guarantee
+                    // holds even after 1de697784/1e2abaff1 reseeded the join from
+                    // (dst, obj) to (obj, key) — dropping (dst) alone would let a
+                    // Public property read lower a dst that already held Secret
+                    // (bd-0zybl regression).
+                    let prior_dst_label = self.clone_register_label_with_temporary_budget(dst)?;
+                    result_label = self
+                        .join_owned_label_with_temporary_budget(result_label, &prior_dst_label)?;
                     self.write_reg_with_label(dst, prop, result_label)?;
                     self.ip += 1;
                 }

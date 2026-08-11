@@ -16524,6 +16524,17 @@ impl InterpreterCore {
         }
 
         let name = self.inferred_method_name(&key);
+        // bd-ojvo1: capture the method's own string key + its definition IFC
+        // label before both are moved, so the label can be recorded on the
+        // property below — define_method_property otherwise stores the label
+        // only in closure_method_metadata (keyed by closure_id), which the
+        // property-read path does not consult, leaking a Secret method's
+        // provenance on a later read.
+        let method_key = match &key {
+            RuntimePropertyKey::String(js) => js.as_str().map(str::to_string),
+            _ => None,
+        };
+        let method_label = definition_label.clone();
         self.closure_method_metadata.insert(
             closure_id,
             ClosureMethodMetadata {
@@ -16538,6 +16549,9 @@ impl InterpreterCore {
             self.closure_method_metadata.remove(&closure_id);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(error);
+        }
+        if let Some(key_str) = method_key {
+            self.set_own_property_label(object_id, &key_str, &method_label);
         }
         Ok(())
     }
@@ -18992,6 +19006,37 @@ mod tests {
                 .expect("dst register label should exist"),
             crate::ifc_artifacts::Label::Secret,
             "a Secret value written to an array element must read back Secret (bd-ojvo1)"
+        );
+    }
+
+    /// bd-ojvo1: a concise method defined with a Secret definition label must
+    /// record that label on its own property, so a later read recovers the
+    /// method's provenance (define_method_property otherwise stored the label
+    /// only in closure_method_metadata, which the property-read path ignores).
+    #[test]
+    fn define_method_records_definition_label_bd_ojvo1() {
+        let mut core = quickjs_test_core();
+        let obj = core
+            .alloc_object_with_properties(&[])
+            .expect("object allocation should succeed");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: vec![],
+        });
+        let closure_id = (core.closures.len() - 1) as u32;
+
+        core.define_method_property(
+            obj,
+            RuntimePropertyKey::String(JsString::from("m")),
+            Value::Closure(closure_id),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("concise method definition should succeed");
+
+        assert_eq!(
+            core.own_property_label(obj, "m"),
+            crate::ifc_artifacts::Label::Secret,
+            "a concise method's Secret definition label must be recorded on its property (bd-ojvo1)"
         );
     }
 

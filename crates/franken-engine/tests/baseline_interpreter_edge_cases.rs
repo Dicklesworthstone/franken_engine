@@ -280,7 +280,7 @@ fn historical_value_wire_bytes_survive_the_0_2_api_migration() {
         (
             Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::Require,
-                module_specifier: Arc::from("node:path").into(),
+                module_specifier: "node:path".into(),
                 iterator_handle: None,
                 bound_object: None,
             }),

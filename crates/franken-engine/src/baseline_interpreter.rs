@@ -29154,9 +29154,11 @@ impl InterpreterCore {
                 self.cjs_dirname_view(specifier),
             ))
         });
-        let require_payload_bytes = (!require_specifier.is_empty())
-            .then(|| Self::estimate_string_bytes(require_specifier))
-            .unwrap_or(0);
+        let require_payload_bytes = if require_specifier.is_empty() {
+            0
+        } else {
+            Self::estimate_string_bytes(require_specifier)
+        };
         let names = ["require", "exports", "module", "__filename", "__dirname"];
         let rollback_slots = u64::try_from(names.len().saturating_mul(std::mem::size_of::<(
             String,

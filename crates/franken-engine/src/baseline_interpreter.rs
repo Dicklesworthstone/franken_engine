@@ -7680,6 +7680,64 @@ pub enum ExecutionSeed {
     },
 }
 
+#[derive(Default)]
+struct ExecutionSeedReservationLedger {
+    live_reserved_bytes: std::cell::Cell<u64>,
+    accounting_fault: std::cell::Cell<bool>,
+}
+
+#[derive(Clone)]
+struct ExecutionSeedHandle(std::rc::Rc<ExecutionSeedShared>);
+
+struct ExecutionSeedShared {
+    state: std::cell::RefCell<Box<ExecutionSeed>>,
+    snapshot_bytes: u64,
+    reserved_bytes: std::cell::Cell<u64>,
+    registered: std::cell::Cell<bool>,
+    reservation_ledger: std::rc::Weak<ExecutionSeedReservationLedger>,
+}
+
+impl Drop for ExecutionSeedShared {
+    fn drop(&mut self) {
+        let Some(ledger) = self.reservation_ledger.upgrade() else {
+            return;
+        };
+        let reserved_bytes = if self.registered.get() {
+            self.reserved_bytes
+                .get()
+                .saturating_sub(InterpreterCore::pending_execution_seed_entry_bytes())
+        } else {
+            self.reserved_bytes.get()
+        };
+        match ledger.live_reserved_bytes.get().checked_sub(reserved_bytes) {
+            Some(next) => ledger.live_reserved_bytes.set(next),
+            None => {
+                ledger.accounting_fault.set(true);
+                ledger.live_reserved_bytes.set(u64::MAX);
+            }
+        }
+    }
+}
+
+impl ExecutionSeedHandle {
+    fn is_owned_by(&self, ledger: &std::rc::Rc<ExecutionSeedReservationLedger>) -> bool {
+        self.0
+            .reservation_ledger
+            .upgrade()
+            .is_some_and(|owner| std::rc::Rc::ptr_eq(&owner, ledger))
+    }
+
+    #[cfg(test)]
+    fn is_lazy(&self) -> bool {
+        matches!(&**self.0.state.borrow(), ExecutionSeed::Lazy { .. })
+    }
+
+    #[cfg(test)]
+    fn inspect<R>(&self, inspect: impl FnOnce(&ExecutionSeed) -> R) -> R {
+        inspect(&self.0.state.borrow())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // InterpreterCore — shared execution engine
 // ---------------------------------------------------------------------------
@@ -8802,7 +8860,9 @@ pub struct InterpreterCore {
     call_stack: Vec<CallFrame>,
     /// Object heap. SEED-SURFACE.
     heap: SeedTrackedField<Vec<HeapObject>>,
-    /// Approximate live memory tracked for fail-closed budget enforcement.
+    /// Approximate live non-seed memory tracked for fail-closed budget enforcement.
+    /// Live execution-seed reservations are held separately in
+    /// `execution_seed_reservation_ledger` and joined at every admission gate.
     estimated_memory_bytes: u64,
     /// Resident ownership held by nested module/callback snapshots while the
     /// corresponding active core fields are temporarily replaced.
@@ -8824,7 +8884,9 @@ pub struct InterpreterCore {
     /// Current seed epoch for lazy materialization.
     seed_epoch: u64,
     /// Pending lazy seeds to materialize on next write.
-    pending_lazy_seeds: Vec<std::rc::Weak<std::cell::RefCell<ExecutionSeed>>>,
+    pending_lazy_seeds: Vec<std::rc::Weak<ExecutionSeedShared>>,
+    /// Drop-aware ownership charged for every live execution-seed snapshot.
+    execution_seed_reservation_ledger: std::rc::Rc<ExecutionSeedReservationLedger>,
     /// Current instruction pointer.
     ip: usize,
     /// Instructions executed counter.
@@ -8919,9 +8981,10 @@ pub struct InterpreterCore {
     /// exact `EnterFinally` instruction it targets.
     pending_finally_entry: Option<PendingFinallyEntry>,
     /// Pre-run caller-visible seed used for the most recent execute().
-    last_pre_run_seed: Option<std::rc::Rc<std::cell::RefCell<ExecutionSeed>>>,
-    /// Caller-visible state immediately after the most recent execute().
-    last_post_run_seed: Option<std::rc::Rc<std::cell::RefCell<ExecutionSeed>>>,
+    last_pre_run_seed: Option<ExecutionSeedHandle>,
+    /// Seed epoch immediately after the most recent execute(). Every seed-surface
+    /// write clears this marker before advancing the epoch, preventing wraparound ABA.
+    last_post_run_epoch: Option<u64>,
     /// Runtime scope chain for lexical variable resolution.
     scope_chain: ScopeChain,
     /// Realm-owned bindings created by sloppy writes to unresolvable names.
@@ -9696,6 +9759,9 @@ impl InterpreterCore {
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
+            execution_seed_reservation_ledger: std::rc::Rc::new(
+                ExecutionSeedReservationLedger::default(),
+            ),
             ip: 0,
             instructions_executed: 0,
             witness_events: Vec::new(),
@@ -9720,7 +9786,7 @@ impl InterpreterCore {
             finally_frames: Vec::new(),
             pending_finally_entry: None,
             last_pre_run_seed: None,
-            last_post_run_seed: None,
+            last_post_run_epoch: None,
             scope_chain,
             realm_dynamic_globals: BTreeMap::new(),
             generated_function_realm_globals: None,
@@ -12795,8 +12861,7 @@ impl InterpreterCore {
     }
 
     fn preflight_loopback_transaction(&self, requested_bytes: u64) -> Result<(), InterpreterError> {
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         Ok(())
@@ -18000,8 +18065,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_add(object_bytes)
             .saturating_add(state_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(
                 requested_bytes,
                 self.heap_object_count_u32().saturating_add(1),
@@ -18131,8 +18195,7 @@ impl InterpreterCore {
             .saturating_add(readable_bytes)
             .saturating_add(writable_bytes)
             .saturating_add(object_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(
                 requested_bytes,
                 self.heap_object_count_u32().saturating_add(1),
@@ -18297,8 +18360,7 @@ impl InterpreterCore {
             .saturating_add(readable_bytes)
             .saturating_add(writable_bytes)
             .saturating_add(object_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(
                 requested_bytes,
                 self.heap_object_count_u32().saturating_add(1),
@@ -19058,8 +19120,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(previous_bytes)
             .saturating_add(destroyed_state_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         let scheduled_tick = if current.tick_sequence.is_none() {
@@ -19534,8 +19595,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(old_dynamic)
             .saturating_add(next_dynamic);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         let scheduled_tick = if state.tick_sequence.is_none() {
@@ -19637,8 +19697,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(old_dynamic)
             .saturating_add(next_dynamic);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         let scheduled_tick = if state.tick_sequence.is_none() {
@@ -19728,8 +19787,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(old_dynamic)
             .saturating_add(next_dynamic);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             let budget_error =
                 self.memory_budget_error(requested_bytes, self.heap_object_count_u32());
             if restore_pending_exception_on_refusal {
@@ -20224,8 +20282,7 @@ impl InterpreterCore {
         bytes: u64,
     ) -> Result<(), InterpreterError> {
         let requested_bytes = self.estimated_memory_bytes.saturating_add(bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         self.writable_in_flight_callback_bytes =
@@ -20489,8 +20546,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(previous_label_bytes)
             .saturating_add(next_label_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         self.writable_in_flight_callback_bytes = self
@@ -21795,8 +21851,7 @@ impl InterpreterCore {
             .saturating_add(state_bytes)
             .saturating_add(object_bytes)
             .saturating_add(pump_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(
                 requested_bytes,
                 self.heap_object_count_u32().saturating_add(1),
@@ -23281,8 +23336,7 @@ impl InterpreterCore {
             }
         }
         let requested_bytes = self.estimated_memory_bytes.saturating_add(positive_delta);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         Ok(())
@@ -25060,8 +25114,7 @@ impl InterpreterCore {
             .saturating_sub(previous_bytes)
             .saturating_add(destroyed_state_bytes)
             .saturating_add(pump_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         let previous_total = self.estimated_memory_bytes;
@@ -25191,7 +25244,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_add(minimum_materialization_peak.max(minimum_commit_peak));
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
-        if Self::memory_request_exceeds_budget(
+        if self.memory_request_exceeds_budget(
             minimum_requested_bytes,
             self.config.max_total_memory_bytes,
         ) || requested_heap_objects > self.config.max_heap_objects
@@ -25244,8 +25297,7 @@ impl InterpreterCore {
         let requested_bytes = self
             .estimated_memory_bytes
             .saturating_add(materialization_peak.max(commit_peak));
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(
                 requested_bytes,
                 self.heap_object_count_u32().saturating_add(1),
@@ -25343,7 +25395,7 @@ impl InterpreterCore {
             debug_assert!(previous.is_none());
             debug_assert_eq!(
                 self.estimated_memory_bytes,
-                self.recompute_estimated_memory_bytes()
+                self.recompute_base_estimated_memory_bytes()
             );
             return Err(error);
         }
@@ -26199,15 +26251,133 @@ impl InterpreterCore {
     // ExecutionSeed management for PERF-H2.2
     // ---------------------------------------------------------------------------
 
-    pub(crate) fn capture_execution_seed(
-        &mut self,
-    ) -> std::rc::Rc<std::cell::RefCell<ExecutionSeed>> {
-        let seed = std::rc::Rc::new(std::cell::RefCell::new(ExecutionSeed::Lazy {
-            epoch: self.seed_epoch,
-            max_regs: self.config.max_registers,
-        }));
-        self.pending_lazy_seeds.push(std::rc::Rc::downgrade(&seed));
-        seed
+    fn execution_seed_registry_envelope_bytes() -> u64 {
+        u64::try_from(
+            std::mem::size_of::<ExecutionSeedShared>()
+                .saturating_add(2usize.saturating_mul(std::mem::size_of::<usize>())),
+        )
+        .unwrap_or(u64::MAX)
+    }
+
+    fn pending_execution_seed_entry_bytes() -> u64 {
+        Self::execution_seed_registry_envelope_bytes().saturating_add(
+            u64::try_from(std::mem::size_of::<std::rc::Weak<ExecutionSeedShared>>())
+                .unwrap_or(u64::MAX),
+        )
+    }
+
+    fn live_execution_seed_reserved_bytes(&self) -> u64 {
+        if self
+            .execution_seed_reservation_ledger
+            .accounting_fault
+            .get()
+        {
+            u64::MAX
+        } else {
+            self.execution_seed_reservation_ledger
+                .live_reserved_bytes
+                .get()
+        }
+    }
+
+    fn total_memory_bytes_from_base(&self, base_bytes: u64) -> u64 {
+        base_bytes.saturating_add(self.live_execution_seed_reserved_bytes())
+    }
+
+    fn prune_dead_pending_execution_seeds(&mut self) {
+        let previous_len = self.pending_lazy_seeds.len();
+        self.pending_lazy_seeds
+            .retain(|seed| seed.strong_count() != 0);
+        let removed = previous_len.saturating_sub(self.pending_lazy_seeds.len());
+        let released_bytes = u64::try_from(removed)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(Self::pending_execution_seed_entry_bytes());
+        match self
+            .execution_seed_reservation_ledger
+            .live_reserved_bytes
+            .get()
+            .checked_sub(released_bytes)
+        {
+            Some(next) => self
+                .execution_seed_reservation_ledger
+                .live_reserved_bytes
+                .set(next),
+            None => {
+                self.execution_seed_reservation_ledger
+                    .accounting_fault
+                    .set(true);
+                self.execution_seed_reservation_ledger
+                    .live_reserved_bytes
+                    .set(u64::MAX);
+            }
+        }
+    }
+
+    fn capture_execution_seed(&mut self) -> Result<ExecutionSeedHandle, InterpreterError> {
+        self.prune_dead_pending_execution_seeds();
+        if self
+            .execution_seed_reservation_ledger
+            .accounting_fault
+            .get()
+        {
+            return Err(InterpreterError::InternalError {
+                details: "execution-seed reservation ledger is inconsistent".to_string(),
+            });
+        }
+
+        let snapshot_bytes = self.estimate_execution_seed_snapshot_bytes();
+        let reserved_bytes = snapshot_bytes
+            .saturating_add(u64::try_from(std::mem::size_of::<ExecutionSeed>()).unwrap_or(u64::MAX))
+            .saturating_add(Self::pending_execution_seed_entry_bytes());
+        let requested_base_bytes = self.estimated_memory_bytes;
+        let requested_total_bytes = self
+            .total_memory_bytes_from_base(requested_base_bytes)
+            .saturating_add(reserved_bytes);
+        if self.memory_request_exceeds_budget(
+            requested_base_bytes.saturating_add(reserved_bytes),
+            self.config.max_total_memory_bytes,
+        ) {
+            return Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: requested_total_bytes,
+                max_bytes: self.config.max_total_memory_bytes,
+                requested_heap_objects: self.heap_object_count_u32(),
+                max_heap_objects: self.config.max_heap_objects,
+            });
+        }
+
+        let Some(next_reserved_bytes) = self
+            .execution_seed_reservation_ledger
+            .live_reserved_bytes
+            .get()
+            .checked_add(reserved_bytes)
+        else {
+            self.execution_seed_reservation_ledger
+                .accounting_fault
+                .set(true);
+            self.execution_seed_reservation_ledger
+                .live_reserved_bytes
+                .set(u64::MAX);
+            return Err(InterpreterError::InternalError {
+                details: "execution-seed reservation ledger overflowed".to_string(),
+            });
+        };
+
+        let shared = std::rc::Rc::new(ExecutionSeedShared {
+            state: std::cell::RefCell::new(Box::new(ExecutionSeed::Lazy {
+                epoch: self.seed_epoch,
+                max_regs: self.config.max_registers,
+            })),
+            snapshot_bytes,
+            reserved_bytes: std::cell::Cell::new(reserved_bytes),
+            registered: std::cell::Cell::new(true),
+            reservation_ledger: std::rc::Rc::downgrade(&self.execution_seed_reservation_ledger),
+        });
+        self.execution_seed_reservation_ledger
+            .live_reserved_bytes
+            .set(next_reserved_bytes);
+        self.pending_lazy_seeds
+            .push(std::rc::Rc::downgrade(&shared));
+        Ok(ExecutionSeedHandle(shared))
     }
 
     // ---- THE ONLY WAY to mutate a seed-surface field ----
@@ -26243,19 +26413,67 @@ impl InterpreterCore {
     }
 
     fn before_seed_surface_write(&mut self) {
+        self.last_post_run_epoch = None;
         self.materialize_pending_lazy_seeds_with_current_state();
         self.seed_epoch = self.seed_epoch.wrapping_add(1);
     }
 
     fn materialize_pending_lazy_seeds_with_current_state(&mut self) {
-        let mut keepers = Vec::with_capacity(self.pending_lazy_seeds.len());
-        for weak in std::mem::take(&mut self.pending_lazy_seeds) {
+        let pending = std::mem::take(&mut self.pending_lazy_seeds);
+        for weak in pending {
             let Some(strong) = weak.upgrade() else {
+                let entry_bytes = Self::pending_execution_seed_entry_bytes();
+                match self
+                    .execution_seed_reservation_ledger
+                    .live_reserved_bytes
+                    .get()
+                    .checked_sub(entry_bytes)
+                {
+                    Some(next) => self
+                        .execution_seed_reservation_ledger
+                        .live_reserved_bytes
+                        .set(next),
+                    None => {
+                        self.execution_seed_reservation_ledger
+                            .accounting_fault
+                            .set(true);
+                        self.execution_seed_reservation_ledger
+                            .live_reserved_bytes
+                            .set(u64::MAX);
+                    }
+                }
                 continue;
             };
-            let mut seed = strong.borrow_mut();
-            if let ExecutionSeed::Lazy { .. } = *seed {
-                *seed = ExecutionSeed::Materialized {
+            strong.registered.set(false);
+            let weak_bytes =
+                u64::try_from(std::mem::size_of::<std::rc::Weak<ExecutionSeedShared>>())
+                    .unwrap_or(u64::MAX);
+            strong
+                .reserved_bytes
+                .set(strong.reserved_bytes.get().saturating_sub(weak_bytes));
+            let next_live_reserved = self
+                .execution_seed_reservation_ledger
+                .live_reserved_bytes
+                .get()
+                .checked_sub(weak_bytes);
+            match next_live_reserved {
+                Some(next) => self
+                    .execution_seed_reservation_ledger
+                    .live_reserved_bytes
+                    .set(next),
+                None => {
+                    self.execution_seed_reservation_ledger
+                        .accounting_fault
+                        .set(true);
+                    self.execution_seed_reservation_ledger
+                        .live_reserved_bytes
+                        .set(u64::MAX);
+                }
+            }
+
+            let mut seed = strong.state.borrow_mut();
+            if let ExecutionSeed::Lazy { .. } = **seed {
+                **seed = ExecutionSeed::Materialized {
                     registers: self.registers.value.clone(),
                     heap: self.heap.value.clone(),
                     function_prototypes: self.function_prototypes.value.clone(),
@@ -26263,15 +26481,82 @@ impl InterpreterCore {
                     symbol_state: self.symbol_state.value.clone(),
                 };
             }
-            keepers.push(std::rc::Rc::downgrade(&strong));
         }
-        self.pending_lazy_seeds = keepers;
     }
 
-    pub(crate) fn reset_execution_state_from_seed(
+    fn reset_execution_state_from_seed(
         &mut self,
-        seed: &std::rc::Rc<std::cell::RefCell<ExecutionSeed>>,
+        seed: &ExecutionSeedHandle,
     ) -> Result<(), InterpreterError> {
+        if !seed.is_owned_by(&self.execution_seed_reservation_ledger) {
+            return Err(InterpreterError::InternalError {
+                details: "execution seed belongs to a different interpreter core".to_string(),
+            });
+        }
+
+        let previous_seed_surface_bytes = self
+            .registers_memory_bytes()
+            .saturating_add(self.heap_memory_bytes())
+            .saturating_add(self.symbol_state_memory_bytes());
+        let next_seed_surface_bytes = {
+            let snapshot = seed.0.state.borrow();
+            match &**snapshot {
+                ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch => None,
+                ExecutionSeed::Lazy { epoch, .. } => {
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "lazy seed survived a write (seed_epoch={}, core_epoch={}); \
+                             the before_seed_surface_write chokepoint missed a write site",
+                            epoch, self.seed_epoch
+                        ),
+                    });
+                }
+                ExecutionSeed::Materialized {
+                    registers,
+                    heap,
+                    symbol_state,
+                    ..
+                } => {
+                    self.check_temporary_memory_budget(seed.0.snapshot_bytes)?;
+                    symbol_state
+                        .validate()
+                        .map_err(|details| InterpreterError::InternalError { details })?;
+                    for value in registers {
+                        validate_symbol_value(symbol_state, value)
+                            .map_err(|details| InterpreterError::InternalError { details })?;
+                    }
+                    for object in heap {
+                        validate_heap_symbol_references(symbol_state, object)
+                            .map_err(|details| InterpreterError::InternalError { details })?;
+                    }
+                    Some(Self::estimate_seed_surface_active_bytes(
+                        registers,
+                        heap,
+                        symbol_state,
+                    ))
+                }
+            }
+        };
+
+        if let Some(next_seed_surface_bytes) = next_seed_surface_bytes {
+            let projected_base_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_seed_surface_bytes)
+                .saturating_add(next_seed_surface_bytes);
+            let projected_total_bytes = self.total_memory_bytes_from_base(projected_base_bytes);
+            if self.memory_request_exceeds_budget(
+                projected_base_bytes,
+                self.config.max_total_memory_bytes,
+            ) {
+                return Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes: projected_total_bytes,
+                    max_bytes: self.config.max_total_memory_bytes,
+                    requested_heap_objects: self.heap_object_count_u32(),
+                    max_heap_objects: self.config.max_heap_objects,
+                });
+            }
+        }
+
         // Execution-local stream state is keyed by heap ObjectId and must
         // disappear at the same authoritative boundary that restores the
         // seeded heap. Otherwise a reused id can inherit callbacks, buffered
@@ -26293,31 +26578,9 @@ impl InterpreterCore {
                 .estimated_memory_bytes
                 .saturating_sub(Self::estimate_label_bytes(&context));
         }
-        let restore = {
-            let snapshot = seed.borrow();
-            match &*snapshot {
-                ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch => {
-                    // No writes between capture and reset — nothing to do.
-                    None
-                }
-                ExecutionSeed::Lazy { epoch, .. } => {
-                    // bd-ytaa7: previously this was a `panic!()` based on the
-                    // assumption that `before_seed_surface_write` is always
-                    // reached before any state mutation. A future regression
-                    // that adds a write site bypassing the chokepoint would
-                    // turn this into an attacker-reachable process abort
-                    // from any embedder that hosts extension code. Return a
-                    // fail-closed `InternalError` instead so the run loop
-                    // can emit a safe-mode witness and the host can recover
-                    // without losing every in-flight extension's state.
-                    return Err(InterpreterError::InternalError {
-                        details: format!(
-                            "lazy seed survived a write (seed_epoch={}, core_epoch={}); \
-                             the before_seed_surface_write chokepoint missed a write site",
-                            epoch, self.seed_epoch
-                        ),
-                    });
-                }
+        let restore = if next_seed_surface_bytes.is_some() {
+            let snapshot = seed.0.state.borrow();
+            match &**snapshot {
                 ExecutionSeed::Materialized {
                     registers,
                     heap,
@@ -26331,31 +26594,31 @@ impl InterpreterCore {
                     builtin_prototypes.clone(),
                     symbol_state.clone(),
                 )),
+                ExecutionSeed::Lazy { .. } => {
+                    return Err(InterpreterError::InternalError {
+                        details: "materialized execution seed reverted to lazy state".to_string(),
+                    });
+                }
             }
+        } else {
+            None
         };
-
-        if let Some((registers, heap, _, _, symbol_state)) = &restore {
-            symbol_state
-                .validate()
-                .map_err(|details| InterpreterError::InternalError { details })?;
-            for value in registers {
-                validate_symbol_value(symbol_state, value)
-                    .map_err(|details| InterpreterError::InternalError { details })?;
-            }
-            for object in heap {
-                validate_heap_symbol_references(symbol_state, object)
-                    .map_err(|details| InterpreterError::InternalError { details })?;
-            }
-        }
 
         if let Some((registers, heap, function_prototypes, builtin_prototypes, symbol_state)) =
             restore
         {
-            self.mutate_registers(|r| *r = registers);
-            self.mutate_heap(|h| *h = heap);
-            self.mutate_function_prototypes(|fp| *fp = function_prototypes);
-            self.mutate_builtin_prototypes(|bp| *bp = builtin_prototypes);
-            self.mutate_symbol_state(|state| *state = symbol_state);
+            self.before_seed_surface_write();
+            self.registers.value = registers;
+            self.heap.value = heap;
+            self.function_prototypes.value = function_prototypes;
+            self.builtin_prototypes.value = builtin_prototypes;
+            self.symbol_state.value = symbol_state;
+            let committed_seed_surface_bytes = next_seed_surface_bytes
+                .expect("materialized execution seed has a projected active size");
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_seed_surface_bytes)
+                .saturating_add(committed_seed_surface_bytes);
         }
         Ok(())
     }
@@ -26411,8 +26674,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(previous_label_bytes)
             .saturating_add(next_label_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
@@ -26848,7 +27110,7 @@ impl InterpreterCore {
             // A custom iterator's guest `next()` can mutate unrelated live
             // state. Keep those observable effects and re-derive accounting
             // after restoring only the transaction-owned target object.
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
             return Err(match error {
                 InterpreterError::MemoryBudgetExceeded {
                     requested_bytes,
@@ -26873,7 +27135,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(previous_label_bytes)
             .saturating_add(final_label_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, original_memory_ceiling) {
+        if self.memory_request_exceeds_budget(requested_bytes, original_memory_ceiling) {
             self.mutate_heap(|heap| {
                 if let Some(target) = heap.get_mut(heap_index) {
                     *target = array_snapshot;
@@ -26882,7 +27144,7 @@ impl InterpreterCore {
             if !target_was_remembered {
                 self.gc_remembered_set.remove(&array_id);
             }
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
@@ -26896,7 +27158,7 @@ impl InterpreterCore {
                 if !target_was_remembered {
                     self.gc_remembered_set.remove(&array_id);
                 }
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
                 return Err(InterpreterError::RegisterOutOfBounds {
                     register: array,
                     max: self.config.max_registers,
@@ -27207,9 +27469,9 @@ impl InterpreterCore {
             }
         })?;
 
-        self.mutate_registers(|r| r[reg as usize] = value);
         self.last_pre_run_seed = None;
-        self.last_post_run_seed = None;
+        self.last_post_run_epoch = None;
+        self.mutate_registers(|r| r[reg as usize] = value);
         Ok(())
     }
 
@@ -27290,7 +27552,7 @@ impl InterpreterCore {
         // event count observes end-of-execution state (bd-fqlfw.3.5.5).
         self.check_state_capture_boundary();
         self.record_execution_outcome(&entry_specifier, &result);
-        self.last_post_run_seed = Some(self.capture_execution_seed());
+        self.last_post_run_epoch = Some(self.seed_epoch);
         self.finish_execution_result(result)
     }
 
@@ -27587,40 +27849,25 @@ impl InterpreterCore {
     }
 
     fn prepare_execution_inner(&mut self, module: &Ir3Module) -> Result<String, InterpreterError> {
-        let current_seed = self.capture_execution_seed();
-        // Repeat-execute detection is epoch-based, not Rc-identity-based:
-        // `capture_execution_seed` always allocates a fresh Rc, so the former
-        // `Rc::ptr_eq(&current_seed, previous_post_run)` comparison could
-        // never fire and the restore-previous-pre-run-seed path was
-        // unreachable (bd-bgq16). The post-run seed is still `Lazy` at the
-        // current epoch exactly when no seed-surface write (registers, heap,
-        // prototypes, symbols) happened since the previous `execute`
-        // returned; any caller mutation in between materializes it and
-        // advances the epoch, routing through the fresh-seed path below.
-        let repeat_execute = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
-            (Some(_), Some(previous_post_run)) => matches!(
-                &*previous_post_run.borrow(),
-                ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch
-            ),
-            _ => false,
-        };
+        // Writes clear `last_post_run_epoch` before incrementing the epoch, so
+        // equality cannot be resurrected by a wrapping counter (bd-bgq16).
+        let repeat_execute =
+            self.last_pre_run_seed.is_some() && self.last_post_run_epoch == Some(self.seed_epoch);
         let seed = if repeat_execute {
             self.last_pre_run_seed
                 .clone()
                 .expect("repeat_execute requires a previous pre-run seed")
         } else {
-            current_seed
+            self.last_pre_run_seed = None;
+            self.last_post_run_epoch = None;
+            self.prune_dead_pending_execution_seeds();
+            self.capture_execution_seed()?
         };
         self.last_pre_run_seed = Some(seed.clone());
         self.top_level_await_resumption_contexts.clear();
         self.clear_top_level_await_outcome();
         self.rotate_generated_function_realm()?;
-        let previous_seed_surface_bytes = self
-            .registers_memory_bytes()
-            .saturating_add(self.heap_memory_bytes())
-            .saturating_add(self.symbol_state_memory_bytes());
         self.reset_execution_state_from_seed(&seed)?;
-        self.apply_seed_surface_memory_delta(previous_seed_surface_bytes)?;
         if repeat_execute {
             self.reset_repeat_execution_state()?;
         }
@@ -28423,7 +28670,7 @@ impl InterpreterCore {
         let previous_heap_len = self.heap.len();
         let previous_estimated_memory_bytes = self.estimated_memory_bytes;
         #[cfg(debug_assertions)]
-        let previous_recomputed_memory_bytes = self.recompute_estimated_memory_bytes();
+        let previous_recomputed_memory_bytes = self.recompute_base_estimated_memory_bytes();
         let result = (|| -> Result<(), InterpreterError> {
             let console = self.alloc_console_global()?;
             let performance = self.alloc_performance_global()?;
@@ -28477,7 +28724,7 @@ impl InterpreterCore {
 
         #[cfg(debug_assertions)]
         {
-            let recomputed_memory_bytes = self.recompute_estimated_memory_bytes();
+            let recomputed_memory_bytes = self.recompute_base_estimated_memory_bytes();
             debug_assert!(self.estimated_memory_bytes >= previous_estimated_memory_bytes);
             debug_assert!(recomputed_memory_bytes >= previous_recomputed_memory_bytes);
             debug_assert_eq!(
@@ -29636,10 +29883,9 @@ impl InterpreterCore {
             .saturating_sub(previous_transition_bytes)
             .saturating_add(next_transition_bytes)
             .saturating_add(Self::generated_function_handle_peak_bytes());
-        if Self::memory_request_exceeds_budget(
-            requested_peak_bytes,
-            self.config.max_total_memory_bytes,
-        ) {
+        if self
+            .memory_request_exceeds_budget(requested_peak_bytes, self.config.max_total_memory_bytes)
+        {
             return Err(
                 self.memory_budget_error(requested_peak_bytes, self.heap_object_count_u32())
             );
@@ -36367,7 +36613,7 @@ impl InterpreterCore {
         self.clear_finally_frames();
         self.pending_finally_entry = None;
         self.ip = return_ip;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
     }
 
     /// Preserve the raw IFC level in an allocation-free terminal carrier. The
@@ -36515,7 +36761,7 @@ impl InterpreterCore {
 
             // Reconcile after releasing the activation before asking the
             // ordinary Promise path to admit the bounded terminal record.
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
             if promise_is_pending
                 && self
                     .reject_promise(
@@ -36553,9 +36799,9 @@ impl InterpreterCore {
         if let Some(epoch) = terminal_epoch {
             self.close_terminal_async_promise_dependencies(epoch, &label);
         }
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
         debug_assert!(
-            self.estimated_memory_bytes <= self.config.max_total_memory_bytes,
+            self.estimated_memory_bytes() <= self.config.max_total_memory_bytes,
             "fatal async repair must not exceed its configured memory ceiling"
         );
     }
@@ -46802,9 +47048,8 @@ impl InterpreterCore {
         // Reconcile the checkpoint from every resident owner instead of
         // combining the final Promise estimate with a stale pre-drain
         // non-Promise subtotal.
-        let requested_bytes = self.recompute_estimated_memory_bytes();
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        let requested_bytes = self.recompute_base_estimated_memory_bytes();
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         self.estimated_memory_bytes = requested_bytes;
@@ -47232,8 +47477,7 @@ impl InterpreterCore {
         }
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
         self.mutate_heap(|heap| heap.push(object));
@@ -47533,8 +47777,7 @@ impl InterpreterCore {
         let temporary_bytes = self
             .estimated_memory_bytes
             .saturating_add(previous_symbol_bytes);
-        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
         }
         let mut projected = self.symbol_state.value.clone();
@@ -47543,7 +47786,7 @@ impl InterpreterCore {
         let peak_bytes = self
             .estimated_memory_bytes
             .saturating_add(next_symbol_bytes);
-        if Self::memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
+        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
         }
         self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
@@ -47559,8 +47802,7 @@ impl InterpreterCore {
         let temporary_bytes = self
             .estimated_memory_bytes
             .saturating_add(previous_symbol_bytes);
-        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
         }
         let mut projected = self.symbol_state.value.clone();
@@ -47569,7 +47811,7 @@ impl InterpreterCore {
         let peak_bytes = self
             .estimated_memory_bytes
             .saturating_add(next_symbol_bytes);
-        if Self::memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
+        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
         }
         self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
@@ -47692,7 +47934,7 @@ impl InterpreterCore {
                     self.value_to_string(&raw_length),
                     MAX_ARRAY_BUFFER_BYTE_LENGTH,
                     self.config.max_total_memory_bytes,
-                    self.estimated_memory_bytes,
+                    self.estimated_memory_bytes(),
                 ),
             });
         };
@@ -47703,7 +47945,7 @@ impl InterpreterCore {
                     "invalid ArrayBuffer byteLength {length}; requested value must be non-negative, per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
                     MAX_ARRAY_BUFFER_BYTE_LENGTH,
                     self.config.max_total_memory_bytes,
-                    self.estimated_memory_bytes,
+                    self.estimated_memory_bytes(),
                 ),
             });
         }
@@ -47715,7 +47957,7 @@ impl InterpreterCore {
                     "ArrayBuffer byteLength {length} exceeds per-buffer cap of {} bytes; total cap is {} bytes, committed bytes are {}",
                     MAX_ARRAY_BUFFER_BYTE_LENGTH,
                     self.config.max_total_memory_bytes,
-                    self.estimated_memory_bytes,
+                    self.estimated_memory_bytes(),
                 ),
             });
         }
@@ -47725,7 +47967,7 @@ impl InterpreterCore {
                 "ArrayBuffer byteLength {length} exceeds host addressable size; per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
                 MAX_ARRAY_BUFFER_BYTE_LENGTH,
                 self.config.max_total_memory_bytes,
-                self.estimated_memory_bytes,
+                self.estimated_memory_bytes(),
             ),
         })
     }
@@ -66500,7 +66742,7 @@ impl InterpreterCore {
     #[cfg(test)]
     fn execute_module(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
         self.last_pre_run_seed = None;
-        self.last_post_run_seed = None;
+        self.last_post_run_epoch = None;
         self.execute(module)
     }
 
@@ -66769,7 +67011,7 @@ impl InterpreterCore {
             .saturating_sub(previous_label_bytes)
             .saturating_add(new_value_bytes)
             .saturating_add(next_label_bytes);
-        if Self::memory_request_exceeds_budget(projected, self.config.max_total_memory_bytes) {
+        if self.memory_request_exceeds_budget(projected, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(projected, self.heap_object_count_u32()));
         }
 
@@ -66840,8 +67082,7 @@ impl InterpreterCore {
             .saturating_sub(previous_label_bytes)
             .saturating_add(Self::estimate_value_bytes(&value))
             .saturating_add(next_label_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
@@ -67014,6 +67255,222 @@ impl InterpreterCore {
         }
 
         root_estimate
+    }
+
+    /// Allocation-free logical ownership used before admitting a lazy seed.
+    /// Accessor graphs are bounded explicitly: an over-deep/cyclic graph is a
+    /// deterministic `u64::MAX` refusal rather than native-stack growth or an
+    /// unbudgeted worklist allocation.
+    fn estimate_execution_seed_value_bytes(value: &Value) -> u64 {
+        const MAX_ACCESSOR_GRAPH_WORK: usize = 256;
+
+        let arc_value_bytes = u64::try_from(std::mem::size_of::<Value>())
+            .unwrap_or(u64::MAX)
+            .saturating_add(
+                u64::try_from(2usize.saturating_mul(std::mem::size_of::<usize>()))
+                    .unwrap_or(u64::MAX),
+            );
+        let mut work: [Option<&Value>; MAX_ACCESSOR_GRAPH_WORK] = [None; MAX_ACCESSOR_GRAPH_WORK];
+        work[0] = Some(value);
+        let mut work_len = 1usize;
+        let mut visited = 0usize;
+        let mut total = 0u64;
+
+        while work_len != 0 {
+            work_len -= 1;
+            let current = work[work_len]
+                .take()
+                .expect("execution-seed value work slot is initialized");
+            visited = visited.saturating_add(1);
+            if visited > MAX_ACCESSOR_GRAPH_WORK {
+                return u64::MAX;
+            }
+            match current {
+                Value::BigInt(digits) => {
+                    total = total.saturating_add(Self::estimate_string_bytes(digits));
+                }
+                Value::Str(text) => {
+                    total = total.saturating_add(Self::estimate_js_string_bytes(text));
+                }
+                Value::BuiltinFunction(builtin) => {
+                    total = total
+                        .saturating_add(Self::estimate_string_bytes(&builtin.module_specifier));
+                }
+                Value::Accessor { get, set } => {
+                    for nested in [get.as_ref(), set.as_ref()].into_iter().flatten() {
+                        total = total.saturating_add(arc_value_bytes);
+                        if work_len == MAX_ACCESSOR_GRAPH_WORK {
+                            return u64::MAX;
+                        }
+                        work[work_len] = Some(nested.as_ref());
+                        work_len += 1;
+                    }
+                }
+                _ => {}
+            }
+            if total == u64::MAX {
+                return total;
+            }
+        }
+        total
+    }
+
+    fn estimate_execution_seed_ordered_value_map_bytes(
+        properties: &OrderedStringMap<Value>,
+    ) -> u64 {
+        let exact_order_is_active = properties.exact_len() != properties.len();
+        Self::saturating_sum(properties.well_formed_data_entries().map(|(key, value)| {
+            let owned_key_copies =
+                if exact_order_is_active && Self::canonical_array_index_key(key).is_none() {
+                    4
+                } else {
+                    2
+                };
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_string_bytes(key).saturating_mul(owned_key_copies))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(value))
+        }))
+        .saturating_add(Self::saturating_sum(
+            properties.exact_only_data_entries().map(|(key, value)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_js_string_bytes(key).saturating_mul(3))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(value))
+            }),
+        ))
+        .saturating_add(Self::saturating_sum(
+            properties
+                .baseline_symbol_properties()
+                .map(|(_, property)| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2))
+                        .saturating_add(match property {
+                            BaselineSymbolProperty::Data(value) => {
+                                Self::estimate_execution_seed_value_bytes(value)
+                            }
+                            BaselineSymbolProperty::Accessor { get, set } => get
+                                .as_ref()
+                                .map(Self::estimate_execution_seed_value_bytes)
+                                .unwrap_or(0)
+                                .saturating_add(
+                                    set.as_ref()
+                                        .map(Self::estimate_execution_seed_value_bytes)
+                                        .unwrap_or(0),
+                                ),
+                        })
+                }),
+        ))
+    }
+
+    fn estimate_execution_seed_ordered_label_map_bytes(labels: &OrderedStringMap<Label>) -> u64 {
+        let exact_order_is_active = labels.exact_len() != labels.len();
+        Self::saturating_sum(labels.well_formed_data_entries().map(|(key, label)| {
+            let owned_key_copies =
+                if exact_order_is_active && Self::canonical_array_index_key(key).is_none() {
+                    4
+                } else {
+                    2
+                };
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_string_bytes(key).saturating_mul(owned_key_copies))
+                .saturating_add(Self::estimate_label_bytes(label))
+        }))
+        .saturating_add(Self::saturating_sum(labels.exact_only_data_entries().map(
+            |(key, label)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_js_string_bytes(key).saturating_mul(3))
+                    .saturating_add(Self::estimate_label_bytes(label))
+            },
+        )))
+        .saturating_add(Self::saturating_sum(
+            labels.baseline_symbol_properties().map(|(_, property)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2))
+                    .saturating_add(match property {
+                        BaselineSymbolProperty::Data(label) => Self::estimate_label_bytes(label),
+                        BaselineSymbolProperty::Accessor { get, set } => get
+                            .as_ref()
+                            .map(Self::estimate_label_bytes)
+                            .unwrap_or(0)
+                            .saturating_add(
+                                set.as_ref().map(Self::estimate_label_bytes).unwrap_or(0),
+                            ),
+                    })
+            }),
+        ))
+    }
+
+    fn estimate_execution_seed_heap_object_bytes(object: &HeapObject) -> u64 {
+        Self::estimate_execution_seed_ordered_value_map_bytes(&object.properties)
+            .saturating_add(Self::estimate_execution_seed_ordered_label_map_bytes(
+                &object.property_labels,
+            ))
+            .saturating_add(
+                object
+                    .array_buffer
+                    .as_ref()
+                    .map(|backing| {
+                        u64::try_from(backing.bytes.len())
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(Self::estimate_label_bytes(&backing.label))
+                    })
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
+                    .derived_constructor_parent
+                    .as_ref()
+                    .map(Self::estimate_execution_seed_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
+                    .derived_constructor_parent_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    fn estimate_execution_seed_snapshot_bytes(&self) -> u64 {
+        let registers = u64::try_from(self.registers.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64)
+            .saturating_add(Self::saturating_sum(
+                self.registers
+                    .iter()
+                    .map(Self::estimate_execution_seed_value_bytes),
+            ));
+        let heap = u64::try_from(self.heap.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<HeapObject>() as u64)
+            .saturating_add(Self::saturating_sum(
+                self.heap
+                    .iter()
+                    .map(Self::estimate_execution_seed_heap_object_bytes),
+            ));
+        let function_prototypes = u64::try_from(self.function_prototypes.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        let builtin_prototypes = Self::saturating_sum(self.builtin_prototypes.keys().map(|key| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_string_bytes(key))
+        }));
+        registers
+            .saturating_add(heap)
+            .saturating_add(function_prototypes)
+            .saturating_add(builtin_prototypes)
+            .saturating_add(Self::estimate_symbol_state_bytes(&self.symbol_state))
+    }
+
+    fn estimate_seed_surface_active_bytes(
+        registers: &[Value],
+        heap: &[HeapObject],
+        symbol_state: &RuntimeSymbolState,
+    ) -> u64 {
+        Self::saturating_sum(registers.iter().map(Self::estimate_value_bytes))
+            .saturating_add(Self::saturating_sum(
+                heap.iter().map(Self::estimate_heap_object_bytes),
+            ))
+            .saturating_add(Self::estimate_symbol_state_bytes(symbol_state))
     }
 
     fn estimate_plain_string_map_entry_bytes(key: &str, value: &Value) -> u64 {
@@ -68589,7 +69046,8 @@ impl InterpreterCore {
         u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
     }
 
-    fn memory_request_exceeds_budget(requested_bytes: u64, max_bytes: u64) -> bool {
+    fn memory_request_exceeds_budget(&self, requested_base_bytes: u64, max_bytes: u64) -> bool {
+        let requested_bytes = self.total_memory_bytes_from_base(requested_base_bytes);
         // `u64::MAX` is the saturating overflow sentinel for logical memory
         // accounting. Admitting it would make a later subtraction lossy
         // (`MAX - MAX == 0`) and allow the incremental total to drift from
@@ -68599,11 +69057,11 @@ impl InterpreterCore {
 
     fn memory_budget_error(
         &self,
-        requested_bytes: u64,
+        requested_base_bytes: u64,
         requested_heap_objects: u32,
     ) -> InterpreterError {
         InterpreterError::MemoryBudgetExceeded {
-            requested_bytes,
+            requested_bytes: self.total_memory_bytes_from_base(requested_base_bytes),
             max_bytes: self.config.max_total_memory_bytes,
             requested_heap_objects,
             max_heap_objects: self.config.max_heap_objects,
@@ -68617,7 +69075,7 @@ impl InterpreterCore {
     /// is a validation surface, not a hot-path API: integration tests compare
     /// it against `estimated_memory_bytes()` to prove the incremental
     /// accumulator has not drifted (bd-o4cbn.13.4).
-    pub fn recompute_estimated_memory_bytes(&self) -> u64 {
+    fn recompute_base_estimated_memory_bytes(&self) -> u64 {
         self.symbol_state_memory_bytes()
             .saturating_add(Self::saturating_sum(
                 self.heap.iter().map(Self::estimate_heap_object_bytes),
@@ -68680,14 +69138,17 @@ impl InterpreterCore {
             .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
+    pub fn recompute_estimated_memory_bytes(&self) -> u64 {
+        self.total_memory_bytes_from_base(self.recompute_base_estimated_memory_bytes())
+    }
+
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
-        let requested_bytes = self.recompute_estimated_memory_bytes();
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        let requested_bytes = self.recompute_base_estimated_memory_bytes();
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         self.estimated_memory_bytes = requested_bytes;
-        Ok(requested_bytes)
+        Ok(self.total_memory_bytes_from_base(requested_bytes))
     }
 
     fn apply_memory_component_delta(
@@ -68699,8 +69160,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(previous_component_bytes)
             .saturating_add(next_component_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         self.estimated_memory_bytes = requested_bytes;
@@ -68712,31 +69172,6 @@ impl InterpreterCore {
         previous_scope_bytes: u64,
     ) -> Result<u64, InterpreterError> {
         self.apply_memory_component_delta(previous_scope_bytes, self.scope_chain_memory_bytes())
-    }
-
-    fn apply_seed_surface_memory_delta(
-        &mut self,
-        previous_seed_surface_bytes: u64,
-    ) -> Result<u64, InterpreterError> {
-        self.apply_memory_component_delta(
-            previous_seed_surface_bytes,
-            self.registers_memory_bytes()
-                .saturating_add(self.heap_memory_bytes())
-                .saturating_add(self.symbol_state_memory_bytes()),
-        )
-    }
-
-    #[cfg(test)]
-    fn apply_register_heap_memory_delta(
-        &mut self,
-        previous_register_bytes: u64,
-        previous_heap_bytes: u64,
-    ) -> Result<u64, InterpreterError> {
-        self.apply_memory_component_delta(
-            previous_register_bytes.saturating_add(previous_heap_bytes),
-            self.registers_memory_bytes()
-                .saturating_add(self.heap_memory_bytes()),
-        )
     }
 
     fn apply_closures_memory_delta(
@@ -68813,8 +69248,7 @@ impl InterpreterCore {
 
     fn check_temporary_memory_budget(&self, temporary_bytes: u64) -> Result<(), InterpreterError> {
         let requested_bytes = self.estimated_memory_bytes.saturating_add(temporary_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         Ok(())
@@ -68910,7 +69344,7 @@ impl InterpreterCore {
                 "ArrayBuffer byteLength {byte_length} exceeds host addressable size; per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
                 MAX_ARRAY_BUFFER_BYTE_LENGTH,
                 self.config.max_total_memory_bytes,
-                self.estimated_memory_bytes,
+                self.estimated_memory_bytes(),
             ),
         })?;
         let byte_length_i64 = i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -68918,7 +69352,7 @@ impl InterpreterCore {
                 "ArrayBuffer byteLength {byte_length} exceeds JS integer storage; per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
                 MAX_ARRAY_BUFFER_BYTE_LENGTH,
                 self.config.max_total_memory_bytes,
-                self.estimated_memory_bytes,
+                self.estimated_memory_bytes(),
             ),
         })?;
 
@@ -68948,8 +69382,7 @@ impl InterpreterCore {
         let metadata_size = Self::estimate_heap_object_bytes(&object);
         let object_size = metadata_size.saturating_add(byte_length_u64);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
@@ -69124,8 +69557,7 @@ impl InterpreterCore {
 
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
@@ -69269,8 +69701,7 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_add(temporary_bytes)
             .saturating_add(committed_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
@@ -69445,8 +69876,7 @@ impl InterpreterCore {
 
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
@@ -69549,8 +69979,7 @@ impl InterpreterCore {
         object.cached_dense_length = if is_array { Some(0) } else { None };
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
         self.mutate_heap(|h| h.push(object));
@@ -69572,8 +70001,7 @@ impl InterpreterCore {
             })?;
         let iterator_bytes = Self::estimate_iterator_bytes(&iterator);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(iterator_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         self.iterators.push(iterator);
@@ -69803,8 +70231,7 @@ impl InterpreterCore {
         let temporary_bytes = self
             .estimated_memory_bytes
             .saturating_add(previous_property_bytes);
-        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
         }
         let mut projected_properties = object.properties.clone();
@@ -69813,7 +70240,7 @@ impl InterpreterCore {
         let peak_bytes = self
             .estimated_memory_bytes
             .saturating_add(next_property_bytes);
-        if Self::memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
+        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
         }
         self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
@@ -69915,8 +70342,7 @@ impl InterpreterCore {
         let temporary_bytes = self
             .estimated_memory_bytes
             .saturating_add(previous_property_bytes);
-        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
         }
         let mut projected_properties = object.properties.clone();
@@ -69928,7 +70354,7 @@ impl InterpreterCore {
         let projected_temporary_bytes = self
             .estimated_memory_bytes
             .saturating_add(next_property_bytes);
-        if Self::memory_request_exceeds_budget(
+        if self.memory_request_exceeds_budget(
             projected_temporary_bytes,
             self.config.max_total_memory_bytes,
         ) {
@@ -70022,8 +70448,7 @@ impl InterpreterCore {
             .saturating_sub(previous_bytes)
             .saturating_add(new_bytes)
             .saturating_sub(deleted_index_bytes);
-        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
-        {
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
@@ -71135,7 +71560,7 @@ impl InterpreterCore {
 
     /// Return the current live-memory estimate used by the interpreter.
     pub fn estimated_memory_bytes(&self) -> u64 {
-        self.estimated_memory_bytes
+        self.total_memory_bytes_from_base(self.estimated_memory_bytes)
     }
 
     // -- Witness emission --------------------------------------------------
@@ -71303,7 +71728,7 @@ impl InterpreterCore {
         // keeps this diagnostic surface from ever pushing the estimate past
         // `max_total_memory_bytes`; the drop is recorded as evidence.
         let event_bytes = Self::estimate_interpreter_event_bytes(&event);
-        if Self::memory_request_exceeds_budget(
+        if self.memory_request_exceeds_budget(
             self.estimated_memory_bytes.saturating_add(event_bytes),
             self.config.max_total_memory_bytes,
         ) {
@@ -80045,7 +80470,9 @@ mod async_runtime_tests_current {
     #[test]
     fn url_state_is_memory_exact_ifc_labeled_and_seed_cleared_bd_8y0gs() {
         let mut core = test_interpreter();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         core.write_reg(0, Value::str("http://example.com/?a=1"))
             .expect("URL source register");
         core.set_register_label(0, Label::Secret)
@@ -80078,12 +80505,8 @@ mod async_runtime_tests_current {
             core.recompute_estimated_memory_bytes()
         );
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("restore pre-URL seed");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("account restored register and heap state");
         assert!(core.url_objects.is_empty());
         assert!(core.url_search_params.is_empty());
         assert_eq!(
@@ -84870,7 +85293,9 @@ mod async_runtime_tests_current {
         );
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let Value::Object(writable) = core
             .construct_stream_writable(RegRange { start: 0, count: 0 })
             .expect("generic Writable")
@@ -85035,12 +85460,8 @@ mod async_runtime_tests_current {
         assert_eq!(core.pending_writable_terminal_ticks, 0);
         assert_eq!(core.estimated_memory_bytes(), before_append);
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("seed reset clears terminal Writable state");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("first reset memory delta");
         assert!(!core.writable_terminal_states.contains_key(&writable));
         assert_eq!(core.pending_writable_terminal_ticks, 0);
         let replacement = core
@@ -85053,12 +85474,8 @@ mod async_runtime_tests_current {
         ));
         assert_eq!(core.stream_state_label(replacement), Label::Public);
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("second seed reset before branded ObjectId reuse");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("second reset memory delta");
         let Value::Object(reused_writable) = core
             .construct_stream_writable(RegRange { start: 0, count: 0 })
             .expect("Writable after terminal ObjectId reset")
@@ -88164,7 +88581,9 @@ mod async_runtime_tests_current {
             .expect("events.once name");
         // Keep the heap/register seed byte-identical so this test isolates the
         // execution-local side-table release performed by the reset boundary.
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         core.register_event_promise_once(RegRange { start: 0, count: 2 })
             .expect("events.once waiter");
         core.writable_streams
@@ -88244,7 +88663,9 @@ mod async_runtime_tests_current {
         );
 
         let mut reset = test_interpreter();
-        let seed = reset.capture_execution_seed();
+        let seed = reset
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let Value::Object(reused) = reset
             .construct_stream_passthrough(RegRange { start: 0, count: 0 })
             .expect("PassThrough before reset")
@@ -88274,14 +88695,9 @@ mod async_runtime_tests_current {
             .expect("PassThrough listener before reset");
         assert!(!reset.pending_readable_from_pumps.is_empty());
 
-        let previous_register_bytes = reset.registers_memory_bytes();
-        let previous_heap_bytes = reset.heap_memory_bytes();
         reset
             .reset_execution_state_from_seed(&seed)
             .expect("PassThrough seed reset");
-        reset
-            .apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("PassThrough reset memory delta");
         assert_eq!(reset.heap.len(), accepted_heap_len);
         assert!(!reset.readable_from_streams.contains_key(&reused));
         assert!(!reset.writable_streams.contains_key(&reused));
@@ -89317,7 +89733,9 @@ mod async_runtime_tests_current {
     fn writable_completion_nonce_survives_seed_reset_and_object_id_reuse_bd_fw7zd() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
 
         let Value::Object(old_stream) = core
             .construct_stream_writable(RegRange { start: 0, count: 0 })
@@ -89341,12 +89759,8 @@ mod async_runtime_tests_current {
             old_token,
         );
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("execution reset");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("reset memory delta");
 
         let Value::Object(new_stream) = core
             .construct_stream_writable(RegRange { start: 0, count: 0 })
@@ -91120,7 +91534,9 @@ mod async_runtime_tests_current {
             };
 
         let mut close_core = test_interpreter();
-        let reset_seed = close_core.capture_execution_seed();
+        let reset_seed = close_core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let options = close_core
             .alloc_object_with_properties(&[("highWaterMark", Value::Int(4))])
             .expect("configured Readable options");
@@ -91154,14 +91570,9 @@ mod async_runtime_tests_current {
         );
         assert_repeated_terminal_reads(&mut close_core, closed_readable, &config_label);
 
-        let previous_register_bytes = close_core.registers_memory_bytes();
-        let previous_heap_bytes = close_core.heap_memory_bytes();
         close_core
             .reset_execution_state_from_seed(&reset_seed)
             .expect("reset terminal Readable state");
-        close_core
-            .apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("terminal Readable reset memory delta");
         assert!(close_core.readable_terminal_states.is_empty());
         assert_eq!(
             close_core.stream_state_label(closed_readable),
@@ -91640,7 +92051,9 @@ mod async_runtime_tests_current {
         let target = core
             .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
             .expect("emitter target before seed capture");
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let baseline_heap_len = core.heap.len();
         let baseline_bytes = core.estimated_memory_bytes();
         let original_listener =
@@ -91720,12 +92133,8 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("seed reset clears once-wrapper side state");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("account restored wrapper heap suffix");
         assert!(core.event_once_wrappers.is_empty());
         assert!(core.event_listeners.is_empty());
         assert_eq!(core.heap.len(), baseline_heap_len);
@@ -92005,7 +92414,9 @@ mod async_runtime_tests_current {
     #[test]
     fn stream_emission_seed_reset_cancels_stale_object_id_task_bd_rgx1b() {
         let mut core = test_interpreter();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let stale_target = core
             .alloc_object_with_properties(&[("body", Value::str("stale"))])
             .expect("stale response object");
@@ -92029,12 +92440,8 @@ mod async_runtime_tests_current {
             .next()
             .expect("stale response registration");
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("seed reset cancels stale stream emission");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("stream emission reset memory delta");
         assert!(core.pending_stream_emissions.is_empty());
         assert!(core.event_loop.cancel_registration(registration).is_none());
         assert!(!core.event_listeners.contains_key(&stale_target));
@@ -94326,7 +94733,9 @@ mod async_runtime_tests_current {
     #[test]
     fn cluster_hostcalls_share_identity_and_seed_reset_clears_authenticated_state_bd_9p2v3() {
         let mut core = test_interpreter();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let first = core
             .dispatch_builtin_hostcall_inner(
                 "builtin:ClusterFacade",
@@ -94355,12 +94764,8 @@ mod async_runtime_tests_current {
             core.recompute_estimated_memory_bytes()
         );
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("restore pre-cluster seed");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("account restored register and heap state");
         assert!(core.cluster_facades.is_empty());
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -100517,7 +100922,9 @@ mod tests {
     #[test]
     fn crypto_state_is_cleared_before_seed_object_ids_are_reused_bd_2z157() {
         let mut core = quickjs_test_core();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         core.write_reg(0, Value::str("sha256"))
             .expect("seed hash algorithm");
         core.crypto_create_hash(RegRange { start: 0, count: 1 })
@@ -100525,12 +100932,8 @@ mod tests {
         core.clear_pending_hostcall_result_label();
         assert!(!core.crypto_objects.is_empty());
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("restore pre-crypto execution seed");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("restored seed memory accounting");
         assert!(core.crypto_objects.is_empty());
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -103266,7 +103669,9 @@ mod tests {
                 .expect("seed property should fit");
         }
         let initial_order = core.heap[object.0 as usize].properties.exact_keys();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
 
         core.set_object_runtime_property(
             object,
@@ -103289,12 +103694,8 @@ mod tests {
             initial_order
         );
 
-        let previous_register_bytes = core.registers_memory_bytes();
-        let previous_heap_bytes = core.heap_memory_bytes();
         core.reset_execution_state_from_seed(&seed)
             .expect("materialized exact heap seed should restore");
-        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
-            .expect("restored exact heap should fit its original memory budget");
         let properties = &core.heap[object.0 as usize].properties;
         assert_eq!(properties.exact_keys(), initial_order);
         assert_eq!(properties.get_exact(&d800), Some(&Value::Int(8)));
@@ -104225,16 +104626,12 @@ mod tests {
             global
         );
         core.seed_register(0, Value::Symbol(private)).unwrap();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let later = core.allocate_private_symbol(None).unwrap();
         assert_eq!(later, SymbolId(16));
-        let previous_seed_surface_bytes = core
-            .registers_memory_bytes()
-            .saturating_add(core.heap_memory_bytes())
-            .saturating_add(core.symbol_state_memory_bytes());
         core.reset_execution_state_from_seed(&seed).unwrap();
-        core.apply_seed_surface_memory_delta(previous_seed_surface_bytes)
-            .unwrap();
         assert_eq!(
             core.symbol_state.key_for(global),
             Some(&JsString::from("shared"))
@@ -115355,42 +115752,42 @@ mod lazy_seed_tests {
         core
     }
 
-    fn capture_execution_seed_eager_for_test(
-        core: &InterpreterCore,
-    ) -> std::rc::Rc<std::cell::RefCell<ExecutionSeed>> {
-        std::rc::Rc::new(std::cell::RefCell::new(ExecutionSeed::Materialized {
-            registers: core.registers.value.clone(),
-            heap: core.heap.value.clone(),
-            function_prototypes: core.function_prototypes.value.clone(),
-            builtin_prototypes: core.builtin_prototypes.value.clone(),
-            symbol_state: core.symbol_state.value.clone(),
-        }))
+    fn capture_execution_seed_eager_for_test(core: &mut InterpreterCore) -> ExecutionSeedHandle {
+        let seed = core
+            .capture_execution_seed()
+            .expect("eager test execution-seed capture must fit");
+        core.materialize_pending_lazy_seeds_with_current_state();
+        seed
     }
 
     #[test]
     fn lazy_seed_remains_lazy_with_no_writes() {
         let mut core = test_core();
-        let seed = core.capture_execution_seed();
-        assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
+        assert!(seed.is_lazy());
         core.reset_execution_state_from_seed(&seed)
             .expect("matching-epoch lazy seed must reset cleanly");
-        assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
+        assert!(seed.is_lazy());
     }
 
     #[test]
     fn write_to_register_materializes_outstanding_lazy_seed() {
         let mut core = test_core_with_registers(vec![Value::Int(1), Value::Int(2)]);
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let pre_epoch = core.seed_epoch;
         // Force a write.
         core.mutate_registers(|r| r[0] = Value::Int(99));
         // Seed must now be Materialized with the PRE-write registers.
-        match &*seed.borrow() {
+        seed.inspect(|state| match state {
             ExecutionSeed::Materialized { registers, .. } => {
                 assert_eq!(registers, &vec![Value::Int(1), Value::Int(2)]);
             }
             ExecutionSeed::Lazy { .. } => panic!("write should have materialized the seed"),
-        }
+        });
         assert!(core.seed_epoch > pre_epoch);
     }
 
@@ -115400,8 +115797,10 @@ mod lazy_seed_tests {
         let mut eager = test_core_with_registers(initial_regs.clone());
         let mut lazy = test_core_with_registers(initial_regs);
 
-        let seed_e = capture_execution_seed_eager_for_test(&eager);
-        let seed_l = lazy.capture_execution_seed();
+        let seed_e = capture_execution_seed_eager_for_test(&mut eager);
+        let seed_l = lazy
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
 
         // Apply same write sequence to both cores
         for v in (0..16).map(Value::Int) {
@@ -115439,24 +115838,28 @@ mod lazy_seed_tests {
     #[test]
     fn heap_mutation_also_materializes() {
         let mut core = test_core();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let pre_epoch = core.seed_epoch;
         // Force a heap write.
         core.mutate_heap(|h| h.push(HeapObject::new()));
         // Seed must now be Materialized.
-        match &*seed.borrow() {
+        seed.inspect(|state| match state {
             ExecutionSeed::Materialized { heap, .. } => {
                 assert!(heap.is_empty()); // Pre-write heap was empty
             }
             ExecutionSeed::Lazy { .. } => panic!("heap write should have materialized the seed"),
-        }
+        });
         assert!(core.seed_epoch > pre_epoch);
     }
 
     #[test]
     fn function_prototypes_mutation_also_materializes() {
         let mut core = test_core();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let pre_epoch = core.seed_epoch;
         // Force a function_prototypes write.
         core.mutate_function_prototypes(|fp| {
@@ -115466,7 +115869,7 @@ mod lazy_seed_tests {
             );
         });
         // Seed must now be Materialized.
-        match &*seed.borrow() {
+        seed.inspect(|state| match state {
             ExecutionSeed::Materialized {
                 function_prototypes,
                 ..
@@ -115476,19 +115879,21 @@ mod lazy_seed_tests {
             ExecutionSeed::Lazy { .. } => {
                 panic!("function_prototypes write should have materialized the seed")
             }
-        }
+        });
         assert!(core.seed_epoch > pre_epoch);
     }
 
     #[test]
     fn builtin_prototypes_mutation_also_materializes() {
         let mut core = test_core();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         let pre_epoch = core.seed_epoch;
         core.mutate_builtin_prototypes(|bp| {
             bp.insert("Error".to_string(), ObjectId(123));
         });
-        match &*seed.borrow() {
+        seed.inspect(|state| match state {
             ExecutionSeed::Materialized {
                 builtin_prototypes, ..
             } => {
@@ -115497,31 +115902,56 @@ mod lazy_seed_tests {
             ExecutionSeed::Lazy { .. } => {
                 panic!("builtin_prototypes write should have materialized the seed")
             }
-        }
+        });
         assert!(core.seed_epoch > pre_epoch);
     }
 
     #[test]
     fn multiple_pending_seeds_all_materialize_once() {
         let mut core = test_core_with_registers(vec![Value::Int(1)]);
-        let s1 = core.capture_execution_seed();
-        let s2 = core.capture_execution_seed();
-        let s3 = core.capture_execution_seed();
-        core.mutate_registers(|r| r[0] = Value::Int(2));
+        core.sync_estimated_memory_bytes()
+            .expect("multiple-seed fixture must fit");
+        let s1 = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
+        let s2 = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
+        let s3 = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
+        core.write_reg(0, Value::Int(2))
+            .expect("normal first write must fit reserved seed ownership");
         for seed in [&s1, &s2, &s3] {
-            assert!(matches!(*seed.borrow(), ExecutionSeed::Materialized { .. }));
+            seed.inspect(|state| {
+                assert!(matches!(state, ExecutionSeed::Materialized { .. }));
+            });
         }
+        assert!(core.estimated_memory_bytes() <= core.config.max_total_memory_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
     fn dropped_seed_does_not_force_materialization() {
         let mut core = test_core_with_registers(vec![Value::Int(1)]);
+        core.sync_estimated_memory_bytes()
+            .expect("dropped-seed fixture must fit");
         {
-            let _seed = core.capture_execution_seed();
+            let _seed = core
+                .capture_execution_seed()
+                .expect("test execution-seed capture must fit");
             // seed drops here
         }
+        assert_eq!(
+            core.live_execution_seed_reserved_bytes(),
+            InterpreterCore::pending_execution_seed_entry_bytes()
+        );
         let pre_epoch = core.seed_epoch;
-        core.mutate_registers(|r| r[0] = Value::Int(2));
+        core.write_reg(0, Value::Int(2))
+            .expect("dead weak cleanup must not block a normal write");
         // No keepers (the Weak upgrade returns None); pending_lazy_seeds drains to empty.
         assert!(
             core.pending_lazy_seeds.is_empty()
@@ -115532,6 +115962,11 @@ mod lazy_seed_tests {
         );
         // Epoch still advances due to the write
         assert!(core.seed_epoch > pre_epoch);
+        assert_eq!(core.live_execution_seed_reserved_bytes(), 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     /// bd-ytaa7: simulate the chokepoint failure (lazy seed with a
@@ -115544,12 +115979,14 @@ mod lazy_seed_tests {
     #[test]
     fn lazy_seed_epoch_divergence_returns_internal_error() {
         let mut core = test_core();
-        let seed = core.capture_execution_seed();
+        let seed = core
+            .capture_execution_seed()
+            .expect("test execution-seed capture must fit");
         // Without going through `before_seed_surface_write`, bump the
         // core epoch to model a missed chokepoint — the seed stays
         // Lazy at the old epoch.
         core.seed_epoch = core.seed_epoch.wrapping_add(1);
-        assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
+        assert!(seed.is_lazy());
 
         let err = core
             .reset_execution_state_from_seed(&seed)
@@ -115564,6 +116001,192 @@ mod lazy_seed_tests {
             ),
             "expected InternalError with chokepoint-miss detail, got: {err:?}"
         );
+    }
+
+    fn expected_capture_total(core: &InterpreterCore) -> u64 {
+        core.estimated_memory_bytes()
+            .saturating_add(InterpreterCore::pending_execution_seed_entry_bytes())
+            .saturating_add(core.estimate_execution_seed_snapshot_bytes())
+            .saturating_add(u64::try_from(std::mem::size_of::<ExecutionSeed>()).unwrap_or(u64::MAX))
+    }
+
+    #[test]
+    fn execution_seed_register_reservation_is_exact_and_drop_aware_bd_x6010() {
+        let mut core = test_core_with_registers(vec![Value::str("reserved-register-payload")]);
+        core.sync_estimated_memory_bytes()
+            .expect("register fixture must fit before seed admission");
+        let baseline = core.estimated_memory_bytes();
+        let exact_total = expected_capture_total(&core);
+
+        core.config.max_total_memory_bytes = exact_total.saturating_sub(1);
+        assert!(matches!(
+            core.capture_execution_seed(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.pending_lazy_seeds.is_empty());
+
+        core.config.max_total_memory_bytes = exact_total;
+        let seed = core
+            .capture_execution_seed()
+            .expect("exact execution-seed reservation ceiling must succeed");
+        assert_eq!(core.estimated_memory_bytes(), exact_total);
+        let alias = seed.clone();
+        let reserved = core.live_execution_seed_reserved_bytes();
+        drop(seed);
+        assert_eq!(core.live_execution_seed_reserved_bytes(), reserved);
+        core.write_reg(0, Value::str("reserved-register-payload"))
+            .expect("same-size normal first write must fit the exact capture ceiling");
+        assert!(core.estimated_memory_bytes() <= core.config.max_total_memory_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        drop(alias);
+        assert_eq!(core.live_execution_seed_reserved_bytes(), 0);
+        core.prune_dead_pending_execution_seeds();
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(core.recompute_estimated_memory_bytes(), baseline);
+    }
+
+    #[test]
+    fn execution_seed_reserves_heap_prototypes_symbols_and_property_labels_bd_x6010() {
+        let mut core = test_core();
+        let mut object = HeapObject::new();
+        object
+            .properties
+            .insert("payload".to_string(), Value::str("heap-owned-seed-payload"));
+        object.property_labels.insert(
+            "payload".to_string(),
+            Label::Custom {
+                name: "seed-property-label".repeat(4),
+                level: 7,
+            },
+        );
+        object.array_buffer = Some(ArrayBufferBacking {
+            bytes: vec![0xA5; 257],
+            label: Label::Secret,
+        });
+        core.mutate_heap(|heap| heap.push(object));
+        core.mutate_function_prototypes(|prototypes| {
+            prototypes.insert((ContentHash::compute(b"seed-owner"), 3), ObjectId(0));
+        });
+        core.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert("SeedBuiltin".to_string(), ObjectId(0));
+        });
+        core.allocate_private_symbol(Some(JsString::from("seed-symbol")))
+            .expect("symbol fixture must fit");
+        core.sync_estimated_memory_bytes()
+            .expect("composite seed fixture must fit");
+
+        let baseline = core.estimated_memory_bytes();
+        let exact_total = expected_capture_total(&core);
+        core.config.max_total_memory_bytes = exact_total.saturating_sub(1);
+        assert!(matches!(
+            core.capture_execution_seed(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = exact_total;
+        let seed = core
+            .capture_execution_seed()
+            .expect("composite snapshot must fit its exact reservation");
+        assert_eq!(core.estimated_memory_bytes(), exact_total);
+        core.write_reg(0, Value::Int(1))
+            .expect("normal write must consume the pre-admitted composite reservation");
+        assert!(!seed.is_lazy());
+        assert!(core.pending_lazy_seeds.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        drop(seed);
+        assert_eq!(core.live_execution_seed_reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn execution_seed_reset_peak_refusal_is_atomic_bd_x6010() {
+        let mut core = test_core_with_registers(vec![Value::str("seed-state")]);
+        core.sync_estimated_memory_bytes()
+            .expect("initial reset fixture must fit");
+        let seed = core
+            .capture_execution_seed()
+            .expect("reset fixture capture must fit");
+        core.mutate_registers(|registers| registers[0] = Value::str("mutated-state"));
+        core.active_inline_callback_context_label = Some(Label::Custom {
+            name: "transient-reset-label".repeat(4),
+            level: 5,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("mutated reset fixture must fit");
+        let before_total = core.estimated_memory_bytes();
+        let before_registers = core.registers.value.clone();
+        let before_label = core.active_inline_callback_context_label.clone();
+
+        core.config.max_total_memory_bytes = before_total
+            .saturating_add(seed.0.snapshot_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.reset_execution_state_from_seed(&seed),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.registers.value, before_registers);
+        assert_eq!(core.active_inline_callback_context_label, before_label);
+        assert_eq!(core.estimated_memory_bytes(), before_total);
+
+        core.config.max_total_memory_bytes = before_total.saturating_add(seed.0.snapshot_bytes);
+        core.reset_execution_state_from_seed(&seed)
+            .expect("exact reset clone peak must succeed");
+        assert_eq!(core.registers[0], Value::str("seed-state"));
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn execution_seed_owner_and_epoch_wrap_fail_closed_bd_x6010() {
+        let mut owner = test_core();
+        owner.seed_epoch = u64::MAX;
+        let seed = owner
+            .capture_execution_seed()
+            .expect("owner seed capture must fit");
+        owner.last_pre_run_seed = Some(seed.clone());
+        owner.last_post_run_epoch = Some(u64::MAX);
+        owner.mutate_registers(|registers| registers[0] = Value::Int(7));
+        assert_eq!(owner.seed_epoch, 0);
+        assert_eq!(owner.last_post_run_epoch, None);
+
+        let mut foreign = test_core();
+        assert!(matches!(
+            foreign.reset_execution_state_from_seed(&seed),
+            Err(InterpreterError::InternalError { details })
+                if details.contains("different interpreter core")
+        ));
+    }
+
+    #[test]
+    fn execution_seed_accessor_estimator_is_bounded_bd_x6010() {
+        let mut value = Value::Undefined;
+        for _ in 0..300 {
+            value = Value::Accessor {
+                get: Some(Arc::new(value)),
+                set: None,
+            };
+        }
+        let mut core = test_core_with_registers(vec![value]);
+        core.config.max_total_memory_bytes = u64::MAX;
+        assert_eq!(core.estimate_execution_seed_snapshot_bytes(), u64::MAX);
+        assert!(matches!(
+            core.capture_execution_seed(),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: u64::MAX,
+                ..
+            })
+        ));
+        assert!(core.pending_lazy_seeds.is_empty());
     }
 }
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-PERF-H2 implements lazy capture for `capture_execution_seed()` to eliminate repeated deep clones of interpreter state (registers, heap, function_prototypes) in the hot execution path. This optimization provides the highest cycle savings potential but carries the highest risk due to replay determinism requirements.
+PERF-H2 implements lazy capture for `capture_execution_seed()` to eliminate repeated deep clones of interpreter state (registers, heap, function and builtin prototypes, and symbol state) in the hot execution path. This optimization provides the highest cycle savings potential but carries the highest risk due to replay determinism and fail-closed memory-containment requirements.
 
 ## 1. The Invariant (Precise Statement)
 
@@ -13,7 +13,9 @@ PERF-H2 implements lazy capture for `capture_execution_seed()` to eliminate repe
 >
 > 1. `s_i'.registers == s_i.registers` byte-equal,
 > 2. `s_i'.heap == s_i.heap` byte-equal,
-> 3. `s_i'.function_prototypes == s_i.function_prototypes` byte-equal.
+> 3. `s_i'.function_prototypes == s_i.function_prototypes` byte-equal,
+> 4. `s_i'.builtin_prototypes == s_i.builtin_prototypes` byte-equal, and
+> 5. `s_i'.symbol_state == s_i.symbol_state` byte-equal.
 
 That's the load-bearing property. Any divergence is a correctness bug.
 
@@ -29,9 +31,35 @@ enum ExecutionSeed {
         registers: Vec<Value>,
         heap: Heap,
         function_prototypes: FunctionPrototypes,
+        builtin_prototypes: BuiltinPrototypes,
+        symbol_state: RuntimeSymbolState,
     },
 }
+
+// Private runtime ownership wrapper. The public ExecutionSeed enum remains
+// unchanged; only crate-internal capture/reset paths handle this lease.
+struct ExecutionSeedHandle(Rc<ExecutionSeedShared>);
+
+struct ExecutionSeedShared {
+    state: RefCell<Box<ExecutionSeed>>,
+    snapshot_bytes: u64,
+    reserved_bytes: u64,
+    reservation_ledger: Weak<ExecutionSeedReservationLedger>,
+}
 ```
+
+`ExecutionSeedShared::drop` releases the reservation at the same boundary as
+the final strong seed owner. Pending materialization keeps only `Weak` handles,
+so it cannot extend snapshot lifetime. The boxed state ensures a dead weak
+control block cannot retain a materialized snapshot payload.
+
+The seed ledger also charges the pending registry's weak slot and `Rc`
+envelope, so the interpreter's ordinary base counter never changes inside a
+seed-surface mutation chokepoint. Materialization releases only the removed
+weak-slot charge; a dead weak tombstone retains its entry charge until the next
+capture or seed-surface write prunes it. This separation matters because normal
+register/heap writers compute and later commit a base-memory projection around
+the chokepoint.
 
 ## 3. Type-Enforced Write Discipline (THE LOAD-BEARING PIECE)
 
@@ -72,33 +100,50 @@ Option A is simpler and tighter; selected.
 
 ## 4. The Protocol
 
-- `capture_execution_seed` returns `Rc<RefCell<ExecutionSeed>>` of
-  `Lazy{ epoch: self.seed_epoch, max_regs }`. Caller holds the Rc; the
-  Weak goes into `self.pending_lazy_seeds`.
+- `capture_execution_seed` first computes a bounded, allocation-free logical
+  ownership estimate for every seed surface. It refuses before allocation when
+  `base_memory + existing_seed_reservations + new_reservation` exceeds the
+  configured ceiling. On success it returns a private cloneable handle over a
+  `Lazy { epoch: self.seed_epoch, max_regs }` seed and puts a `Weak` handle in
+  `self.pending_lazy_seeds`.
 - `mutate_registers` / `mutate_heap` / `mutate_function_prototypes`:
-  1. Call `self.materialize_pending_lazy_seeds()` — drains Weak refs,
-     materializes any still-live Lazy seed *with the pre-mutation state*.
-  2. Bump `self.seed_epoch = self.seed_epoch.wrapping_add(1)`.
-  3. Yield `&mut self.field.value` to the closure.
-- `reset_execution_state_from_seed(Rc<RefCell<ExecutionSeed>>)`:
+  1. Call `self.materialize_pending_lazy_seeds()` — drains Weak refs and
+     materializes every still-live Lazy seed *with the pre-mutation state*.
+     Materialization is infallible because its complete logical ownership was
+     reserved at capture. Materialized and dead weak entries are not retained.
+  2. Clear `last_post_run_epoch` before changing the state. This prevents a
+     `u64` wraparound from resurrecting repeat-execute eligibility (ABA).
+  3. Bump `self.seed_epoch = self.seed_epoch.wrapping_add(1)`.
+  4. Yield `&mut self.field.value` to the closure.
+- `reset_execution_state_from_seed(&ExecutionSeedHandle)` rejects a seed owned
+  by a different core, validates epoch/state and preflights the full restore
+  clone peak before clearing any execution-local state, releases all seed
+  borrows, then restores the five seed surfaces through one mutation boundary:
   - If `seed` is `Lazy { epoch }` and `self.seed_epoch == epoch`: no-op.
   - If `seed` is `Materialized {…}`: apply the contents.
   - If `seed` is `Lazy { epoch }` and `self.seed_epoch != epoch`:
-    **invariant violation** (write happened without materializing).
-    `panic!()` with full diagnostic — this is a bug, not a runtime case.
+    return a fail-closed `InternalError` describing the missed write
+    chokepoint. This invariant failure must never abort the host process.
+- Repeat execution is detected with `last_post_run_epoch`, not a second seed.
+  A repeat reuses the existing pre-run seed without allocating. A non-repeat
+  drops the obsolete seed before fallibly capturing the new pre-run state.
+  Post-run bookkeeping is therefore infallible after guest effects commit.
 
 ## 5. Self-Cost Guardrail
 
-`Rc<RefCell<ExecutionSeed>>` allocates on the heap per `capture_execution_seed`
-call. Eager clone allocates a 256-Value Vec each call. We need:
+The private `Rc<ExecutionSeedShared>` lease allocates a small envelope per
+successful `capture_execution_seed` call. Eager clone allocates a 256-Value Vec
+plus every other seed surface each call. We need:
 
 > total_cost(lazy) = Rc_alloc + 0× clone (no write) OR Rc_alloc + clone_size (write)
 > total_cost(eager) = clone_size
 
 The Rc allocation is ~80 bytes (well below the 8 KiB register-Vec clone).
 But on "no write" paths the lazy version wins outright. On "write"
-paths the lazy version costs Rc_alloc *extra*. We bench in H2.6 to
-confirm net positive.
+paths the lazy version costs Rc_alloc *extra*. The reservation ledger is logical
+accounting only: it does not eagerly clone, but it prevents a later infallible
+write chokepoint from crossing the physical-memory ceiling. We bench in H2.6 to
+confirm the runtime optimization remains net positive.
 
 If H2.6 measures a *regression*, fallback design: use `Box<Cell<ExecutionSeed>>`
 or even a flat `(epoch: u64, MaybeUninit<ExecutionSeed>)` per
@@ -189,4 +234,8 @@ Complete inventory of existing write sites that must be converted to use `mutate
 
 ## Compatibility
 
-This change is purely internal to `baseline_interpreter.rs`. No public API changes are required. The `capture_execution_seed` and `reset_execution_state_from_seed` methods maintain identical signatures and behavior guarantees.
+The public `ExecutionSeed` enum remains unchanged. The drop-aware handle and
+reservation ledger are private to `baseline_interpreter.rs`; the capture/reset
+methods are crate-internal and may use the private handle directly. Observable
+reset behavior remains byte-identical, while budget refusal and epoch divergence
+are now typed, fail-closed outcomes rather than unbudgeted allocation or panic.

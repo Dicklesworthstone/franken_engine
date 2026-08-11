@@ -4813,6 +4813,12 @@ impl RuntimePropertyKey {
 pub struct HeapObject {
     /// Data properties in ECMAScript own-key order with deterministic lookup.
     pub properties: OrderedStringMap<Value>,
+    /// Per-own-string-property IFC labels (bd-ojvo1). A missing entry denotes
+    /// `Label::Public`, so this map stays sparse (only non-Public provenance is
+    /// stored) and serialization/accounting are unchanged for the common case.
+    /// Without this, a `Secret` value written to a property of a lower-labeled
+    /// object would launder back out as the object's label on later reads.
+    property_labels: OrderedStringMap<Label>,
     /// Prototype link used by membership operators and constructor instances.
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
@@ -4889,6 +4895,7 @@ impl Serialize for HeapObject {
         let mut object = serializer.serialize_struct(
             "HeapObject",
             10 + usize::from(!symbol_properties.is_empty())
+                + usize::from(!self.property_labels.is_empty())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -4915,6 +4922,9 @@ impl Serialize for HeapObject {
                 "is_default_derived_constructor",
                 &self.is_default_derived_constructor,
             )?;
+        }
+        if !self.property_labels.is_empty() {
+            object.serialize_field("property_labels", &self.property_labels)?;
         }
         if !symbol_properties.is_empty() {
             object.serialize_field("symbol_properties", &symbol_properties)?;
@@ -4948,6 +4958,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_derived_constructor: bool,
             #[serde(default)]
             is_default_derived_constructor: bool,
+            #[serde(default)]
+            property_labels: OrderedStringMap<Label>,
             #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
         }
@@ -4985,6 +4997,7 @@ impl<'de> Deserialize<'de> for HeapObject {
         }
         let mut object = Self {
             properties: wire.properties,
+            property_labels: wire.property_labels,
             prototype: wire.prototype,
             constructor_function: wire.constructor_function,
             is_array: wire.is_array,
@@ -39035,6 +39048,22 @@ impl InterpreterCore {
                     // (dst, obj) to (obj, key) — dropping (dst) alone would let a
                     // Public property read lower a dst that already held Secret
                     // (bd-0zybl regression).
+                    // bd-ojvo1: a value read from an own string property (incl.
+                    // array-index keys) carries the IFC provenance it was
+                    // written with, not merely the owning object's label. Join
+                    // the stored own-property label (Public when absent) so a
+                    // Secret value written to a lower-labeled object does not
+                    // launder back out as the object's label. Own properties
+                    // only for now; prototype-chain inheritance is a documented
+                    // follow-up and is still bounded below by the object label,
+                    // so this never under-taints relative to prior behavior.
+                    if let Some(owner) = object_id
+                        && let Some(key_str) = property_key.as_str()
+                    {
+                        let stored_label = self.own_property_label(owner, key_str);
+                        result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
+                    }
                     let prior_dst_label = self.get_register_label(dst)?;
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
@@ -39125,6 +39154,20 @@ impl InterpreterCore {
                                 // helper guards on `is_array`, and the proxy
                                 // object itself is not an array).
                                 self.maintain_array_index_assignment(oid, index)?;
+                            }
+                            // bd-ojvo1: record the written value's IFC label on
+                            // this own string property (incl. array-index keys)
+                            // so a later read recovers the value's provenance,
+                            // not merely the object's label. `__proto__` is a
+                            // prototype link (not a data property) and URL
+                            // properties commit through an authenticated side
+                            // table, so both are excluded.
+                            if !handled_url
+                                && let Some(key_str) = property_key.as_str()
+                                && key_str != "__proto__"
+                            {
+                                let value_label = self.get_register_label(val)?.clone();
+                                self.set_own_property_label(oid, key_str, &value_label);
                             }
                         }
                         Value::BuiltinFunction(builtin) => {
@@ -69649,6 +69692,35 @@ impl InterpreterCore {
         }
     }
 
+    /// Record the IFC label of a written own string property (bd-ojvo1). The
+    /// map is sparse: a `Public` label is stored as absence, so unlabeled
+    /// (Public) writes never grow the map and the common case is unchanged.
+    /// This is what stops a `Secret` value written to a lower-labeled object's
+    /// property from laundering back out as the object's label on later reads.
+    fn set_own_property_label(&mut self, object_id: ObjectId, key: &str, label: &Label) {
+        let idx = object_id.0 as usize;
+        let key = key.to_string();
+        let label = label.clone();
+        self.mutate_heap(move |heap| {
+            if let Some(object) = heap.get_mut(idx) {
+                if matches!(label, Label::Public) {
+                    object.property_labels.remove(key.as_str());
+                } else {
+                    object.property_labels.insert(key, label);
+                }
+            }
+        });
+    }
+
+    /// The stored IFC label of an own string property, or `Public` when the
+    /// property is absent, inherited, or carries no recorded provenance.
+    fn own_property_label(&self, object_id: ObjectId, key: &str) -> Label {
+        self.heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.property_labels.get(key).cloned())
+            .unwrap_or(Label::Public)
+    }
+
     fn set_object_runtime_property(
         &mut self,
         object_id: ObjectId,
@@ -92889,6 +92961,59 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "temporary join storage must not escape into retained accounting"
+        );
+    }
+
+    /// bd-ojvo1: a Secret value written to a Public object's own property must
+    /// read back as (at least) Secret. Before per-property labels, SetProperty
+    /// dropped the value's provenance and GetProperty recovered only the
+    /// object's (Public) label, laundering the Secret out through an aliased
+    /// container.
+    #[test]
+    fn set_property_persists_value_label_so_get_does_not_launder_bd_ojvo1() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("leaked".into());
+
+        let mut core = test_interpreter();
+        let public_obj = core
+            .alloc_object_with_properties(&[])
+            .expect("test object allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(public_obj);
+            r[2] = Value::Int(42);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Public)
+            .expect("object label should be settable");
+        core.set_register_label(2, crate::ifc_artifacts::Label::Secret)
+            .expect("written value label should be settable");
+
+        core.execute(&module)
+            .expect("set then get off a public object should execute");
+
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
         );
     }
 

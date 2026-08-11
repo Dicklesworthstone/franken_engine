@@ -18948,6 +18948,53 @@ mod tests {
         );
     }
 
+    /// bd-ojvo1: an array element written with a Secret value must read back
+    /// Secret via its index key, not laundered to the array's label.
+    #[test]
+    fn set_array_element_persists_value_label_bd_ojvo1() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("0".into());
+
+        let mut core = quickjs_test_core();
+        let arr = core
+            .alloc_object_with_properties(&[])
+            .expect("array allocation should succeed");
+        core.heap[arr.0 as usize].is_array = true;
+        core.write_reg_with_label(0, Value::Object(arr), crate::ifc_artifacts::Label::Public)
+            .expect("array register should be settable");
+        core.write_reg_with_label(2, Value::Int(9), crate::ifc_artifacts::Label::Secret)
+            .expect("written value register should be settable");
+
+        core.execute(&module)
+            .expect("array element set then get should execute");
+
+        assert_eq!(
+            core.read_reg_label(3)
+                .expect("dst register label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "a Secret value written to an array element must read back Secret (bd-ojvo1)"
+        );
+    }
+
     #[test]
     fn bd_3ose7_resolve_preserves_non_public_settlement_label() {
         // The ResolveThenable/resolve path must preserve the resolution label

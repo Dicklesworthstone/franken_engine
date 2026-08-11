@@ -8662,12 +8662,17 @@ impl InterpreterCore {
                     // join is non-Public (no-op otherwise), so neither a Secret
                     // value written to a lower-labeled object nor a read off a
                     // Secret object launders back out as Public.
-                    if let Value::Object(oid) = &obj_val
-                        && let RuntimePropertyKey::String(js_key) = &property_key
-                        && let Some(key_str) = js_key.as_str()
-                    {
-                        let raise = self
-                            .own_property_label(*oid, key_str)
+                    if let Value::Object(oid) = &obj_val {
+                        let prop_label = match &property_key {
+                            RuntimePropertyKey::String(js_key) => js_key
+                                .as_str()
+                                .map(|key_str| self.own_property_label(*oid, key_str))
+                                .unwrap_or(crate::ifc_artifacts::Label::Public),
+                            RuntimePropertyKey::Symbol(symbol) => {
+                                self.own_symbol_property_label(*oid, *symbol)
+                            }
+                        };
+                        let raise = prop_label
                             .join(&self.read_reg_label(obj)?)
                             .join(&self.read_reg_label(key)?);
                         if !matches!(raise, crate::ifc_artifacts::Label::Public) {
@@ -8710,16 +8715,22 @@ impl InterpreterCore {
                         }
                     };
                     // bd-ojvo1 (core parity): record the written value's IFC
-                    // label on the own string property so a later read recovers
-                    // the value's provenance, not merely the object's label.
-                    // Only a committed data-property write (no accessor call).
-                    if !called_accessor
-                        && let Value::Object(oid) = &obj_val
-                        && let RuntimePropertyKey::String(js_key) = &property_key
-                        && let Some(key_str) = js_key.as_str()
-                    {
+                    // label on the own property (string or Symbol key) so a
+                    // later read recovers the value's provenance, not merely the
+                    // object's label. Only a committed data-property write (no
+                    // accessor call).
+                    if !called_accessor && let Value::Object(oid) = &obj_val {
                         let value_label = self.read_reg_label(val)?;
-                        self.set_own_property_label(*oid, key_str, &value_label);
+                        match &property_key {
+                            RuntimePropertyKey::String(js_key) => {
+                                if let Some(key_str) = js_key.as_str() {
+                                    self.set_own_property_label(*oid, key_str, &value_label);
+                                }
+                            }
+                            RuntimePropertyKey::Symbol(symbol) => {
+                                self.set_own_symbol_property_label(*oid, *symbol, &value_label);
+                            }
+                        }
                     }
                     if !called_accessor {
                         self.ip += 1;
@@ -15352,6 +15363,47 @@ impl InterpreterCore {
         }
     }
 
+    /// Record the IFC label of a written own Symbol-keyed property (bd-ojvo1),
+    /// using the property_labels map's parallel Symbol side. Sparse: a `Public`
+    /// label is stored as absence. Stops a Secret value written under a Symbol
+    /// key from laundering back out as the object's label on a later read.
+    fn set_own_symbol_property_label(
+        &mut self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+        label: &crate::ifc_artifacts::Label,
+    ) {
+        if let Some(object) = self.heap.get_mut(object_id.0 as usize) {
+            if matches!(label, crate::ifc_artifacts::Label::Public) {
+                object
+                    .property_labels
+                    .remove_baseline_symbol_property(symbol);
+            } else {
+                object.property_labels.insert_baseline_symbol_property(
+                    symbol,
+                    BaselineSymbolProperty::Data(label.clone()),
+                );
+            }
+        }
+    }
+
+    /// The stored IFC label of an own Symbol-keyed property, or `Public` when
+    /// absent or unlabeled.
+    fn own_symbol_property_label(
+        &self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+    ) -> crate::ifc_artifacts::Label {
+        self.heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.property_labels.baseline_symbol_property(symbol))
+            .and_then(|property| match property {
+                BaselineSymbolProperty::Data(label) => Some(label.clone()),
+                _ => None,
+            })
+            .unwrap_or(crate::ifc_artifacts::Label::Public)
+    }
+
     /// The stored IFC label of an own string property, or `Public` when the
     /// property is absent, inherited, or carries no recorded provenance.
     /// The stored IFC label of the string property `key` resolved through the
@@ -19037,6 +19089,33 @@ mod tests {
             core.own_property_label(obj, "m"),
             crate::ifc_artifacts::Label::Secret,
             "a concise method's Secret definition label must be recorded on its property (bd-ojvo1)"
+        );
+    }
+
+    /// bd-ojvo1: an own Symbol-keyed property records and recovers its value's
+    /// IFC label (via the property_labels map's parallel Symbol side), and a
+    /// Public write clears it — so a Secret value under a Symbol key does not
+    /// launder, and unlabeled Symbol writes stay sparse.
+    #[test]
+    fn set_symbol_property_persists_value_label_bd_ojvo1() {
+        let mut core = quickjs_test_core();
+        let obj = core
+            .alloc_object_with_properties(&[])
+            .expect("object allocation should succeed");
+        let symbol = SymbolId(1);
+
+        core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Secret);
+        assert_eq!(
+            core.own_symbol_property_label(obj, symbol),
+            crate::ifc_artifacts::Label::Secret,
+            "a Secret value under a Symbol key must record its label (bd-ojvo1)"
+        );
+
+        core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Public);
+        assert_eq!(
+            core.own_symbol_property_label(obj, symbol),
+            crate::ifc_artifacts::Label::Public,
+            "a Public write must clear the Symbol-property label (sparse map)"
         );
     }
 

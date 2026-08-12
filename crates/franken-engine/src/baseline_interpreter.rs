@@ -5860,6 +5860,13 @@ impl BindingKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeBindingState {
     value: Value,
+    /// IFC label owned by the lexical cell alongside its value.
+    ///
+    /// Keeping the label in the shared cell is essential: closure snapshots
+    /// clone the `Rc` handle, and per-iteration environments deliberately
+    /// replace that handle with a detached cell. A parallel register-only
+    /// label would therefore be lost on every scoped store/load round trip.
+    label: Label,
     /// `true` once initialized (let/const start uninitialized in TDZ).
     initialized: bool,
 }
@@ -5907,9 +5914,22 @@ impl ScopeBinding {
     }
 
     fn with_state(kind: BindingKind, value: Value, initialized: bool) -> Self {
+        Self::with_labeled_state(kind, value, Label::Public, initialized)
+    }
+
+    fn with_labeled_state(
+        kind: BindingKind,
+        value: Value,
+        label: Label,
+        initialized: bool,
+    ) -> Self {
         Self {
             kind,
-            state: Rc::new(RefCell::new(ScopeBindingState { value, initialized })),
+            state: Rc::new(RefCell::new(ScopeBindingState {
+                value,
+                label,
+                initialized,
+            })),
         }
     }
 
@@ -5935,7 +5955,12 @@ impl ScopeBinding {
 
     fn detached_clone(&self) -> Result<Self, InterpreterError> {
         let state = self.snapshot_state()?;
-        Ok(Self::with_state(self.kind, state.value, state.initialized))
+        Ok(Self::with_labeled_state(
+            self.kind,
+            state.value,
+            state.label,
+            state.initialized,
+        ))
     }
 
     fn restore_state(&self, previous: ScopeBindingState) -> Result<(), InterpreterError> {
@@ -5954,6 +5979,11 @@ impl ScopeBinding {
     #[cfg(test)]
     fn value(&self) -> Result<Value, InterpreterError> {
         Ok(self.state()?.value.clone())
+    }
+
+    #[cfg(test)]
+    fn label(&self) -> Result<Label, InterpreterError> {
+        Ok(self.state()?.label.clone())
     }
 }
 
@@ -41105,26 +41135,28 @@ impl InterpreterCore {
                     name_pool_index,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    let val = if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
-                        let state = binding.state()?;
-                        if !state.initialized {
-                            return Err(InterpreterError::UninitializedBinding {
-                                name: name.into_owned(),
-                            });
-                        }
-                        state.value.clone()
-                    } else if let Some(context) = self.active_cjs_context.as_ref() {
-                        let (filename, dirname) =
-                            self.cjs_filename_dirname(Some(&context.module_specifier));
-                        match name.as_ref() {
-                            "__filename" => filename,
-                            "__dirname" => dirname,
-                            _ => Value::Undefined,
-                        }
-                    } else {
-                        Value::Undefined
-                    };
-                    self.write_reg(dst, val)?;
+                    let (val, label) =
+                        if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
+                            let state = binding.state()?;
+                            if !state.initialized {
+                                return Err(InterpreterError::UninitializedBinding {
+                                    name: name.into_owned(),
+                                });
+                            }
+                            (state.value.clone(), state.label.clone())
+                        } else if let Some(context) = self.active_cjs_context.as_ref() {
+                            let (filename, dirname) =
+                                self.cjs_filename_dirname(Some(&context.module_specifier));
+                            let value = match name.as_ref() {
+                                "__filename" => filename,
+                                "__dirname" => dirname,
+                                _ => Value::Undefined,
+                            };
+                            (value, Label::Public)
+                        } else {
+                            (Value::Undefined, Label::Public)
+                        };
+                    self.write_reg_with_label(dst, val, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadName {
@@ -41161,6 +41193,7 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
+                    let label = self.get_register_label(src)?.clone();
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let previous_closure_bytes = self.closures_memory_bytes();
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -41178,7 +41211,9 @@ impl InterpreterCore {
                             });
                         }
                         previous = Some((binding.clone(), previous_state));
-                        binding.state_mut()?.value = val;
+                        let mut state = binding.state_mut()?;
+                        state.value = val;
+                        state.label = label;
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
@@ -41223,6 +41258,7 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
+                    let label = self.get_register_label(src)?.clone();
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let previous_closure_bytes = self.closures_memory_bytes();
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
@@ -41231,6 +41267,7 @@ impl InterpreterCore {
                         previous = Some((binding.clone(), binding.snapshot_state()?));
                         let mut state = binding.state_mut()?;
                         state.value = val;
+                        state.label = label;
                         state.initialized = true;
                     }
                     if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
@@ -69026,14 +69063,18 @@ impl InterpreterCore {
 
     fn estimate_scope_bindings_bytes(bindings: &BTreeMap<String, ScopeBinding>) -> u64 {
         Self::saturating_sum(bindings.iter().map(|(name, binding)| {
-            let value_bytes = binding
+            let state_bytes = binding
                 .state
                 .try_borrow()
-                .map(|state| Self::estimate_value_bytes(&state.value))
+                .map(|state| {
+                    Self::estimate_value_bytes(&state.value)
+                        .saturating_add(std::mem::size_of::<Label>() as u64)
+                        .saturating_add(Self::estimate_label_bytes(&state.label))
+                })
                 .unwrap_or(u64::MAX);
             MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                 .saturating_add(Self::estimate_string_bytes(name))
-                .saturating_add(value_bytes)
+                .saturating_add(state_bytes)
         }))
     }
 
@@ -109689,12 +109730,17 @@ mod tests {
 
     #[test]
     fn per_iteration_binding_clone_detaches_identity_and_preserves_state() {
-        let original =
-            ScopeBinding::with_state(BindingKind::Let, Value::str("iteration payload"), true);
+        let original = ScopeBinding::with_labeled_state(
+            BindingKind::Let,
+            Value::str("iteration payload"),
+            Label::Secret,
+            true,
+        );
         let detached = original.detached_clone().expect("detached clone");
 
         assert_eq!(detached.kind, BindingKind::Let);
         assert_eq!(detached.snapshot_state(), original.snapshot_state());
+        assert_eq!(detached.label().unwrap(), Label::Secret);
         assert!(!Rc::ptr_eq(&original.state, &detached.state));
 
         detached
@@ -109702,6 +109748,187 @@ mod tests {
             .expect("mutate detached cell");
         assert_eq!(original.value().unwrap(), Value::str("iteration payload"));
         assert_eq!(detached.value().unwrap(), Value::str("next iteration"));
+        assert_eq!(original.label().unwrap(), Label::Secret);
+        assert_eq!(detached.label().unwrap(), Label::Secret);
+    }
+
+    #[test]
+    fn per_iteration_cells_preserve_exact_ifc_labels_through_nested_closures_bd_mpm0l() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 10,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::CreatePerIterationBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                    preserve_state: true,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 2,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 11,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::CreatePerIterationBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                    preserve_state: true,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 3,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 12,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 4,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 10,
+                    args: RegRange {
+                        start: 30,
+                        count: 0,
+                    },
+                    dst: 20,
+                },
+                Ir3Instruction::Call {
+                    callee: 11,
+                    args: RegRange {
+                        start: 30,
+                        count: 0,
+                    },
+                    dst: 21,
+                },
+                Ir3Instruction::Call {
+                    callee: 12,
+                    args: RegRange {
+                        start: 30,
+                        count: 0,
+                    },
+                    dst: 22,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["iteration".to_string()],
+        );
+        module.function_table.extend([
+            Ir3FunctionDesc {
+                entry: 15,
+                arity: 0,
+                frame_size: 2,
+                name: Some("capture_nested".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+            Ir3FunctionDesc {
+                entry: 17,
+                arity: 0,
+                frame_size: 2,
+                name: Some("read_iteration".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+        ]);
+
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::str("iteration-0"), Label::Secret)
+            .expect("seed the first iteration with a Secret label");
+        core.write_reg_with_label(2, Value::str("iteration-1"), Label::Public)
+            .expect("seed the second iteration with a Public label");
+        core.write_reg_with_label(3, Value::str("iteration-2"), Label::Confidential)
+            .expect("seed the third iteration with a Confidential label");
+
+        core.run_loop(&module)
+            .expect("per-iteration nested-closure program should execute");
+
+        assert_eq!(
+            core.get_register_label(1).expect("preserved first label"),
+            &Label::Secret,
+            "the first detached iteration cell must copy the prior cell label"
+        );
+        assert_eq!(
+            core.get_register_label(4).expect("final live label"),
+            &Label::Confidential,
+            "LoadScoped must restore the exact current cell label"
+        );
+
+        let binding_from = |closure: &ClosureValue| {
+            closure
+                .captured_env
+                .iter()
+                .rev()
+                .find_map(|frame| frame.bindings.get("iteration"))
+                .cloned()
+                .expect("closure must capture the iteration binding")
+        };
+        let outer: Vec<ScopeBinding> = core.closures[..3].iter().map(binding_from).collect();
+        let nested_ids: Vec<usize> = [20_u32, 21, 22]
+            .into_iter()
+            .map(
+                |reg| match core.read_reg(reg).expect("nested closure result") {
+                    Value::Closure(id) => id as usize,
+                    other => panic!("expected nested closure, got {other:?}"),
+                },
+            )
+            .collect();
+        let nested: Vec<ScopeBinding> = nested_ids
+            .iter()
+            .map(|&id| binding_from(&core.closures[id]))
+            .collect();
+
+        for (index, (outer_binding, nested_binding)) in outer.iter().zip(nested.iter()).enumerate()
+        {
+            assert!(
+                Rc::ptr_eq(&outer_binding.state, &nested_binding.state),
+                "nested closure {index} must retain its outer closure's exact cell"
+            );
+        }
+        assert!(!Rc::ptr_eq(&outer[0].state, &outer[1].state));
+        assert!(!Rc::ptr_eq(&outer[1].state, &outer[2].state));
+        assert_eq!(outer[0].value().unwrap(), Value::str("iteration-0"));
+        assert_eq!(outer[0].label().unwrap(), Label::Secret);
+        assert_eq!(outer[1].value().unwrap(), Value::str("iteration-1"));
+        assert_eq!(outer[1].label().unwrap(), Label::Public);
+        assert_eq!(outer[2].value().unwrap(), Value::str("iteration-2"));
+        assert_eq!(outer[2].label().unwrap(), Label::Confidential);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "lexical-cell labels must participate in exact memory accounting"
+        );
     }
 
     #[test]

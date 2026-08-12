@@ -254,3 +254,5 @@ crates/franken-engine/tests/*_irdump.rs
 # nowhere in the tree. Ignored rather than deleted: AGENTS.md Rule 1 forbids
 # removing files without explicit written user permission.
 *.ll
+# br doctor per-run artifacts
+.doctor/

@@ -9,3 +9,4 @@
 # Temporary
 last-touched
 *.tmp
+.write.lock

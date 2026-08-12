@@ -109932,6 +109932,164 @@ mod tests {
     }
 
     #[test]
+    fn iterator_head_cell_resets_stale_label_before_exact_initialization_bd_mpm0l() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 10,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::CreatePerIterationBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                    preserve_state: false,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 2,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 1,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 11,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["iterator_head".to_string()],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 7,
+            arity: 0,
+            frame_size: 1,
+            name: Some("capture_iterator_head".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::str("stale"), Label::Secret)
+            .expect("seed the previous iteration");
+        core.write_reg_with_label(1, Value::str("fresh"), Label::Confidential)
+            .expect("seed the iterator-head value");
+
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::UninitializedBinding { name }) if name == "iterator_head"
+        ));
+        assert_eq!(core.ip, 4, "the TDZ load itself must remain unconsumed");
+        let previous = core.closures[0]
+            .captured_env
+            .iter()
+            .rev()
+            .find_map(|frame| frame.bindings.get("iterator_head"))
+            .cloned()
+            .expect("previous iteration closure binding");
+        let fresh = core
+            .scope_chain
+            .resolve("iterator_head")
+            .map(|(_, binding)| binding.clone())
+            .expect("fresh iterator-head binding");
+        assert!(!Rc::ptr_eq(&previous.state, &fresh.state));
+        assert_eq!(previous.label().unwrap(), Label::Secret);
+        let fresh_before_init = fresh.snapshot_state().expect("fresh cell state");
+        assert_eq!(fresh_before_init.value, Value::Undefined);
+        assert_eq!(fresh_before_init.label, Label::Public);
+        assert!(!fresh_before_init.initialized);
+
+        core.ip = 5;
+        core.run_loop(&module)
+            .expect("exact iterator-head initialization should resume");
+        let captured_fresh = core.closures[1]
+            .captured_env
+            .iter()
+            .rev()
+            .find_map(|frame| frame.bindings.get("iterator_head"))
+            .cloned()
+            .expect("initialized iterator-head closure binding");
+        assert!(Rc::ptr_eq(&fresh.state, &captured_fresh.state));
+        assert_eq!(captured_fresh.value().unwrap(), Value::str("fresh"));
+        assert_eq!(captured_fresh.label().unwrap(), Label::Confidential);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "TDZ refusal and resumed initialization must preserve accounting"
+        );
+    }
+
+    #[test]
+    fn scoped_binding_accounts_custom_ifc_label_payload_bd_mpm0l() {
+        let initialize = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["custom_labeled".to_string()],
+        );
+        let update = test_module_with_pool(
+            vec![
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["custom_labeled".to_string()],
+        );
+        let custom = Label::Custom {
+            name: "tenant-secret-compartment".repeat(8),
+            level: Label::Secret.level(),
+        };
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::Int(7), Label::Public)
+            .expect("seed public binding value");
+        core.run_loop(&initialize)
+            .expect("initialize public lexical binding");
+        let scope_before = core.scope_chain_memory_bytes();
+        core.write_reg_with_label(1, Value::Int(7), custom.clone())
+            .expect("seed custom-labeled replacement");
+        core.ip = 0;
+        core.run_loop(&update)
+            .expect("store custom-labeled lexical value");
+        let scope_after = core.scope_chain_memory_bytes();
+
+        assert_eq!(
+            scope_after.saturating_sub(scope_before),
+            InterpreterCore::estimate_label_bytes(&custom),
+            "only the dynamic Custom-label payload should grow for the same value"
+        );
+        let binding = core
+            .scope_chain
+            .resolve("custom_labeled")
+            .map(|(_, binding)| binding)
+            .expect("custom-labeled binding");
+        assert_eq!(binding.label().unwrap(), custom);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn temporary_scope_clone_budget_counts_existing_snapshot() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "temporary-scope-clone-budget");

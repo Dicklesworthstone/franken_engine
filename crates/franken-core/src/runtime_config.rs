@@ -111,8 +111,15 @@ impl Default for ExecutionConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OrchestratorConfig {
+    /// Whether the regret-bounded router may select the execution profile.
+    /// Explicit directives and capability-sensitive modules still take precedence.
+    pub adaptive_routing_enabled: bool,
     /// Adaptive router exploration rate (fixed-point millionths, 0..=1_000_000).
     pub adaptive_router_gamma_millionths: i64,
+    /// Maximum serialized bytes of trusted adaptive state admitted into one
+    /// replay-bound routing decision. Exhaustion selects the conservative
+    /// profile with an explicit receipt instead of using partial state.
+    pub adaptive_router_state_budget_bytes: u64,
     /// CUSUM anomaly detection threshold (fixed-point millionths).
     pub stopping_cusum_threshold_millionths: i64,
     /// CUSUM reference value (fixed-point millionths).
@@ -128,7 +135,9 @@ pub struct OrchestratorConfig {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
+            adaptive_routing_enabled: true,
             adaptive_router_gamma_millionths: 100_000,
+            adaptive_router_state_budget_bytes: 64 * 1024,
             stopping_cusum_threshold_millionths: 5_000_000,
             stopping_cusum_reference_millionths: 500_000,
             cell_close_budget_ms: 10_000,
@@ -866,7 +875,9 @@ mod tests {
     #[test]
     fn default_orchestrator_matches_prior_constants() {
         let o = OrchestratorConfig::default();
+        assert!(o.adaptive_routing_enabled);
         assert_eq!(o.adaptive_router_gamma_millionths, 100_000);
+        assert_eq!(o.adaptive_router_state_budget_bytes, 64 * 1024);
         assert_eq!(o.stopping_cusum_threshold_millionths, 5_000_000);
         assert_eq!(o.stopping_cusum_reference_millionths, 500_000);
         assert_eq!(o.cell_close_budget_ms, 10_000);

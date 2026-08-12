@@ -106,6 +106,8 @@ pub enum RegimeKind {
     Stochastic,
     /// Rewards may be adversarially chosen — EXP3 is needed.
     Adversarial,
+    /// Deterministic conservative fallback after invalid or failed adaptive state.
+    SafeMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +547,7 @@ impl RegretBoundedRouter {
                     self.exp3.select_arm(random_millionths)
                 }
             }
+            RegimeKind::SafeMode => 0,
         }
     }
 
@@ -645,6 +648,7 @@ impl RegretBoundedRouter {
         match self.active_regime {
             RegimeKind::Adversarial | RegimeKind::Unknown => self.exp3.regret_bound_millionths(),
             RegimeKind::Stochastic => self.ftrl.regret_bound_millionths(),
+            RegimeKind::SafeMode => 0,
         }
     }
 
@@ -728,6 +732,13 @@ impl RegretBoundedRouter {
         let arm_probs = match self.active_regime {
             RegimeKind::Adversarial | RegimeKind::Unknown => self.exp3.arm_probabilities(),
             RegimeKind::Stochastic => self.ftrl.arm_probabilities(),
+            RegimeKind::SafeMode => {
+                let mut probabilities = vec![0; self.arms.len()];
+                if let Some(first) = probabilities.first_mut() {
+                    *first = MILLION;
+                }
+                probabilities
+            }
         };
 
         RouterSummary {
@@ -741,6 +752,27 @@ impl RegretBoundedRouter {
             realized_regret_millionths: self.realized_regret_millionths(),
             theoretical_regret_bound_millionths: self.regret_bound_millionths(),
             exact_regret_available: self.exact_regret_available(),
+            regime_transitions: self.regime_history.len(),
+        }
+    }
+
+    /// Create a deterministic safe-mode fallback summary.
+    pub fn safe_mode_fallback_summary(&self) -> RouterSummary {
+        let mut arm_probabilities_millionths = vec![0; self.arms.len()];
+        if let Some(first) = arm_probabilities_millionths.first_mut() {
+            *first = MILLION;
+        }
+        RouterSummary {
+            schema: ROUTING_SCHEMA_VERSION.to_string(),
+            num_arms: self.arms.len(),
+            rounds: self.exp3.rounds,
+            active_regime: RegimeKind::SafeMode,
+            arm_probabilities_millionths,
+            cumulative_reward_millionths: self.cumulative_reward_millionths,
+            best_arm_cumulative_millionths: self.best_arm_cumulative_millionths,
+            realized_regret_millionths: self.realized_regret_millionths(),
+            theoretical_regret_bound_millionths: 0,
+            exact_regret_available: false,
             regime_transitions: self.regime_history.len(),
         }
     }

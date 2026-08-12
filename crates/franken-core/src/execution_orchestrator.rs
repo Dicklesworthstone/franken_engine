@@ -60,8 +60,8 @@ use crate::optimal_stopping::{
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParserOptions, ParserSource};
 use crate::region_lifecycle::{CancelReason, DrainDeadline, FinalizeResult};
 use crate::regret_bounded_router::{
-    LaneArm as AdaptiveLaneArm, RegretBoundedRouter, RewardSignal as AdaptiveRewardSignal,
-    RouterSummary,
+    LaneArm as AdaptiveLaneArm, ROUTING_SCHEMA_VERSION, RegimeKind, RegretBoundedRouter,
+    RewardSignal as AdaptiveRewardSignal, RouterSummary,
 };
 use crate::runtime_config::RuntimeConfig;
 use crate::saga_orchestrator::{
@@ -97,6 +97,7 @@ const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
 const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v4";
 const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
+const ADAPTIVE_ROUTING_DECISION_SCHEMA: &str = "franken-engine.adaptive-routing-decision.v2";
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -163,6 +164,327 @@ impl Default for OrchestratorConfig {
             parser_options: ParserOptions::default(),
             trace_id_prefix: "orch".to_string(),
             policy_id: "default-policy".to_string(),
+        }
+    }
+}
+
+/// Why the pre-execution adaptive routing boundary selected its profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdaptiveRoutingReason {
+    DisabledStaticPolicy,
+    ExplicitLaneOverride,
+    CapabilitySafetyConstraint,
+    WarmupFallback,
+    AdaptivePolicy,
+    SafeModeFallback,
+    InvalidStateFallback,
+    MissingEvidenceFallback,
+    StaleEpochFallback,
+    BudgetExhaustedFallback,
+    UpdateFailureFallback,
+}
+
+impl AdaptiveRoutingReason {
+    const fn stable_label(self) -> &'static str {
+        match self {
+            Self::DisabledStaticPolicy => "disabled_static_policy",
+            Self::ExplicitLaneOverride => "explicit_lane_override",
+            Self::CapabilitySafetyConstraint => "capability_safety_constraint",
+            Self::WarmupFallback => "warmup_fallback",
+            Self::AdaptivePolicy => "adaptive_policy",
+            Self::SafeModeFallback => "safe_mode_fallback",
+            Self::InvalidStateFallback => "invalid_state_fallback",
+            Self::MissingEvidenceFallback => "missing_evidence_fallback",
+            Self::StaleEpochFallback => "stale_epoch_fallback",
+            Self::BudgetExhaustedFallback => "budget_exhausted_fallback",
+            Self::UpdateFailureFallback => "update_failure_fallback",
+        }
+    }
+}
+
+/// Trusted adaptive state bound into a pre-execution routing decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdaptiveRouterStateEvidence {
+    pub policy_epoch: SecurityEpoch,
+    pub summary: RouterSummary,
+    pub fallback_reason: Option<AdaptiveRoutingReason>,
+}
+
+/// Outcome of staging feedback from a completed interpreter run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", content = "reason", rename_all = "snake_case")]
+pub enum AdaptiveRouterUpdateStatus {
+    Disabled,
+    Applied,
+    Fallback(AdaptiveRoutingReason),
+}
+
+impl AdaptiveRouterUpdateStatus {
+    const fn stable_label(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Applied => "applied",
+            Self::Fallback(reason) => reason.stable_label(),
+        }
+    }
+}
+
+/// Inputs that deterministic replay must bind before executing a routed run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdaptiveRoutingContext {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub extension_id: String,
+    pub policy_epoch: SecurityEpoch,
+    pub ir3_content_hash: ContentHash,
+    pub forced_lane: Option<LaneChoice>,
+    pub static_lane: LaneChoice,
+    pub static_reason: LaneReason,
+    pub has_required_capabilities: bool,
+    pub adaptive_routing_enabled: bool,
+    pub adaptive_state_budget_bytes: u64,
+}
+
+impl AdaptiveRoutingContext {
+    fn content_hash(&self) -> ContentHash {
+        let bytes =
+            serde_json::to_vec(self).expect("adaptive routing context serialization is infallible");
+        ContentHash::compute(&bytes)
+    }
+}
+
+/// Replay-checkable decision made before interpreter dispatch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdaptiveRoutingDecision {
+    pub schema: String,
+    pub context_digest: ContentHash,
+    pub pre_state: Option<AdaptiveRouterStateEvidence>,
+    pub pre_state_digest: ContentHash,
+    pub seed_millionths: i64,
+    pub selected_arm: Option<usize>,
+    pub selected_lane: LaneChoice,
+    pub reason: AdaptiveRoutingReason,
+    pub decision_digest: ContentHash,
+}
+
+impl AdaptiveRoutingDecision {
+    fn state_digest(state: Option<&AdaptiveRouterStateEvidence>) -> ContentHash {
+        let bytes = serde_json::to_vec(&state)
+            .expect("adaptive router summary serialization is infallible");
+        ContentHash::compute(&bytes)
+    }
+
+    fn deterministic_seed(context: &AdaptiveRoutingContext, state_digest: &ContentHash) -> i64 {
+        let mut bytes = Vec::with_capacity(128);
+        bytes.extend_from_slice(ADAPTIVE_ROUTING_DECISION_SCHEMA.as_bytes());
+        bytes.extend_from_slice(state_digest.as_bytes());
+        bytes.extend_from_slice(context.ir3_content_hash.as_bytes());
+        bytes.extend_from_slice(&context.policy_epoch.as_u64().to_be_bytes());
+        bytes.extend_from_slice(context.extension_id.as_bytes());
+        let digest = ContentHash::compute(&bytes);
+        let mut prefix = [0u8; 8];
+        prefix.copy_from_slice(&digest.as_bytes()[..8]);
+        i64::try_from(u64::from_be_bytes(prefix) % 1_000_000_u64)
+            .expect("millionths seed fits in i64")
+    }
+
+    fn state_is_valid(state: &RouterSummary) -> bool {
+        state.schema == ROUTING_SCHEMA_VERSION
+            && state.num_arms == 2
+            && state.arm_probabilities_millionths.len() == 2
+            && state
+                .arm_probabilities_millionths
+                .iter()
+                .all(|probability| (0..=SCALE_MILLION).contains(probability))
+            && state
+                .arm_probabilities_millionths
+                .iter()
+                .copied()
+                .sum::<i64>()
+                == SCALE_MILLION
+    }
+
+    fn arm_from_summary(state: &RouterSummary, seed_millionths: i64) -> usize {
+        let mut cumulative = 0i64;
+        for (index, probability) in state.arm_probabilities_millionths.iter().enumerate() {
+            cumulative = cumulative.saturating_add(*probability);
+            if seed_millionths < cumulative {
+                return index;
+            }
+        }
+        state.num_arms.saturating_sub(1)
+    }
+
+    fn lane_for_arm(arm: usize) -> LaneChoice {
+        match arm {
+            0 => LaneChoice::QuickJs,
+            1 => LaneChoice::V8,
+            _ => LaneChoice::QuickJs,
+        }
+    }
+
+    fn choose_from_state(
+        context: &AdaptiveRoutingContext,
+        state: &AdaptiveRouterStateEvidence,
+        seed_millionths: i64,
+    ) -> (Option<usize>, LaneChoice, AdaptiveRoutingReason) {
+        let serialized_len = u64::try_from(
+            serde_json::to_vec(state)
+                .expect("adaptive router state serialization is infallible")
+                .len(),
+        )
+        .unwrap_or(u64::MAX);
+        if serialized_len > context.adaptive_state_budget_bytes {
+            return (
+                Some(0),
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::BudgetExhaustedFallback,
+            );
+        }
+        if state.policy_epoch != context.policy_epoch {
+            return (
+                Some(0),
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::StaleEpochFallback,
+            );
+        }
+        if !Self::state_is_valid(&state.summary) {
+            return (
+                Some(0),
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::InvalidStateFallback,
+            );
+        }
+        if let Some(reason) = state.fallback_reason {
+            return if reason == AdaptiveRoutingReason::UpdateFailureFallback {
+                (Some(0), LaneChoice::QuickJs, reason)
+            } else {
+                (
+                    Some(0),
+                    LaneChoice::QuickJs,
+                    AdaptiveRoutingReason::InvalidStateFallback,
+                )
+            };
+        }
+        if state.summary.active_regime == RegimeKind::SafeMode {
+            return (
+                Some(0),
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::SafeModeFallback,
+            );
+        }
+        if state.summary.rounds < u64::try_from(state.summary.num_arms).unwrap_or(u64::MAX) {
+            return (
+                Some(0),
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::WarmupFallback,
+            );
+        }
+        let arm = Self::arm_from_summary(&state.summary, seed_millionths);
+        (
+            Some(arm),
+            Self::lane_for_arm(arm),
+            AdaptiveRoutingReason::AdaptivePolicy,
+        )
+    }
+
+    fn digest_fields(
+        context_digest: &ContentHash,
+        state_digest: &ContentHash,
+        seed_millionths: i64,
+        selected_arm: Option<usize>,
+        selected_lane: LaneChoice,
+        reason: AdaptiveRoutingReason,
+    ) -> ContentHash {
+        let mut bytes = Vec::with_capacity(128);
+        bytes.extend_from_slice(ADAPTIVE_ROUTING_DECISION_SCHEMA.as_bytes());
+        bytes.extend_from_slice(context_digest.as_bytes());
+        bytes.extend_from_slice(state_digest.as_bytes());
+        bytes.extend_from_slice(&seed_millionths.to_be_bytes());
+        match selected_arm {
+            Some(arm) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&u64::try_from(arm).unwrap_or(u64::MAX).to_be_bytes());
+            }
+            None => bytes.push(0),
+        }
+        bytes.extend_from_slice(selected_lane.stable_label().as_bytes());
+        bytes.extend_from_slice(reason.stable_label().as_bytes());
+        ContentHash::compute(&bytes)
+    }
+
+    fn build(
+        context: &AdaptiveRoutingContext,
+        pre_state: Option<AdaptiveRouterStateEvidence>,
+    ) -> Self {
+        let context_digest = context.content_hash();
+        let pre_state_digest = Self::state_digest(pre_state.as_ref());
+        let seed_millionths = Self::deterministic_seed(context, &pre_state_digest);
+        let (selected_arm, selected_lane, reason) = if let Some(lane) = context.forced_lane {
+            (None, lane, AdaptiveRoutingReason::ExplicitLaneOverride)
+        } else if context.has_required_capabilities {
+            (
+                None,
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::CapabilitySafetyConstraint,
+            )
+        } else if !context.adaptive_routing_enabled {
+            (
+                None,
+                context.static_lane,
+                AdaptiveRoutingReason::DisabledStaticPolicy,
+            )
+        } else if let Some(state) = pre_state.as_ref() {
+            Self::choose_from_state(context, state, seed_millionths)
+        } else {
+            (
+                Some(0),
+                LaneChoice::QuickJs,
+                AdaptiveRoutingReason::MissingEvidenceFallback,
+            )
+        };
+        let decision_digest = Self::digest_fields(
+            &context_digest,
+            &pre_state_digest,
+            seed_millionths,
+            selected_arm,
+            selected_lane,
+            reason,
+        );
+        Self {
+            schema: ADAPTIVE_ROUTING_DECISION_SCHEMA.to_string(),
+            context_digest,
+            pre_state,
+            pre_state_digest,
+            seed_millionths,
+            selected_arm,
+            selected_lane,
+            reason,
+            decision_digest,
+        }
+    }
+
+    pub fn verify_for_replay(
+        &self,
+        context: &AdaptiveRoutingContext,
+    ) -> Result<(), OrchestratorError> {
+        let expected = Self::build(context, self.pre_state.clone());
+        if self == &expected {
+            Ok(())
+        } else {
+            Err(OrchestratorError::AdaptiveRoutingDecisionInvalid {
+                detail: "pre-execution adaptive routing decision failed deterministic replay"
+                    .to_string(),
+            })
+        }
+    }
+
+    fn execution_force_lane(&self) -> Option<LaneChoice> {
+        match self.reason {
+            AdaptiveRoutingReason::DisabledStaticPolicy
+            | AdaptiveRoutingReason::CapabilitySafetyConstraint => None,
+            _ => Some(self.selected_lane),
         }
     }
 }
@@ -260,7 +582,9 @@ pub struct OrchestratorResult {
     pub execution_value: String,
     pub completion_label: Label,
     pub instructions_executed: u64,
+    pub adaptive_routing_decision: AdaptiveRoutingDecision,
     pub adaptive_router_summary: Option<RouterSummary>,
+    pub adaptive_router_update_status: AdaptiveRouterUpdateStatus,
     pub ir3_schedule_cost: Option<TropicalWeight>,
 
     // Risk
@@ -368,10 +692,17 @@ struct EvidenceRecordInput<'a> {
     update: &'a UpdateResult,
     ir3_schedule_cost: Option<TropicalWeight>,
     ir4_witness_hash: ContentHash,
+    adaptive_routing_decision: &'a AdaptiveRoutingDecision,
     adaptive_router_summary: Option<&'a RouterSummary>,
+    adaptive_router_update_status: AdaptiveRouterUpdateStatus,
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
     guardplane_report: Option<&'a GuardplaneHookReport>,
     capability_summary: EvidenceCapabilitySummary,
+}
+
+struct StagedAdaptiveRouterUpdate {
+    router: RegretBoundedRouter,
+    fallback_reason: Option<AdaptiveRoutingReason>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -491,6 +822,9 @@ pub enum OrchestratorError {
     UnknownPackageCapability {
         capability: String,
     },
+    AdaptiveRoutingDecisionInvalid {
+        detail: String,
+    },
     /// The post-execution IR4 witness failed linkage verification against the
     /// executed IR3 (bd-drb55). Fail-closed: a run whose witness cannot be
     /// verified is not published as a success.
@@ -531,6 +865,9 @@ impl fmt::Display for OrchestratorError {
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
             Self::UnknownPackageCapability { capability } => {
                 write!(f, "unknown package capability `{capability}`")
+            }
+            Self::AdaptiveRoutingDecisionInvalid { detail } => {
+                write!(f, "adaptive routing decision invalid: {detail}")
             }
             Self::WitnessSealing { detail } => {
                 write!(f, "ir4 witness sealing failed: {detail}")
@@ -658,6 +995,8 @@ pub struct ExecutionOrchestrator {
     runtime_config: RuntimeConfig,
     parser: CanonicalEs2020Parser,
     adaptive_router: RegretBoundedRouter,
+    adaptive_router_state_epoch: Option<SecurityEpoch>,
+    adaptive_router_fallback_reason: Option<AdaptiveRoutingReason>,
     stopping_policies: BTreeMap<String, EscalationPolicy>,
     last_cumulative_llr_by_extension: BTreeMap<String, i64>,
     posterior_updaters: UpdaterStore,
@@ -677,6 +1016,8 @@ pub struct ExecutionOrchestrator {
     guardplane_builder_failure_index_override: Option<usize>,
     #[cfg(test)]
     containment_action_override: Option<ContainmentAction>,
+    #[cfg(test)]
+    adaptive_router_update_failure_override: bool,
 }
 
 impl ExecutionOrchestrator {
@@ -785,6 +1126,8 @@ impl ExecutionOrchestrator {
         Ok(Self {
             parser: CanonicalEs2020Parser,
             adaptive_router,
+            adaptive_router_state_epoch: Some(config.epoch),
+            adaptive_router_fallback_reason: None,
             stopping_policies: BTreeMap::new(),
             last_cumulative_llr_by_extension: BTreeMap::new(),
             posterior_updaters: UpdaterStore::new(),
@@ -804,6 +1147,8 @@ impl ExecutionOrchestrator {
             guardplane_builder_failure_index_override: None,
             #[cfg(test)]
             containment_action_override: None,
+            #[cfg(test)]
+            adaptive_router_update_failure_override: false,
             config,
             runtime_config,
         })
@@ -945,6 +1290,7 @@ impl ExecutionOrchestrator {
         );
 
         let mut cell_cancel_reason = CancelReason::OperatorShutdown;
+        let mut pending_adaptive_router: Option<StagedAdaptiveRouterUpdate> = None;
         let pipeline_result = (|| -> Result<OrchestratorResult, PendingPostCellFailure> {
             // Step 3: Register extension in containment executor.
             self.containment_executor.register(&package.extension_id);
@@ -953,16 +1299,41 @@ impl ExecutionOrchestrator {
             self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
             let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
 
+            let adaptive_routing_context = self.adaptive_routing_context(
+                package,
+                &lowering_output.ir3,
+                &trace_id,
+                &decision_id,
+            );
+            let adaptive_routing_decision =
+                self.select_adaptive_routing_decision(&adaptive_routing_context);
+            adaptive_routing_decision.verify_for_replay(&adaptive_routing_context)?;
+
             // Step 6: Execute IR3.
-            let (routed, guardplane_report) =
-                self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
+            let (routed, guardplane_report) = self.phase_execute(
+                package,
+                &lowering_output.ir3,
+                &trace_id,
+                &adaptive_routing_decision,
+            )?;
             let lane = routed.lane;
             let lane_reason = routed.reason;
+            if lane != adaptive_routing_decision.selected_lane {
+                return Err(OrchestratorError::AdaptiveRoutingDecisionInvalid {
+                    detail: format!(
+                        "dispatch executed {} but the bound pre-execution decision selected {}",
+                        lane, adaptive_routing_decision.selected_lane
+                    ),
+                }
+                .into());
+            }
             let exec_result = routed.result;
             let execution_value = format!("{}", exec_result.value);
             let completion_label = exec_result.completion_label.clone();
             let instructions_executed = exec_result.instructions_executed;
-            let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
+            let (staged_router, adaptive_router_summary, adaptive_router_update_status) = self
+                .stage_adaptive_router_update(lane, &exec_result, adaptive_routing_decision.reason);
+            pending_adaptive_router = staged_router;
 
             // Step 6.5 (bd-drb55): seal and verify the IR4 witness against the
             // exact executed IR3 before any downstream phase can observe this
@@ -1023,7 +1394,9 @@ impl ExecutionOrchestrator {
                     update: &update_result,
                     ir3_schedule_cost,
                     ir4_witness_hash: ir4_witness.content_hash(),
+                    adaptive_routing_decision: &adaptive_routing_decision,
                     adaptive_router_summary: adaptive_router_summary.as_ref(),
+                    adaptive_router_update_status,
                     optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
                     guardplane_report: guardplane_report.as_ref(),
                     capability_summary: evidence_capability_summary,
@@ -1052,7 +1425,9 @@ impl ExecutionOrchestrator {
                 execution_value,
                 completion_label,
                 instructions_executed,
+                adaptive_routing_decision,
                 adaptive_router_summary,
+                adaptive_router_update_status,
                 ir3_schedule_cost,
                 posterior,
                 risk_state,
@@ -1086,6 +1461,11 @@ impl ExecutionOrchestrator {
             (Ok(mut result), Ok(finalize_result)) => {
                 result.cell_events = cell_events;
                 result.finalize_result = Some(finalize_result);
+                if let Some(staged) = pending_adaptive_router.take() {
+                    self.adaptive_router = staged.router;
+                    self.adaptive_router_state_epoch = Some(self.config.epoch);
+                    self.adaptive_router_fallback_reason = staged.fallback_reason;
+                }
                 self.execution_counter = self.execution_counter.saturating_add(1);
                 Ok(result)
             }
@@ -1322,11 +1702,65 @@ impl ExecutionOrchestrator {
         Ok(LaneRouter::with_configs(quickjs_config, v8_config))
     }
 
+    fn static_lane_for_ir3(&self, ir3: &Ir3Module) -> (LaneChoice, LaneReason) {
+        if let Some(lane) = self.config.force_lane {
+            return (lane, LaneReason::PolicyDirective);
+        }
+        if !ir3.required_capabilities.is_empty() {
+            return (LaneChoice::QuickJs, LaneReason::SecuritySensitive);
+        }
+        if ir3.instructions.len() > 1000 {
+            return (LaneChoice::V8, LaneReason::ThroughputOptimized);
+        }
+        (LaneChoice::QuickJs, LaneReason::DefaultFallback)
+    }
+
+    fn adaptive_routing_context(
+        &self,
+        package: &ExtensionPackage,
+        ir3: &Ir3Module,
+        trace_id: &str,
+        decision_id: &str,
+    ) -> AdaptiveRoutingContext {
+        let (static_lane, static_reason) = self.static_lane_for_ir3(ir3);
+        AdaptiveRoutingContext {
+            trace_id: trace_id.to_string(),
+            decision_id: decision_id.to_string(),
+            extension_id: package.extension_id.clone(),
+            policy_epoch: self.config.epoch,
+            ir3_content_hash: ir3.content_hash(),
+            forced_lane: self.config.force_lane,
+            static_lane,
+            static_reason,
+            has_required_capabilities: !ir3.required_capabilities.is_empty(),
+            adaptive_routing_enabled: self.runtime_config.orchestrator.adaptive_routing_enabled,
+            adaptive_state_budget_bytes: self
+                .runtime_config
+                .orchestrator
+                .adaptive_router_state_budget_bytes,
+        }
+    }
+
+    fn select_adaptive_routing_decision(
+        &self,
+        context: &AdaptiveRoutingContext,
+    ) -> AdaptiveRoutingDecision {
+        let pre_state =
+            self.adaptive_router_state_epoch
+                .map(|policy_epoch| AdaptiveRouterStateEvidence {
+                    policy_epoch,
+                    summary: self.adaptive_router.summary(),
+                    fallback_reason: self.adaptive_router_fallback_reason,
+                });
+        AdaptiveRoutingDecision::build(context, pre_state)
+    }
+
     fn phase_execute(
         &self,
         package: &ExtensionPackage,
         ir3: &Ir3Module,
         trace_id: &str,
+        adaptive_routing_decision: &AdaptiveRoutingDecision,
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
         let hook = guardplane_adapter.as_ref().map(|adapter| {
@@ -1336,7 +1770,12 @@ impl ExecutionOrchestrator {
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the internal enforcement capabilities required by the lowered module.
         let routed = Self::lane_router_for_execution(package, ir3)?
-            .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
+            .execute_with_hook(
+                ir3,
+                trace_id,
+                adaptive_routing_decision.execution_force_lane(),
+                hook,
+            )
             .map_err(OrchestratorError::Interpreter)?;
         let report = guardplane_adapter
             .as_ref()
@@ -1641,7 +2080,9 @@ impl ExecutionOrchestrator {
             update,
             ir3_schedule_cost,
             ir4_witness_hash,
+            adaptive_routing_decision,
             adaptive_router_summary,
+            adaptive_router_update_status,
             optimal_stopping_certificate,
             guardplane_report,
             capability_summary,
@@ -1722,6 +2163,37 @@ impl ExecutionOrchestrator {
         // bd-drb55: bind the sealed IR4 witness into the signed evidence
         // entry so witness tampering is detectable through the receipt path.
         builder = builder.meta("ir4_witness_hash".to_string(), ir4_witness_hash.to_hex());
+        builder = builder.meta(
+            "adaptive_routing_decision_digest".to_string(),
+            adaptive_routing_decision.decision_digest.to_hex(),
+        );
+        builder = builder.meta(
+            "adaptive_routing_context_digest".to_string(),
+            adaptive_routing_decision.context_digest.to_hex(),
+        );
+        builder = builder.meta(
+            "adaptive_routing_pre_state_digest".to_string(),
+            adaptive_routing_decision.pre_state_digest.to_hex(),
+        );
+        builder = builder.meta(
+            "adaptive_routing_selected_profile".to_string(),
+            adaptive_routing_decision
+                .selected_lane
+                .stable_label()
+                .to_string(),
+        );
+        builder = builder.meta(
+            "adaptive_routing_reason".to_string(),
+            adaptive_routing_decision.reason.stable_label().to_string(),
+        );
+        builder = builder.meta(
+            "adaptive_routing_seed_millionths".to_string(),
+            adaptive_routing_decision.seed_millionths.to_string(),
+        );
+        builder = builder.meta(
+            "adaptive_router_update_status".to_string(),
+            adaptive_router_update_status.stable_label().to_string(),
+        );
         if let Some(summary) = adaptive_router_summary {
             builder = builder.meta(
                 "adaptive_router_regime".to_string(),
@@ -2049,11 +2521,35 @@ impl ExecutionOrchestrator {
         Ok(builder.build()?)
     }
 
-    fn update_adaptive_router(
+    fn stage_adaptive_router_update(
         &mut self,
         lane: LaneChoice,
         exec: &ExecutionResult,
-    ) -> Option<RouterSummary> {
+        decision_reason: AdaptiveRoutingReason,
+    ) -> (
+        Option<StagedAdaptiveRouterUpdate>,
+        Option<RouterSummary>,
+        AdaptiveRouterUpdateStatus,
+    ) {
+        if !self.runtime_config.orchestrator.adaptive_routing_enabled {
+            return (None, None, AdaptiveRouterUpdateStatus::Disabled);
+        }
+        if matches!(
+            decision_reason,
+            AdaptiveRoutingReason::MissingEvidenceFallback
+                | AdaptiveRoutingReason::StaleEpochFallback
+                | AdaptiveRoutingReason::BudgetExhaustedFallback
+                | AdaptiveRoutingReason::InvalidStateFallback
+                | AdaptiveRoutingReason::SafeModeFallback
+                | AdaptiveRoutingReason::UpdateFailureFallback
+        ) {
+            return (
+                None,
+                None,
+                AdaptiveRouterUpdateStatus::Fallback(decision_reason),
+            );
+        }
+        let mut staged_router = self.adaptive_router.clone();
         let arm_index = match lane {
             LaneChoice::QuickJs => 0,
             LaneChoice::V8 => 1,
@@ -2067,10 +2563,50 @@ impl ExecutionOrchestrator {
             epoch: self.config.epoch,
             counterfactual_rewards_millionths: None,
         };
-        if self.adaptive_router.observe_reward(&signal).is_ok() {
-            Some(self.adaptive_router.summary())
+        #[cfg(test)]
+        let update_succeeded = !std::mem::take(&mut self.adaptive_router_update_failure_override)
+            && staged_router.observe_reward(&signal).is_ok();
+        #[cfg(not(test))]
+        let update_succeeded = staged_router.observe_reward(&signal).is_ok();
+        if update_succeeded {
+            let summary = staged_router.summary();
+            (
+                Some(StagedAdaptiveRouterUpdate {
+                    router: staged_router,
+                    fallback_reason: None,
+                }),
+                Some(summary),
+                AdaptiveRouterUpdateStatus::Applied,
+            )
         } else {
-            None
+            let gamma = self
+                .runtime_config
+                .orchestrator
+                .adaptive_router_gamma_millionths;
+            let mut fallback_router = RegretBoundedRouter::new(
+                vec![
+                    AdaptiveLaneArm {
+                        lane_id: "quickjs".to_string(),
+                        description: "Baseline deterministic execution profile".to_string(),
+                    },
+                    AdaptiveLaneArm {
+                        lane_id: "v8".to_string(),
+                        description: "Baseline throughput execution profile".to_string(),
+                    },
+                ],
+                gamma,
+            )
+            .expect("validated adaptive router configuration must remain constructible");
+            fallback_router.active_regime = RegimeKind::SafeMode;
+            let summary = fallback_router.safe_mode_fallback_summary();
+            (
+                Some(StagedAdaptiveRouterUpdate {
+                    router: fallback_router,
+                    fallback_reason: Some(AdaptiveRoutingReason::UpdateFailureFallback),
+                }),
+                Some(summary),
+                AdaptiveRouterUpdateStatus::Fallback(AdaptiveRoutingReason::UpdateFailureFallback),
+            )
         }
     }
 
@@ -2986,7 +3522,9 @@ mod tests {
     #[test]
     fn post_cell_interpreter_failure_returns_close_evidence_bd_9rhwp() {
         let package = package_with_source(r#"throw "bd-9rhwp";"#);
-        let error = ExecutionOrchestrator::with_defaults()
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let adaptive_router_before = orchestrator.adaptive_router.clone();
+        let error = orchestrator
             .execute(&package)
             .expect_err("an uncaught throw must fail in the interpreter");
         let failure = assert_successful_post_cell_cleanup(&error);
@@ -2997,6 +3535,7 @@ mod tests {
             OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
                 if value.contains("bd-9rhwp")
         ));
+        assert_eq!(orchestrator.adaptive_router, adaptive_router_before);
     }
 
     #[test]
@@ -3035,6 +3574,7 @@ mod tests {
     fn guardplane_builder_failure_leaves_ledger_empty_bd_gjrlf() {
         let package = guardplane_package("bd-gjrlf-builder-core");
         let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let adaptive_router_before = orchestrator.adaptive_router.clone();
         orchestrator.guardplane_builder_failure_index_override = Some(0);
 
         let error = orchestrator
@@ -3050,6 +3590,7 @@ mod tests {
             orchestrator.ledger().is_empty(),
             "the primary entry must not be emitted before all guardplane entries build"
         );
+        assert_eq!(orchestrator.adaptive_router, adaptive_router_before);
     }
 
     #[test]
@@ -3506,17 +4047,207 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch.execute(&simple_package()).expect("execute");
 
+        assert_eq!(
+            result.adaptive_routing_decision.reason,
+            AdaptiveRoutingReason::WarmupFallback
+        );
+        assert_eq!(result.adaptive_routing_decision.selected_lane, result.lane);
         assert!(result.adaptive_router_summary.is_some());
         assert!(result.ir3_schedule_cost.is_some());
         assert!(result.optimal_stopping_certificate.is_some());
         assert!(result.evidence_compression_certificate.is_some());
 
         let entry = &result.evidence_entries[0];
+        assert!(
+            entry
+                .metadata
+                .contains_key("adaptive_routing_decision_digest")
+        );
         assert!(entry.metadata.contains_key("adaptive_router_regime"));
         assert!(entry.metadata.contains_key("adaptive_router_exact_regret"));
         assert!(entry.metadata.contains_key("adaptive_router_regret"));
         assert!(entry.metadata.contains_key("ir3_schedule_cost"));
         assert!(entry.metadata.contains_key("optimal_stopping_algorithm"));
+    }
+
+    #[test]
+    fn bd_wftp1_core_adaptive_choice_reaches_dispatch_and_disabled_mode_stays_static() {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.adaptive_router.active_regime = RegimeKind::Adversarial;
+        orchestrator.adaptive_router.exp3.rounds = 2;
+        orchestrator.adaptive_router.ftrl.rounds = 2;
+        orchestrator.adaptive_router.exp3.log_weights_millionths = vec![-1_000_000, 1_000_000];
+
+        let selected_package = (0..2048)
+            .find_map(|nonce| {
+                let package = package_with_id(&format!("bd-wftp1-core-{nonce}"));
+                let prepared = orchestrator
+                    .prepare_lowering_output(&package, "bd-wftp1-core", "bd-wftp1-core")
+                    .expect("candidate lowering");
+                let context = orchestrator.adaptive_routing_context(
+                    &package,
+                    &prepared.lowering_output.ir3,
+                    "bd-wftp1-core",
+                    "bd-wftp1-core",
+                );
+                let decision = orchestrator.select_adaptive_routing_decision(&context);
+                (decision.selected_lane == LaneChoice::V8).then_some(package)
+            })
+            .expect("deterministic seed search must find the throughput profile");
+
+        let result = orchestrator
+            .execute(&selected_package)
+            .expect("adaptive core execution");
+        assert_eq!(result.lane, LaneChoice::V8);
+        assert_eq!(result.lane_reason, LaneReason::PolicyDirective);
+        assert_eq!(
+            result.adaptive_routing_decision.reason,
+            AdaptiveRoutingReason::AdaptivePolicy
+        );
+        assert_eq!(
+            result.adaptive_router_update_status,
+            AdaptiveRouterUpdateStatus::Applied
+        );
+
+        let mut static_runtime = RuntimeConfig::default();
+        static_runtime.orchestrator.adaptive_routing_enabled = false;
+        let mut static_orchestrator = ExecutionOrchestrator::new_with_runtime_config(
+            OrchestratorConfig::default(),
+            static_runtime,
+        );
+        let static_result = static_orchestrator
+            .execute(&selected_package)
+            .expect("static core execution");
+        assert_eq!(static_result.lane, LaneChoice::QuickJs);
+        assert_eq!(static_result.lane_reason, LaneReason::DefaultFallback);
+        assert_eq!(
+            static_result.adaptive_routing_decision.reason,
+            AdaptiveRoutingReason::DisabledStaticPolicy
+        );
+        assert_eq!(
+            static_result.adaptive_router_update_status,
+            AdaptiveRouterUpdateStatus::Disabled
+        );
+        assert_eq!(static_orchestrator.adaptive_router.rounds(), 0);
+    }
+
+    #[test]
+    fn bd_wftp1_core_state_fallbacks_are_typed_and_replayable() {
+        let orchestrator = ExecutionOrchestrator::with_defaults();
+        let package = simple_package();
+        let prepared = orchestrator
+            .prepare_lowering_output(&package, "bd-wftp1-state", "bd-wftp1-state")
+            .expect("state fallback lowering");
+        let context = orchestrator.adaptive_routing_context(
+            &package,
+            &prepared.lowering_output.ir3,
+            "bd-wftp1-state",
+            "bd-wftp1-state",
+        );
+
+        let missing = AdaptiveRoutingDecision::build(&context, None);
+        assert_eq!(missing.selected_lane, LaneChoice::QuickJs);
+        assert_eq!(
+            missing.reason,
+            AdaptiveRoutingReason::MissingEvidenceFallback
+        );
+        missing
+            .verify_for_replay(&context)
+            .expect("missing-evidence fallback must replay exactly");
+
+        let stale = AdaptiveRoutingDecision::build(
+            &context,
+            Some(AdaptiveRouterStateEvidence {
+                policy_epoch: context.policy_epoch.next(),
+                summary: orchestrator.adaptive_router.summary(),
+                fallback_reason: None,
+            }),
+        );
+        assert_eq!(stale.selected_lane, LaneChoice::QuickJs);
+        assert_eq!(stale.reason, AdaptiveRoutingReason::StaleEpochFallback);
+        stale
+            .verify_for_replay(&context)
+            .expect("stale-epoch fallback must replay exactly");
+
+        let mut exhausted_context = context.clone();
+        exhausted_context.adaptive_state_budget_bytes = 0;
+        let exhausted = AdaptiveRoutingDecision::build(
+            &exhausted_context,
+            Some(AdaptiveRouterStateEvidence {
+                policy_epoch: exhausted_context.policy_epoch,
+                summary: orchestrator.adaptive_router.summary(),
+                fallback_reason: None,
+            }),
+        );
+        assert_eq!(exhausted.selected_lane, LaneChoice::QuickJs);
+        assert_eq!(
+            exhausted.reason,
+            AdaptiveRoutingReason::BudgetExhaustedFallback
+        );
+        exhausted
+            .verify_for_replay(&exhausted_context)
+            .expect("budget fallback must replay exactly");
+
+        let mut invalid_state = orchestrator.adaptive_router.summary();
+        invalid_state.arm_probabilities_millionths = vec![SCALE_MILLION];
+        let invalid = AdaptiveRoutingDecision::build(
+            &context,
+            Some(AdaptiveRouterStateEvidence {
+                policy_epoch: context.policy_epoch,
+                summary: invalid_state,
+                fallback_reason: None,
+            }),
+        );
+        assert_eq!(invalid.selected_lane, LaneChoice::QuickJs);
+        assert_eq!(invalid.reason, AdaptiveRoutingReason::InvalidStateFallback);
+        invalid
+            .verify_for_replay(&context)
+            .expect("invalid-state fallback must replay exactly");
+
+        let safe = AdaptiveRoutingDecision::build(
+            &context,
+            Some(AdaptiveRouterStateEvidence {
+                policy_epoch: context.policy_epoch,
+                summary: orchestrator.adaptive_router.safe_mode_fallback_summary(),
+                fallback_reason: None,
+            }),
+        );
+        assert_eq!(safe.selected_lane, LaneChoice::QuickJs);
+        assert_eq!(safe.reason, AdaptiveRoutingReason::SafeModeFallback);
+        safe.verify_for_replay(&context)
+            .expect("safe-mode fallback must replay exactly");
+    }
+
+    #[test]
+    fn bd_wftp1_core_update_failure_commits_only_the_typed_safe_state() {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.adaptive_router_update_failure_override = true;
+
+        let first = orchestrator
+            .execute(&simple_package())
+            .expect("router update failure must degrade the accepted execution");
+        assert_eq!(
+            first.adaptive_router_update_status,
+            AdaptiveRouterUpdateStatus::Fallback(AdaptiveRoutingReason::UpdateFailureFallback)
+        );
+        assert_eq!(
+            orchestrator.adaptive_router.active_regime,
+            RegimeKind::SafeMode
+        );
+        assert_eq!(
+            orchestrator.adaptive_router_fallback_reason,
+            Some(AdaptiveRoutingReason::UpdateFailureFallback)
+        );
+
+        let second = orchestrator
+            .execute(&simple_package())
+            .expect("the next run must consume the committed safe-state receipt");
+        assert_eq!(second.lane, LaneChoice::QuickJs);
+        assert_eq!(
+            second.adaptive_routing_decision.reason,
+            AdaptiveRoutingReason::UpdateFailureFallback
+        );
+        assert_eq!(orchestrator.adaptive_router.rounds(), 0);
     }
 
     #[test]
@@ -4905,6 +5636,7 @@ mod tests {
         expected_state: crate::containment_executor::ContainmentState,
     ) {
         let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let adaptive_router_before = orchestrator.adaptive_router.clone();
         orchestrator
             .saga_orchestrator
             .create_saga(
@@ -4943,6 +5675,11 @@ mod tests {
             &evidence.saga_error,
             SagaError::SagaAlreadyExists { saga_id } if saga_id == "orch:0:saga"
         ));
+        assert_eq!(
+            orchestrator.adaptive_router, adaptive_router_before,
+            "containment failure must not publish staged adaptive feedback"
+        );
+        assert_eq!(orchestrator.execution_count(), 0);
 
         let encoded =
             serde_json::to_vec(evidence).expect("saga-failure evidence must be serializable");

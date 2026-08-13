@@ -1162,9 +1162,8 @@ impl ExecutionCell {
             ),
         ]
         .into_iter()
-        .filter_map(|(field, expected, actual)| {
-            (expected != actual).then(|| format!("{field}: expected {expected:?}, got {actual:?}"))
-        })
+        .filter(|(_, expected, actual)| expected != actual)
+        .map(|(field, expected, actual)| format!("{field}: expected {expected:?}, got {actual:?}"))
         .collect::<Vec<_>>();
         if !mismatches.is_empty() {
             return Err(

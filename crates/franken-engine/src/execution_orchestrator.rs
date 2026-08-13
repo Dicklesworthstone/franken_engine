@@ -301,6 +301,18 @@ impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
     }
 }
 
+/// Cell-owned inputs needed to configure one interpreter dispatch.
+///
+/// Keeping these values together makes the authority boundary explicit at the
+/// phase seam and avoids growing `phase_execute` every time another provider
+/// is brought under the same cell permit.
+struct CellExecutionDispatch<'a> {
+    cancellation_token: &'a CancellationToken,
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+}
+
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
 // ---------------------------------------------------------------------------
@@ -2210,10 +2222,12 @@ impl ExecutionOrchestrator {
                     &lowering_output.ir3,
                     &trace_id,
                     &adaptive_routing_decision,
-                    permit.cancellation_token(),
-                    host_io,
-                    process_spawn,
-                    host_effect_journal.clone(),
+                    CellExecutionDispatch {
+                        cancellation_token: permit.cancellation_token(),
+                        host_io,
+                        process_spawn,
+                        host_effect_journal: host_effect_journal.clone(),
+                    },
                 );
                 if let Ok((routed, _)) = &result {
                     permit
@@ -2997,11 +3011,14 @@ impl ExecutionOrchestrator {
         ir3: &Ir3Module,
         trace_id: &str,
         adaptive_routing_decision: &AdaptiveRoutingDecision,
-        cancellation_token: &CancellationToken,
-        host_io: Option<Arc<dyn HostIoProvider>>,
-        process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
-        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+        dispatch: CellExecutionDispatch<'_>,
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
+        let CellExecutionDispatch {
+            cancellation_token,
+            host_io,
+            process_spawn,
+            host_effect_journal,
+        } = dispatch;
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
         let hook = guardplane_adapter.as_ref().map(|adapter| {
             let hook: Arc<dyn InterpreterHook> = adapter.clone();

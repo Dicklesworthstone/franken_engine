@@ -109871,8 +109871,11 @@ mod tests {
         core.write_reg_with_label(3, Value::str("iteration-2"), Label::Confidential)
             .expect("seed the third iteration with a Confidential label");
 
-        core.run_loop(&module)
-            .expect("per-iteration nested-closure program should execute");
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::Halted),
+            "the per-iteration nested-closure program must reach its explicit Halt"
+        );
 
         assert_eq!(
             core.get_register_label(1).expect("preserved first label"),
@@ -110010,8 +110013,11 @@ mod tests {
         assert!(!fresh_before_init.initialized);
 
         core.ip = 5;
-        core.run_loop(&module)
-            .expect("exact iterator-head initialization should resume");
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::Halted),
+            "exact iterator-head initialization must resume through the explicit Halt"
+        );
         let captured_fresh = core.closures[1]
             .captured_env
             .iter()
@@ -110062,14 +110068,20 @@ mod tests {
         let mut core = quickjs_test_core();
         core.write_reg_with_label(0, Value::Int(7), Label::Public)
             .expect("seed public binding value");
-        core.run_loop(&initialize)
-            .expect("initialize public lexical binding");
+        assert_eq!(
+            core.run_loop(&initialize),
+            Err(InterpreterError::Halted),
+            "public lexical initialization must reach its explicit Halt"
+        );
         let scope_before = core.scope_chain_memory_bytes();
         core.write_reg_with_label(1, Value::Int(7), custom.clone())
             .expect("seed custom-labeled replacement");
         core.ip = 0;
-        core.run_loop(&update)
-            .expect("store custom-labeled lexical value");
+        assert_eq!(
+            core.run_loop(&update),
+            Err(InterpreterError::Halted),
+            "custom-labeled lexical store must reach its explicit Halt"
+        );
         let scope_after = core.scope_chain_memory_bytes();
 
         assert_eq!(

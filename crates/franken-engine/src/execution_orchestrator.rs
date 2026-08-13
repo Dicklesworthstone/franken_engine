@@ -4894,6 +4894,7 @@ fn more_severe_containment_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution_cell::CellExecutionEventKind;
     use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
     use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 

@@ -2346,7 +2346,7 @@ mod tests {
     fn escaped_permit_refuses_effect_after_cell_close() {
         let mut cell = execution_cell_with_authority(CancellationToken::new());
         let escaped_permit = cell
-            .run_interpreter(|permit| Ok::<_, ()>(permit))
+            .run_interpreter(Ok::<_, ()>)
             .expect("boundary should run")
             .expect("test interpreter should return its permit");
         cell.close(

@@ -2177,15 +2177,17 @@ impl ExecutionOrchestrator {
             let (instruction_budget, memory_budget_bytes) =
                 Self::execution_budget_for_lane(adaptive_routing_decision.selected_lane);
             cell.bind_execution_authority(CellExecutionAuthority::new(
-                &trace_id,
-                &trace_id,
-                &decision_id,
-                &self.config.policy_id,
-                self.config.epoch,
-                Self::execution_capabilities(package),
-                Label::Public,
-                instruction_budget,
-                memory_budget_bytes,
+                CellExecutionAuthoritySnapshot {
+                    cell_id: trace_id.clone(),
+                    trace_id: trace_id.clone(),
+                    decision_id: decision_id.clone(),
+                    policy_id: self.config.policy_id.clone(),
+                    policy_epoch: self.config.epoch,
+                    capabilities: Self::execution_capabilities(package),
+                    initial_ifc_label: Label::Public,
+                    instruction_budget,
+                    memory_budget_bytes,
+                },
                 cancellation_token,
             ))
             .map_err(OrchestratorError::Cell)?;

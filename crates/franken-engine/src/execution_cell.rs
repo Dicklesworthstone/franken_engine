@@ -206,32 +206,13 @@ pub struct CellExecutionAuthority {
 }
 
 impl CellExecutionAuthority {
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
-        cell_id: impl Into<String>,
-        trace_id: impl Into<String>,
-        decision_id: impl Into<String>,
-        policy_id: impl Into<String>,
-        policy_epoch: SecurityEpoch,
-        capabilities: BTreeSet<RuntimeCapability>,
-        initial_ifc_label: Label,
-        instruction_budget: u64,
-        memory_budget_bytes: u64,
+        snapshot: CellExecutionAuthoritySnapshot,
         cancellation_token: CancellationToken,
     ) -> Self {
         Self {
-            snapshot: CellExecutionAuthoritySnapshot {
-                cell_id: cell_id.into(),
-                trace_id: trace_id.into(),
-                decision_id: decision_id.into(),
-                policy_id: policy_id.into(),
-                policy_epoch,
-                capabilities,
-                initial_ifc_label,
-                instruction_budget,
-                memory_budget_bytes,
-            },
+            snapshot,
             cancellation_token,
         }
     }
@@ -2072,15 +2053,20 @@ mod tests {
 
     fn execution_authority(token: CancellationToken) -> CellExecutionAuthority {
         CellExecutionAuthority::new(
-            "cell-1",
-            "trace-1",
-            "decision-1",
-            "policy-1",
-            SecurityEpoch::from_raw(7),
-            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::FsRead]),
-            Label::Public,
-            10_000,
-            1024 * 1024,
+            CellExecutionAuthoritySnapshot {
+                cell_id: "cell-1".to_string(),
+                trace_id: "trace-1".to_string(),
+                decision_id: "decision-1".to_string(),
+                policy_id: "policy-1".to_string(),
+                policy_epoch: SecurityEpoch::from_raw(7),
+                capabilities: BTreeSet::from([
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::FsRead,
+                ]),
+                initial_ifc_label: Label::Public,
+                instruction_budget: 10_000,
+                memory_budget_bytes: 1024 * 1024,
+            },
             token,
         )
     }

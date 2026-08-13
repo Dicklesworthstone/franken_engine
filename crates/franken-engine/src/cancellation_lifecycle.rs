@@ -225,6 +225,8 @@ impl From<CellError> for CancellationError {
             CellError::SessionRejected { parent_cell_id, .. } => parent_cell_id.clone(),
             CellError::ObligationNotFound { cell_id, .. } => cell_id.clone(),
             CellError::CellAlreadyExists { cell_id } => cell_id.clone(),
+            CellError::ExecutionBoundary { cell_id, .. }
+            | CellError::InterpreterPanicked { cell_id } => cell_id.clone(),
         };
         Self::CellError {
             cell_id,

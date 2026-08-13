@@ -13,17 +13,23 @@
 //! Dependencies: bd-2ygl (Cx threading), bd-2ao (region quiescent close),
 //!               bd-23om (adapter layer).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::RuntimeCapability;
+use crate::checkpoint::CancellationToken;
 use crate::control_plane::ContextAdapter;
 use crate::cx_threading::{CxThreadedEvent, EffectCategory};
 use crate::hash_tiers::ContentHash;
+use crate::ifc_artifacts::Label;
 use crate::region_lifecycle::{
     CancelReason, DrainDeadline, FinalizeResult, Region, RegionEvent, RegionState,
 };
+use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // CellKind — classification of execution cells
@@ -89,6 +95,13 @@ pub enum CellError {
     },
     /// Cell already exists.
     CellAlreadyExists { cell_id: String },
+    /// The sealed interpreter/effect authority boundary refused an operation.
+    ExecutionBoundary {
+        cell_id: String,
+        error: CellExecutionError,
+    },
+    /// The cell-owned interpreter task panicked inside the Tier-I boundary.
+    InterpreterPanicked { cell_id: String },
 }
 
 impl fmt::Display for CellError {
@@ -122,6 +135,12 @@ impl fmt::Display for CellError {
                 obligation_id,
             } => write!(f, "obligation {obligation_id} not found in cell {cell_id}"),
             Self::CellAlreadyExists { cell_id } => write!(f, "cell already exists: {cell_id}"),
+            Self::ExecutionBoundary { cell_id, error } => {
+                write!(f, "cell {cell_id}: execution boundary: {error}")
+            }
+            Self::InterpreterPanicked { cell_id } => {
+                write!(f, "cell {cell_id}: interpreter task panicked")
+            }
         }
     }
 }
@@ -139,6 +158,8 @@ impl CellError {
             Self::SessionRejected { .. } => "cell_session_rejected",
             Self::ObligationNotFound { .. } => "cell_obligation_not_found",
             Self::CellAlreadyExists { .. } => "cell_already_exists",
+            Self::ExecutionBoundary { .. } => "cell_execution_boundary",
+            Self::InterpreterPanicked { .. } => "cell_interpreter_panicked",
         }
     }
 }
@@ -168,6 +189,801 @@ pub struct CellEvent {
 }
 
 // ---------------------------------------------------------------------------
+// CellExecutionAuthority — sealed Tier-I execution/effect boundary
+// ---------------------------------------------------------------------------
+
+/// Immutable authority presented when an interpreter task is bound to a cell.
+///
+/// This is the in-process Tier-I form of the authority envelope that a native
+/// execution-cell supervisor will authenticate over IPC.  The cancellation
+/// token is intentionally excluded from serialization; replay commits to the
+/// stable [`CellExecutionAuthoritySnapshot`] while live dispatch shares the
+/// exact token instance stored here.
+#[derive(Debug, Clone)]
+pub struct CellExecutionAuthority {
+    snapshot: CellExecutionAuthoritySnapshot,
+    cancellation_token: CancellationToken,
+}
+
+impl CellExecutionAuthority {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        cell_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        decision_id: impl Into<String>,
+        policy_id: impl Into<String>,
+        policy_epoch: SecurityEpoch,
+        capabilities: BTreeSet<RuntimeCapability>,
+        initial_ifc_label: Label,
+        instruction_budget: u64,
+        memory_budget_bytes: u64,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        Self {
+            snapshot: CellExecutionAuthoritySnapshot {
+                cell_id: cell_id.into(),
+                trace_id: trace_id.into(),
+                decision_id: decision_id.into(),
+                policy_id: policy_id.into(),
+                policy_epoch,
+                capabilities,
+                initial_ifc_label,
+                instruction_budget,
+                memory_budget_bytes,
+            },
+            cancellation_token,
+        }
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> &CellExecutionAuthoritySnapshot {
+        &self.snapshot
+    }
+
+    #[must_use]
+    pub fn cancellation_token(&self) -> &CancellationToken {
+        &self.cancellation_token
+    }
+}
+
+/// Replay-stable portion of [`CellExecutionAuthority`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellExecutionAuthoritySnapshot {
+    pub cell_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub policy_epoch: SecurityEpoch,
+    pub capabilities: BTreeSet<RuntimeCapability>,
+    pub initial_ifc_label: Label,
+    pub instruction_budget: u64,
+    pub memory_budget_bytes: u64,
+}
+
+impl CellExecutionAuthoritySnapshot {
+    #[must_use]
+    pub fn content_hash(&self) -> ContentHash {
+        let bytes = serde_json::to_vec(self)
+            .expect("cell execution authority snapshot serialization is infallible");
+        ContentHash::compute(&bytes)
+    }
+}
+
+/// Lifecycle state of the cell-owned interpreter task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellExecutionPhase {
+    Bound,
+    Running,
+    Terminal,
+    Draining,
+    Finalized,
+}
+
+/// Terminal classification for the cell-owned interpreter task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellInterpreterOutcome {
+    Succeeded,
+    Failed,
+    Panicked,
+}
+
+/// Ordered evidence emitted by the live cell execution boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "event")]
+pub enum CellExecutionEventKind {
+    AuthorityBound,
+    InterpreterStarted,
+    IfcLabelObserved {
+        label: Label,
+    },
+    EffectProposed {
+        family: String,
+        request_kind: String,
+        request_digest: ContentHash,
+        required_capability: RuntimeCapability,
+    },
+    EffectCompleted {
+        proposal_sequence: u64,
+        outcome: String,
+    },
+    EffectAborted {
+        proposal_sequence: u64,
+        reason: String,
+    },
+    InterpreterTerminal {
+        outcome: CellInterpreterOutcome,
+    },
+    DrainRequested {
+        reason: String,
+    },
+    Finalized,
+}
+
+/// One authenticated, monotonically ordered cell execution event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellExecutionEvent {
+    pub sequence: u64,
+    pub cell_id: String,
+    pub trace_id: String,
+    pub policy_epoch: SecurityEpoch,
+    pub authority_digest: ContentHash,
+    pub ifc_high_water_label: Label,
+    pub kind: CellExecutionEventKind,
+}
+
+/// Replay-checkable execution transcript retained after cell finalization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellExecutionTranscript {
+    pub authority: CellExecutionAuthoritySnapshot,
+    pub authority_digest: ContentHash,
+    pub events: Vec<CellExecutionEvent>,
+}
+
+impl CellExecutionTranscript {
+    /// Validate identity, authority, exact event order, proposal/result pairing,
+    /// terminalization, and request -> drain -> finalize completion.
+    pub fn verify(&self) -> Result<(), CellExecutionError> {
+        if self.authority.content_hash() != self.authority_digest {
+            return Err(CellExecutionError::TranscriptInvalid {
+                detail: "authority digest does not match authority snapshot".to_string(),
+            });
+        }
+        if self.events.is_empty() {
+            return Err(CellExecutionError::TranscriptInvalid {
+                detail: "execution transcript is empty".to_string(),
+            });
+        }
+
+        let mut phase = None;
+        let mut in_flight = BTreeSet::new();
+        let mut terminal_count = 0_u64;
+        let mut drain_count = 0_u64;
+        let mut finalized_count = 0_u64;
+        let mut ifc_high_water_label = self.authority.initial_ifc_label.clone();
+        for (index, event) in self.events.iter().enumerate() {
+            let expected_sequence = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+            if event.sequence != expected_sequence {
+                return Err(CellExecutionError::TranscriptInvalid {
+                    detail: format!(
+                        "event sequence gap or reorder: expected {expected_sequence}, got {}",
+                        event.sequence
+                    ),
+                });
+            }
+            if event.cell_id != self.authority.cell_id
+                || event.trace_id != self.authority.trace_id
+                || event.policy_epoch != self.authority.policy_epoch
+                || event.authority_digest != self.authority_digest
+            {
+                return Err(CellExecutionError::TranscriptInvalid {
+                    detail: format!(
+                        "event {} is not bound to the transcript authority",
+                        event.sequence
+                    ),
+                });
+            }
+
+            match &event.kind {
+                CellExecutionEventKind::IfcLabelObserved { label } => {
+                    let next_high_water = ifc_high_water_label.join(label);
+                    if event.ifc_high_water_label != next_high_water {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail: format!(
+                                "event {} carries IFC high-water {:?}, expected {:?}",
+                                event.sequence, event.ifc_high_water_label, next_high_water
+                            ),
+                        });
+                    }
+                    ifc_high_water_label = next_high_water;
+                }
+                _ if event.ifc_high_water_label != ifc_high_water_label => {
+                    return Err(CellExecutionError::TranscriptInvalid {
+                        detail: format!(
+                            "event {} changes IFC high-water without an observation",
+                            event.sequence
+                        ),
+                    });
+                }
+                _ => {}
+            }
+
+            match &event.kind {
+                CellExecutionEventKind::AuthorityBound if phase.is_none() => {
+                    phase = Some(CellExecutionPhase::Bound);
+                }
+                CellExecutionEventKind::InterpreterStarted
+                    if phase == Some(CellExecutionPhase::Bound) =>
+                {
+                    phase = Some(CellExecutionPhase::Running);
+                }
+                CellExecutionEventKind::IfcLabelObserved { .. }
+                    if phase == Some(CellExecutionPhase::Running) => {}
+                CellExecutionEventKind::EffectProposed {
+                    required_capability,
+                    ..
+                } if phase == Some(CellExecutionPhase::Running) => {
+                    if !self.authority.capabilities.contains(required_capability) {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail: format!(
+                                "effect proposal {} lacks authority capability {required_capability}",
+                                event.sequence
+                            ),
+                        });
+                    }
+                    if !in_flight.insert(event.sequence) {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail: format!("duplicate proposal sequence {}", event.sequence),
+                        });
+                    }
+                }
+                CellExecutionEventKind::EffectCompleted {
+                    proposal_sequence, ..
+                }
+                | CellExecutionEventKind::EffectAborted {
+                    proposal_sequence, ..
+                } if phase == Some(CellExecutionPhase::Running) => {
+                    if !in_flight.remove(proposal_sequence) {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail: format!(
+                                "effect result references missing or duplicate proposal {proposal_sequence}"
+                            ),
+                        });
+                    }
+                }
+                CellExecutionEventKind::InterpreterTerminal { .. }
+                    if phase == Some(CellExecutionPhase::Running) && in_flight.is_empty() =>
+                {
+                    terminal_count = terminal_count.saturating_add(1);
+                    phase = Some(CellExecutionPhase::Terminal);
+                }
+                CellExecutionEventKind::DrainRequested { .. }
+                    if matches!(
+                        phase,
+                        Some(CellExecutionPhase::Bound | CellExecutionPhase::Terminal)
+                    ) =>
+                {
+                    drain_count = drain_count.saturating_add(1);
+                    phase = Some(CellExecutionPhase::Draining);
+                }
+                CellExecutionEventKind::Finalized
+                    if phase == Some(CellExecutionPhase::Draining) && in_flight.is_empty() =>
+                {
+                    finalized_count = finalized_count.saturating_add(1);
+                    phase = Some(CellExecutionPhase::Finalized);
+                }
+                _ => {
+                    return Err(CellExecutionError::TranscriptInvalid {
+                        detail: format!(
+                            "event {} is invalid in phase {:?}: {:?}",
+                            event.sequence, phase, event.kind
+                        ),
+                    });
+                }
+            }
+        }
+        if phase != Some(CellExecutionPhase::Finalized)
+            || terminal_count > 1
+            || drain_count != 1
+            || finalized_count != 1
+            || !in_flight.is_empty()
+        {
+            return Err(CellExecutionError::TranscriptInvalid {
+                detail: format!(
+                    "incomplete terminal prefix: phase={phase:?}, terminal_count={terminal_count}, drain_count={drain_count}, finalized_count={finalized_count}, in_flight={}",
+                    in_flight.len()
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Fail-closed errors from the cell execution authority boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CellExecutionError {
+    AuthorityMismatch {
+        detail: String,
+    },
+    AuthorityNotBound,
+    InvalidPhase {
+        phase: CellExecutionPhase,
+        attempted: String,
+    },
+    StaleEpoch {
+        permit_epoch: SecurityEpoch,
+        current_epoch: SecurityEpoch,
+    },
+    CapabilityDenied {
+        required: RuntimeCapability,
+    },
+    Cancelled,
+    InFlightEffects {
+        count: usize,
+    },
+    StatePoisoned,
+    TranscriptInvalid {
+        detail: String,
+    },
+}
+
+impl fmt::Display for CellExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AuthorityMismatch { detail } => write!(f, "cell authority mismatch: {detail}"),
+            Self::AuthorityNotBound => f.write_str("cell execution authority is not bound"),
+            Self::InvalidPhase { phase, attempted } => {
+                write!(
+                    f,
+                    "cell execution phase {phase:?} does not allow {attempted}"
+                )
+            }
+            Self::StaleEpoch {
+                permit_epoch,
+                current_epoch,
+            } => write!(
+                f,
+                "stale cell execution epoch {permit_epoch}; current epoch is {current_epoch}"
+            ),
+            Self::CapabilityDenied { required } => {
+                write!(f, "cell execution capability denied: {required}")
+            }
+            Self::Cancelled => f.write_str("cell execution is cancelled"),
+            Self::InFlightEffects { count } => {
+                write!(f, "cell execution has {count} in-flight effects")
+            }
+            Self::StatePoisoned => f.write_str("cell execution state lock is poisoned"),
+            Self::TranscriptInvalid { detail } => {
+                write!(f, "cell execution transcript invalid: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CellExecutionError {}
+
+#[derive(Debug)]
+struct CellExecutionState {
+    phase: CellExecutionPhase,
+    current_epoch: SecurityEpoch,
+    next_sequence: u64,
+    ifc_high_water_label: Label,
+    in_flight: BTreeSet<u64>,
+    events: Vec<CellExecutionEvent>,
+}
+
+#[derive(Debug)]
+struct CellExecutionBoundaryInner {
+    authority: CellExecutionAuthority,
+    authority_digest: ContentHash,
+    state: Mutex<CellExecutionState>,
+}
+
+/// Shared authority/lifecycle state used by the interpreter and real provider
+/// adapters.  Clones refer to the same sealed boundary.
+#[derive(Debug, Clone)]
+pub struct CellExecutionBoundary {
+    inner: Arc<CellExecutionBoundaryInner>,
+}
+
+impl CellExecutionBoundary {
+    fn new(authority: CellExecutionAuthority) -> Self {
+        let authority_digest = authority.snapshot.content_hash();
+        let boundary = Self {
+            inner: Arc::new(CellExecutionBoundaryInner {
+                state: Mutex::new(CellExecutionState {
+                    phase: CellExecutionPhase::Bound,
+                    current_epoch: authority.snapshot.policy_epoch,
+                    next_sequence: 0,
+                    ifc_high_water_label: authority.snapshot.initial_ifc_label.clone(),
+                    in_flight: BTreeSet::new(),
+                    events: Vec::new(),
+                }),
+                authority,
+                authority_digest,
+            }),
+        };
+        // A fresh boundary has never exposed the mutex to code that could
+        // poison it, so the authority-binding event cannot be omitted.
+        let mut state = boundary
+            .inner
+            .state
+            .lock()
+            .expect("fresh cell execution boundary mutex cannot be poisoned");
+        boundary.push_event(&mut state, CellExecutionEventKind::AuthorityBound);
+        drop(state);
+        boundary
+    }
+
+    fn push_event(&self, state: &mut CellExecutionState, kind: CellExecutionEventKind) -> u64 {
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        let sequence = state.next_sequence;
+        state.events.push(CellExecutionEvent {
+            sequence,
+            cell_id: self.inner.authority.snapshot.cell_id.clone(),
+            trace_id: self.inner.authority.snapshot.trace_id.clone(),
+            policy_epoch: state.current_epoch,
+            authority_digest: self.inner.authority_digest,
+            ifc_high_water_label: state.ifc_high_water_label.clone(),
+            kind,
+        });
+        sequence
+    }
+
+    fn begin_interpreter(&self) -> Result<CellExecutionPermit, CellExecutionError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        if state.phase != CellExecutionPhase::Bound {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "interpreter_start".to_string(),
+            });
+        }
+        if self.inner.authority.cancellation_token.is_cancelled() {
+            return Err(CellExecutionError::Cancelled);
+        }
+        if !self
+            .inner
+            .authority
+            .snapshot
+            .capabilities
+            .contains(&RuntimeCapability::VmDispatch)
+        {
+            return Err(CellExecutionError::CapabilityDenied {
+                required: RuntimeCapability::VmDispatch,
+            });
+        }
+        state.phase = CellExecutionPhase::Running;
+        self.push_event(&mut state, CellExecutionEventKind::InterpreterStarted);
+        Ok(CellExecutionPermit {
+            boundary: self.clone(),
+            authority_digest: self.inner.authority_digest,
+            policy_epoch: state.current_epoch,
+        })
+    }
+
+    fn finish_interpreter(
+        &self,
+        outcome: CellInterpreterOutcome,
+    ) -> Result<(), CellExecutionError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        if state.phase != CellExecutionPhase::Running {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "interpreter_terminal".to_string(),
+            });
+        }
+        if !state.in_flight.is_empty() {
+            return Err(CellExecutionError::InFlightEffects {
+                count: state.in_flight.len(),
+            });
+        }
+        self.push_event(
+            &mut state,
+            CellExecutionEventKind::InterpreterTerminal { outcome },
+        );
+        state.phase = CellExecutionPhase::Terminal;
+        Ok(())
+    }
+
+    fn begin_drain(&self, reason: &CancelReason) -> Result<(), CellExecutionError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        if !matches!(
+            state.phase,
+            CellExecutionPhase::Bound | CellExecutionPhase::Terminal
+        ) {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "drain".to_string(),
+            });
+        }
+        if !state.in_flight.is_empty() {
+            return Err(CellExecutionError::InFlightEffects {
+                count: state.in_flight.len(),
+            });
+        }
+        self.push_event(
+            &mut state,
+            CellExecutionEventKind::DrainRequested {
+                reason: reason.to_string(),
+            },
+        );
+        state.phase = CellExecutionPhase::Draining;
+        Ok(())
+    }
+
+    fn prepare_finalize(&self) -> Result<(), CellExecutionError> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        if state.phase != CellExecutionPhase::Draining {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "finalize".to_string(),
+            });
+        }
+        if !state.in_flight.is_empty() {
+            return Err(CellExecutionError::InFlightEffects {
+                count: state.in_flight.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn mark_finalized(&self) -> Result<(), CellExecutionError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        if state.phase != CellExecutionPhase::Draining {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "finalize".to_string(),
+            });
+        }
+        self.push_event(&mut state, CellExecutionEventKind::Finalized);
+        state.phase = CellExecutionPhase::Finalized;
+        Ok(())
+    }
+
+    fn transcript(&self) -> Result<CellExecutionTranscript, CellExecutionError> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        Ok(CellExecutionTranscript {
+            authority: self.inner.authority.snapshot.clone(),
+            authority_digest: self.inner.authority_digest,
+            events: state.events.clone(),
+        })
+    }
+}
+
+/// Sealed proof that a running interpreter task is attached to one exact cell
+/// authority. Fields are private so external callers cannot synthesize a permit.
+#[derive(Debug, Clone)]
+pub struct CellExecutionPermit {
+    boundary: CellExecutionBoundary,
+    authority_digest: ContentHash,
+    policy_epoch: SecurityEpoch,
+}
+
+impl CellExecutionPermit {
+    fn validate_locked(&self, state: &CellExecutionState) -> Result<(), CellExecutionError> {
+        if self.authority_digest != self.boundary.inner.authority_digest {
+            return Err(CellExecutionError::AuthorityMismatch {
+                detail: "permit authority digest differs from bound authority".to_string(),
+            });
+        }
+        if self.policy_epoch != state.current_epoch {
+            return Err(CellExecutionError::StaleEpoch {
+                permit_epoch: self.policy_epoch,
+                current_epoch: state.current_epoch,
+            });
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn cell_id(&self) -> &str {
+        &self.boundary.inner.authority.snapshot.cell_id
+    }
+
+    #[must_use]
+    pub fn policy_epoch(&self) -> SecurityEpoch {
+        self.policy_epoch
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> &BTreeSet<RuntimeCapability> {
+        &self.boundary.inner.authority.snapshot.capabilities
+    }
+
+    #[must_use]
+    pub fn cancellation_token(&self) -> &CancellationToken {
+        &self.boundary.inner.authority.cancellation_token
+    }
+
+    /// Raise the boundary's observed IFC high-water label monotonically.
+    pub fn observe_ifc_label(&self, label: Label) -> Result<(), CellExecutionError> {
+        let mut state = self
+            .boundary
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        self.validate_locked(&state)?;
+        if state.phase != CellExecutionPhase::Running {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "observe_ifc_label".to_string(),
+            });
+        }
+        state.ifc_high_water_label = state.ifc_high_water_label.join(&label);
+        self.boundary.push_event(
+            &mut state,
+            CellExecutionEventKind::IfcLabelObserved { label },
+        );
+        Ok(())
+    }
+
+    /// Admit one real provider operation under this cell's sealed authority.
+    pub fn begin_effect(
+        &self,
+        family: impl Into<String>,
+        request_kind: impl Into<String>,
+        request_digest: ContentHash,
+        required_capability: RuntimeCapability,
+    ) -> Result<CellEffectGuard, CellExecutionError> {
+        self.begin_effect_inner(
+            family.into(),
+            request_kind.into(),
+            request_digest,
+            required_capability,
+            false,
+        )
+    }
+
+    /// Admit compensating provider cleanup under the same sealed authority.
+    /// Cancellation does not block cleanup because revoking a live child or
+    /// handle is containment, not new guest authority.
+    pub fn begin_cleanup_effect(
+        &self,
+        family: impl Into<String>,
+        request_kind: impl Into<String>,
+        request_digest: ContentHash,
+        required_capability: RuntimeCapability,
+    ) -> Result<CellEffectGuard, CellExecutionError> {
+        self.begin_effect_inner(
+            family.into(),
+            request_kind.into(),
+            request_digest,
+            required_capability,
+            true,
+        )
+    }
+
+    fn begin_effect_inner(
+        &self,
+        family: String,
+        request_kind: String,
+        request_digest: ContentHash,
+        required_capability: RuntimeCapability,
+        allow_cancelled: bool,
+    ) -> Result<CellEffectGuard, CellExecutionError> {
+        let mut state = self
+            .boundary
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        self.validate_locked(&state)?;
+        if state.phase != CellExecutionPhase::Running {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "effect_proposal".to_string(),
+            });
+        }
+        if !allow_cancelled && self.cancellation_token().is_cancelled() {
+            return Err(CellExecutionError::Cancelled);
+        }
+        if !self.capabilities().contains(&required_capability) {
+            return Err(CellExecutionError::CapabilityDenied {
+                required: required_capability,
+            });
+        }
+        let proposal_sequence = self.boundary.push_event(
+            &mut state,
+            CellExecutionEventKind::EffectProposed {
+                family,
+                request_kind,
+                request_digest,
+                required_capability,
+            },
+        );
+        state.in_flight.insert(proposal_sequence);
+        Ok(CellEffectGuard {
+            boundary: self.boundary.clone(),
+            proposal_sequence,
+            completed: false,
+        })
+    }
+}
+
+/// Drop-safe proposal guard. A provider path that returns early without
+/// committing a typed outcome is retained as an aborted crossing.
+#[derive(Debug)]
+pub struct CellEffectGuard {
+    boundary: CellExecutionBoundary,
+    proposal_sequence: u64,
+    completed: bool,
+}
+
+impl CellEffectGuard {
+    pub fn complete(mut self, outcome: impl Into<String>) -> Result<(), CellExecutionError> {
+        let mut state = self
+            .boundary
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        if !state.in_flight.remove(&self.proposal_sequence) {
+            return Err(CellExecutionError::TranscriptInvalid {
+                detail: format!(
+                    "effect proposal {} was already completed or aborted",
+                    self.proposal_sequence
+                ),
+            });
+        }
+        self.boundary.push_event(
+            &mut state,
+            CellExecutionEventKind::EffectCompleted {
+                proposal_sequence: self.proposal_sequence,
+                outcome: outcome.into(),
+            },
+        );
+        self.completed = true;
+        Ok(())
+    }
+}
+
+impl Drop for CellEffectGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if let Ok(mut state) = self.boundary.inner.state.lock()
+            && state.in_flight.remove(&self.proposal_sequence)
+        {
+            self.boundary.push_event(
+                &mut state,
+                CellExecutionEventKind::EffectAborted {
+                    proposal_sequence: self.proposal_sequence,
+                    reason: "provider path ended without a committed outcome".to_string(),
+                },
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ExecutionCell — a single isolated execution region with Cx-gated effects
 // ---------------------------------------------------------------------------
 
@@ -188,6 +1004,7 @@ pub struct ExecutionCell {
     events: Vec<CellEvent>,
     effect_log: Vec<CxThreadedEvent>,
     sequence_counter: u64,
+    execution_boundary: Option<CellExecutionBoundary>,
 }
 
 impl ExecutionCell {
@@ -208,6 +1025,7 @@ impl ExecutionCell {
             events: Vec::new(),
             effect_log: Vec::new(),
             sequence_counter: 0,
+            execution_boundary: None,
         }
     }
 
@@ -234,6 +1052,7 @@ impl ExecutionCell {
             events: Vec::new(),
             effect_log: Vec::new(),
             sequence_counter: 0,
+            execution_boundary: None,
         }
     }
 
@@ -304,7 +1123,123 @@ impl ExecutionCell {
             events: Vec::new(),
             effect_log: Vec::new(),
             sequence_counter: 0,
+            execution_boundary: None,
         })
+    }
+
+    /// Bind the interpreter and provider path to one exact cell authority.
+    ///
+    /// Binding is one-shot. Identity, trace, decision, and policy fields must
+    /// match the cell's trusted construction context before a permit can exist.
+    pub fn bind_execution_authority(
+        &mut self,
+        authority: CellExecutionAuthority,
+    ) -> Result<(), CellError> {
+        if self.execution_boundary.is_some() {
+            return Err(
+                self.execution_boundary_error(CellExecutionError::AuthorityMismatch {
+                    detail: "execution authority is already bound".to_string(),
+                }),
+            );
+        }
+        let snapshot = authority.snapshot();
+        let mismatches = [
+            ("cell_id", self.cell_id.as_str(), snapshot.cell_id.as_str()),
+            (
+                "trace_id",
+                self.trace_id.as_str(),
+                snapshot.trace_id.as_str(),
+            ),
+            (
+                "decision_id",
+                self.decision_id.as_str(),
+                snapshot.decision_id.as_str(),
+            ),
+            (
+                "policy_id",
+                self.policy_id.as_str(),
+                snapshot.policy_id.as_str(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(field, expected, actual)| {
+            (expected != actual).then(|| format!("{field}: expected {expected:?}, got {actual:?}"))
+        })
+        .collect::<Vec<_>>();
+        if !mismatches.is_empty() {
+            return Err(
+                self.execution_boundary_error(CellExecutionError::AuthorityMismatch {
+                    detail: mismatches.join(", "),
+                }),
+            );
+        }
+        self.execution_boundary = Some(CellExecutionBoundary::new(authority));
+        Ok(())
+    }
+
+    /// Run exactly one interpreter task under the sealed cell permit.
+    ///
+    /// The nested `Result` preserves the interpreter's first domain error. A
+    /// panic is caught, classified, and returned as a cell error so normal
+    /// request -> drain -> finalize cleanup can still run.
+    pub fn run_interpreter<T, E>(
+        &mut self,
+        execute: impl FnOnce(CellExecutionPermit) -> Result<T, E>,
+    ) -> Result<Result<T, E>, CellError> {
+        if self.region.state() != RegionState::Running {
+            return Err(CellError::InvalidState {
+                cell_id: self.cell_id.clone(),
+                current: self.region.state(),
+                attempted: "run_interpreter".to_string(),
+            });
+        }
+        let boundary = self
+            .execution_boundary
+            .clone()
+            .ok_or_else(|| self.execution_boundary_error(CellExecutionError::AuthorityNotBound))?;
+        let permit = boundary
+            .begin_interpreter()
+            .map_err(|error| self.execution_boundary_error(error))?;
+        match catch_unwind(AssertUnwindSafe(|| execute(permit))) {
+            Ok(outcome) => {
+                let classification = if outcome.is_ok() {
+                    CellInterpreterOutcome::Succeeded
+                } else {
+                    CellInterpreterOutcome::Failed
+                };
+                if let Err(error) = boundary.finish_interpreter(classification) {
+                    // Preserve an already-observed interpreter error as the
+                    // primary failure. The later close will surface the stuck
+                    // boundary as additional cleanup evidence.
+                    if outcome.is_ok() {
+                        return Err(self.execution_boundary_error(error));
+                    }
+                }
+                Ok(outcome)
+            }
+            Err(_) => {
+                let _ = boundary.finish_interpreter(CellInterpreterOutcome::Panicked);
+                Err(CellError::InterpreterPanicked {
+                    cell_id: self.cell_id.clone(),
+                })
+            }
+        }
+    }
+
+    /// Current or finalized replay transcript for this cell-owned execution.
+    pub fn execution_transcript(&self) -> Result<Option<CellExecutionTranscript>, CellError> {
+        self.execution_boundary
+            .as_ref()
+            .map(CellExecutionBoundary::transcript)
+            .transpose()
+            .map_err(|error| self.execution_boundary_error(error))
+    }
+
+    fn execution_boundary_error(&self, error: CellExecutionError) -> CellError {
+        CellError::ExecutionBoundary {
+            cell_id: self.cell_id.clone(),
+            error,
+        }
     }
 
     /// Execute an effectful operation within this cell, consuming budget.
@@ -394,6 +1329,13 @@ impl ExecutionCell {
         reason: CancelReason,
         deadline: DrainDeadline,
     ) -> Result<(), CellError> {
+        if self.region.state() != RegionState::Running {
+            return Err(CellError::InvalidState {
+                cell_id: self.cell_id.clone(),
+                current: self.region.state(),
+                attempted: "cancel".to_string(),
+            });
+        }
         cx.consume_budget(CELL_TRANSITION_BUDGET_MS)
             .map_err(|_| CellError::BudgetExhausted {
                 cell_id: self.cell_id.clone(),
@@ -404,6 +1346,12 @@ impl ExecutionCell {
         self.total_budget_consumed_ms = self
             .total_budget_consumed_ms
             .saturating_add(CELL_TRANSITION_BUDGET_MS);
+
+        if let Some(boundary) = &self.execution_boundary {
+            boundary
+                .begin_drain(&reason)
+                .map_err(|error| self.execution_boundary_error(error))?;
+        }
 
         self.region
             .cancel(reason)
@@ -434,6 +1382,11 @@ impl ExecutionCell {
 
     /// Finalize the cell after drain completes.
     pub fn finalize(&mut self) -> Result<FinalizeResult, CellError> {
+        if let Some(boundary) = &self.execution_boundary {
+            boundary
+                .prepare_finalize()
+                .map_err(|error| self.execution_boundary_error(error))?;
+        }
         let result = self
             .region
             .finalize()
@@ -448,6 +1401,11 @@ impl ExecutionCell {
         } else {
             "finalize_with_pending"
         };
+        if let Some(boundary) = &self.execution_boundary {
+            boundary
+                .mark_finalized()
+                .map_err(|error| self.execution_boundary_error(error))?;
+        }
         self.emit_event("finalize", outcome, 0);
         Ok(result)
     }
@@ -1113,6 +2071,34 @@ mod tests {
         )
     }
 
+    fn execution_authority(token: CancellationToken) -> CellExecutionAuthority {
+        CellExecutionAuthority::new(
+            "cell-1",
+            "trace-1",
+            "decision-1",
+            "policy-1",
+            SecurityEpoch::from_raw(7),
+            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::FsRead]),
+            Label::Public,
+            10_000,
+            1024 * 1024,
+            token,
+        )
+    }
+
+    fn execution_cell_with_authority(token: CancellationToken) -> ExecutionCell {
+        let mut cell = ExecutionCell::with_context(
+            "cell-1",
+            CellKind::Extension,
+            "trace-1",
+            "decision-1",
+            "policy-1",
+        );
+        cell.bind_execution_authority(execution_authority(token))
+            .expect("matching execution authority should bind");
+        cell
+    }
+
     // -----------------------------------------------------------------------
     // CellKind
     // -----------------------------------------------------------------------
@@ -1210,6 +2196,271 @@ mod tests {
         assert_eq!(cell.total_budget_consumed_ms(), 0);
         assert_eq!(cell.pending_obligations(), 0);
         assert_eq!(cell.session_count(), 0);
+    }
+
+    #[test]
+    fn cell_owned_interpreter_effect_and_close_form_verified_prefix() {
+        let mut cell = execution_cell_with_authority(CancellationToken::new());
+        let request_digest = ContentHash::compute(b"typed-fs-read-request");
+
+        let outcome = cell
+            .run_interpreter(|permit| {
+                permit
+                    .observe_ifc_label(Label::Internal)
+                    .expect("running permit should accept observed IFC label");
+                let proposal = permit
+                    .begin_effect(
+                        "host_io",
+                        "fs_read",
+                        request_digest,
+                        RuntimeCapability::FsRead,
+                    )
+                    .expect("authorized effect should be admitted");
+                proposal
+                    .complete("provider_succeeded")
+                    .expect("provider outcome should commit");
+                Ok::<_, ()>(42_u64)
+            })
+            .expect("cell boundary should run")
+            .expect("interpreter domain should succeed");
+        assert_eq!(outcome, 42);
+
+        cell.close(
+            &mut mock_cx(100),
+            CancelReason::OperatorShutdown,
+            DrainDeadline::default(),
+        )
+        .expect("cell should close after the interpreter terminal event");
+        let transcript = cell
+            .execution_transcript()
+            .expect("transcript state should be readable")
+            .expect("bound execution should produce a transcript");
+        transcript.verify().expect("exact prefix should replay");
+        let proposal_index = transcript
+            .events
+            .iter()
+            .position(|event| matches!(&event.kind, CellExecutionEventKind::EffectProposed { .. }))
+            .expect("effect proposal event");
+        assert!({
+            let event = &transcript.events[proposal_index];
+            matches!(&event.kind, CellExecutionEventKind::EffectProposed { .. })
+                && event.ifc_high_water_label == Label::Internal
+        });
+        assert!(matches!(
+            transcript.events.last().map(|event| &event.kind),
+            Some(CellExecutionEventKind::Finalized)
+        ));
+
+        let mut ifc_tamper = transcript.clone();
+        ifc_tamper.events[proposal_index].ifc_high_water_label = Label::Public;
+        assert!(ifc_tamper.verify().is_err());
+
+        let mut capability_tamper = transcript;
+        if let CellExecutionEventKind::EffectProposed {
+            required_capability,
+            ..
+        } = &mut capability_tamper.events[proposal_index].kind
+        {
+            *required_capability = RuntimeCapability::FsWrite;
+        }
+        assert!(capability_tamper.verify().is_err());
+    }
+
+    #[test]
+    fn cancelled_cell_refuses_interpreter_before_guest_code_runs() {
+        let token = CancellationToken::new();
+        let mut cell = execution_cell_with_authority(token.clone());
+        token.cancel();
+        let mut guest_ran = false;
+
+        let error = cell
+            .run_interpreter(|_| {
+                guest_ran = true;
+                Ok::<_, ()>(())
+            })
+            .expect_err("cancelled authority must refuse before the closure");
+
+        assert!(!guest_ran);
+        assert!(matches!(
+            error,
+            CellError::ExecutionBoundary {
+                error: CellExecutionError::Cancelled,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cancellation_after_dispatch_stops_the_next_provider_effect() {
+        let token = CancellationToken::new();
+        let mut cell = execution_cell_with_authority(token.clone());
+        cell.run_interpreter(|permit| {
+            let first = permit
+                .begin_effect(
+                    "host_io",
+                    "fs_read",
+                    ContentHash::compute(b"first"),
+                    RuntimeCapability::FsRead,
+                )
+                .expect("first proposal should start");
+            token.cancel();
+            first
+                .complete("provider_succeeded_after_cancellation")
+                .expect("in-flight provider outcome must remain classifiable");
+            let error = permit
+                .begin_effect(
+                    "host_io",
+                    "fs_read",
+                    ContentHash::compute(b"second"),
+                    RuntimeCapability::FsRead,
+                )
+                .expect_err("new effect after cancellation must be refused");
+            assert_eq!(error, CellExecutionError::Cancelled);
+            Ok::<_, ()>(())
+        })
+        .expect("boundary should preserve terminalization")
+        .expect("test interpreter should finish");
+    }
+
+    #[test]
+    fn interpreter_panic_is_classified_and_cell_still_finalizes_once() {
+        let mut cell = execution_cell_with_authority(CancellationToken::new());
+        let error = cell
+            .run_interpreter(|_| -> Result<(), ()> { panic!("guest panic fixture") })
+            .expect_err("panic should cross the boundary as a typed cell error");
+        assert!(matches!(error, CellError::InterpreterPanicked { .. }));
+
+        cell.close(
+            &mut mock_cx(100),
+            CancelReason::Quarantine,
+            DrainDeadline::default(),
+        )
+        .expect("panic terminalization must permit normal close");
+        let transcript = cell
+            .execution_transcript()
+            .expect("transcript readable")
+            .expect("transcript present");
+        transcript.verify().expect("panic prefix should replay");
+        assert_eq!(
+            transcript
+                .events
+                .iter()
+                .filter(|event| matches!(&event.kind, CellExecutionEventKind::Finalized))
+                .count(),
+            1
+        );
+        assert!(transcript.events.iter().any(|event| matches!(
+            &event.kind,
+            CellExecutionEventKind::InterpreterTerminal {
+                outcome: CellInterpreterOutcome::Panicked
+            }
+        )));
+    }
+
+    #[test]
+    fn escaped_permit_refuses_effect_after_cell_close() {
+        let mut cell = execution_cell_with_authority(CancellationToken::new());
+        let escaped_permit = cell
+            .run_interpreter(|permit| Ok::<_, ()>(permit))
+            .expect("boundary should run")
+            .expect("test interpreter should return its permit");
+        cell.close(
+            &mut mock_cx(100),
+            CancelReason::OperatorShutdown,
+            DrainDeadline::default(),
+        )
+        .expect("cell should close");
+
+        assert!(matches!(
+            escaped_permit.begin_effect(
+                "host_io",
+                "fs_read",
+                ContentHash::compute(b"after-close"),
+                RuntimeCapability::FsRead,
+            ),
+            Err(CellExecutionError::InvalidPhase {
+                phase: CellExecutionPhase::Finalized,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn transcript_rejects_identity_tamper_reorder_duplicate_and_gap() {
+        let mut cell = execution_cell_with_authority(CancellationToken::new());
+        cell.run_interpreter(|_| Ok::<_, ()>(()))
+            .expect("boundary should run")
+            .expect("domain should succeed");
+        cell.close(
+            &mut mock_cx(100),
+            CancelReason::OperatorShutdown,
+            DrainDeadline::default(),
+        )
+        .expect("close should succeed");
+        let transcript = cell
+            .execution_transcript()
+            .expect("transcript readable")
+            .expect("transcript present");
+        transcript
+            .verify()
+            .expect("baseline transcript should verify");
+
+        let mut identity_tamper = transcript.clone();
+        identity_tamper.events[1].cell_id = "other-cell".to_string();
+        assert!(identity_tamper.verify().is_err());
+
+        let mut reorder = transcript.clone();
+        reorder.events.swap(1, 2);
+        assert!(reorder.verify().is_err());
+
+        let mut duplicate = transcript.clone();
+        duplicate.events.insert(2, duplicate.events[1].clone());
+        assert!(duplicate.verify().is_err());
+
+        let mut gap = transcript;
+        gap.events[1].sequence = gap.events[1].sequence.saturating_add(1);
+        assert!(gap.verify().is_err());
+    }
+
+    #[test]
+    fn stale_epoch_and_missing_capability_refuse_before_effect() {
+        let boundary = CellExecutionBoundary::new(execution_authority(CancellationToken::new()));
+        let permit = boundary
+            .begin_interpreter()
+            .expect("authority should start interpreter");
+        {
+            let mut state = boundary
+                .inner
+                .state
+                .lock()
+                .expect("test boundary mutex should not be poisoned");
+            state.current_epoch = state.current_epoch.next();
+        }
+        assert!(matches!(
+            permit.begin_effect(
+                "host_io",
+                "fs_read",
+                ContentHash::compute(b"stale"),
+                RuntimeCapability::FsRead,
+            ),
+            Err(CellExecutionError::StaleEpoch { .. })
+        ));
+
+        let boundary = CellExecutionBoundary::new(execution_authority(CancellationToken::new()));
+        let permit = boundary
+            .begin_interpreter()
+            .expect("authority should start interpreter");
+        assert!(matches!(
+            permit.begin_effect(
+                "host_io",
+                "fs_write",
+                ContentHash::compute(b"missing-capability"),
+                RuntimeCapability::FsWrite,
+            ),
+            Err(CellExecutionError::CapabilityDenied {
+                required: RuntimeCapability::FsWrite
+            })
+        ));
     }
 
     // -----------------------------------------------------------------------

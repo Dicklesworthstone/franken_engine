@@ -40,7 +40,10 @@ use crate::evidence_ledger::{
     EvidenceEntry, EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity,
     InMemoryLedger, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
-use crate::execution_cell::{CellError, CellEvent, CellKind, ExecutionCell};
+use crate::execution_cell::{
+    CellError, CellEvent, CellExecutionAuthority, CellExecutionError, CellExecutionPermit,
+    CellExecutionTranscript, CellKind, ExecutionCell,
+};
 use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,
 };
@@ -87,9 +90,11 @@ use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::host_io::{
-    HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
+    HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
 };
-use frankenengine_extension_host::process_spawn::ProcessSpawnProvider;
+use frankenengine_extension_host::process_spawn::{
+    ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnProvider, ProcessSpawnRequest,
+};
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
 // (see `runtime_config_default_matches_orchestrator_constants` in this file's
@@ -134,6 +139,167 @@ const RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN: &str =
     "franken-engine.execution-orchestrator.runtime-chain-instance.v1";
 pub const UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION: &str =
     "franken-engine.uncommitted-evidence-chain-evidence.v1";
+
+fn cell_effect_request_digest(request: &impl Serialize) -> ContentHash {
+    let bytes =
+        serde_json::to_vec(request).expect("typed host-effect request serialization is infallible");
+    ContentHash::compute(&bytes)
+}
+
+fn runtime_capability_for_host_io(capability: HostIoCapability) -> RuntimeCapability {
+    match capability {
+        HostIoCapability::FsRead => RuntimeCapability::FsRead,
+        HostIoCapability::FsWrite => RuntimeCapability::FsWrite,
+        HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
+            RuntimeCapability::NetworkEgress
+        }
+    }
+}
+
+/// Tier-I adapter that makes the sealed cell permit a mandatory predecessor
+/// of every real filesystem/network provider call.
+#[derive(Debug)]
+struct CellAuthorizedHostIoProvider {
+    provider: Arc<dyn HostIoProvider>,
+    permit: CellExecutionPermit,
+}
+
+impl CellAuthorizedHostIoProvider {
+    fn new(provider: Arc<dyn HostIoProvider>, permit: CellExecutionPermit) -> Self {
+        Self { provider, permit }
+    }
+}
+
+impl HostIoProvider for CellAuthorizedHostIoProvider {
+    fn name(&self) -> &str {
+        self.provider.name()
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        let required = runtime_capability_for_host_io(request.required_capability());
+        let proposal = self
+            .permit
+            .begin_effect(
+                "host_io",
+                request.kind(),
+                cell_effect_request_digest(request),
+                required,
+            )
+            .map_err(|error| HostIoError::Denied {
+                reason: format!("cell execution authority refused provider dispatch: {error}"),
+            })?;
+        let outcome = self.provider.perform(request, granted);
+        let classification = if outcome.is_ok() {
+            "provider_succeeded"
+        } else {
+            "provider_failed"
+        };
+        proposal
+            .complete(classification)
+            .map_err(|error| HostIoError::Io {
+                detail: format!(
+                    "host I/O completed but cell effect evidence is commit-unknown: {error}"
+                ),
+            })?;
+        outcome
+    }
+}
+
+/// Tier-I adapter for the extraordinary process provider. Preparation,
+/// dispatch, and compensating cleanup all cross the same sealed cell channel.
+#[derive(Debug)]
+struct CellAuthorizedProcessSpawnProvider {
+    provider: Arc<dyn ProcessSpawnProvider>,
+    permit: CellExecutionPermit,
+}
+
+impl CellAuthorizedProcessSpawnProvider {
+    fn new(provider: Arc<dyn ProcessSpawnProvider>, permit: CellExecutionPermit) -> Self {
+        Self { provider, permit }
+    }
+
+    fn denied(error: impl fmt::Display) -> ProcessSpawnError {
+        ProcessSpawnError::Denied {
+            reason: format!("cell execution authority refused provider dispatch: {error}"),
+        }
+    }
+}
+
+impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
+    fn name(&self) -> &str {
+        self.provider.name()
+    }
+
+    fn prepare_request(
+        &self,
+        request: &ProcessSpawnRequest,
+    ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+        let proposal = self
+            .permit
+            .begin_effect(
+                "process_spawn_prepare",
+                request.kind(),
+                cell_effect_request_digest(request),
+                RuntimeCapability::ProcessSpawn,
+            )
+            .map_err(Self::denied)?;
+        let outcome = self.provider.prepare_request(request);
+        let classification = if outcome.is_ok() {
+            "provider_succeeded"
+        } else {
+            "provider_failed"
+        };
+        proposal.complete(classification).map_err(Self::denied)?;
+        outcome
+    }
+
+    fn perform(
+        &self,
+        request: &ProcessSpawnRequest,
+        granted: &[frankenengine_extension_host::process_spawn::ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        let proposal = self
+            .permit
+            .begin_effect(
+                "process_spawn",
+                request.kind(),
+                cell_effect_request_digest(request),
+                RuntimeCapability::ProcessSpawn,
+            )
+            .map_err(Self::denied)?;
+        let outcome = self.provider.perform(request, granted);
+        let classification = if outcome.is_ok() {
+            "provider_succeeded"
+        } else {
+            "provider_failed"
+        };
+        proposal.complete(classification).map_err(Self::denied)?;
+        outcome
+    }
+
+    fn cleanup_handle(&self, handle: &str) -> ProcessSpawnOutcome {
+        let request = ProcessSpawnRequest::Cleanup {
+            handle: handle.to_string(),
+        };
+        let proposal = self
+            .permit
+            .begin_cleanup_effect(
+                "process_spawn_cleanup",
+                request.kind(),
+                cell_effect_request_digest(&request),
+                RuntimeCapability::ProcessSpawn,
+            )
+            .map_err(Self::denied)?;
+        let outcome = self.provider.cleanup_handle(handle);
+        let classification = if outcome.is_ok() {
+            "provider_succeeded"
+        } else {
+            "provider_failed"
+        };
+        proposal.complete(classification).map_err(Self::denied)?;
+        outcome
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -673,6 +839,8 @@ pub struct OrchestratorResult {
     // Cell
     pub cell_events: Vec<CellEvent>,
     pub finalize_result: Option<FinalizeResult>,
+    /// Authenticated interpreter/effect prefix bound to the cell authority.
+    pub cell_execution_transcript: Option<CellExecutionTranscript>,
 
     // Host effects (bd-f5b04.2.7): the capability-metered transcript of host
     // effects the run performed or was denied, harvested from the installed
@@ -713,6 +881,7 @@ pub struct CellCleanupEvidence {
     pub trace_id: String,
     pub cancel_reason: CancelReason,
     pub cell_events: Vec<CellEvent>,
+    pub cell_execution_transcript: Option<CellExecutionTranscript>,
     pub finalize_result: Option<FinalizeResult>,
     pub close_error: Option<CellError>,
 }
@@ -1992,6 +2161,23 @@ impl ExecutionOrchestrator {
             // invalid or tampered routing evidence must not reach host effects.
             adaptive_routing_decision.verify_for_replay(&adaptive_routing_context)?;
 
+            let cancellation_token = self.cancellation_token.clone().unwrap_or_default();
+            let (instruction_budget, memory_budget_bytes) =
+                Self::execution_budget_for_lane(adaptive_routing_decision.selected_lane);
+            cell.bind_execution_authority(CellExecutionAuthority::new(
+                &trace_id,
+                &trace_id,
+                &decision_id,
+                &self.config.policy_id,
+                self.config.epoch,
+                Self::execution_capabilities(package),
+                Label::Public,
+                instruction_budget,
+                memory_budget_bytes,
+                cancellation_token,
+            ))
+            .map_err(OrchestratorError::Cell)?;
+
             // Step 6: Execute IR3. Establish the recorder boundary before the
             // interpreter can perform any live host effect. Unsupported recorders
             // fail here, not after an irreversible provider call.
@@ -2008,14 +2194,42 @@ impl ExecutionOrchestrator {
                     })
                 })?;
             }
-            let execution = self.phase_execute(
-                package,
-                &lowering_output.ir3,
-                &trace_id,
-                &adaptive_routing_decision,
-                process_spawn.clone(),
-                host_effect_journal.clone(),
-            );
+            let execution = match cell.run_interpreter(|permit| {
+                let host_io = self.host_io.clone().map(|provider| {
+                    Arc::new(CellAuthorizedHostIoProvider::new(provider, permit.clone()))
+                        as Arc<dyn HostIoProvider>
+                });
+                let process_spawn = process_spawn.clone().map(|provider| {
+                    Arc::new(CellAuthorizedProcessSpawnProvider::new(
+                        provider,
+                        permit.clone(),
+                    )) as Arc<dyn ProcessSpawnProvider>
+                });
+                let result = self.phase_execute(
+                    package,
+                    &lowering_output.ir3,
+                    &trace_id,
+                    &adaptive_routing_decision,
+                    permit.cancellation_token(),
+                    host_io,
+                    process_spawn,
+                    host_effect_journal.clone(),
+                );
+                if let Ok((routed, _)) = &result {
+                    permit
+                        .observe_ifc_label(routed.result.completion_label.clone())
+                        .map_err(|error| {
+                            OrchestratorError::Cell(CellError::ExecutionBoundary {
+                                cell_id: permit.cell_id().to_string(),
+                                error,
+                            })
+                        })?;
+                }
+                result
+            }) {
+                Ok(execution) => execution,
+                Err(error) => Err(OrchestratorError::Cell(error)),
+            };
             // Finalize after every interpreter attempt, including failures. Otherwise
             // a valid prefix could be resumed by a later run and falsely certified as
             // one exact replay.
@@ -2293,6 +2507,7 @@ impl ExecutionOrchestrator {
                 saga_id,
                 cell_events: Vec::new(),
                 finalize_result: None,
+                cell_execution_transcript: None,
                 host_effect_transcript,
                 host_effect_journal: host_effect_journal_entries,
                 nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
@@ -2308,7 +2523,31 @@ impl ExecutionOrchestrator {
         let mut close_cx =
             Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms);
         let cell_id = cell.cell_id().to_string();
-        let close_result = cell.close(&mut close_cx, cell_cancel_reason.clone(), deadline);
+        let successful_pipeline_requires_transcript = pipeline_result.is_ok();
+        let mut close_result = cell.close(&mut close_cx, cell_cancel_reason.clone(), deadline);
+        let mut cell_execution_transcript = None;
+        match cell.execution_transcript() {
+            Ok(Some(transcript)) => {
+                if close_result.is_ok()
+                    && let Err(error) = transcript.verify()
+                {
+                    close_result = Err(CellError::ExecutionBoundary {
+                        cell_id: cell_id.clone(),
+                        error,
+                    });
+                }
+                cell_execution_transcript = Some(transcript);
+            }
+            Ok(None) if successful_pipeline_requires_transcript && close_result.is_ok() => {
+                close_result = Err(CellError::ExecutionBoundary {
+                    cell_id: cell_id.clone(),
+                    error: CellExecutionError::AuthorityNotBound,
+                });
+            }
+            Ok(None) => {}
+            Err(error) if close_result.is_ok() => close_result = Err(error),
+            Err(_) => {}
+        }
         let cell_events = cell.drain_events();
 
         match (pipeline_result, close_result) {
@@ -2329,6 +2568,7 @@ impl ExecutionOrchestrator {
                         trace_id,
                         cancel_reason: cell_cancel_reason,
                         cell_events,
+                        cell_execution_transcript,
                         finalize_result: Some(finalize_result),
                         close_error: None,
                     };
@@ -2344,6 +2584,7 @@ impl ExecutionOrchestrator {
                 }
                 result.cell_events = cell_events;
                 result.finalize_result = Some(finalize_result);
+                result.cell_execution_transcript = cell_execution_transcript;
                 if let Some(staged) = pending_adaptive_router.take() {
                     self.adaptive_router = staged.router;
                     self.adaptive_router_state_epoch = Some(self.config.epoch);
@@ -2367,6 +2608,7 @@ impl ExecutionOrchestrator {
                     trace_id,
                     cancel_reason: cell_cancel_reason,
                     cell_events,
+                    cell_execution_transcript,
                     finalize_result: None,
                     close_error: Some(close_error.clone()),
                 };
@@ -2395,6 +2637,7 @@ impl ExecutionOrchestrator {
                     trace_id,
                     cancel_reason: cell_cancel_reason,
                     cell_events,
+                    cell_execution_transcript,
                     finalize_result,
                     close_error,
                 };
@@ -2647,17 +2890,7 @@ impl ExecutionOrchestrator {
         // evidence stream, never an ambient host sink. Requiring packages to
         // declare `console` would deny `console.log` in every CLI-shaped run
         // (bd-lduxz); the raw interpreter without this grant still fails closed.
-        let mut granted_capabilities = BTreeSet::from([
-            RuntimeCapability::VmDispatch,
-            RuntimeCapability::HeapAllocate,
-            RuntimeCapability::Console,
-        ]);
-        granted_capabilities.extend(
-            package
-                .capabilities
-                .iter()
-                .filter_map(|s| RuntimeCapability::from_tag_str(s)),
-        );
+        let granted_capabilities = Self::execution_capabilities(package);
 
         let module_root = Self::module_root_for_execution(package)?;
 
@@ -2680,6 +2913,29 @@ impl ExecutionOrchestrator {
         }
 
         Ok(LaneRouter::with_configs(quickjs_config, v8_config))
+    }
+
+    fn execution_capabilities(package: &ExtensionPackage) -> BTreeSet<RuntimeCapability> {
+        let mut granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Console,
+        ]);
+        granted_capabilities.extend(
+            package
+                .capabilities
+                .iter()
+                .filter_map(|capability| RuntimeCapability::from_tag_str(capability)),
+        );
+        granted_capabilities
+    }
+
+    fn execution_budget_for_lane(lane: LaneChoice) -> (u64, u64) {
+        let config = match lane {
+            LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
+            LaneChoice::V8 => InterpreterConfig::v8_defaults(),
+        };
+        (config.instruction_budget, config.max_total_memory_bytes)
     }
 
     fn static_lane_for_ir3(&self, ir3: &Ir3Module) -> (LaneChoice, LaneReason) {
@@ -2741,6 +2997,8 @@ impl ExecutionOrchestrator {
         ir3: &Ir3Module,
         trace_id: &str,
         adaptive_routing_decision: &AdaptiveRoutingDecision,
+        cancellation_token: &CancellationToken,
+        host_io: Option<Arc<dyn HostIoProvider>>,
         process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
         host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
@@ -2751,12 +3009,11 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
-        let mut lane_router =
-            Self::lane_router_for_execution(package, self.cancellation_token.as_ref())?;
+        let mut lane_router = Self::lane_router_for_execution(package, Some(cancellation_token))?;
         // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
         // real host effects through the algebraic-effects stack.
-        if let Some(provider) = self.host_io.clone() {
+        if let Some(provider) = host_io {
             lane_router.set_host_io(provider, self.host_io_recorder.clone());
         }
         if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
@@ -6544,6 +6801,39 @@ mod tests {
             vec!["fs_write", "fs_read"],
             "real JS fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
         );
+
+        let cell_transcript = result
+            .cell_execution_transcript
+            .as_ref()
+            .expect("a successful execution must return its finalized cell transcript");
+        cell_transcript
+            .verify()
+            .expect("the cell authority/effect transcript must replay exactly");
+        assert_eq!(cell_transcript.authority.trace_id, result.trace_id);
+        assert_eq!(cell_transcript.authority.policy_epoch, result.epoch);
+        assert_eq!(
+            cell_transcript.authority.initial_ifc_label,
+            crate::ifc_artifacts::Label::Public
+        );
+        let proposed_effects: Vec<&str> = cell_transcript
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CellExecutionEventKind::EffectProposed { request_kind, .. } => {
+                    Some(request_kind.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            proposed_effects,
+            vec!["fs_write", "fs_read"],
+            "real provider calls must pass through the cell permit in dispatch order"
+        );
+        assert!(matches!(
+            cell_transcript.events.last().map(|event| &event.kind),
+            Some(CellExecutionEventKind::Finalized)
+        ));
 
         let second = orch
             .execute(&pkg)

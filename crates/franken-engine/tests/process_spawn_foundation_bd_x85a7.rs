@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::execution_cell::CellExecutionEventKind;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
@@ -433,6 +434,28 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
             outcome: Ok(ProcessSpawnResponse::Run { stdout, .. }),
         } if request == &expected_run_request() && stdout == b"typed-process-output"
     ));
+    let cell_transcript = result
+        .cell_execution_transcript
+        .as_ref()
+        .expect("successful process execution must return its finalized cell transcript");
+    cell_transcript
+        .verify()
+        .expect("process provider crossings must form an exact cell transcript");
+    let proposals: Vec<&str> = cell_transcript
+        .events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            CellExecutionEventKind::EffectProposed { request_kind, .. } => {
+                Some(request_kind.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        proposals,
+        vec!["process_spawn_prepare", "process_spawn"],
+        "request preparation and real dispatch must both cross the sealed cell permit"
+    );
 }
 
 #[test]

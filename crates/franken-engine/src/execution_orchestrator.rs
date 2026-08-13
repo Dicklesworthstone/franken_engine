@@ -41,8 +41,8 @@ use crate::evidence_ledger::{
     InMemoryLedger, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
 use crate::execution_cell::{
-    CellError, CellEvent, CellExecutionAuthority, CellExecutionError, CellExecutionPermit,
-    CellExecutionTranscript, CellKind, ExecutionCell,
+    CellError, CellEvent, CellExecutionAuthority, CellExecutionAuthoritySnapshot,
+    CellExecutionError, CellExecutionPermit, CellExecutionTranscript, CellKind, ExecutionCell,
 };
 use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,

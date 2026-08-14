@@ -9,7 +9,8 @@
 #![forbid(unsafe_code)]
 
 use std::any::{Any, TypeId};
-use std::sync::Arc;
+use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,7 @@ use crate::algebraic_effects::{
     HandlerStack, ProcSpawnEffect,
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
+use crate::ifc_artifacts::Label;
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalError, HostEffectJournalMode, InMemoryHostEffectJournal,
 };
@@ -161,12 +163,223 @@ pub struct TimerHostcallEffect {
     pub timer_id: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimerOperation {
     SetTimeout,
     SetInterval,
     ClearTimeout,
     ClearInterval,
+}
+
+impl TimerOperation {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::SetTimeout => "set_timeout",
+            Self::SetInterval => "set_interval",
+            Self::ClearTimeout => "clear_timeout",
+            Self::ClearInterval => "clear_interval",
+        }
+    }
+}
+
+/// Callback-bearing timer request used only by the interpreter-owned timer
+/// executor. Unlike [`TimerHostcallEffect`], this request identifies the real
+/// closure and carries the IFC label that must reach callback delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterpreterTimerRequest {
+    pub operation: TimerOperation,
+    pub duration_ms: Option<u64>,
+    pub timer_id: Option<u64>,
+    pub callback_id: Option<u32>,
+    pub ifc_label: Label,
+}
+
+impl InterpreterTimerRequest {
+    #[must_use]
+    pub const fn request_kind(&self) -> &'static str {
+        self.operation.as_str()
+    }
+}
+
+/// Exact result committed after the interpreter has mutated its real timer
+/// registry and deterministic event-loop queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InterpreterTimerOutcome {
+    Scheduled {
+        timer_id: u64,
+        registration_sequence: u64,
+    },
+    Cleared {
+        timer_id: u64,
+        was_active: bool,
+    },
+}
+
+impl InterpreterTimerOutcome {
+    #[must_use]
+    pub fn evidence_summary(&self) -> String {
+        match self {
+            Self::Scheduled {
+                timer_id,
+                registration_sequence,
+            } => format!("scheduled:timer_id={timer_id}:registration={registration_sequence}"),
+            Self::Cleared {
+                timer_id,
+                was_active,
+            } => format!("cleared:timer_id={timer_id}:was_active={was_active}"),
+        }
+    }
+}
+
+/// Stable error returned by a timer authority before the interpreter mutates
+/// timer state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimerEffectAuthorityError {
+    pub code: String,
+    pub message: String,
+}
+
+impl TimerEffectAuthorityError {
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for TimerEffectAuthorityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for TimerEffectAuthorityError {}
+
+/// Completion half of a two-phase timer crossing. Product composition wraps
+/// the execution cell's drop-safe effect guard here; dropping an uncommitted
+/// permit therefore records an aborted crossing rather than successful work.
+pub trait TimerEffectCompletion: fmt::Debug + Send {
+    fn complete(
+        self: Box<Self>,
+        outcome: &InterpreterTimerOutcome,
+    ) -> Result<(), TimerEffectAuthorityError>;
+}
+
+enum TimerEffectPermitState {
+    LocalPending,
+    ExternalPending(Box<dyn TimerEffectCompletion>),
+    Completed,
+}
+
+impl fmt::Debug for TimerEffectPermitState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LocalPending => f.write_str("LocalPending"),
+            Self::ExternalPending(completion) => {
+                f.debug_tuple("ExternalPending").field(completion).finish()
+            }
+            Self::Completed => f.write_str("Completed"),
+        }
+    }
+}
+
+/// Cloneable handle for one timer proposal. All clones share a single commit
+/// cell, so an outcome can be committed exactly once.
+#[derive(Debug, Clone)]
+pub struct TimerEffectPermit {
+    state: Arc<Mutex<TimerEffectPermitState>>,
+}
+
+impl TimerEffectPermit {
+    /// Permit used by an `InterpreterCore` executing outside the product cell
+    /// orchestrator. The core itself is the real timer owner in this mode.
+    #[must_use]
+    pub fn interpreter_owned() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(TimerEffectPermitState::LocalPending)),
+        }
+    }
+
+    /// Wrap a product authority completion guard.
+    #[must_use]
+    pub fn with_completion(completion: Box<dyn TimerEffectCompletion>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(TimerEffectPermitState::ExternalPending(
+                completion,
+            ))),
+        }
+    }
+
+    /// Commit the exact real scheduler outcome. A poisoned or already-consumed
+    /// permit is fail-closed because the caller cannot prove which evidence was
+    /// retained.
+    pub fn complete(
+        self,
+        outcome: &InterpreterTimerOutcome,
+    ) -> Result<(), TimerEffectAuthorityError> {
+        let pending = {
+            let mut state = self.state.lock().map_err(|_| {
+                TimerEffectAuthorityError::new(
+                    "TIMER_EFFECT_PERMIT_POISONED",
+                    "timer effect permit state is poisoned",
+                )
+            })?;
+            std::mem::replace(&mut *state, TimerEffectPermitState::Completed)
+        };
+        match pending {
+            TimerEffectPermitState::LocalPending => Ok(()),
+            TimerEffectPermitState::ExternalPending(completion) => completion.complete(outcome),
+            TimerEffectPermitState::Completed => Err(TimerEffectAuthorityError::new(
+                "TIMER_EFFECT_PERMIT_CONSUMED",
+                "timer effect permit was already completed",
+            )),
+        }
+    }
+}
+
+/// Optional product authority layered around the interpreter-owned timer
+/// scheduler. It can refuse stale/cancelled/capability-invalid cells before any
+/// timer state changes and returns a permit committed only after real mutation.
+pub trait TimerEffectAuthority: fmt::Debug + Send + Sync {
+    fn begin(
+        &self,
+        request: &InterpreterTimerRequest,
+    ) -> Result<TimerEffectPermit, TimerEffectAuthorityError>;
+}
+
+/// Internal effect emitted by `InterpreterCore`. It is intentionally separate
+/// from the public migration-only [`TimerHostcallEffect`], whose callback-free
+/// shape must remain unexecutable.
+#[derive(Debug, Clone)]
+struct InterpreterTimerHostcallEffect {
+    request: InterpreterTimerRequest,
+}
+
+impl Effect for InterpreterTimerHostcallEffect {
+    type Output = TimerEffectPermit;
+
+    fn effect_name(&self) -> &'static str {
+        "hostcall:timer"
+    }
+
+    fn required_capabilities(&self) -> EffectCapabilities {
+        EffectCapabilities::runtime([RuntimeCapability::Timer])
+    }
+
+    fn priority(&self) -> EffectPriority {
+        EffectPriority::High
+    }
+
+    fn parameters(&self) -> Box<dyn Any + Send + Sync> {
+        Box::new(self.request.clone())
+    }
+
+    fn parameter_type_id(&self) -> TypeId {
+        TypeId::of::<InterpreterTimerRequest>()
+    }
 }
 
 impl Effect for TimerHostcallEffect {
@@ -480,6 +693,111 @@ fn host_effect_journal_error(handler: &str, error: HostEffectJournalError) -> Ef
 /// replay recorder to hand to that implementation. Returning a timer handle
 /// here would therefore fabricate successful scheduling.
 pub const TIMER_PROVIDER_UNAVAILABLE_CODE: &str = "TIMER_PROVIDER_UNAVAILABLE";
+
+fn validate_interpreter_timer_request(
+    request: &InterpreterTimerRequest,
+) -> Result<(), EffectError> {
+    let invalid_reason = match request.operation {
+        TimerOperation::SetTimeout | TimerOperation::SetInterval => {
+            match (request.duration_ms, request.timer_id, request.callback_id) {
+                (None, _, _) => Some("set timer operation requires duration_ms"),
+                (Some(_), Some(_), _) => Some("set timer operation must not include timer_id"),
+                (Some(_), None, None) => Some("set timer operation requires callback_id"),
+                (Some(_), None, Some(_)) => None,
+            }
+        }
+        TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
+            match (request.duration_ms, request.timer_id, request.callback_id) {
+                (_, None, _) => Some("clear timer operation requires timer_id"),
+                (Some(_), Some(_), _) => Some("clear timer operation must not include duration_ms"),
+                (None, Some(_), Some(_)) => {
+                    Some("clear timer operation must not include callback_id")
+                }
+                (None, Some(_), None) => None,
+            }
+        }
+    };
+    match invalid_reason {
+        Some(reason) => Err(EffectError::InvalidParameters {
+            effect_name: "hostcall:timer".to_string(),
+            reason: reason.to_string(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Handler used only from the interpreter's timer dispatch method. Returning a
+/// permit is phase one; `InterpreterCore` remains responsible for the actual
+/// event-loop mutation and must commit the permit with its exact result.
+#[derive(Debug)]
+struct InterpreterTimerHandler {
+    authority: Option<Arc<dyn TimerEffectAuthority>>,
+    capability_granted: bool,
+}
+
+impl Handler for InterpreterTimerHandler {
+    fn can_handle(&self, effect_name: &str) -> bool {
+        effect_name == "hostcall:timer"
+    }
+
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        let request = effect
+            .parameters()
+            .downcast::<InterpreterTimerRequest>()
+            .map_err(|_| EffectError::InvalidParameters {
+                effect_name: effect.effect_name().to_string(),
+                reason: "Expected InterpreterTimerRequest parameters".to_string(),
+            })?;
+        validate_interpreter_timer_request(&request)?;
+        let permit = match self.authority.as_deref() {
+            Some(authority) => {
+                authority
+                    .begin(&request)
+                    .map_err(|error| EffectError::HandlerError {
+                        handler: self.handler_name().to_string(),
+                        message: error.message,
+                        code: Some(error.code),
+                    })?
+            }
+            None => TimerEffectPermit::interpreter_owned(),
+        };
+        Ok(Some(EffectResult::new(permit)))
+    }
+
+    fn provided_capabilities(&self) -> EffectCapabilities {
+        if self.capability_granted {
+            EffectCapabilities::runtime([RuntimeCapability::Timer])
+        } else {
+            EffectCapabilities::none()
+        }
+    }
+
+    fn priority(&self) -> EffectPriority {
+        EffectPriority::High
+    }
+
+    fn handler_name(&self) -> &'static str {
+        "interpreter_timer_handler"
+    }
+}
+
+pub(crate) fn create_interpreter_timer_effect(
+    request: InterpreterTimerRequest,
+) -> Box<dyn ErasedEffect> {
+    Box::new(InterpreterTimerHostcallEffect { request })
+}
+
+pub(crate) fn create_interpreter_timer_handler_stack(
+    authority: Option<Arc<dyn TimerEffectAuthority>>,
+    capability_granted: bool,
+) -> HandlerStack {
+    let mut stack = HandlerStack::new();
+    stack.add_handler(Arc::new(InterpreterTimerHandler {
+        authority,
+        capability_granted,
+    }));
+    stack
+}
 
 fn reject_unbound_timer(
     handler: &'static str,
@@ -1469,6 +1787,148 @@ mod tests {
                 "malformed timer parameters must be rejected before provider lookup"
             );
         }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingTimerAuthority {
+        requests: Mutex<Vec<InterpreterTimerRequest>>,
+        outcomes: Arc<Mutex<Vec<InterpreterTimerOutcome>>>,
+        aborted: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[derive(Debug)]
+    struct RecordingTimerCompletion {
+        outcomes: Arc<Mutex<Vec<InterpreterTimerOutcome>>>,
+        aborted: Arc<std::sync::atomic::AtomicUsize>,
+        completed: bool,
+    }
+
+    impl Drop for RecordingTimerCompletion {
+        fn drop(&mut self) {
+            if !self.completed {
+                self.aborted
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
+    impl TimerEffectCompletion for RecordingTimerCompletion {
+        fn complete(
+            mut self: Box<Self>,
+            outcome: &InterpreterTimerOutcome,
+        ) -> Result<(), TimerEffectAuthorityError> {
+            self.outcomes
+                .lock()
+                .expect("recording timer outcomes mutex")
+                .push(outcome.clone());
+            self.completed = true;
+            Ok(())
+        }
+    }
+
+    impl TimerEffectAuthority for RecordingTimerAuthority {
+        fn begin(
+            &self,
+            request: &InterpreterTimerRequest,
+        ) -> Result<TimerEffectPermit, TimerEffectAuthorityError> {
+            self.requests
+                .lock()
+                .expect("recording timer requests mutex")
+                .push(request.clone());
+            Ok(TimerEffectPermit::with_completion(Box::new(
+                RecordingTimerCompletion {
+                    outcomes: self.outcomes.clone(),
+                    aborted: self.aborted.clone(),
+                    completed: false,
+                },
+            )))
+        }
+    }
+
+    fn interpreter_timeout_request() -> InterpreterTimerRequest {
+        InterpreterTimerRequest {
+            operation: TimerOperation::SetTimeout,
+            duration_ms: Some(7),
+            timer_id: None,
+            callback_id: Some(3),
+            ifc_label: Label::Internal,
+        }
+    }
+
+    #[test]
+    fn interpreter_timer_handler_is_two_phase_exactly_once_and_drop_safe() {
+        let authority = Arc::new(RecordingTimerAuthority::default());
+        let request = interpreter_timeout_request();
+        let mut stack = create_interpreter_timer_handler_stack(Some(authority.clone()), true);
+        let effect = create_interpreter_timer_effect(request.clone());
+
+        let permit = stack
+            .handle_effect(effect.as_ref())
+            .expect("valid timer proposal")
+            .downcast::<TimerEffectPermit>()
+            .expect("timer handler returns a permit");
+        assert_eq!(
+            authority.requests.lock().expect("requests").as_slice(),
+            &[request]
+        );
+        assert!(authority.outcomes.lock().expect("outcomes").is_empty());
+
+        let duplicate = permit.clone();
+        let outcome = InterpreterTimerOutcome::Scheduled {
+            timer_id: 9,
+            registration_sequence: 17,
+        };
+        permit.complete(&outcome).expect("first commit");
+        assert_eq!(
+            authority.outcomes.lock().expect("outcomes").as_slice(),
+            &[outcome.clone()]
+        );
+        assert!(matches!(
+            duplicate.complete(&outcome),
+            Err(TimerEffectAuthorityError { code, .. })
+                if code == "TIMER_EFFECT_PERMIT_CONSUMED"
+        ));
+        assert_eq!(
+            authority.aborted.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        let dropped = stack
+            .handle_effect(effect.as_ref())
+            .expect("second proposal")
+            .downcast::<TimerEffectPermit>()
+            .expect("second permit");
+        drop(dropped);
+        assert_eq!(
+            authority.aborted.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an uncommitted provider crossing must be retained as aborted"
+        );
+    }
+
+    #[test]
+    fn interpreter_timer_handler_checks_capability_and_shape_before_authority() {
+        let authority = Arc::new(RecordingTimerAuthority::default());
+        let request = interpreter_timeout_request();
+        let effect = create_interpreter_timer_effect(request.clone());
+
+        let mut denied = create_interpreter_timer_handler_stack(Some(authority.clone()), false);
+        assert!(matches!(
+            denied.handle_effect(effect.as_ref()),
+            Err(EffectError::CapabilityDenied { .. })
+        ));
+        assert!(authority.requests.lock().expect("requests").is_empty());
+
+        let malformed = create_interpreter_timer_effect(InterpreterTimerRequest {
+            callback_id: None,
+            ..request
+        });
+        let mut granted = create_interpreter_timer_handler_stack(Some(authority.clone()), true);
+        assert!(matches!(
+            granted.handle_effect(malformed.as_ref()),
+            Err(EffectError::InvalidParameters { .. })
+        ));
+        assert!(authority.requests.lock().expect("requests").is_empty());
     }
 
     #[derive(Debug, Default)]

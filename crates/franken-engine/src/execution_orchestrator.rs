@@ -41,7 +41,7 @@ use crate::evidence_ledger::{
     InMemoryLedger, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
 use crate::execution_cell::{
-    CellError, CellEvent, CellExecutionAuthority, CellExecutionAuthoritySnapshot,
+    CellEffectGuard, CellError, CellEvent, CellExecutionAuthority, CellExecutionAuthoritySnapshot,
     CellExecutionError, CellExecutionPermit, CellExecutionTranscript, CellKind, ExecutionCell,
 };
 use crate::expected_loss_selector::{
@@ -53,6 +53,10 @@ use crate::guardplane_adapter::{
     GuardplaneExtensionContext, GuardplaneOperation,
 };
 use crate::hash_tiers::ContentHash;
+use crate::hostcall_effects_migration::{
+    InterpreterTimerOutcome, InterpreterTimerRequest, TimerEffectAuthority,
+    TimerEffectAuthorityError, TimerEffectCompletion, TimerEffectPermit,
+};
 use crate::ifc_artifacts::{ClearanceClass, DeclassificationReceipt, Label};
 use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord, IfcProvenanceIndex};
 use crate::ir_contract::{ExecutionOutcome, Ir0Module, Ir3Module, Ir4Module, verify_ir4_linkage};
@@ -301,6 +305,71 @@ impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
     }
 }
 
+/// Sealed cell authority for the interpreter-owned deterministic timer
+/// scheduler. Scheduling remains inside `InterpreterCore`; this adapter makes
+/// proposal/commit evidence, epoch, capability, and cancellation mandatory.
+#[derive(Debug)]
+struct CellAuthorizedTimerEffectAuthority {
+    permit: CellExecutionPermit,
+}
+
+impl CellAuthorizedTimerEffectAuthority {
+    fn new(permit: CellExecutionPermit) -> Self {
+        Self { permit }
+    }
+
+    fn denied(error: CellExecutionError) -> TimerEffectAuthorityError {
+        let code = match error {
+            CellExecutionError::Cancelled => "TIMER_CELL_CANCELLED",
+            CellExecutionError::CapabilityDenied { .. } => "TIMER_CELL_CAPABILITY_DENIED",
+            CellExecutionError::InvalidPhase { .. } | CellExecutionError::StaleEpoch { .. } => {
+                "TIMER_CELL_STALE_OR_CLOSED"
+            }
+            _ => "TIMER_CELL_AUTHORITY_DENIED",
+        };
+        TimerEffectAuthorityError::new(code, error.to_string())
+    }
+}
+
+#[derive(Debug)]
+struct CellTimerEffectCompletion {
+    guard: CellEffectGuard,
+}
+
+impl TimerEffectCompletion for CellTimerEffectCompletion {
+    fn complete(
+        self: Box<Self>,
+        outcome: &InterpreterTimerOutcome,
+    ) -> Result<(), TimerEffectAuthorityError> {
+        self.guard
+            .complete(outcome.evidence_summary())
+            .map_err(CellAuthorizedTimerEffectAuthority::denied)
+    }
+}
+
+impl TimerEffectAuthority for CellAuthorizedTimerEffectAuthority {
+    fn begin(
+        &self,
+        request: &InterpreterTimerRequest,
+    ) -> Result<TimerEffectPermit, TimerEffectAuthorityError> {
+        self.permit
+            .observe_ifc_label(request.ifc_label.clone())
+            .map_err(Self::denied)?;
+        let guard = self
+            .permit
+            .begin_effect(
+                "timer",
+                request.request_kind(),
+                cell_effect_request_digest(request),
+                RuntimeCapability::Timer,
+            )
+            .map_err(Self::denied)?;
+        Ok(TimerEffectPermit::with_completion(Box::new(
+            CellTimerEffectCompletion { guard },
+        )))
+    }
+}
+
 /// Cell-owned inputs needed to configure one interpreter dispatch.
 ///
 /// Keeping these values together makes the authority boundary explicit at the
@@ -313,6 +382,7 @@ struct CellExecutionDispatch<'a> {
     host_io: Option<Arc<dyn HostIoProvider>>,
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    timer_effect_authority: Arc<dyn TimerEffectAuthority>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2221,6 +2291,9 @@ impl ExecutionOrchestrator {
                         permit.clone(),
                     )) as Arc<dyn ProcessSpawnProvider>
                 });
+                let timer_effect_authority =
+                    Arc::new(CellAuthorizedTimerEffectAuthority::new(permit.clone()))
+                        as Arc<dyn TimerEffectAuthority>;
                 let result = self.phase_execute(
                     package,
                     &lowering_output.ir3,
@@ -2233,6 +2306,7 @@ impl ExecutionOrchestrator {
                         host_io,
                         process_spawn,
                         host_effect_journal: host_effect_journal.clone(),
+                        timer_effect_authority,
                     },
                 );
                 if let Ok((routed, _)) = &result {
@@ -3040,6 +3114,7 @@ impl ExecutionOrchestrator {
             host_io,
             process_spawn,
             host_effect_journal,
+            timer_effect_authority,
         } = dispatch;
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
         let hook = guardplane_adapter.as_ref().map(|adapter| {
@@ -3063,6 +3138,7 @@ impl ExecutionOrchestrator {
         if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
             lane_router.set_process_spawn(provider, journal);
         }
+        lane_router.set_timer_effect_authority(timer_effect_authority);
         let routed = lane_router
             .execute_with_hook(
                 ir3,
@@ -6984,6 +7060,314 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn real_js_timers_cross_handler_stack_and_cell_with_exact_delivery() {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let package = ExtensionPackage {
+            extension_id: "timer-provider-e2e".to_string(),
+            source: r#"
+                const cancelled = setTimeout(() => console.log('cancelled'), 10);
+                const first = setTimeout(() => console.log('first'), 1);
+                const second = setTimeout(() => console.log('second'), 1);
+                console.log(cancelled === first);
+                clearTimeout(cancelled);
+            "#
+            .to_string(),
+            source_file: None,
+            module_root: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "console".to_string(),
+                "timer".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orchestrator
+            .execute(&package)
+            .expect("real source timers execute through the product stack");
+        let console = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            console,
+            vec!["false", "first", "second"],
+            "handles must be distinct, exact clear must suppress only its callback, and equal-deadline callbacks must retain registration order"
+        );
+        assert!(
+            !console.contains(&"cancelled"),
+            "the cleared callback must never be delivered"
+        );
+
+        let transcript = result
+            .cell_execution_transcript
+            .as_ref()
+            .expect("timer execution retains a finalized cell transcript");
+        transcript
+            .verify()
+            .expect("timer transcript replays exactly");
+        assert_eq!(transcript.authority.cell_id, result.trace_id);
+
+        let timer_proposals = transcript
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CellExecutionEventKind::EffectProposed {
+                    family,
+                    request_kind,
+                    request_digest,
+                    required_capability,
+                } if family == "timer" => Some((
+                    event.sequence,
+                    request_kind.as_str(),
+                    *request_digest,
+                    *required_capability,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            timer_proposals
+                .iter()
+                .map(|(_, kind, _, _)| *kind)
+                .collect::<Vec<_>>(),
+            vec!["set_timeout", "set_timeout", "set_timeout", "clear_timeout"]
+        );
+        assert!(timer_proposals.iter().all(|(_, _, digest, capability)| {
+            *digest != ContentHash::compute(b"") && *capability == RuntimeCapability::Timer
+        }));
+
+        let timer_completions = transcript
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CellExecutionEventKind::EffectCompleted {
+                    proposal_sequence,
+                    outcome,
+                } if outcome.starts_with("scheduled:") || outcome.starts_with("cleared:") => {
+                    Some((*proposal_sequence, outcome.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(timer_completions.len(), timer_proposals.len());
+        for (proposal_sequence, _, _, _) in &timer_proposals {
+            assert_eq!(
+                timer_completions
+                    .iter()
+                    .filter(|(completed, _)| completed == proposal_sequence)
+                    .count(),
+                1,
+                "every timer proposal must have one exact completion"
+            );
+        }
+        let outcomes = timer_completions
+            .iter()
+            .map(|(_, outcome)| *outcome)
+            .collect::<Vec<_>>();
+        assert!(
+            outcomes
+                .iter()
+                .any(|outcome| { outcome.starts_with("scheduled:timer_id=0:registration=") })
+        );
+        assert!(
+            outcomes
+                .iter()
+                .any(|outcome| { outcome.starts_with("scheduled:timer_id=1:registration=") })
+        );
+        assert!(
+            outcomes
+                .iter()
+                .any(|outcome| { outcome.starts_with("scheduled:timer_id=2:registration=") })
+        );
+        assert!(outcomes.contains(&"cleared:timer_id=0:was_active=true"));
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| !outcome.contains("timer_id=42")),
+            "planted negative: the former constant-42 implementation must fail this test"
+        );
+        assert!(matches!(
+            transcript.events.last().map(|event| &event.kind),
+            Some(CellExecutionEventKind::Finalized)
+        ));
+    }
+
+    fn timer_authority_test_cell(
+        capabilities: BTreeSet<RuntimeCapability>,
+        cancellation_token: CancellationToken,
+    ) -> ExecutionCell {
+        let mut cell = ExecutionCell::with_context(
+            "timer-cell",
+            CellKind::Extension,
+            "timer-trace",
+            "timer-decision",
+            "timer-policy",
+        );
+        cell.bind_execution_authority(CellExecutionAuthority::new(
+            CellExecutionAuthoritySnapshot {
+                cell_id: "timer-cell".to_string(),
+                trace_id: "timer-trace".to_string(),
+                decision_id: "timer-decision".to_string(),
+                policy_id: "timer-policy".to_string(),
+                policy_epoch: SecurityEpoch::from_raw(3),
+                capabilities,
+                initial_ifc_label: Label::Public,
+                instruction_budget: 100,
+                memory_budget_bytes: 1024 * 1024,
+            },
+            cancellation_token,
+        ))
+        .expect("matching timer test authority");
+        cell
+    }
+
+    fn timer_authority_test_request() -> InterpreterTimerRequest {
+        InterpreterTimerRequest {
+            operation: crate::hostcall_effects_migration::TimerOperation::SetTimeout,
+            duration_ms: Some(1),
+            timer_id: None,
+            callback_id: Some(0),
+            ifc_label: Label::Internal,
+        }
+    }
+
+    #[test]
+    fn timer_cell_authority_observes_ifc_and_commits_exact_outcome() {
+        let mut cell = timer_authority_test_cell(
+            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::Timer]),
+            CancellationToken::new(),
+        );
+        cell.run_interpreter(|permit| {
+            let authority = CellAuthorizedTimerEffectAuthority::new(permit.clone());
+            let timer_permit = authority
+                .begin(&timer_authority_test_request())
+                .expect("valid timer request crosses the sealed cell authority");
+            timer_permit
+                .complete(&InterpreterTimerOutcome::Scheduled {
+                    timer_id: 7,
+                    registration_sequence: 11,
+                })
+                .expect("exact scheduler result commits to the cell transcript");
+            permit
+                .settle_interpreter_budget(0)
+                .expect("test interpreter settles its budget");
+            Ok::<(), ()>(())
+        })
+        .expect("cell boundary remains valid")
+        .expect("timer authority test succeeds");
+
+        let transcript = cell
+            .execution_transcript()
+            .expect("current timer transcript")
+            .expect("timer cell has an execution transcript");
+        assert!(transcript.events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                CellExecutionEventKind::IfcLabelObserved { label }
+                    if *label == Label::Internal
+            ) && event.ifc_high_water_label == Label::Internal
+        }));
+        let proposal_sequence = transcript
+            .events
+            .iter()
+            .find_map(|event| match &event.kind {
+                CellExecutionEventKind::EffectProposed {
+                    family,
+                    request_kind,
+                    required_capability,
+                    ..
+                } if family == "timer"
+                    && request_kind == "set_timeout"
+                    && *required_capability == RuntimeCapability::Timer =>
+                {
+                    Some(event.sequence)
+                }
+                _ => None,
+            })
+            .expect("timer proposal retained in transcript");
+        assert!(transcript.events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                CellExecutionEventKind::EffectCompleted {
+                    proposal_sequence: completed,
+                    outcome,
+                } if *completed == proposal_sequence
+                    && outcome == "scheduled:timer_id=7:registration=11"
+            )
+        }));
+    }
+
+    #[test]
+    fn timer_cell_authority_refuses_capability_cancellation_and_terminal_permits() {
+        let capability_token = CancellationToken::new();
+        let mut capability_cell = timer_authority_test_cell(
+            BTreeSet::from([RuntimeCapability::VmDispatch]),
+            capability_token,
+        );
+        let capability_outcome = capability_cell
+            .run_interpreter(|permit| {
+                let authority = CellAuthorizedTimerEffectAuthority::new(permit);
+                let error = authority
+                    .begin(&timer_authority_test_request())
+                    .expect_err("cell without Timer capability must refuse");
+                assert_eq!(error.code, "TIMER_CELL_CAPABILITY_DENIED");
+                Err::<(), ()>(())
+            })
+            .expect("cell boundary remains valid");
+        assert!(capability_outcome.is_err());
+
+        let cancellation_token = CancellationToken::new();
+        let mut cancelled_cell = timer_authority_test_cell(
+            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::Timer]),
+            cancellation_token.clone(),
+        );
+        let cancelled_outcome = cancelled_cell
+            .run_interpreter(|permit| {
+                cancellation_token.cancel();
+                let authority = CellAuthorizedTimerEffectAuthority::new(permit);
+                let error = authority
+                    .begin(&timer_authority_test_request())
+                    .expect_err("cancelled cell must refuse new timer work");
+                assert_eq!(error.code, "TIMER_CELL_CANCELLED");
+                Err::<(), ()>(())
+            })
+            .expect("cancelled refusal retains a valid boundary");
+        assert!(cancelled_outcome.is_err());
+
+        let terminal_token = CancellationToken::new();
+        let mut terminal_cell = timer_authority_test_cell(
+            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::Timer]),
+            terminal_token,
+        );
+        let retained_permit = Arc::new(std::sync::Mutex::new(None));
+        let retained_for_run = retained_permit.clone();
+        terminal_cell
+            .run_interpreter(|permit| {
+                *retained_for_run.lock().expect("retained permit mutex") = Some(permit.clone());
+                permit
+                    .settle_interpreter_budget(0)
+                    .expect("zero-use test interpreter settles");
+                Ok::<(), ()>(())
+            })
+            .expect("terminal test boundary")
+            .expect("terminal test interpreter");
+        let permit = retained_permit
+            .lock()
+            .expect("retained permit mutex")
+            .take()
+            .expect("permit retained past interpreter completion");
+        let authority = CellAuthorizedTimerEffectAuthority::new(permit);
+        let error = authority
+            .begin(&timer_authority_test_request())
+            .expect_err("terminal cell permit must be stale for new timer work");
+        assert_eq!(error.code, "TIMER_CELL_STALE_OR_CLOSED");
     }
 
     /// bd-201vt (async callback form): the idiomatic Node callback forms

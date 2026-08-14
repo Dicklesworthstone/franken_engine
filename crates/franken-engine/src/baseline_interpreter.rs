@@ -88,9 +88,10 @@ use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
-    create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
-    create_handler_stack_from_profile_with_host_io, create_network_effect,
-    create_process_spawn_effect,
+    InterpreterTimerOutcome, InterpreterTimerRequest, TimerEffectAuthority, TimerEffectPermit,
+    TimerOperation, create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
+    create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
+    create_interpreter_timer_handler_stack, create_network_effect, create_process_spawn_effect,
 };
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
@@ -1702,7 +1703,10 @@ struct PendingTimerTask {
 enum PendingTimerTaskKind {
     /// A JS callback timer (`setTimeout`/`setInterval`/`setImmediate`).
     Callback {
-        closure_id: u32,
+        /// Exact callable supplied by the guest. Retaining the full value makes
+        /// named `Function` callbacks real rather than registering a handle with
+        /// no delivery task.
+        callback: Value,
         /// Extra trailing arguments forwarded to the callback on every fire.
         args: Vec<Value>,
         /// `setInterval` timers re-schedule themselves after each fire while
@@ -1710,6 +1714,9 @@ enum PendingTimerTaskKind {
         repeating: bool,
         /// The (already clamped) per-fire delay used for re-scheduling.
         delay_ms: u64,
+        /// IFC label joined from the callback, delay, and extra arguments at
+        /// registration. Delivery reuses this exact label on every interval tick.
+        label: Label,
     },
     /// A `require('timers/promises')` timer: fulfills `promise` with `value`
     /// when it fires (no JS callback; the macrotask's `ClosureHandle` is an
@@ -8968,6 +8975,10 @@ pub struct InterpreterCore {
     /// admission. The shared journal retains exact inter-family crossing order.
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    /// Optional product cell authority for timer effects. The deterministic
+    /// timer registry and event loop remain owned by this interpreter; the
+    /// authority gates and records the crossing before mutation.
+    timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
     /// Call stack.
@@ -9866,6 +9877,7 @@ impl InterpreterCore {
             host_io_recorder: None,
             process_spawn: None,
             host_effect_journal: None,
+            timer_effect_authority: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             call_stack: Vec::new(),
             heap: SeedTrackedField::new(Vec::new()),
@@ -10060,6 +10072,12 @@ impl InterpreterCore {
     ) {
         self.process_spawn = Some(provider);
         self.host_effect_journal = Some(journal);
+    }
+
+    /// Attach the sealed product-cell authority used by interpreter timer
+    /// effects. The actual scheduling provider remains this core's event loop.
+    pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
+        self.timer_effect_authority = Some(authority);
     }
 
     fn join_object_mutation_label(
@@ -34279,7 +34297,15 @@ impl InterpreterCore {
                     extra_args.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
                     index += 1;
                 }
-                self.timer_schedule_from_values(callback, delay, extra_args, is_interval, is_immediate)
+                let registration_label = self.join_arg_range_label(args)?;
+                self.timer_schedule_from_values(
+                    callback,
+                    delay,
+                    extra_args,
+                    is_interval,
+                    is_immediate,
+                    registration_label,
+                )
             }
             BuiltinFunctionKind::ClearTimeout
             | BuiltinFunctionKind::ClearInterval
@@ -34290,7 +34316,13 @@ impl InterpreterCore {
                     _ => "builtin:clearImmediate",
                 };
                 let handle = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                self.timer_clear_from_value(&handle, witness_tag)
+                let operation = match builtin.kind {
+                    BuiltinFunctionKind::ClearTimeout => Some(TimerOperation::ClearTimeout),
+                    BuiltinFunctionKind::ClearInterval => Some(TimerOperation::ClearInterval),
+                    _ => None,
+                };
+                let ifc_label = self.join_arg_range_label(args)?;
+                self.timer_clear_from_value(&handle, witness_tag, operation, ifc_label)
             }
             BuiltinFunctionKind::QueueMicrotask => {
                 let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -46748,6 +46780,15 @@ impl InterpreterCore {
         let mut turns = 0;
 
         while self.event_loop.has_pending_work() && turns < MAX_TURNS {
+            if self
+                .config
+                .cancellation_token
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                self.cancel_all_pending_timer_tasks();
+                return Err(InterpreterError::Cancelled);
+            }
             // bd-suwvw: unref'd timers do not keep the loop alive. When every
             // remaining macrotask is an unref'd (or cancelled) timer and no
             // microtasks are queued, the program is done — exactly Node's
@@ -47357,7 +47398,12 @@ impl InterpreterCore {
                 }
 
                 // Execute the timer callback body (no arguments, undefined this).
-                let result = self.execute_timer_closure(closure_id, module, Vec::new());
+                let result = self.execute_timer_callback(
+                    Value::Closure(closure_id),
+                    module,
+                    Vec::new(),
+                    macrotask.label.clone(),
+                );
 
                 if let Err(ref err) = result {
                     eprintln!("Timer callback execution error: {err:?}");
@@ -47456,18 +47502,19 @@ impl InterpreterCore {
     /// This creates a minimal execution context to run the timer callback function.
     /// `args` carries the extra trailing `setTimeout(cb, ms, ...args)` arguments
     /// (empty for the legacy direct-scheduled path) (bd-suwvw).
-    fn execute_timer_closure(
+    fn execute_timer_callback(
         &mut self,
-        closure_id: u32,
+        callback: Value,
         module: Option<&Ir3Module>,
         args: Vec<Value>,
+        label: Label,
     ) -> Result<Value, InterpreterError> {
         use crate::ir_contract::WitnessEventKind;
 
         // Witness marker for deterministic replay: this timer macrotask fired.
         self.emit_witness(
             WitnessEventKind::ExecutionCompleted,
-            Some(&format!("timer_closure_{closure_id}")),
+            Some(&format!("timer_callback_{callback}")),
         );
 
         // Run the callback body for real (bd-zqb1x): `setTimeout(() => { ... })`
@@ -47478,12 +47525,15 @@ impl InterpreterCore {
         // state around the call and runs the closure's IR3 body to completion
         // against its captured environment.
         match module {
-            Some(module) => self.invoke_inline_method_call(
-                Some(module),
-                Value::Closure(closure_id),
-                Value::Undefined,
-                args,
-            ),
+            Some(module) => self
+                .invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    callback,
+                    Value::Undefined,
+                    args,
+                    Some(label),
+                )
+                .map(|(value, _)| value),
             None => {
                 // No module context is available only on the test-only
                 // `run_event_loop_until_idle()` path (the production eval flow
@@ -47515,19 +47565,12 @@ impl InterpreterCore {
         }
         match task.kind {
             PendingTimerTaskKind::Callback {
-                closure_id,
+                callback,
                 args,
                 repeating,
                 delay_ms,
+                label,
             } => {
-                if self.closures.get(closure_id as usize).is_none() {
-                    self.estimated_memory_bytes =
-                        self.estimated_memory_bytes.saturating_sub(retained_bytes);
-                    return Err(InterpreterError::TypeError {
-                        expected: "valid closure".to_string(),
-                        got: format!("closure#{closure_id} not found"),
-                    });
-                }
                 let (result, reschedule_args) = if repeating {
                     let clone_bytes = Self::estimate_value_vec_bytes(&args);
                     if let Err(error) = self.apply_memory_component_delta(0, clone_bytes) {
@@ -47539,14 +47582,19 @@ impl InterpreterCore {
                     }
                     let callback_args = args.clone();
                     let result = self
-                        .execute_timer_closure(closure_id, module, callback_args)
+                        .execute_timer_callback(
+                            callback.clone(),
+                            module,
+                            callback_args,
+                            label.clone(),
+                        )
                         .map(|_| ());
                     self.estimated_memory_bytes =
                         self.estimated_memory_bytes.saturating_sub(clone_bytes);
                     (result, Some(args))
                 } else {
                     (
-                        self.execute_timer_closure(closure_id, module, args)
+                        self.execute_timer_callback(callback.clone(), module, args, label.clone())
                             .map(|_| ()),
                         None,
                     )
@@ -47559,10 +47607,16 @@ impl InterpreterCore {
                     // anything it ran) cleared the interval.
                     if self.active_timers.contains_key(&task.timer_id) {
                         let previous_promise_bytes = self.promise_runtime_memory_bytes();
+                        let handler_id = match &callback {
+                            Value::Closure(id) | Value::Function(id) => *id,
+                            _ => {
+                                unreachable!("pending timer callback was validated at registration")
+                            }
+                        };
                         let seq = self.event_loop.set_timeout(
-                            crate::closure_model::ClosureHandle(closure_id),
+                            crate::closure_model::ClosureHandle(handler_id),
                             delay_ms,
-                            crate::ifc_artifacts::Label::Public,
+                            label.clone(),
                         );
                         if let Err(error) =
                             self.apply_promise_runtime_memory_delta(previous_promise_bytes)
@@ -47579,11 +47633,12 @@ impl InterpreterCore {
                             PendingTimerTask {
                                 timer_id: task.timer_id,
                                 kind: PendingTimerTaskKind::Callback {
-                                    closure_id,
+                                    callback,
                                     args: reschedule_args
                                         .expect("repeating timer retained its owned arguments"),
                                     repeating: true,
                                     delay_ms,
+                                    label,
                                 },
                             },
                         );
@@ -47648,6 +47703,60 @@ impl InterpreterCore {
         } else {
             ms as u64
         }
+    }
+
+    fn timer_effect_error(error: EffectError) -> InterpreterError {
+        match error {
+            EffectError::CapabilityDenied { .. } => InterpreterError::CapabilityDenied {
+                capability: RuntimeCapability::Timer.to_string(),
+            },
+            EffectError::HandlerError {
+                message: _,
+                code: Some(code),
+                ..
+            } if code == "TIMER_CELL_CANCELLED" => InterpreterError::Cancelled,
+            EffectError::HandlerError {
+                message: _,
+                code: Some(code),
+                ..
+            } if code == "TIMER_CELL_CAPABILITY_DENIED" => InterpreterError::CapabilityDenied {
+                capability: RuntimeCapability::Timer.to_string(),
+            },
+            other => InterpreterError::InternalError {
+                details: format!("interpreter timer effect dispatch failed: {other}"),
+            },
+        }
+    }
+
+    fn begin_interpreter_timer_effect(
+        &self,
+        request: InterpreterTimerRequest,
+    ) -> Result<TimerEffectPermit, InterpreterError> {
+        let capability_granted = self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::Timer);
+        let mut stack = create_interpreter_timer_handler_stack(
+            self.timer_effect_authority.clone(),
+            capability_granted,
+        );
+        let effect = create_interpreter_timer_effect(request);
+        stack
+            .handle_effect(effect.as_ref())
+            .map_err(Self::timer_effect_error)?
+            .downcast::<TimerEffectPermit>()
+            .map_err(Self::timer_effect_error)
+    }
+
+    fn complete_interpreter_timer_effect(
+        permit: TimerEffectPermit,
+        outcome: &InterpreterTimerOutcome,
+    ) -> Result<(), InterpreterError> {
+        permit
+            .complete(outcome)
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!("interpreter timer evidence commit failed: {error}"),
+            })
     }
 
     /// bd-suwvw: allocate a Timeout/Immediate handle object carrying the timer
@@ -47721,6 +47830,7 @@ impl InterpreterCore {
         extra_args: Vec<Value>,
         repeating: bool,
         immediate: bool,
+        registration_label: Label,
     ) -> Result<Value, InterpreterError> {
         if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
             // Preserved lenient legacy contract: a non-callable callback
@@ -47737,41 +47847,55 @@ impl InterpreterCore {
         };
 
         let timer_id = self.next_timer_id;
-
-        let handler_id = match callback {
-            Value::Closure(id) => Some(id),
-            _ => None,
+        let callback_id = match &callback {
+            Value::Closure(id) | Value::Function(id) => *id,
+            _ => unreachable!("callability was checked above"),
+        };
+        let effect_permit = if immediate {
+            None
+        } else {
+            Some(
+                self.begin_interpreter_timer_effect(InterpreterTimerRequest {
+                    operation: if repeating {
+                        TimerOperation::SetInterval
+                    } else {
+                        TimerOperation::SetTimeout
+                    },
+                    duration_ms: Some(delay_ms),
+                    timer_id: None,
+                    callback_id: Some(callback_id),
+                    ifc_label: registration_label.clone(),
+                })?,
+            )
         };
 
-        let pending_task = handler_id.map(|closure_id| PendingTimerTask {
+        let pending_task = PendingTimerTask {
             timer_id,
             kind: PendingTimerTaskKind::Callback {
-                closure_id,
+                callback,
                 args: extra_args,
                 repeating,
                 delay_ms,
+                label: registration_label,
             },
-        });
+        };
         self.active_timers.insert(
             timer_id,
             ActiveTimer {
-                handler: handler_id,
+                handler: Some(callback_id),
                 delay_ms,
                 repeating,
             },
         );
 
-        let mut scheduled_seq = None;
-        if let Some(task) = pending_task {
-            let seq = match self.schedule_pending_timer_task(task, immediate, delay_ms) {
+        let scheduled_seq =
+            match self.schedule_pending_timer_task(pending_task, immediate, delay_ms) {
                 Ok(sequence) => sequence,
                 Err(error) => {
                     self.active_timers.remove(&timer_id);
                     return Err(error);
                 }
             };
-            scheduled_seq = Some(seq);
-        }
 
         let (witness_tag, marker) = if immediate {
             ("builtin:setImmediate", TIMER_HANDLE_IMMEDIATE_TYPE)
@@ -47784,12 +47908,24 @@ impl InterpreterCore {
             Ok(handle) => handle,
             Err(error) => {
                 self.active_timers.remove(&timer_id);
-                if let Some(seq) = scheduled_seq {
-                    self.cancel_pending_timer_registration(seq);
-                }
+                self.cancel_pending_timer_registration(scheduled_seq);
                 return Err(error);
             }
         };
+        if let Some(permit) = effect_permit
+            && let Err(error) = Self::complete_interpreter_timer_effect(
+                permit,
+                &InterpreterTimerOutcome::Scheduled {
+                    timer_id: u64::from(timer_id),
+                    registration_sequence: scheduled_seq,
+                },
+            )
+        {
+            self.active_timers.remove(&timer_id);
+            self.cancel_pending_timer_registration(scheduled_seq);
+            self.rollback_timer_handle_object(&handle);
+            return Err(error);
+        }
         self.next_timer_id = self.next_timer_id.wrapping_add(1);
         self.emit_witness(
             WitnessEventKind::HostcallDispatched,
@@ -47799,6 +47935,21 @@ impl InterpreterCore {
         Ok(handle)
     }
 
+    fn rollback_timer_handle_object(&mut self, handle: &Value) {
+        let Value::Object(object_id) = handle else {
+            return;
+        };
+        let is_last = object_id.0 as usize + 1 == self.heap.len();
+        if !is_last {
+            return;
+        }
+        if let Some(object) = self.mutate_heap(Vec::pop) {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(Self::estimate_heap_object_bytes(&object));
+        }
+    }
+
     /// bd-suwvw: shared clearTimeout/clearInterval/clearImmediate core.
     /// Resolves the timer id from a handle object (`__timerId`) or a legacy
     /// integer id; every other value is a no-op (Node semantics).
@@ -47806,6 +47957,8 @@ impl InterpreterCore {
         &mut self,
         handle: &Value,
         witness_tag: &str,
+        operation: Option<TimerOperation>,
+        ifc_label: Label,
     ) -> Result<Value, InterpreterError> {
         let timer_id = match handle {
             Value::Int(id) => Some(*id as u32),
@@ -47823,6 +47976,19 @@ impl InterpreterCore {
             return Ok(Value::Undefined);
         };
 
+        let effect_permit = match operation {
+            Some(operation) => Some(self.begin_interpreter_timer_effect(
+                InterpreterTimerRequest {
+                    operation,
+                    duration_ms: None,
+                    timer_id: Some(u64::from(timer_id)),
+                    callback_id: None,
+                    ifc_label,
+                },
+            )?),
+            None => None,
+        };
+
         let was_active = self.active_timers.remove(&timer_id).is_some();
         self.unref_timer_ids.remove(&timer_id);
         let pending_sequences: Vec<u64> = self
@@ -47832,6 +47998,15 @@ impl InterpreterCore {
             .collect();
         for sequence in pending_sequences {
             self.cancel_pending_timer_registration(sequence);
+        }
+        if let Some(permit) = effect_permit {
+            Self::complete_interpreter_timer_effect(
+                permit,
+                &InterpreterTimerOutcome::Cleared {
+                    timer_id: u64::from(timer_id),
+                    was_active,
+                },
+            )?;
         }
         if was_active {
             self.emit_witness(
@@ -65923,12 +66098,14 @@ impl InterpreterCore {
                     extra_args.push(self.read_reg(args.start + index)?);
                     index += 1;
                 }
+                let registration_label = self.join_arg_range_label(args)?;
                 self.timer_schedule_from_values(
                     callback_val,
                     delay_val,
                     extra_args,
                     is_interval,
                     is_immediate,
+                    registration_label,
                 )
             }
 
@@ -65947,7 +66124,13 @@ impl InterpreterCore {
                     "builtin:ClearInterval" => "builtin:clearInterval",
                     _ => "builtin:clearImmediate",
                 };
-                self.timer_clear_from_value(&handle_val, witness_tag)
+                let operation = match cap {
+                    "builtin:ClearTimeout" => Some(TimerOperation::ClearTimeout),
+                    "builtin:ClearInterval" => Some(TimerOperation::ClearInterval),
+                    _ => None,
+                };
+                let ifc_label = self.join_arg_range_label(args)?;
+                self.timer_clear_from_value(&handle_val, witness_tag, operation, ifc_label)
             }
 
             "builtin:QueueMicrotask" => {
@@ -68682,9 +68865,15 @@ impl InterpreterCore {
 
     fn estimate_pending_timer_task_bytes(task: &PendingTimerTask) -> u64 {
         match &task.kind {
-            PendingTimerTaskKind::Callback { args, .. } => {
-                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_value_vec_bytes(args))
-            }
+            PendingTimerTaskKind::Callback {
+                callback,
+                args,
+                label,
+                ..
+            } => MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_value_bytes(callback))
+                .saturating_add(Self::estimate_value_vec_bytes(args))
+                .saturating_add(Self::estimate_label_bytes(label)),
             PendingTimerTaskKind::PromiseResolve { value, .. } => MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                 .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(value)),
         }
@@ -68706,13 +68895,20 @@ impl InterpreterCore {
     ) -> Result<u64, InterpreterError> {
         let retained_bytes = Self::estimate_pending_timer_task_bytes(&task);
         self.apply_memory_component_delta(0, retained_bytes)?;
-        let closure_id = match &task.kind {
-            PendingTimerTaskKind::Callback { closure_id, .. } => *closure_id,
-            PendingTimerTaskKind::PromiseResolve { .. } => u32::MAX,
+        let (handler_id, label) = match &task.kind {
+            PendingTimerTaskKind::Callback {
+                callback, label, ..
+            } => {
+                let handler_id = match callback {
+                    Value::Closure(id) | Value::Function(id) => *id,
+                    _ => u32::MAX,
+                };
+                (handler_id, label.clone())
+            }
+            PendingTimerTaskKind::PromiseResolve { .. } => (u32::MAX, Label::Public),
         };
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let closure_handle = crate::closure_model::ClosureHandle(closure_id);
-        let label = crate::ifc_artifacts::Label::Public;
+        let closure_handle = crate::closure_model::ClosureHandle(handler_id);
         let sequence = if immediate {
             self.event_loop.set_immediate(closure_handle, label)
         } else {
@@ -68741,6 +68937,15 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_promise_bytes);
+    }
+
+    fn cancel_all_pending_timer_tasks(&mut self) {
+        let pending_sequences = self.pending_timer_tasks.keys().copied().collect::<Vec<_>>();
+        for sequence in pending_sequences {
+            self.cancel_pending_timer_registration(sequence);
+        }
+        self.active_timers.clear();
+        self.unref_timer_ids.clear();
     }
 
     fn estimate_promise_combinator_bytes(state: &PromiseCombinatorState) -> u64 {
@@ -72460,6 +72665,7 @@ pub struct QuickJsLane {
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
 }
 
 impl Default for QuickJsLane {
@@ -72470,6 +72676,7 @@ impl Default for QuickJsLane {
             host_io_recorder: None,
             process_spawn: None,
             host_effect_journal: None,
+            timer_effect_authority: None,
         }
     }
 }
@@ -72486,6 +72693,7 @@ impl QuickJsLane {
             host_io_recorder: None,
             process_spawn: None,
             host_effect_journal: None,
+            timer_effect_authority: None,
         }
     }
 
@@ -72509,6 +72717,10 @@ impl QuickJsLane {
     ) {
         self.process_spawn = Some(provider);
         self.host_effect_journal = Some(journal);
+    }
+
+    pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
+        self.timer_effect_authority = Some(authority);
     }
 
     pub fn execute(
@@ -72536,6 +72748,9 @@ impl QuickJsLane {
             (self.process_spawn.clone(), self.host_effect_journal.clone())
         {
             core.set_process_spawn(provider, journal);
+        }
+        if let Some(authority) = self.timer_effect_authority.clone() {
+            core.set_timer_effect_authority(authority);
         }
         match core.execute(module) {
             Ok(result) => Ok(result),
@@ -72584,6 +72799,7 @@ pub struct V8Lane {
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
 }
 
 impl Default for V8Lane {
@@ -72594,6 +72810,7 @@ impl Default for V8Lane {
             host_io_recorder: None,
             process_spawn: None,
             host_effect_journal: None,
+            timer_effect_authority: None,
         }
     }
 }
@@ -72618,6 +72835,7 @@ impl V8Lane {
             host_io_recorder: None,
             process_spawn: None,
             host_effect_journal: None,
+            timer_effect_authority: None,
         }
     }
 
@@ -72641,6 +72859,10 @@ impl V8Lane {
     ) {
         self.process_spawn = Some(provider);
         self.host_effect_journal = Some(journal);
+    }
+
+    pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
+        self.timer_effect_authority = Some(authority);
     }
 
     pub fn execute(
@@ -72668,6 +72890,9 @@ impl V8Lane {
             (self.process_spawn.clone(), self.host_effect_journal.clone())
         {
             core.set_process_spawn(provider, journal);
+        }
+        if let Some(authority) = self.timer_effect_authority.clone() {
+            core.set_timer_effect_authority(authority);
         }
         match core.execute(module) {
             Ok(result) => Ok(result),
@@ -73144,6 +73369,13 @@ impl LaneRouter {
         self.quickjs
             .set_process_spawn(provider.clone(), journal.clone());
         self.v8.set_process_spawn(provider, journal);
+    }
+
+    /// Install the same sealed timer-effect authority on both lanes so adaptive
+    /// routing cannot bypass the cell/cancellation/evidence boundary.
+    pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
+        self.quickjs.set_timer_effect_authority(authority.clone());
+        self.v8.set_timer_effect_authority(authority);
     }
 
     /// Route and execute the module.
@@ -77581,6 +77813,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("await_pending_fulfill".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -77615,7 +77848,8 @@ mod async_runtime_tests_current {
                 &mut core.event_loop.microtasks,
             )
             .expect("fulfill seed promise");
-        core.drain_microtasks(Some(&module));
+        core.drain_microtasks(Some(&module))
+            .expect("fulfilled await continuation drains successfully");
 
         let state = core.promise_store.get(async_result).unwrap().state.clone();
         assert_eq!(
@@ -77649,6 +77883,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("await_pending_reject".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -77683,7 +77918,8 @@ mod async_runtime_tests_current {
                 &mut core.event_loop.microtasks,
             )
             .expect("reject seed promise");
-        core.drain_microtasks(Some(&module));
+        core.drain_microtasks(Some(&module))
+            .expect("rejected await continuation drains successfully");
 
         let state = core.promise_store.get(async_result).unwrap().state.clone();
         assert_eq!(
@@ -81059,8 +81295,13 @@ mod async_runtime_tests_current {
         let baseline = core.estimated_memory_bytes();
 
         assert_eq!(
-            core.execute_timer_closure(0, Some(&module), Vec::new())
-                .expect("timer callback should execute in an isolated snapshot"),
+            core.execute_timer_callback(
+                Value::Closure(0),
+                Some(&module),
+                Vec::new(),
+                Label::Public,
+            )
+            .expect("timer callback should execute in an isolated snapshot"),
             Value::Undefined
         );
         assert_eq!(core.pending_return, Some(pending));
@@ -83377,10 +83618,11 @@ mod async_runtime_tests_current {
         let timer_task = PendingTimerTask {
             timer_id: 9,
             kind: PendingTimerTaskKind::Callback {
-                closure_id: 88,
+                callback: Value::Closure(88),
                 args: vec![Value::BigInt(Arc::from("timer-argument".repeat(43)))],
                 repeating: false,
                 delay_ms: 1,
+                label: Label::Public,
             },
         };
         let mut timer_probe = test_interpreter();
@@ -83436,6 +83678,10 @@ mod async_runtime_tests_current {
             "production-timer-argument".repeat(37),
         ))];
         let mut production_probe = test_interpreter();
+        production_probe
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::Timer);
         let production_baseline = production_probe
             .sync_estimated_memory_bytes()
             .expect("production timer probe baseline");
@@ -83446,6 +83692,7 @@ mod async_runtime_tests_current {
                 production_args.clone(),
                 false,
                 false,
+                Label::Public,
             )
             .expect("unbounded production timer probe");
         let production_delta = production_probe
@@ -83454,6 +83701,10 @@ mod async_runtime_tests_current {
         assert!(production_delta > timer_delta);
 
         let mut production_one_short = test_interpreter();
+        production_one_short
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::Timer);
         let production_one_short_baseline = production_one_short
             .sync_estimated_memory_bytes()
             .expect("production timer refusal baseline");
@@ -83468,6 +83719,7 @@ mod async_runtime_tests_current {
                 production_args.clone(),
                 false,
                 false,
+                Label::Public,
             ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
@@ -83486,6 +83738,10 @@ mod async_runtime_tests_current {
         );
 
         let mut production_exact = test_interpreter();
+        production_exact
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::Timer);
         let production_exact_baseline = production_exact
             .sync_estimated_memory_bytes()
             .expect("production timer exact baseline");
@@ -83498,6 +83754,7 @@ mod async_runtime_tests_current {
                 production_args,
                 false,
                 false,
+                Label::Public,
             )
             .expect("production timer fits exact ceiling");
         assert_eq!(
@@ -83505,7 +83762,12 @@ mod async_runtime_tests_current {
             production_exact.recompute_estimated_memory_bytes()
         );
         production_exact
-            .timer_clear_from_value(&handle, "test:clearTimeout")
+            .timer_clear_from_value(
+                &handle,
+                "test:clearTimeout",
+                Some(TimerOperation::ClearTimeout),
+                Label::Public,
+            )
             .expect("timer cancellation releases side tables");
         assert!(production_exact.active_timers.is_empty());
         assert!(production_exact.pending_timer_tasks.is_empty());
@@ -83533,10 +83795,11 @@ mod async_runtime_tests_current {
             let task = PendingTimerTask {
                 timer_id,
                 kind: PendingTimerTaskKind::Callback {
-                    closure_id: 0,
+                    callback: Value::Closure(0),
                     args: vec![Value::BigInt(Arc::from("firing-argument".repeat(71)))],
                     repeating,
                     delay_ms: 1,
+                    label: Label::Public,
                 },
             };
             core.sync_estimated_memory_bytes()
@@ -111869,6 +112132,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         // Create two identical interpreter instances with same initial state
         let mut core1 = InterpreterCore::new(config.clone(), "deterministic-timer-test-1");
@@ -111934,6 +112198,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         let mut core = InterpreterCore::new(config, "setTimeout-deterministic-test");
 
@@ -111974,6 +112239,67 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_before_timer_turn_revokes_delivery_permanently() {
+        let token = CancellationToken::new();
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Timer,
+        ]);
+        config.cancellation_token = Some(token.clone());
+        let mut core = InterpreterCore::new(config, "timer-cancellation-before-turn");
+        let callback = core.allocate_function(
+            "must_not_run",
+            vec![],
+            vec![Ir3Instruction::Halt],
+            0,
+            BTreeMap::new(),
+        );
+        core.execute_builtin_call(
+            "builtin:SetTimeout",
+            vec![Value::Undefined, Value::Function(callback), Value::Int(1)],
+        )
+        .expect("timer schedules before cancellation");
+        assert_eq!(core.active_timers.len(), 1);
+        assert_eq!(core.pending_timer_tasks.len(), 1);
+        let callback_completion_count = core
+            .witness_events
+            .iter()
+            .filter(|event| event.kind == WitnessEventKind::ExecutionCompleted)
+            .count();
+
+        token.cancel();
+        assert_eq!(
+            core.run_event_loop_until_idle_with_module(None),
+            Err(InterpreterError::Cancelled)
+        );
+        assert!(core.active_timers.is_empty());
+        assert!(core.pending_timer_tasks.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(
+            core.witness_events
+                .iter()
+                .filter(|event| event.kind == WitnessEventKind::ExecutionCompleted)
+                .count(),
+            callback_completion_count,
+            "cancellation must prevent the timer callback completion witness"
+        );
+
+        token.reset();
+        core.run_event_loop_until_idle_with_module(None)
+            .expect("revoked timer cannot reappear after token reset");
+        assert_eq!(
+            core.witness_events
+                .iter()
+                .filter(|event| event.kind == WitnessEventKind::ExecutionCompleted)
+                .count(),
+            callback_completion_count,
+            "resetting the token must not resurrect the revoked timer callback"
+        );
+    }
+
+    #[test]
     fn clear_timeout_cancels_deterministic() {
         // Regression test: clearTimeout properly cancels timers from active_timers
         let mut config = InterpreterConfig::quickjs_defaults();
@@ -111983,6 +112309,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         let mut core = InterpreterCore::new(config, "clearTimeout-test");
 
@@ -112089,6 +112416,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         let mut core = InterpreterCore::new(config, "interval-repeats-test");
 
@@ -112128,6 +112456,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         let mut core = InterpreterCore::new(config, "clearInterval-test");
 
@@ -112196,6 +112525,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         let mut core = InterpreterCore::new(config, "nested-timeout-test");
 
@@ -112239,6 +112569,7 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
+        config.granted_capabilities.insert(RuntimeCapability::Timer);
 
         let mut core = InterpreterCore::new(config, "zero-delay-timeout-test");
 

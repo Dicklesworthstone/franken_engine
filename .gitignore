@@ -256,3 +256,6 @@ crates/franken-engine/tests/*_irdump.rs
 *.ll
 # br doctor per-run artifacts
 .doctor/
+
+# Claude Code temp files
+claude-upgrade-progress.json

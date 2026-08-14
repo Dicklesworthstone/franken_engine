@@ -27,8 +27,10 @@
 //!   - **dispatch** (`substrate_allows_hostcall`) — whether a real executor runs the hostcall.
 //!     A capability can be granted yet have no executor: post-bd-6wc97 `FullCapsHandler`
 //!     explicitly denies `fs:read`/`fs:write`/`network` (no in-engine executor — denies
-//!     rather than fabricating data), and the `Remote` placeholder defers `network`. These
-//!     granted-but-undispatchable cells are frozen in `FROZEN_DISPATCH_DIVERGENCES`.
+//!     rather than fabricating data), both Full and EngineCore reject timers until an
+//!     interpreter-owned event-loop provider is installed, and the `Remote` placeholder
+//!     defers `network`. These granted-but-undispatchable cells are frozen in
+//!     `FROZEN_DISPATCH_DIVERGENCES`.
 //!
 //! Both frozen sets are asserted with `assert_eq!`, so the suite fails in BOTH directions:
 //!   - a NEW divergence (a verdict that should have been preserved changed) → regression, fail.
@@ -258,11 +260,12 @@ fn pp4_fixture_manifest_covers_every_present_verdict_file() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pp4_full_profile_grants_every_family_dispatch_denies_fs_network() {
+fn pp4_full_profile_grants_every_family_but_denies_unbound_executors() {
     // Full GRANTS every hostcall-family capability (membership ALLOW, preserved). At the
-    // dispatch layer it really runs console/timer/module, but `fs:read`/`fs:write`/`network`
-    // are explicitly denied (bd-6wc97: no real executor — `CapabilityDenied` rather than
-    // fabricated data). Those denied-but-granted cells are the frozen dispatch-divergences.
+    // dispatch layer it really runs console/module, but `fs:read`/`fs:write`/`network` and
+    // timer are explicitly denied when no provider is installed. Those denied-but-granted
+    // cells are the frozen dispatch divergences; returning a constant timer handle is not
+    // an executor.
     let profile = CapabilityProfile::full();
     let frozen = frozen_dispatch_divergences();
     for (name, required, effect) in hostcall_effects() {
@@ -327,22 +330,23 @@ fn pp4_compute_only_denies_every_hostcall_family() {
 }
 
 #[test]
-fn pp4_engine_core_allows_console_and_timer_denies_io() {
+fn pp4_engine_core_allows_console_and_denies_unbound_timer_and_io() {
     let profile = CapabilityProfile::engine_core();
+    let frozen = frozen_dispatch_divergences();
     for (name, required, effect) in hostcall_effects() {
         let prior = profile.has(required);
         let substrate = substrate_allows_hostcall(&profile, effect.as_ref());
         emit_event("dispatch", "engine_core", name, prior, substrate);
-        match name {
-            "hostcall:console" | "hostcall:timer" => {
-                assert!(prior && substrate, "EngineCore must ALLOW {name}")
-            }
-            _ => assert!(!prior && !substrate, "EngineCore must DENY {name}"),
+        let key = ("engine_core".to_string(), name.to_string());
+        if frozen.contains(&key) {
+            assert!(prior, "EngineCore must retain {required} membership");
+            assert!(
+                !substrate,
+                "EngineCore must deny {name} until a real executor is installed"
+            );
+        } else {
+            assert_eq!(prior, substrate, "EngineCore verdict for {name}");
         }
-        assert_eq!(
-            prior, substrate,
-            "EngineCore verdict for {name} must be preserved"
-        );
     }
 }
 
@@ -449,17 +453,19 @@ const FROZEN_PLACEHOLDER_DIVERGENCES: [(&str, RuntimeCapability); 0] = [];
 /// Unlike membership (which capabilities a profile *grants*), this is about whether a real
 /// *executor* runs. Per bd-6wc97 (commit 1ac8fabe), `FullCapsHandler` now EXPLICITLY DENIES
 /// `fs:read`/`fs:write`/`network` (no real in-engine executor — `CapabilityDenied` instead
-/// of fabricating data) while still granting those capabilities at the membership layer;
-/// `console`/`timer`/`module` keep their in-process paths and still dispatch. The
-/// `(remote, network)` entry is the pre-existing PP.3 Remote placeholder (grants
-/// NetworkEgress, defers dispatch). Frozen with `assert_eq!`: a new unimplemented executor
-/// OR a newly-wired real one must update this set. (NB: `CapabilityDenied` for a granted
-/// capability is semantically loose — `Unhandled` = "granted, no executor" would be cleaner;
-/// tracked under bd-6wc97, not relitigated here. pp4 keys on `is_ok()` either way.)
-const FROZEN_DISPATCH_DIVERGENCES: [(&str, &str); 4] = [
+/// of fabricating data) while still granting those capabilities at the membership layer.
+/// bd-performance-conformance-bridge-tu32j.1.12 adds the Full/EngineCore timer cells: both
+/// handlers retain Timer membership but return `TIMER_PROVIDER_UNAVAILABLE` until an
+/// interpreter-owned event-loop provider is installed. The `(remote, network)` entry is the
+/// pre-existing PP.3 Remote placeholder. Frozen with `assert_eq!`: a new unimplemented
+/// executor OR a newly-wired real one must update this set. pp4 keys on `is_ok()` regardless
+/// of the concrete typed failure.
+const FROZEN_DISPATCH_DIVERGENCES: [(&str, &str); 6] = [
     ("full", "hostcall:fs:read"),
     ("full", "hostcall:fs:write"),
     ("full", "hostcall:network"),
+    ("full", "hostcall:timer"),
+    ("engine_core", "hostcall:timer"),
     ("remote", "hostcall:network"),
 ];
 
@@ -519,9 +525,8 @@ fn pp4_known_placeholder_divergences_are_exactly_frozen() {
 fn pp4_known_hostcall_dispatch_divergences_are_exactly_frozen() {
     // A hostcall-dispatch divergence is a (profile, family) where the legacy capability
     // verdict is ALLOW but the substrate cannot really dispatch it. After bd-6wc97 these are
-    // exactly: Full's fs:read/fs:write/network (granted, but explicitly denied — no executor)
-    // and Remote's network (PP.3 Remote placeholder). Frozen with `assert_eq!` so a new gap
-    // OR a newly-wired executor forces this set (and bd-6wc97) to be updated.
+    // exactly the entries in FROZEN_DISPATCH_DIVERGENCES. Frozen with `assert_eq!` so a new
+    // gap OR a newly-wired executor forces the set and its owning bead to be updated.
     let mut observed: BTreeSet<(String, String)> = BTreeSet::new();
     for (pname, profile) in canonical_profiles() {
         for (name, required, effect) in hostcall_effects() {

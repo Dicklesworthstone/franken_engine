@@ -472,6 +472,55 @@ fn host_effect_journal_error(handler: &str, error: HostEffectJournalError) -> Ef
     }
 }
 
+/// Stable error code returned when the algebraic-effects migration stack is
+/// asked to execute a timer without an interpreter-owned event-loop provider.
+///
+/// The production JavaScript timer implementation lives in `InterpreterCore`;
+/// this migration handler has no callback, cell permit, cancellation token, or
+/// replay recorder to hand to that implementation. Returning a timer handle
+/// here would therefore fabricate successful scheduling.
+pub const TIMER_PROVIDER_UNAVAILABLE_CODE: &str = "TIMER_PROVIDER_UNAVAILABLE";
+
+fn reject_unbound_timer(
+    handler: &'static str,
+    effect: &dyn ErasedEffect,
+) -> Result<Option<EffectResult>, EffectError> {
+    let params = effect
+        .parameters()
+        .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
+        .map_err(|_| EffectError::InvalidParameters {
+            effect_name: effect.effect_name().to_string(),
+            reason: "Expected (TimerOperation, Option<u64>, Option<u64>) parameters".to_string(),
+        })?;
+    let (operation, duration_ms, timer_id) = *params;
+    let invalid_reason = match operation {
+        TimerOperation::SetTimeout | TimerOperation::SetInterval => match (duration_ms, timer_id) {
+            (None, _) => Some("set timer operation requires duration_ms"),
+            (Some(_), Some(_)) => Some("set timer operation must not include timer_id"),
+            (Some(_), None) => None,
+        },
+        TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
+            match (duration_ms, timer_id) {
+                (_, None) => Some("clear timer operation requires timer_id"),
+                (Some(_), Some(_)) => Some("clear timer operation must not include duration_ms"),
+                (None, Some(_)) => None,
+            }
+        }
+    };
+    if let Some(reason) = invalid_reason {
+        return Err(EffectError::InvalidParameters {
+            effect_name: effect.effect_name().to_string(),
+            reason: reason.to_string(),
+        });
+    }
+
+    Err(EffectError::HandlerError {
+        handler: handler.to_string(),
+        message: "timer effect requires an interpreter-owned event-loop provider".to_string(),
+        code: Some(TIMER_PROVIDER_UNAVAILABLE_CODE.to_string()),
+    })
+}
+
 impl Handler for FullCapsHandler {
     fn can_handle(&self, effect_name: &str) -> bool {
         effect_name.starts_with("hostcall:")
@@ -480,8 +529,10 @@ impl Handler for FullCapsHandler {
     fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         // FullCaps is permitted to invoke all hostcalls, but `fs:read`,
         // `fs:write`, and `network` are explicitly denied unless a sandboxed
-        // extension-host provider is installed. `console`, `timer`, and
-        // `module` keep their in-process migration paths.
+        // extension-host provider is installed. `console` and `module` keep
+        // their in-process migration paths. Timer effects fail closed until an
+        // interpreter-owned event-loop provider is explicitly installed; this
+        // handler cannot manufacture a callback-bearing timer.
         match effect.effect_name() {
             "hostcall:console" => {
                 if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
@@ -521,35 +572,7 @@ impl Handler for FullCapsHandler {
                 // fake.
                 self.route_host_io(effect)
             }
-            "hostcall:timer" => {
-                if let Ok(params) = effect
-                    .parameters()
-                    .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
-                {
-                    let (operation, duration_ms, timer_id) = *params;
-                    // Simulate timer operations
-                    match operation {
-                        TimerOperation::SetTimeout | TimerOperation::SetInterval => {
-                            let new_timer_id = 42u64; // Simulated timer ID
-                            println!(
-                                "Setting timer for {}ms -> ID {}",
-                                duration_ms.unwrap_or(0),
-                                new_timer_id
-                            );
-                            Ok(Some(EffectResult::new(Some(new_timer_id))))
-                        }
-                        TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
-                            println!("Clearing timer ID {}", timer_id.unwrap_or(0));
-                            Ok(Some(EffectResult::new(None::<u64>)))
-                        }
-                    }
-                } else {
-                    Err(EffectError::InvalidParameters {
-                        effect_name: effect.effect_name().to_string(),
-                        reason: "Expected timer parameters".to_string(),
-                    })
-                }
-            }
+            "hostcall:timer" => reject_unbound_timer(self.handler_name(), effect),
             "hostcall:module" => {
                 if let Ok(params) = effect.parameters().downcast::<(String, ModuleImportType)>() {
                     let (module_path, import_type) = *params;
@@ -776,35 +799,7 @@ impl Handler for EngineCoreHandler {
                     })
                 }
             }
-            "hostcall:timer" => {
-                // EngineCore allows timer operations
-                if let Ok(params) = effect
-                    .parameters()
-                    .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
-                {
-                    let (operation, duration_ms, timer_id) = *params;
-                    match operation {
-                        TimerOperation::SetTimeout | TimerOperation::SetInterval => {
-                            let new_timer_id = 100u64; // Engine-specific timer ID
-                            println!(
-                                "[ENGINE] Setting timer for {}ms -> ID {}",
-                                duration_ms.unwrap_or(0),
-                                new_timer_id
-                            );
-                            Ok(Some(EffectResult::new(Some(new_timer_id))))
-                        }
-                        TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
-                            println!("[ENGINE] Clearing timer ID {}", timer_id.unwrap_or(0));
-                            Ok(Some(EffectResult::new(None::<u64>)))
-                        }
-                    }
-                } else {
-                    Err(EffectError::InvalidParameters {
-                        effect_name: effect.effect_name().to_string(),
-                        reason: "Expected timer parameters".to_string(),
-                    })
-                }
-            }
+            "hostcall:timer" => reject_unbound_timer(self.handler_name(), effect),
             _ => Ok(None), // Not handled by EngineCore
         }
     }
@@ -1180,8 +1175,38 @@ pub fn create_effect_from_hostcall_tag(
                     });
                 }
             };
-            let duration_ms = args.first().and_then(|s| s.parse().ok());
-            let timer_id = args.get(1).and_then(|s| s.parse().ok());
+            let value = args.first().ok_or_else(|| EffectError::InvalidParameters {
+                effect_name: tag.to_string(),
+                reason: match &operation {
+                    TimerOperation::SetTimeout | TimerOperation::SetInterval => {
+                        "Missing timer duration"
+                    }
+                    TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
+                        "Missing timer ID"
+                    }
+                }
+                .to_string(),
+            })?;
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| EffectError::InvalidParameters {
+                    effect_name: tag.to_string(),
+                    reason: match &operation {
+                        TimerOperation::SetTimeout | TimerOperation::SetInterval => {
+                            "Invalid timer duration"
+                        }
+                        TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
+                            "Invalid timer ID"
+                        }
+                    }
+                    .to_string(),
+                })?;
+            let (duration_ms, timer_id) = match &operation {
+                TimerOperation::SetTimeout | TimerOperation::SetInterval => (Some(parsed), None),
+                TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
+                    (None, Some(parsed))
+                }
+            };
             let effect = TimerHostcallEffect {
                 operation,
                 duration_ms,
@@ -1296,8 +1321,8 @@ mod tests {
         // bd-6wc97 (decision bd-6wc97.1): FullCapsHandler no longer SIMULATES
         // side-effecting fs/network hostcalls (the bd-1lw7r.11 dishonesty — fake
         // data while claiming full capability). With no real in-engine executor,
-        // it EXPLICITLY DENIES them with `CapabilityDenied`. `timer` keeps its
-        // in-process path and the helper stays `false`.
+        // it EXPLICITLY DENIES them with `CapabilityDenied`. Timer dispatch is
+        // independently provider-gated and must not fabricate a handle.
         let handler = FullCapsHandler::new();
         assert!(
             !handler.dispatches_real_hostcalls(),
@@ -1349,16 +1374,101 @@ mod tests {
             "network must be explicitly denied (bd-6wc97)"
         );
 
-        // timer keeps its in-process path (the decision denies only fs/network).
+        // No event-loop provider is installed, so timer dispatch returns a
+        // stable typed error instead of the former constant handle `42`.
         let timer_effect = TimerHostcallEffect {
             operation: TimerOperation::SetTimeout,
             duration_ms: Some(10),
             timer_id: None,
         };
         assert!(
-            handler.handle(&timer_effect).is_ok(),
-            "timer must remain handled (bd-6wc97 denies only fs/network)"
+            matches!(
+                handler.handle(&timer_effect),
+                Err(EffectError::HandlerError { code: Some(code), .. })
+                    if code == TIMER_PROVIDER_UNAVAILABLE_CODE
+            ),
+            "an unbound timer must fail closed rather than return a synthetic handle"
         );
+    }
+
+    fn assert_timer_provider_unavailable(handler: &dyn Handler, effect: &TimerHostcallEffect) {
+        assert!(
+            matches!(
+                handler.handle(effect),
+                Err(EffectError::HandlerError { code: Some(code), .. })
+                    if code == TIMER_PROVIDER_UNAVAILABLE_CODE
+            ),
+            "{} must reject an unbound timer without fabricating success",
+            handler.handler_name()
+        );
+    }
+
+    #[test]
+    fn every_unbound_timer_operation_fails_closed_for_full_and_engine_core() {
+        let effects = [
+            TimerHostcallEffect {
+                operation: TimerOperation::SetTimeout,
+                duration_ms: Some(0),
+                timer_id: None,
+            },
+            TimerHostcallEffect {
+                operation: TimerOperation::SetInterval,
+                duration_ms: Some(25),
+                timer_id: None,
+            },
+            TimerHostcallEffect {
+                operation: TimerOperation::ClearTimeout,
+                duration_ms: None,
+                timer_id: Some(7),
+            },
+            TimerHostcallEffect {
+                operation: TimerOperation::ClearInterval,
+                duration_ms: None,
+                timer_id: Some(8),
+            },
+        ];
+        let full = FullCapsHandler::new();
+        let engine = EngineCoreHandler;
+        for effect in &effects {
+            assert_timer_provider_unavailable(&full, effect);
+            assert_timer_provider_unavailable(&engine, effect);
+        }
+    }
+
+    #[test]
+    fn malformed_timer_parameters_fail_before_provider_dispatch() {
+        let handler = FullCapsHandler::new();
+        let malformed = [
+            TimerHostcallEffect {
+                operation: TimerOperation::SetTimeout,
+                duration_ms: None,
+                timer_id: None,
+            },
+            TimerHostcallEffect {
+                operation: TimerOperation::SetInterval,
+                duration_ms: Some(1),
+                timer_id: Some(9),
+            },
+            TimerHostcallEffect {
+                operation: TimerOperation::ClearTimeout,
+                duration_ms: None,
+                timer_id: None,
+            },
+            TimerHostcallEffect {
+                operation: TimerOperation::ClearInterval,
+                duration_ms: Some(1),
+                timer_id: Some(9),
+            },
+        ];
+        for effect in &malformed {
+            assert!(
+                matches!(
+                    handler.handle(effect),
+                    Err(EffectError::InvalidParameters { .. })
+                ),
+                "malformed timer parameters must be rejected before provider lookup"
+            );
+        }
     }
 
     #[derive(Debug, Default)]
@@ -2508,6 +2618,41 @@ mod tests {
         let effect =
             create_effect_from_hostcall_tag("timer:setTimeout", &["1000".to_string()]).unwrap();
         assert_eq!(effect.as_ref().effect_name(), "hostcall:timer");
+        let params = effect
+            .parameters()
+            .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
+            .expect("typed timer parameters");
+        assert!(matches!(&params.0, TimerOperation::SetTimeout));
+        assert_eq!(params.1, Some(1000));
+        assert_eq!(params.2, None);
+
+        let effect =
+            create_effect_from_hostcall_tag("timer:clearTimeout", &["17".to_string()]).unwrap();
+        let params = effect
+            .parameters()
+            .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
+            .expect("typed timer parameters");
+        assert!(matches!(&params.0, TimerOperation::ClearTimeout));
+        assert_eq!(params.1, None);
+        assert_eq!(params.2, Some(17));
+    }
+
+    #[test]
+    fn timer_tag_conversion_rejects_missing_and_non_numeric_values() {
+        for (tag, args) in [
+            ("timer:setTimeout", Vec::<String>::new()),
+            ("timer:setInterval", vec!["not-a-duration".to_string()]),
+            ("timer:clearTimeout", Vec::<String>::new()),
+            ("timer:clearInterval", vec!["not-an-id".to_string()]),
+        ] {
+            assert!(
+                matches!(
+                    create_effect_from_hostcall_tag(tag, &args),
+                    Err(EffectError::InvalidParameters { .. })
+                ),
+                "{tag} must reject malformed public tag arguments"
+            );
+        }
     }
 
     #[test]

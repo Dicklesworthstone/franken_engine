@@ -262,16 +262,16 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 
 ### Code Surface At A Glance
 
-| Surface | Count / size (tracked HEAD, verified 2026-07-24) |
+| Surface | Count / size (tracked HEAD, verified 2026-08-14) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~3.9 MB / 98,924 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
+| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.0 MB / 119,900 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
-| Integration tests in `crates/franken-engine/tests/` | 1,649 top-level files (41 are RGC gate tests) |
+| Integration tests in `crates/franken-engine/tests/` | 1,653 top-level files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | 4,448 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
+| Tracked beads in `.beads/issues.jsonl` | 4,509 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -284,10 +284,10 @@ franken_engine/
 ├── CHANGELOG.md                     # Synthesized 4-month history
 ├── crates/
 │   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 615 modules
-│   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 56 internal operator binaries)
-│   │   ├── src/baseline_interpreter.rs   # Core VM (98,924 LoC)
+│   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 61 internal operator binaries)
+│   │   ├── src/baseline_interpreter.rs   # Core VM (119,900 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
-│   │   └── tests/                   # 1,637 integration tests (41 RGC gate tests)
+│   │   └── tests/                   # 1,653 integration tests (41 RGC gate tests)
 │   ├── franken-extension-host/      # Ed25519-signed extension manifests + capability model
 │   ├── franken-engine-test-support/ # Mock control-plane adapters + injection helpers
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
@@ -295,7 +295,7 @@ franken_engine/
 │   └── franken-core/                # Extracted runtime; included in workspace and standalone compileable
 ├── docs/                            # Charters, contracts, audits, gate specs (727 top-level files + subdirs)
 ├── examples/                        # 13 impossible-by-default capabilities across 24 numbered demo dirs (01..26, gaps at 08/10) + live runtime examples
-├── scripts/                         # 292 run_*.sh gate runners + e2e/*_replay.sh wrappers
+├── scripts/                         # 293 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
 ├── fuzz/                            # cargo-fuzz harnesses (parser, ts_module_resolution, shadow_panel)
 ├── benchmarks/                      # Benchmark inputs and goldens
@@ -1097,7 +1097,7 @@ The 615 source modules in `crates/franken-engine/src/` are unrelated alphabetica
 |---|---|
 | **Parser / Lexer** | `parser.rs`, `parser_arena.rs`, `parser_error_recovery.rs`, `parser_evidence_indexer.rs`, `parser_oracle.rs`, `parser_frontier_evidence.rs`, `simd_lexer.rs`, `parallel_parser.rs`, `jsx_tsx_parser.rs` |
 | **AST + Lowering** | `ast.rs` (~182 KB), `lowering_pipeline.rs`, `lowering_gap_inventory.rs`, `lowering_parity_evidence.rs`, `ir_contract.rs`, `static_semantics.rs`, `semantic_canonical_basis.rs` |
-| **Interpreter / VM** | `baseline_interpreter.rs` (3.9 MB / 98,924 LoC), `bytecode_vm.rs`, `execution_cell.rs`, `execution_orchestrator.rs`, `aot_entrygraph_compiler.rs`, `array_fast_lane.rs` |
+| **Interpreter / VM** | `baseline_interpreter.rs` (~5.0 MB / 119,900 LoC), `bytecode_vm.rs`, `execution_cell.rs`, `execution_orchestrator.rs`, `aot_entrygraph_compiler.rs`, `array_fast_lane.rs` |
 | **Execution Profiles** | `runtime_decision_core.rs` and `regret_bounded_router.rs` (these own the `RuntimeProfile` routing; the `baseline_deterministic_profile` / `baseline_throughput_profile` / `adaptive_profile_router` identifiers are profile labels declared in `baseline_interpreter.rs`, not standalone modules), `js_runtime_lane.rs`, `wasm_runtime_lane.rs`, `hybrid_lane_router.rs` |
 | **Iterator / Generator / Async** | `iterator_protocol.rs`, `promise_model.rs`, `module_async_evaluation.rs` |
 | **Capability / Authority** | `capability.rs`, `capability_witness.rs`, `ambient_authority.rs`, `extension_lifecycle_manager.rs`, `extension_host_authority_guard.rs`, `native_addon_membrane.rs` |
@@ -1754,7 +1754,7 @@ The project ships a layered test stack; each layer answers a different question.
 | Layer | Where it lives | What it proves |
 |---|---|---|
 | **Lib unit tests** | `crates/franken-engine/src/**/*.rs` `#[cfg(test)]` modules | Per-module invariants. Every source module ships ≥20 unit tests by project convention; the running journal in `memory/enrichment_sessions.md` records 35,000+ landed by 2026-03-19. |
-| **Integration tests** | `crates/franken-engine/tests/*.rs` (1,637 files) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
+| **Integration tests** | `crates/franken-engine/tests/*.rs` (1,653 files) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
 | **Control-plane integration tests** | `crates/franken-engine-control-plane-integration-tests/` | Tests that need `frankenengine-test-support` mock adapters, held in a sibling crate so the engine lib-test target doesn't drag them in. |
 | **RGC gate tests** | `crates/franken-engine/tests/rgc_*.rs` (37 files) | Each major RGC gate has a matching `cargo test` target plus a `scripts/run_*.sh` operator runner. |
 | **Test262 conformance** | `frankenctl test test262`, `crates/franken-engine/tests/test262_*` | Real Test262 conformance (since April 2026, when `21b485a0` replaced the hardcoded fake test data with real JS execution). |
@@ -2016,7 +2016,7 @@ The README's troubleshooting table captures the practical operator hits. For the
 
 ## Beads Workflow & Project Memory
 
-The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,448 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
+The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,509 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
 
 ### Why in-tree
 
@@ -2047,7 +2047,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
-The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,448 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
+The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,509 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
 
 ### Project-memory files (`memory/`)
 
@@ -2097,7 +2097,7 @@ graph LR
     linkStyle 6 stroke:#5e35b1,stroke-width:2px;
 ```
 
-The thick arrow into `/dp/franken_node` is the one-way handoff — the reverse direction (`franken_node → franken_engine`) is forbidden by the Charter §4 split contract.
+The thick arrow into `/dp/franken_node` depicts the one-way product handoff, not the Cargo dependency. The binding dependency points the other way: `franken_node → franken_engine` is allowed, while `franken_engine → franken_node` is forbidden by the Charter §4 split contract.
 
 ### Dependency direction is binding
 
@@ -2271,7 +2271,7 @@ Project-specific jargon, defined once.
 | **Allowed state** | The claim-to-proof matrix's permitted wording state for a specific README/PLAN line range (`observed`, `target`, or `hypothesis`). Stronger wording is rejected by the gate. |
 | **Artifact bundle** | The timestamped directory a gate emits under `artifacts/<gate>/<timestamp>/`. The replay-shaped, self-describing record of what a gate run produced. |
 | **Authenticity hash** | A keyed-HMAC hash (`AuthenticityHash::compute_keyed`) used where content binding alone is insufficient (for example, binding a decision receipt to the originating runtime's persistent identity). |
-| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (3.9 MB, 98,924 LoC). The runtime's load-bearing VM. |
+| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.0 MB, 119,900 LoC). The runtime's load-bearing VM. |
 | **Bead** | A unit of work in `br` (the Rust beads tracker). Identified as `bd-<base36>` with `.N` children for sub-tasks. Stored in `.beads/issues.jsonl`. |
 | **`br`** | `beads_rust` CLI; the in-tree task tracker. Closes via `br close <id> --reason "..."`. |
 | **Charter** | `docs/RUNTIME_CHARTER.md`, the non-negotiable governance contract for this repo. |

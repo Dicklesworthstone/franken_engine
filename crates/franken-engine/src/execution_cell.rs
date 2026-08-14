@@ -277,6 +277,14 @@ pub enum CellInterpreterOutcome {
 pub enum CellExecutionEventKind {
     AuthorityBound,
     InterpreterStarted,
+    /// Successful interpreter completion under the sealed resource limits.
+    /// `instructions_executed` is observed usage; `memory_limit_bytes` is the
+    /// configured ceiling, not a claim about peak live memory.
+    InterpreterBudgetSettled {
+        instructions_executed: u64,
+        instruction_budget: u64,
+        memory_limit_bytes: u64,
+    },
     IfcLabelObserved {
         label: Label,
     },
@@ -343,6 +351,7 @@ impl CellExecutionTranscript {
         let mut terminal_count = 0_u64;
         let mut drain_count = 0_u64;
         let mut finalized_count = 0_u64;
+        let mut budget_settlement_count = 0_u64;
         let mut ifc_high_water_label = self.authority.initial_ifc_label.clone();
         for (index, event) in self.events.iter().enumerate() {
             let expected_sequence = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
@@ -400,12 +409,34 @@ impl CellExecutionTranscript {
                 {
                     phase = Some(CellExecutionPhase::Running);
                 }
+                CellExecutionEventKind::InterpreterBudgetSettled {
+                    instructions_executed,
+                    instruction_budget,
+                    memory_limit_bytes,
+                } if phase == Some(CellExecutionPhase::Running)
+                    && budget_settlement_count == 0
+                    && in_flight.is_empty() =>
+                {
+                    if *instruction_budget != self.authority.instruction_budget
+                        || *memory_limit_bytes != self.authority.memory_budget_bytes
+                        || instructions_executed > instruction_budget
+                    {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail: format!(
+                                "event {} carries invalid interpreter budget settlement: executed={instructions_executed}, instruction_budget={instruction_budget}, memory_limit_bytes={memory_limit_bytes}",
+                                event.sequence
+                            ),
+                        });
+                    }
+                    budget_settlement_count = budget_settlement_count.saturating_add(1);
+                }
                 CellExecutionEventKind::IfcLabelObserved { .. }
-                    if phase == Some(CellExecutionPhase::Running) => {}
+                    if phase == Some(CellExecutionPhase::Running)
+                        && budget_settlement_count == 0 => {}
                 CellExecutionEventKind::EffectProposed {
                     required_capability,
                     ..
-                } if phase == Some(CellExecutionPhase::Running) => {
+                } if phase == Some(CellExecutionPhase::Running) && budget_settlement_count == 0 => {
                     if !self.authority.capabilities.contains(required_capability) {
                         return Err(CellExecutionError::TranscriptInvalid {
                             detail: format!(
@@ -434,9 +465,24 @@ impl CellExecutionTranscript {
                         });
                     }
                 }
-                CellExecutionEventKind::InterpreterTerminal { .. }
+                CellExecutionEventKind::InterpreterTerminal { outcome }
                     if phase == Some(CellExecutionPhase::Running) && in_flight.is_empty() =>
                 {
+                    if *outcome == CellInterpreterOutcome::Succeeded && budget_settlement_count != 1
+                    {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail:
+                                "successful interpreter terminal lacks one exact budget settlement"
+                                    .to_string(),
+                        });
+                    }
+                    if *outcome != CellInterpreterOutcome::Succeeded && budget_settlement_count != 0
+                    {
+                        return Err(CellExecutionError::TranscriptInvalid {
+                            detail: "failed or panicked interpreter carries success-only budget settlement"
+                                .to_string(),
+                        });
+                    }
                     terminal_count = terminal_count.saturating_add(1);
                     phase = Some(CellExecutionPhase::Terminal);
                 }
@@ -500,6 +546,12 @@ pub enum CellExecutionError {
     CapabilityDenied {
         required: RuntimeCapability,
     },
+    InstructionBudgetExceeded {
+        executed: u64,
+        budget: u64,
+    },
+    BudgetSettlementMissing,
+    BudgetSettlementAlreadyRecorded,
     Cancelled,
     InFlightEffects {
         count: usize,
@@ -531,6 +583,16 @@ impl fmt::Display for CellExecutionError {
             Self::CapabilityDenied { required } => {
                 write!(f, "cell execution capability denied: {required}")
             }
+            Self::InstructionBudgetExceeded { executed, budget } => write!(
+                f,
+                "cell interpreter instruction budget exceeded: {executed}/{budget}"
+            ),
+            Self::BudgetSettlementMissing => {
+                f.write_str("successful cell interpreter lacks budget settlement")
+            }
+            Self::BudgetSettlementAlreadyRecorded => {
+                f.write_str("cell interpreter budget settlement is already recorded")
+            }
             Self::Cancelled => f.write_str("cell execution is cancelled"),
             Self::InFlightEffects { count } => {
                 write!(f, "cell execution has {count} in-flight effects")
@@ -552,6 +614,7 @@ struct CellExecutionState {
     next_sequence: u64,
     ifc_high_water_label: Label,
     in_flight: BTreeSet<u64>,
+    budget_settled: bool,
     events: Vec<CellExecutionEvent>,
 }
 
@@ -580,6 +643,7 @@ impl CellExecutionBoundary {
                     next_sequence: 0,
                     ifc_high_water_label: authority.snapshot.initial_ifc_label.clone(),
                     in_flight: BTreeSet::new(),
+                    budget_settled: false,
                     events: Vec::new(),
                 }),
                 authority,
@@ -666,6 +730,28 @@ impl CellExecutionBoundary {
         if !state.in_flight.is_empty() {
             return Err(CellExecutionError::InFlightEffects {
                 count: state.in_flight.len(),
+            });
+        }
+        if outcome == CellInterpreterOutcome::Succeeded
+            && !state.budget_settled
+            && self.inner.authority.cancellation_token.is_cancelled()
+        {
+            self.push_event(
+                &mut state,
+                CellExecutionEventKind::InterpreterTerminal {
+                    outcome: CellInterpreterOutcome::Failed,
+                },
+            );
+            state.phase = CellExecutionPhase::Terminal;
+            return Err(CellExecutionError::Cancelled);
+        }
+        if outcome == CellInterpreterOutcome::Succeeded && !state.budget_settled {
+            return Err(CellExecutionError::BudgetSettlementMissing);
+        }
+        if outcome != CellInterpreterOutcome::Succeeded && state.budget_settled {
+            return Err(CellExecutionError::TranscriptInvalid {
+                detail: "failed or panicked interpreter carries success-only budget settlement"
+                    .to_string(),
             });
         }
         self.push_event(
@@ -797,9 +883,76 @@ impl CellExecutionPermit {
         &self.boundary.inner.authority.snapshot.capabilities
     }
 
+    /// Instruction ceiling sealed into this cell's authenticated authority.
+    #[must_use]
+    pub fn instruction_budget(&self) -> u64 {
+        self.boundary.inner.authority.snapshot.instruction_budget
+    }
+
+    /// Estimated-live-memory ceiling sealed into this cell's authority.
+    #[must_use]
+    pub fn memory_budget_bytes(&self) -> u64 {
+        self.boundary.inner.authority.snapshot.memory_budget_bytes
+    }
+
     #[must_use]
     pub fn cancellation_token(&self) -> &CancellationToken {
         &self.boundary.inner.authority.cancellation_token
+    }
+
+    /// Record successful interpreter instruction use under the sealed limits.
+    ///
+    /// The interpreter must receive the two limits above as its actual config
+    /// before executing. This settlement then binds its observed instruction
+    /// count back into the replay transcript. The memory field is deliberately
+    /// a configured ceiling because `ExecutionResult` does not expose peak
+    /// live-memory usage.
+    pub fn settle_interpreter_budget(
+        &self,
+        instructions_executed: u64,
+    ) -> Result<(), CellExecutionError> {
+        let mut state = self
+            .boundary
+            .inner
+            .state
+            .lock()
+            .map_err(|_| CellExecutionError::StatePoisoned)?;
+        self.validate_locked(&state)?;
+        if state.phase != CellExecutionPhase::Running {
+            return Err(CellExecutionError::InvalidPhase {
+                phase: state.phase,
+                attempted: "interpreter_budget_settlement".to_string(),
+            });
+        }
+        if state.budget_settled {
+            return Err(CellExecutionError::BudgetSettlementAlreadyRecorded);
+        }
+        if self.cancellation_token().is_cancelled() {
+            return Err(CellExecutionError::Cancelled);
+        }
+        if !state.in_flight.is_empty() {
+            return Err(CellExecutionError::InFlightEffects {
+                count: state.in_flight.len(),
+            });
+        }
+        let instruction_budget = self.instruction_budget();
+        if instructions_executed > instruction_budget {
+            return Err(CellExecutionError::InstructionBudgetExceeded {
+                executed: instructions_executed,
+                budget: instruction_budget,
+            });
+        }
+        let memory_limit_bytes = self.memory_budget_bytes();
+        self.boundary.push_event(
+            &mut state,
+            CellExecutionEventKind::InterpreterBudgetSettled {
+                instructions_executed,
+                instruction_budget,
+                memory_limit_bytes,
+            },
+        );
+        state.budget_settled = true;
+        Ok(())
     }
 
     /// Raise the boundary's observed IFC high-water label monotonically.
@@ -816,6 +969,9 @@ impl CellExecutionPermit {
                 phase: state.phase,
                 attempted: "observe_ifc_label".to_string(),
             });
+        }
+        if state.budget_settled {
+            return Err(CellExecutionError::BudgetSettlementAlreadyRecorded);
         }
         state.ifc_high_water_label = state.ifc_high_water_label.join(&label);
         self.boundary.push_event(
@@ -881,6 +1037,9 @@ impl CellExecutionPermit {
                 phase: state.phase,
                 attempted: "effect_proposal".to_string(),
             });
+        }
+        if state.budget_settled {
+            return Err(CellExecutionError::BudgetSettlementAlreadyRecorded);
         }
         if !allow_cancelled && self.cancellation_token().is_cancelled() {
             return Err(CellExecutionError::Cancelled);
@@ -2201,9 +2360,16 @@ mod tests {
                         RuntimeCapability::FsRead,
                     )
                     .expect("authorized effect should be admitted");
+                assert_eq!(
+                    permit.settle_interpreter_budget(37),
+                    Err(CellExecutionError::InFlightEffects { count: 1 })
+                );
                 proposal
                     .complete("provider_succeeded")
                     .expect("provider outcome should commit");
+                permit
+                    .settle_interpreter_budget(37)
+                    .expect("successful interpreter should settle under its sealed budget");
                 Ok::<_, ()>(42_u64)
             })
             .expect("cell boundary should run")
@@ -2235,12 +2401,30 @@ mod tests {
             transcript.events.last().map(|event| &event.kind),
             Some(CellExecutionEventKind::Finalized)
         ));
+        let settlement_index = transcript
+            .events
+            .iter()
+            .position(|event| {
+                matches!(
+                    &event.kind,
+                    CellExecutionEventKind::InterpreterBudgetSettled { .. }
+                )
+            })
+            .expect("successful interpreter budget settlement event");
+        assert!(matches!(
+            &transcript.events[settlement_index].kind,
+            CellExecutionEventKind::InterpreterBudgetSettled {
+                instructions_executed: 37,
+                instruction_budget: 10_000,
+                memory_limit_bytes: 1_048_576,
+            }
+        ));
 
         let mut ifc_tamper = transcript.clone();
         ifc_tamper.events[proposal_index].ifc_high_water_label = Label::Public;
         assert!(ifc_tamper.verify().is_err());
 
-        let mut capability_tamper = transcript;
+        let mut capability_tamper = transcript.clone();
         if let CellExecutionEventKind::EffectProposed {
             required_capability,
             ..
@@ -2249,6 +2433,33 @@ mod tests {
             *required_capability = RuntimeCapability::FsWrite;
         }
         assert!(capability_tamper.verify().is_err());
+
+        let mut budget_tamper = transcript.clone();
+        if let CellExecutionEventKind::InterpreterBudgetSettled {
+            instructions_executed,
+            ..
+        } = &mut budget_tamper.events[settlement_index].kind
+        {
+            *instructions_executed = 10_001;
+        }
+        assert!(budget_tamper.verify().is_err());
+
+        let mut memory_limit_tamper = transcript.clone();
+        if let CellExecutionEventKind::InterpreterBudgetSettled {
+            memory_limit_bytes, ..
+        } = &mut memory_limit_tamper.events[settlement_index].kind
+        {
+            *memory_limit_bytes = memory_limit_bytes.saturating_add(1);
+        }
+        assert!(memory_limit_tamper.verify().is_err());
+
+        let mut early_settlement = transcript;
+        let settlement = early_settlement.events.remove(settlement_index);
+        early_settlement.events.insert(2, settlement);
+        for (index, event) in early_settlement.events.iter_mut().enumerate() {
+            event.sequence = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+        }
+        assert!(early_settlement.verify().is_err());
     }
 
     #[test]
@@ -2276,35 +2487,147 @@ mod tests {
     }
 
     #[test]
+    fn successful_interpreter_requires_one_bounded_budget_settlement() {
+        let mut missing = execution_cell_with_authority(CancellationToken::new());
+        let error = missing
+            .run_interpreter(|_| Ok::<_, ()>(()))
+            .expect_err("success without budget settlement must fail closed");
+        assert!(matches!(
+            error,
+            CellError::ExecutionBoundary {
+                error: CellExecutionError::BudgetSettlementMissing,
+                ..
+            }
+        ));
+
+        let mut bounded = execution_cell_with_authority(CancellationToken::new());
+        bounded
+            .run_interpreter(|permit| {
+                assert_eq!(permit.instruction_budget(), 10_000);
+                assert_eq!(permit.memory_budget_bytes(), 1_048_576);
+                assert!(matches!(
+                    permit.settle_interpreter_budget(10_001),
+                    Err(CellExecutionError::InstructionBudgetExceeded {
+                        executed: 10_001,
+                        budget: 10_000,
+                    })
+                ));
+                permit
+                    .settle_interpreter_budget(10_000)
+                    .expect("exact-budget use should settle");
+                assert_eq!(
+                    permit.settle_interpreter_budget(10_000),
+                    Err(CellExecutionError::BudgetSettlementAlreadyRecorded)
+                );
+                assert!(matches!(
+                    permit.begin_effect(
+                        "host_io",
+                        "fs_read",
+                        ContentHash::compute(b"after-settlement"),
+                        RuntimeCapability::FsRead,
+                    ),
+                    Err(CellExecutionError::BudgetSettlementAlreadyRecorded)
+                ));
+                Ok::<_, ()>(())
+            })
+            .expect("bounded execution should terminalize")
+            .expect("test domain should succeed");
+    }
+
+    #[test]
     fn cancellation_after_dispatch_stops_the_next_provider_effect() {
         let token = CancellationToken::new();
         let mut cell = execution_cell_with_authority(token.clone());
+        let error = cell
+            .run_interpreter(|permit| {
+                let first = permit
+                    .begin_effect(
+                        "host_io",
+                        "fs_read",
+                        ContentHash::compute(b"first"),
+                        RuntimeCapability::FsRead,
+                    )
+                    .expect("first proposal should start");
+                token.cancel();
+                first
+                    .complete("provider_succeeded_after_cancellation")
+                    .expect("in-flight provider outcome must remain classifiable");
+                let error = permit
+                    .begin_effect(
+                        "host_io",
+                        "fs_read",
+                        ContentHash::compute(b"second"),
+                        RuntimeCapability::FsRead,
+                    )
+                    .expect_err("new effect after cancellation must be refused");
+                assert_eq!(error, CellExecutionError::Cancelled);
+                assert_eq!(
+                    permit.settle_interpreter_budget(1),
+                    Err(CellExecutionError::Cancelled)
+                );
+                Ok::<_, ()>(())
+            })
+            .expect_err("cancellation before settlement must win over closure success");
+        assert!(matches!(
+            error,
+            CellError::ExecutionBoundary {
+                error: CellExecutionError::Cancelled,
+                ..
+            }
+        ));
+
+        cell.close(
+            &mut mock_cx(100),
+            CancelReason::OperatorShutdown,
+            DrainDeadline::default(),
+        )
+        .expect("typed cancellation terminal must retain normal cleanup");
+        let transcript = cell
+            .execution_transcript()
+            .expect("transcript readable")
+            .expect("transcript present");
+        transcript
+            .verify()
+            .expect("cancelled execution should retain a valid failed prefix");
+        assert!(transcript.events.iter().any(|event| matches!(
+            &event.kind,
+            CellExecutionEventKind::InterpreterTerminal {
+                outcome: CellInterpreterOutcome::Failed,
+            }
+        )));
+    }
+
+    #[test]
+    fn cancellation_after_budget_settlement_does_not_rewrite_committed_success() {
+        let token = CancellationToken::new();
+        let mut cell = execution_cell_with_authority(token.clone());
         cell.run_interpreter(|permit| {
-            let first = permit
-                .begin_effect(
-                    "host_io",
-                    "fs_read",
-                    ContentHash::compute(b"first"),
-                    RuntimeCapability::FsRead,
-                )
-                .expect("first proposal should start");
+            permit
+                .settle_interpreter_budget(1)
+                .expect("uncancelled interpreter may commit bounded success");
             token.cancel();
-            first
-                .complete("provider_succeeded_after_cancellation")
-                .expect("in-flight provider outcome must remain classifiable");
-            let error = permit
-                .begin_effect(
-                    "host_io",
-                    "fs_read",
-                    ContentHash::compute(b"second"),
-                    RuntimeCapability::FsRead,
-                )
-                .expect_err("new effect after cancellation must be refused");
-            assert_eq!(error, CellExecutionError::Cancelled);
             Ok::<_, ()>(())
         })
-        .expect("boundary should preserve terminalization")
-        .expect("test interpreter should finish");
+        .expect("cancellation after the settlement commit point is not retroactive")
+        .expect("test domain should succeed");
+
+        cell.close(
+            &mut mock_cx(100),
+            CancelReason::OperatorShutdown,
+            DrainDeadline::default(),
+        )
+        .expect("committed success should close normally");
+        let transcript = cell
+            .execution_transcript()
+            .expect("transcript readable")
+            .expect("transcript present");
+        transcript.verify().expect("committed prefix should replay");
+        assert!(transcript.events.iter().any(|event| matches!(
+            &event.kind,
+            CellExecutionEventKind::InterpreterTerminal {
+                outcome: CellInterpreterOutcome::Succeeded,
+            }
+        )));
     }
 
     #[test]
@@ -2346,7 +2669,12 @@ mod tests {
     fn escaped_permit_refuses_effect_after_cell_close() {
         let mut cell = execution_cell_with_authority(CancellationToken::new());
         let escaped_permit = cell
-            .run_interpreter(Ok::<_, ()>)
+            .run_interpreter(|permit| {
+                permit
+                    .settle_interpreter_budget(0)
+                    .expect("zero-instruction interpreter should settle");
+                Ok::<_, ()>(permit)
+            })
             .expect("boundary should run")
             .expect("test interpreter should return its permit");
         cell.close(
@@ -2373,9 +2701,14 @@ mod tests {
     #[test]
     fn transcript_rejects_identity_tamper_reorder_duplicate_and_gap() {
         let mut cell = execution_cell_with_authority(CancellationToken::new());
-        cell.run_interpreter(|_| Ok::<_, ()>(()))
-            .expect("boundary should run")
-            .expect("domain should succeed");
+        cell.run_interpreter(|permit| {
+            permit
+                .settle_interpreter_budget(0)
+                .expect("zero-instruction interpreter should settle");
+            Ok::<_, ()>(())
+        })
+        .expect("boundary should run")
+        .expect("domain should succeed");
         cell.close(
             &mut mock_cx(100),
             CancelReason::OperatorShutdown,

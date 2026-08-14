@@ -182,6 +182,18 @@ impl RuntimeCapability {
             "fs:write" | "fs.write" => Some(Self::FsWrite),
             "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),
 
+            // Timer builtins emitted directly by source lowering retain Timer
+            // authority even though their dispatch tag uses the builtin namespace.
+            // Keep this list exact so unrelated or attacker-invented builtin tags
+            // continue to require Builtin authority through the generic rule below.
+            "builtin:SetTimeout"
+            | "builtin:ClearTimeout"
+            | "builtin:SetInterval"
+            | "builtin:ClearInterval"
+            | "builtin:SetImmediate"
+            | "builtin:ClearImmediate"
+            | "builtin:QueueMicrotask" => Some(Self::Timer),
+
             // Map console hostcalls to Console capability
             tag if tag.starts_with("console:") => Some(Self::Console),
 
@@ -1835,6 +1847,30 @@ mod tests {
         assert_eq!(
             RuntimeCapability::from_tag_str("module:import"),
             Some(RuntimeCapability::ModuleLoad)
+        );
+    }
+
+    #[test]
+    fn from_tag_str_timer_builtin_aliases_are_exact_and_bounded() {
+        for tag in [
+            "builtin:SetTimeout",
+            "builtin:ClearTimeout",
+            "builtin:SetInterval",
+            "builtin:ClearInterval",
+            "builtin:SetImmediate",
+            "builtin:ClearImmediate",
+            "builtin:QueueMicrotask",
+        ] {
+            assert_eq!(
+                RuntimeCapability::from_tag_str(tag),
+                Some(RuntimeCapability::Timer),
+                "source-lowered timer tag {tag} must require Timer authority"
+            );
+        }
+        assert_eq!(
+            RuntimeCapability::from_tag_str("builtin:TimerEscape"),
+            Some(RuntimeCapability::Builtin),
+            "unregistered builtin names must not acquire Timer authority"
         );
     }
 

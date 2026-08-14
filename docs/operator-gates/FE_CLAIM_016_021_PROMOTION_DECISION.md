@@ -49,49 +49,53 @@ over-claim `bd-reality-005` exists to prevent.
 
 ## Current decision: STAY_HYPOTHESIS
 
-As of this gate, **none of the six claims carries a real proven theorem proof.**
-`artifacts/rgc_theorem_backed_compiler_inputs/` does not exist; G.2..G.8 emit no
-live proof artifacts (the G.9 closure note states this explicitly). A
-ground-truth reality check of the Track-G source confirms why producing such a
-bundle today would be a fixture, not evidence:
+As of the 2026-08-14 reality check, **none of the six claims carries a qualifying
+current theorem proof.** The live gate finds zero of six proof files in
+`artifacts/rgc_theorem_backed_compiler_inputs/`. Source-level producers and
+verification machinery have advanced since the original G.10 decision, but
+machinery is not a re-runnable artifact and cannot promote a claim by itself:
 
-- **FE-CLAIM-016 (G.2/G.3) — real proofs, not wired to the gate.** Genuine
-  Lean 4 proofs exist under `proofs/lean4/` (`IFCLatticeSpecification.lean`,
-  `IFCLatticeIsomorphism.lean`, `CapabilityAlgebraSpecification.lean`,
-  `CapabilityAlgebraIsomorphism.lean`) and are machine-checkable via
-  `cd proofs/lean4 && lake build`. But (a) no `lake`/`lean` toolchain is
-  installed in this environment, so the proofs cannot be checked here, and
-  (b) nothing emits a `.proof.json` from a successful `lake build` into the G.9
-  bundle. This is the closest claim to promotable — it needs a Lean→proof.json
-  emitter and a CI lane that runs `lake build`.
+- **FE-CLAIM-016 (G.2/G.3) — unsound target-closure boundary.** The default
+  `lake build` checks the IFC, SME, and claim-evidence targets declared in
+  `proofs/lean4/lakefile.lean`; it does not include the capability-algebra
+  files. Direct checks of `CapabilityAlgebraSpecification.lean` and
+  `CapabilityAlgebraIsomorphism.lean` fail. The Lean proof producer nonetheless
+  enumerates theorem declarations from every `*.lean` source after the narrower
+  default build, so an emitted bundle would overstate which targets were
+  successfully checked. The producer must bind theorem enumeration to the exact
+  successful target set, every claim-relevant target must check, and the result
+  must survive the independent bundle rechecker.
 
-- **FE-CLAIM-017 (G.6) — real differential validation, no proof emission.** The
+- **FE-CLAIM-017 (G.6) — validators and an emitter helper, no live producer.** The
   translation validators (`exception_translation_validator.rs`,
   `iterator_protocol*`, `hostcall_capability*`, `async_translation_validation.rs`,
   `generator_translation_validator.rs`, `ifc_label_translation_validator.rs`,
   `full_ir_translation_validator.rs`) run real differential abstract
-  interpreters that genuinely reject semantics-breaking transforms. They are
-  executable and tested, but emit no `.proof.json` into the G.9 bundle.
+  interpreters that reject covered semantics-breaking transforms, and
+  `translation_validation_proof_carrier.rs` can serialize a bundle from a
+  supplied result. No product/operator producer currently drives that helper
+  over a real non-empty compiler transformation and emits a qualifying witness.
 
-- **FE-CLAIM-018 / 021 (G.7) — simulated SMT.**
-  `policy_theorem_engine.rs::verify_single_theorem` is explicit:
-  `// In a real implementation, this would invoke an actual SMT solver`
-  `// For now, simulate SMT verification based on theorem structure`. It returns
-  `Proven` by string-matching the SMT formula (`contains("forall")`,
-  `contains("not (influences")`, `contains("not (exists")`). No Z3/CVC5/Yices is
-  ever invoked; the default backend is `SmtSolver::Internal`.
+- **FE-CLAIM-018 / 021 (G.7) — real Z3 path, no qualifying live bundle.**
+  `policy_theorem_engine.rs::verify_single_theorem` now defaults to
+  `SmtSolver::Z3`, invokes Z3 with the standard negate-and-check pattern, and
+  fails closed on `sat`, `unknown`, timeouts, and subprocess errors. The
+  `emit_track_g_proof_bundles` binary drives a representative theorem corpus
+  and can emit FE-CLAIM-018/021 bundles. No such current bundle is present for
+  the live gate to recheck, so neither broad claim is yet observed.
 
-- **FE-CLAIM-019 (G.8) — simulated equivalence.**
-  `optimization_proof_carriers.rs::verify_proof_obligation` is explicit:
-  `// In a real implementation, this would invoke actual verification tools`
-  `// For now, simulate verification based on proof method and obligations`. Every
-  `VerificationMethod` arm (`ModelChecking`, `TheoremProving`,
-  `SymbolicExecution`, `PropertyTesting`, `DifferentialTesting`) returns
-  `ProofResult::Verified` unconditionally once premise/conclusion are non-empty.
+- **FE-CLAIM-019 (G.8) — fail-closed verification paths, no qualifying live
+  bundle.** `optimization_proof_carriers.rs::verify_proof_obligation` routes
+  formal/theorem obligations through Z3, finite-model/symbolic obligations
+  through bounded Z3 scripts, and property/differential obligations through
+  bounded deterministic sample runners. Empty formulas, missing samples,
+  unsupported syntax, and generated prose fail closed. No current non-fixture
+  full-optimization proof bundle is present.
 
-- **FE-CLAIM-020 (G.7/G.8) — simulated by composition.** The end-to-end
-  theorem-backed compiler composes 018/019/021, so it inherits their simulated
-  verdicts.
+- **FE-CLAIM-020 (G.7/G.8) — no end-to-end composition proof.** The broad
+  theorem-backed-compiler claim depends on qualifying 018/019/021 evidence.
+  There is no current bundle composing those lanes into a re-runnable,
+  non-fixture end-to-end compiler proof.
 
 Therefore the six claims correctly remain at `hypothesis`, and the gate exits
 `0` because the matrix state is consistent with the (absent) live proof
@@ -143,17 +147,19 @@ The gate is bidirectional but conservative:
 
 To promote FE-CLAIM-016..021 to `observed`:
 
-1. Replace the simulated verifiers with real verification and emit a real
+1. Complete the remaining producer and target-closure work and emit a real
    `<claim>.proof.json` per claim into
    `artifacts/rgc_theorem_backed_compiler_inputs/` with `verdict: "proven"`, a
    correct `content_hash`, a fresh `generated_utc`, and a non-fixture
    `source_module`:
-   - 016: run `lake build` over `proofs/lean4/` and emit a proof from the
-     successful check;
-   - 017: emit a proof-carrying witness from the translation validators;
-   - 018/021: invoke a real SMT solver (Z3/CVC5) from `policy_theorem_engine.rs`;
-   - 019: invoke a real model checker / differential oracle from
-     `optimization_proof_carriers.rs`;
+   - 016: make every claim-relevant Lean target explicit, make them all pass,
+     and bind the emitted theorem inventory to exactly those checked targets;
+   - 017: drive the existing helper from a product/operator producer over a
+     real non-empty compiler transformation;
+   - 018/021: execute the Z3-backed producer and independently recheck the
+     emitted theorem bundles against the exact source revision;
+   - 019: emit and independently recheck a non-fixture bundle from the bounded
+     Z3 and differential/property runner paths over product obligations;
    - 020: compose the above end-to-end.
 2. Re-run `./scripts/run_rgc_theorem_backed_compiler.sh ci` and confirm all six
    proofs recheck clean.

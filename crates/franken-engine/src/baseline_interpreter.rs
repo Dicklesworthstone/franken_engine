@@ -77558,6 +77558,144 @@ mod async_runtime_tests_current {
         assert_eq!(promise.label, crate::ifc_artifacts::Label::Secret);
     }
 
+    /// bd-oswo2: awaiting a PENDING promise that later FULFILLS must resume
+    /// the async function and run its continuation, settling the async
+    /// function's result promise with the returned value.
+    #[test]
+    fn await_pending_then_fulfill_resumes_with_value_oswo2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                // async fn body @entry 2: `return await arg`
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("await_pending_fulfill".to_string()),
+                is_generator: false,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
+
+        let awaited = core.promise_store.create();
+        core.mutate_registers(|r| {
+            r[1] = Value::Promise(awaited.0);
+        });
+
+        core.execute(&module).expect("suspends on pending await");
+        let async_result =
+            crate::promise_model::PromiseHandle(core.async_functions[0].result_promise);
+        assert_eq!(
+            core.promise_store.get(async_result).unwrap().state,
+            crate::promise_model::PromiseState::Pending,
+            "async result promise pending while awaited promise unsettled"
+        );
+
+        core.promise_store
+            .fulfill(
+                awaited,
+                crate::object_model::JsValue::Int(7),
+                Label::Public,
+                &mut core.event_loop.microtasks,
+            )
+            .expect("fulfill seed promise");
+        core.drain_microtasks(Some(&module));
+
+        let state = core.promise_store.get(async_result).unwrap().state.clone();
+        assert_eq!(
+            state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7)),
+            "await of a fulfilled promise must resume and fulfill the async \
+             result promise with the value, got {state:?}"
+        );
+    }
+
+    /// bd-oswo2: awaiting a PENDING promise that later REJECTS must throw the
+    /// rejection reason into the async function (rejecting its result promise),
+    /// NOT resume as if it were a fulfillment value.
+    #[test]
+    fn await_pending_then_reject_throws_into_async_frame_oswo2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                // async fn body @entry 2: `return await arg`
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("await_pending_reject".to_string()),
+                is_generator: false,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
+
+        let awaited = core.promise_store.create();
+        core.mutate_registers(|r| {
+            r[1] = Value::Promise(awaited.0);
+        });
+
+        core.execute(&module).expect("suspends on pending await");
+        let async_result =
+            crate::promise_model::PromiseHandle(core.async_functions[0].result_promise);
+        assert_eq!(
+            core.promise_store.get(async_result).unwrap().state,
+            crate::promise_model::PromiseState::Pending,
+            "async result promise pending while awaited promise unsettled"
+        );
+
+        core.promise_store
+            .reject(
+                awaited,
+                crate::object_model::JsValue::Str("boom".into()),
+                Label::Public,
+                &mut core.event_loop.microtasks,
+            )
+            .expect("reject seed promise");
+        core.drain_microtasks(Some(&module));
+
+        let state = core.promise_store.get(async_result).unwrap().state.clone();
+        assert_eq!(
+            state,
+            crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                "boom".into()
+            )),
+            "await of a rejected promise must reject the async result promise \
+             (throw), not fulfill it; got {state:?}"
+        );
+    }
+
     #[test]
     fn async_direct_return_preserves_argument_label_bd_ur3tk_18() {
         let module = async_label_test_module(

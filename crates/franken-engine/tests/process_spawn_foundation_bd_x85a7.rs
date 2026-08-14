@@ -1,21 +1,37 @@
 //! bd-x85a7: authenticated lowering contract for Node `child_process` effects.
 
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::execution_cell::CellExecutionEventKind;
+#[cfg(unix)]
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::checkpoint::CancellationToken;
+#[cfg(unix)]
+use frankenengine_engine::execution_cell::CellInterpreterOutcome;
+use frankenengine_engine::execution_cell::{CellError, CellExecutionError, CellExecutionEventKind};
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
+#[cfg(unix)]
+use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
+#[cfg(unix)]
+use frankenengine_extension_host::process_spawn::{NativeProcessSpawn, ProcessSpawnPolicy};
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnOutcome,
     ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse, ProcessStdio,
@@ -127,6 +143,45 @@ impl ProcessSpawnProvider for CleanupFailingProcessSpawn {
     }
 }
 
+#[derive(Debug)]
+struct CommitBoundaryProcessSpawn {
+    entered: SyncSender<()>,
+    release: Mutex<Receiver<()>>,
+    calls: AtomicUsize,
+}
+
+impl ProcessSpawnProvider for CommitBoundaryProcessSpawn {
+    fn name(&self) -> &str {
+        "commit-boundary-process-spawn"
+    }
+
+    fn perform(
+        &self,
+        _request: &ProcessSpawnRequest,
+        granted: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        self.entered
+            .send(())
+            .expect("cancellation test must observe provider dispatch");
+        self.release
+            .lock()
+            .expect("release receiver mutex")
+            .recv()
+            .expect("cancellation test must release provider completion");
+        Ok(ProcessSpawnResponse::Run {
+            exit: ProcessExit {
+                success: true,
+                code: Some(0),
+                signal: None,
+            },
+            stdout: b"committed-before-cancellation".to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+}
+
 fn process_package(source: &str) -> ExtensionPackage {
     ExtensionPackage {
         extension_id: "bd-x85a7-process-bridge".to_string(),
@@ -137,6 +192,32 @@ fn process_package(source: &str) -> ExtensionPackage {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     }
+}
+
+#[cfg(unix)]
+fn unix_executable(candidates: &[&str]) -> PathBuf {
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::canonicalize(path).ok())
+        .expect("a required Unix test executable must exist")
+}
+
+#[cfg(unix)]
+fn native_process_provider(
+    alias: &str,
+    candidates: &[&str],
+    max_runtime_millis: u64,
+) -> (Arc<NativeProcessSpawn>, String) {
+    let executable = unix_executable(candidates);
+    let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted native process policy");
+    let canonical = policy
+        .authorize_alias(alias, executable)
+        .expect("authorize exact native process alias");
+    policy.limits.max_runtime_millis = max_runtime_millis;
+    let provider = NativeProcessSpawn::new(policy).expect("install native process provider");
+    (Arc::new(provider), canonical)
 }
 
 fn expected_run_request() -> ProcessSpawnRequest {
@@ -482,6 +563,379 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
         proposals,
         vec!["process_spawn_prepare", "process_spawn"],
         "request preparation and real dispatch must both cross the sealed cell permit"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn no_mock_native_os_process_executes_under_exact_cell_authority() {
+    let (provider, canonical) =
+        native_process_provider("native-printf", &["/usr/bin/printf", "/bin/printf"], 2_000);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider, journal);
+
+    let result = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); console.log(cp.execFileSync('native-printf', ['cell-os-e2e'], { encoding: 'utf8' }));",
+        ))
+        .expect("the real native process provider must execute through the cell boundary");
+
+    assert_eq!(result.console_output.len(), 1);
+    assert_eq!(result.console_output[0].message, "cell-os-e2e");
+    assert!(matches!(
+        result.host_effect_journal.as_slice(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            request: ProcessSpawnRequest::Run {
+                launch: ProcessLaunch {
+                    executable,
+                    argv,
+                    env,
+                    cwd: None,
+                    shell: false,
+                    stdio: ProcessStdio { .. },
+                },
+                stdin,
+                timeout_millis: None,
+            },
+            outcome: Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                },
+                stdout,
+                stderr,
+            }),
+        }] if executable == &canonical
+            && argv.len() == 1
+            && argv[0] == "cell-os-e2e"
+            && env.is_empty()
+            && stdin.is_empty()
+            && stdout == b"cell-os-e2e"
+            && stderr.is_empty()
+    ));
+
+    let transcript = result
+        .cell_execution_transcript
+        .as_ref()
+        .expect("a successful real process run must retain the cell transcript");
+    transcript
+        .verify()
+        .expect("the real process transcript must replay-verify");
+    assert_eq!(transcript.authority.initial_ifc_label, Label::Public);
+    assert_eq!(transcript.authority.policy_epoch.as_u64(), 1);
+    assert_eq!(transcript.authority.cell_id, result.trace_id);
+    assert_eq!(transcript.authority.trace_id, result.trace_id);
+    assert!(
+        transcript
+            .authority
+            .capabilities
+            .contains(&RuntimeCapability::VmDispatch)
+    );
+    assert!(
+        transcript
+            .authority
+            .capabilities
+            .contains(&RuntimeCapability::ProcessSpawn)
+    );
+    assert!(
+        transcript
+            .events
+            .iter()
+            .all(|event| event.cell_id == result.trace_id
+                && event.trace_id == result.trace_id
+                && event.policy_epoch == result.epoch
+                && event.ifc_high_water_label == Label::Public)
+    );
+    let proposals = transcript
+        .events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            CellExecutionEventKind::EffectProposed {
+                family,
+                request_kind,
+                required_capability,
+                ..
+            } => Some((family.as_str(), request_kind.as_str(), *required_capability)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proposals,
+        vec![
+            (
+                "process_spawn_prepare",
+                "run",
+                RuntimeCapability::ProcessSpawn,
+            ),
+            ("process_spawn", "run", RuntimeCapability::ProcessSpawn,),
+        ],
+        "policy preparation and OS dispatch must both cross the sealed permit"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn no_mock_native_hang_times_out_finalizes_and_provider_recovers() {
+    let (provider, _) =
+        native_process_provider("native-sleep", &["/usr/bin/sleep", "/bin/sleep"], 500);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider.clone(), journal);
+
+    let started = Instant::now();
+    let error = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('native-sleep', ['5'], { timeout: 25 });",
+        ))
+        .expect_err("the real sleeping child must hit its requested timeout");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(_)
+    ));
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Err(ProcessSpawnError::TimedOut { .. }),
+            ..
+        }]
+    ));
+    let failure = error
+        .post_cell_failure()
+        .expect("the timeout occurred after cell creation");
+    assert!(failure.cleanup.close_succeeded());
+    let transcript = failure
+        .cleanup
+        .cell_execution_transcript
+        .as_ref()
+        .expect("the failed attempt must retain its finalized cell transcript");
+    transcript
+        .verify()
+        .expect("the timeout prefix and cleanup must replay-verify");
+    assert!(transcript.events.iter().any(|event| matches!(
+        &event.kind,
+        CellExecutionEventKind::EffectCompleted { outcome, .. }
+            if outcome == "provider_failed"
+    )));
+    assert!(transcript.events.iter().any(|event| matches!(
+        &event.kind,
+        CellExecutionEventKind::InterpreterTerminal {
+            outcome: CellInterpreterOutcome::Failed
+        }
+    )));
+
+    let recovery_journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut recovery = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    recovery.set_process_spawn(provider, recovery_journal);
+    let recovered = recovery
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('native-sleep', ['0']);",
+        ))
+        .expect("the same native provider must admit a fresh child after timeout teardown");
+    recovered
+        .cell_execution_transcript
+        .as_ref()
+        .expect("recovery run transcript")
+        .verify()
+        .expect("recovery run must replay-verify");
+}
+
+#[cfg(unix)]
+#[test]
+fn no_mock_native_child_signal_is_audited_and_parent_recovers() {
+    let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 2_000);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider.clone(), journal);
+
+    let error = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('native-sh', ['-c', 'kill -SEGV $$']);",
+        ))
+        .expect_err("a child fatal signal must fail only the guest execution");
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: false,
+                    signal: Some(_),
+                    ..
+                },
+                ..
+            }),
+            ..
+        }]
+    ));
+    let failure = error
+        .post_cell_failure()
+        .expect("the child crash occurred after cell creation");
+    assert!(failure.cleanup.close_succeeded());
+    failure
+        .cleanup
+        .cell_execution_transcript
+        .as_ref()
+        .expect("child crash transcript")
+        .verify()
+        .expect("child crash and parent cleanup must replay-verify");
+
+    let recovery_journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut recovery = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    recovery.set_process_spawn(provider, recovery_journal);
+    let recovered = recovery
+        .execute(&process_package(
+            "const cp = require('child_process'); console.log(cp.execFileSync('native-sh', ['-c', 'printf recovered'], { encoding: 'utf8' }));",
+        ))
+        .expect("a fresh child must execute after the prior child crashed");
+    assert_eq!(recovered.console_output[0].message, "recovered");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn no_mock_native_descendant_is_gone_before_cell_result_returns() {
+    let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 2_000);
+    let sleep = unix_executable(&["/usr/bin/sleep", "/bin/sleep"]);
+    let command = format!("{} 5 & echo $!", sleep.display());
+    let command_literal = serde_json::to_string(&command).expect("encode shell command as JS text");
+    let source = format!(
+        "const cp = require('child_process'); cp.execFileSync('native-sh', ['-c', {command_literal}], {{ encoding: 'utf8' }});"
+    );
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider, journal);
+
+    let started = Instant::now();
+    let result = orchestrator
+        .execute(&process_package(&source))
+        .expect("the parent shell should exit while its ordinary descendant is contained");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let [
+        HostEffectJournalEntry::ProcessSpawn {
+            outcome: Ok(ProcessSpawnResponse::Run { stdout, .. }),
+            ..
+        },
+    ] = result.host_effect_journal.as_slice()
+    else {
+        panic!("expected one successful real process journal entry")
+    };
+    let descendant = String::from_utf8(stdout.clone())
+        .expect("shell descendant pid output")
+        .trim()
+        .parse::<u32>()
+        .expect("shell descendant pid");
+    let proc_entry = PathBuf::from(format!("/proc/{descendant}"));
+    for _ in 0..100 {
+        if !proc_entry.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !proc_entry.exists(),
+        "an ordinary descendant must not outlive the returned cell result"
+    );
+    result
+        .cell_execution_transcript
+        .as_ref()
+        .expect("descendant containment transcript")
+        .verify()
+        .expect("descendant containment run must replay-verify");
+}
+
+#[test]
+fn cancellation_during_provider_dispatch_commits_prefix_then_finalizes_once() {
+    let (entered_tx, entered_rx) = sync_channel(1);
+    let (release_tx, release_rx) = sync_channel(1);
+    let provider = Arc::new(CommitBoundaryProcessSpawn {
+        entered: entered_tx,
+        release: Mutex::new(release_rx),
+        calls: AtomicUsize::new(0),
+    });
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let cancellation = CancellationToken::new();
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_cancellation_token(cancellation.clone());
+    orchestrator.set_process_spawn(provider.clone(), journal);
+
+    let worker = std::thread::spawn(move || {
+        let error = orchestrator
+            .execute(&process_package(
+                "const cp = require('child_process'); cp.execFileSync('tool', ['commit-boundary']);",
+            ))
+            .expect_err("cancellation before provider return must fail the guest run");
+        (orchestrator, error)
+    });
+    if let Err(error) = entered_rx.recv_timeout(Duration::from_secs(10)) {
+        let _ = release_tx.send(());
+        let _ = worker.join();
+        panic!("provider dispatch was not observed: {error}");
+    }
+    cancellation.cancel();
+    release_tx
+        .send(())
+        .expect("release the already-dispatched provider call");
+    let (orchestrator, error) = worker.join().expect("orchestrator worker must not panic");
+
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Cell(CellError::ExecutionBoundary {
+            error: CellExecutionError::Cancelled,
+            ..
+        })
+    ));
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Ok(ProcessSpawnResponse::Run { stdout, .. }),
+            ..
+        }] if stdout == b"committed-before-cancellation"
+    ));
+    let failure = error
+        .post_cell_failure()
+        .expect("the cancelled dispatch must return cell cleanup evidence");
+    assert!(failure.cleanup.close_succeeded());
+    assert!(failure.additional_errors.is_empty());
+    let transcript = failure
+        .cleanup
+        .cell_execution_transcript
+        .as_ref()
+        .expect("the cancelled dispatch must retain its exact cell prefix");
+    transcript
+        .verify()
+        .expect("the committed effect and cancellation cleanup must replay-verify");
+    assert_eq!(
+        transcript
+            .events
+            .iter()
+            .filter(|event| matches!(&event.kind, CellExecutionEventKind::EffectProposed { .. }))
+            .count(),
+        2,
+        "only preparation and the already-admitted dispatch may be proposed"
+    );
+    assert_eq!(
+        transcript
+            .events
+            .iter()
+            .filter(|event| matches!(&event.kind, CellExecutionEventKind::EffectCompleted { .. }))
+            .count(),
+        2,
+        "the already-completed provider effect must not become commit-unknown"
+    );
+    assert!(!transcript.events.iter().any(|event| matches!(
+        &event.kind,
+        CellExecutionEventKind::InterpreterBudgetSettled { .. }
+    )));
+    assert_eq!(
+        transcript
+            .events
+            .iter()
+            .filter(|event| matches!(&event.kind, CellExecutionEventKind::Finalized))
+            .count(),
+        1,
+        "cell cleanup must finalize exactly once"
     );
 }
 

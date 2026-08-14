@@ -95,7 +95,7 @@ Gate exit codes follow DW.STD: `0` pass, non-zero (`≠3`) fail-closed, `3` degr
 ## Claim-state note
 
 The runtime-side **compile-time ambient-authority rejection** (`FE-CLAIM-006`) is
-**OBSERVED** (16-scenario red-team corpus + RGC gate). The static analyzer here
+**OBSERVED** (17-scenario red-team corpus + RGC gate). The static analyzer here
 reports an **inferred authority footprint for the *supported* syntax** of a file
 or package — it shares the runtime's lowering, so each emitted finding carries
 `confidence = "definite"`, and anything it cannot lower is surfaced fail-closed

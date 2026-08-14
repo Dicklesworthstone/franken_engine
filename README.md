@@ -264,7 +264,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 
 | Surface | Count / size (tracked HEAD, verified 2026-08-14) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.0 MB / 119,900 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
+| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.0 MB / 120,038 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
 | Integration tests in `crates/franken-engine/tests/` | 1,653 top-level files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
@@ -285,7 +285,7 @@ franken_engine/
 ├── crates/
 │   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 615 modules
 │   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 61 internal operator binaries)
-│   │   ├── src/baseline_interpreter.rs   # Core VM (119,900 LoC)
+│   │   ├── src/baseline_interpreter.rs   # Core VM (120,038 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
 │   │   └── tests/                   # 1,653 integration tests (41 RGC gate tests)
 │   ├── franken-extension-host/      # Ed25519-signed extension manifests + capability model
@@ -1097,7 +1097,7 @@ The 615 source modules in `crates/franken-engine/src/` are unrelated alphabetica
 |---|---|
 | **Parser / Lexer** | `parser.rs`, `parser_arena.rs`, `parser_error_recovery.rs`, `parser_evidence_indexer.rs`, `parser_oracle.rs`, `parser_frontier_evidence.rs`, `simd_lexer.rs`, `parallel_parser.rs`, `jsx_tsx_parser.rs` |
 | **AST + Lowering** | `ast.rs` (~182 KB), `lowering_pipeline.rs`, `lowering_gap_inventory.rs`, `lowering_parity_evidence.rs`, `ir_contract.rs`, `static_semantics.rs`, `semantic_canonical_basis.rs` |
-| **Interpreter / VM** | `baseline_interpreter.rs` (~5.0 MB / 119,900 LoC), `bytecode_vm.rs`, `execution_cell.rs`, `execution_orchestrator.rs`, `aot_entrygraph_compiler.rs`, `array_fast_lane.rs` |
+| **Interpreter / VM** | `baseline_interpreter.rs` (~5.0 MB / 120,038 LoC), `bytecode_vm.rs`, `execution_cell.rs`, `execution_orchestrator.rs`, `aot_entrygraph_compiler.rs`, `array_fast_lane.rs` |
 | **Execution Profiles** | `runtime_decision_core.rs` and `regret_bounded_router.rs` (these own the `RuntimeProfile` routing; the `baseline_deterministic_profile` / `baseline_throughput_profile` / `adaptive_profile_router` identifiers are profile labels declared in `baseline_interpreter.rs`, not standalone modules), `js_runtime_lane.rs`, `wasm_runtime_lane.rs`, `hybrid_lane_router.rs` |
 | **Iterator / Generator / Async** | `iterator_protocol.rs`, `promise_model.rs`, `module_async_evaluation.rs` |
 | **Capability / Authority** | `capability.rs`, `capability_witness.rs`, `ambient_authority.rs`, `extension_lifecycle_manager.rs`, `extension_host_authority_guard.rs`, `native_addon_membrane.rs` |
@@ -2271,7 +2271,7 @@ Project-specific jargon, defined once.
 | **Allowed state** | The claim-to-proof matrix's permitted wording state for a specific README/PLAN line range (`observed`, `target`, or `hypothesis`). Stronger wording is rejected by the gate. |
 | **Artifact bundle** | The timestamped directory a gate emits under `artifacts/<gate>/<timestamp>/`. The replay-shaped, self-describing record of what a gate run produced. |
 | **Authenticity hash** | A keyed-HMAC hash (`AuthenticityHash::compute_keyed`) used where content binding alone is insufficient (for example, binding a decision receipt to the originating runtime's persistent identity). |
-| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.0 MB, 119,900 LoC). The runtime's load-bearing VM. |
+| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.0 MB, 120,038 LoC). The runtime's load-bearing VM. |
 | **Bead** | A unit of work in `br` (the Rust beads tracker). Identified as `bd-<base36>` with `.N` children for sub-tasks. Stored in `.beads/issues.jsonl`. |
 | **`br`** | `beads_rust` CLI; the in-tree task tracker. Closes via `br close <id> --reason "..."`. |
 | **Charter** | `docs/RUNTIME_CHARTER.md`, the non-negotiable governance contract for this repo. |

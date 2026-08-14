@@ -441,6 +441,33 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
     cell_transcript
         .verify()
         .expect("process provider crossings must form an exact cell transcript");
+    let budget_settlements: Vec<_> = cell_transcript
+        .events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            CellExecutionEventKind::InterpreterBudgetSettled {
+                instructions_executed,
+                instruction_budget,
+                memory_limit_bytes,
+            } => Some((
+                *instructions_executed,
+                *instruction_budget,
+                *memory_limit_bytes,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        budget_settlements,
+        vec![(
+            result.instructions_executed,
+            cell_transcript.authority.instruction_budget,
+            cell_transcript.authority.memory_budget_bytes,
+        )],
+        "real process execution must settle observed instructions under its sealed cell limits"
+    );
+    assert!(result.instructions_executed <= cell_transcript.authority.instruction_budget);
+    assert!(cell_transcript.authority.memory_budget_bytes > 0);
     let proposals: Vec<&str> = cell_transcript
         .events
         .iter()

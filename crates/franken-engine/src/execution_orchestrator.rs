@@ -308,6 +308,8 @@ impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
 /// is brought under the same cell permit.
 struct CellExecutionDispatch<'a> {
     cancellation_token: &'a CancellationToken,
+    instruction_budget: u64,
+    memory_budget_bytes: u64,
     host_io: Option<Arc<dyn HostIoProvider>>,
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
@@ -2226,6 +2228,8 @@ impl ExecutionOrchestrator {
                     &adaptive_routing_decision,
                     CellExecutionDispatch {
                         cancellation_token: permit.cancellation_token(),
+                        instruction_budget: permit.instruction_budget(),
+                        memory_budget_bytes: permit.memory_budget_bytes(),
                         host_io,
                         process_spawn,
                         host_effect_journal: host_effect_journal.clone(),
@@ -2234,6 +2238,14 @@ impl ExecutionOrchestrator {
                 if let Ok((routed, _)) = &result {
                     permit
                         .observe_ifc_label(routed.result.completion_label.clone())
+                        .map_err(|error| {
+                            OrchestratorError::Cell(CellError::ExecutionBoundary {
+                                cell_id: permit.cell_id().to_string(),
+                                error,
+                            })
+                        })?;
+                    permit
+                        .settle_interpreter_budget(routed.result.instructions_executed)
                         .map_err(|error| {
                             OrchestratorError::Cell(CellError::ExecutionBoundary {
                                 cell_id: permit.cell_id().to_string(),
@@ -2900,6 +2912,8 @@ impl ExecutionOrchestrator {
     fn lane_router_for_execution(
         package: &ExtensionPackage,
         cancellation_token: Option<&CancellationToken>,
+        instruction_budget: u64,
+        memory_budget_bytes: u64,
     ) -> Result<LaneRouter, OrchestratorError> {
         // Console is granted by default because orchestrated console output is
         // capture-only: it lands in `OrchestratorResult::console_output` and the
@@ -2911,6 +2925,8 @@ impl ExecutionOrchestrator {
         let module_root = Self::module_root_for_execution(package)?;
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
+        quickjs_config.instruction_budget = instruction_budget;
+        quickjs_config.max_total_memory_bytes = memory_budget_bytes;
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
@@ -2920,6 +2936,8 @@ impl ExecutionOrchestrator {
         }
 
         let mut v8_config = InterpreterConfig::v8_defaults();
+        v8_config.instruction_budget = instruction_budget;
+        v8_config.max_total_memory_bytes = memory_budget_bytes;
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
@@ -3017,6 +3035,8 @@ impl ExecutionOrchestrator {
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
         let CellExecutionDispatch {
             cancellation_token,
+            instruction_budget,
+            memory_budget_bytes,
             host_io,
             process_spawn,
             host_effect_journal,
@@ -3028,7 +3048,12 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
-        let mut lane_router = Self::lane_router_for_execution(package, Some(cancellation_token))?;
+        let mut lane_router = Self::lane_router_for_execution(
+            package,
+            Some(cancellation_token),
+            instruction_budget,
+            memory_budget_bytes,
+        )?;
         // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
         // real host effects through the algebraic-effects stack.
@@ -4984,13 +5009,66 @@ mod tests {
         for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
             let cancellation = CancellationToken::new();
             cancellation.cancel();
-            let router =
-                ExecutionOrchestrator::lane_router_for_execution(&package, Some(&cancellation))
-                    .expect("lane router should build for the cancel-loop package");
+            let defaults = match lane {
+                LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
+                LaneChoice::V8 => InterpreterConfig::v8_defaults(),
+            };
+            let router = ExecutionOrchestrator::lane_router_for_execution(
+                &package,
+                Some(&cancellation),
+                defaults.instruction_budget,
+                defaults.max_total_memory_bytes,
+            )
+            .expect("lane router should build for the cancel-loop package");
             let error = router
                 .execute(&module, "bd-61y6z-trace", Some(lane))
                 .expect_err("the cancelled jump loop must drain");
             assert_eq!(error, InterpreterError::Cancelled, "lane {lane}");
+        }
+    }
+
+    #[test]
+    fn cell_authority_limits_configure_both_interpreter_lanes() {
+        use crate::ir_contract::Ir3Instruction;
+
+        let package = simple_package();
+        let mut module = Ir3Module::new(ContentHash::compute(b"cell-budget-loop"), "budget-loop");
+        module.instructions.push(Ir3Instruction::Jump { target: 0 });
+
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let router = ExecutionOrchestrator::lane_router_for_execution(
+                &package,
+                None,
+                3,
+                64 * 1024 * 1024,
+            )
+            .expect("authority-limited lane router should build");
+            let instruction_limited = router
+                .execute(&module, "cell-budget-trace", Some(lane))
+                .expect_err("three-instruction authority limit must stop the loop");
+            assert_eq!(
+                instruction_limited,
+                InterpreterError::BudgetExhausted {
+                    executed: 3,
+                    budget: 3,
+                },
+                "lane {lane} must enforce the authority-provided instruction limit"
+            );
+
+            let memory_limited =
+                ExecutionOrchestrator::lane_router_for_execution(&package, None, 10_000, 1)
+                    .expect("memory-limited lane router should build")
+                    .execute(&module, "cell-memory-trace", Some(lane))
+                    .expect_err(
+                        "one-byte authority limit must refuse interpreter memory admission",
+                    );
+            assert!(
+                matches!(
+                    memory_limited,
+                    InterpreterError::MemoryBudgetExceeded { max_bytes: 1, .. }
+                ),
+                "lane {lane} must enforce the authority-provided memory limit, got {memory_limited:?}"
+            );
         }
     }
 
@@ -6831,9 +6909,44 @@ mod tests {
             .expect("the cell authority/effect transcript must replay exactly");
         assert_eq!(cell_transcript.authority.trace_id, result.trace_id);
         assert_eq!(cell_transcript.authority.policy_epoch, result.epoch);
+        let (expected_instruction_budget, expected_memory_limit) =
+            ExecutionOrchestrator::execution_budget_for_lane(result.lane);
+        assert_eq!(
+            cell_transcript.authority.instruction_budget,
+            expected_instruction_budget
+        );
+        assert_eq!(
+            cell_transcript.authority.memory_budget_bytes,
+            expected_memory_limit
+        );
         assert_eq!(
             cell_transcript.authority.initial_ifc_label,
             crate::ifc_artifacts::Label::Public
+        );
+        let budget_settlements: Vec<_> = cell_transcript
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CellExecutionEventKind::InterpreterBudgetSettled {
+                    instructions_executed,
+                    instruction_budget,
+                    memory_limit_bytes,
+                } => Some((
+                    *instructions_executed,
+                    *instruction_budget,
+                    *memory_limit_bytes,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            budget_settlements,
+            vec![(
+                result.instructions_executed,
+                expected_instruction_budget,
+                expected_memory_limit,
+            )],
+            "real provider execution must settle observed instructions under the exact cell limits"
         );
         let proposed_effects: Vec<&str> = cell_transcript
             .events

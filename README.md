@@ -271,7 +271,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | 4,509 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
+| Tracked beads in `.beads/issues.jsonl` | 4,510 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -2016,7 +2016,7 @@ The README's troubleshooting table captures the practical operator hits. For the
 
 ## Beads Workflow & Project Memory
 
-The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,509 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
+The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,510 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
 
 ### Why in-tree
 
@@ -2047,7 +2047,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
-The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,509 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
+The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,510 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
 
 ### Project-memory files (`memory/`)
 

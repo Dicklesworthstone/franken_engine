@@ -51720,6 +51720,43 @@ impl InterpreterCore {
         Ok(number as u32 as i64)
     }
 
+    /// Return the indexed own-property keys that an Array `length` write must
+    /// delete. A valid write that strictly grows a *trusted dense* length cannot
+    /// truncate an index, so avoid enumerating the entire property carrier on
+    /// that common path. The dense-length cache is invalidated by public sparse
+    /// or named writes; requiring it to agree with the visible length keeps a
+    /// low-level caller from using the shortcut after constructing an index
+    /// above that length. Equality remains conservative because the low-level
+    /// public setter may place an index exactly at the recorded length without
+    /// growing it. If either value is missing, malformed, sparse, disagrees
+    /// with the runtime-maintained cache, or is unchanged, keep the scan used
+    /// before this fast path. This trust rule covers states reachable through
+    /// the runtime mutation protocol; it is not a validator for an arbitrarily
+    /// assembled `HeapObject`.
+    fn array_length_truncation_keys(object: &HeapObject, new_length: i64) -> Option<Vec<String>> {
+        if let Some(Value::Int(current_length)) = object.properties.get("length")
+            && *current_length >= 0
+            && new_length > *current_length
+            && u32::try_from(*current_length)
+                .is_ok_and(|length| object.cached_dense_length == Some(length))
+        {
+            return None;
+        }
+
+        let new_length = new_length as u64;
+        Some(
+            object
+                .properties
+                .keys()
+                .filter(|candidate| {
+                    Self::canonical_array_index_key(candidate)
+                        .is_some_and(|index| u64::from(index) >= new_length)
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Property subset used by the two isolated callback mini-interpreters.
     /// Preserve their historical own-property-only behavior while keeping
     /// dynamic string identity exact and honoring the legacy-hook boundary.
@@ -71195,20 +71232,9 @@ impl InterpreterCore {
         } else {
             None
         };
-        let deleted_index_keys = if let Some(new_length) = array_length_assignment {
-            let new_length = new_length as u64;
-            object
-                .properties
-                .keys()
-                .filter(|candidate| {
-                    Self::canonical_array_index_key(candidate)
-                        .is_some_and(|index| u64::from(index) >= new_length)
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let deleted_index_keys = array_length_assignment
+            .and_then(|new_length| Self::array_length_truncation_keys(object, new_length))
+            .unwrap_or_default();
         let projected_value = array_length_assignment.map_or(value, Value::Int);
         let mut projected_cached_dense_length = object.cached_dense_length;
         if object.is_array
@@ -71306,20 +71332,9 @@ impl InterpreterCore {
         } else {
             None
         };
-        let deleted_index_keys = if let Some(new_length) = array_length_assignment {
-            let new_length = new_length as u64;
-            object
-                .properties
-                .keys()
-                .filter(|candidate| {
-                    Self::canonical_array_index_key(candidate)
-                        .is_some_and(|index| u64::from(index) >= new_length)
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let deleted_index_keys = array_length_assignment
+            .and_then(|new_length| Self::array_length_truncation_keys(object, new_length))
+            .unwrap_or_default();
 
         let previous_bytes = object.properties.get(&key).map_or(0, |previous| {
             Self::estimate_property_entry_bytes(&key, previous)
@@ -95146,6 +95161,108 @@ mod async_runtime_tests_current {
             Some(2),
             "the dense-length cache must follow splice's new length, not stay stale at 5"
         );
+    }
+
+    #[test]
+    fn array_length_truncation_classification_skips_growth_scans() {
+        let mut object = HeapObject {
+            is_array: true,
+            ..Default::default()
+        };
+        object.properties.insert("0".to_string(), Value::Int(10));
+        object.properties.insert("1".to_string(), Value::Int(20));
+        object.properties.insert("2".to_string(), Value::Int(30));
+        object
+            .properties
+            .insert("named".to_string(), Value::Int(40));
+        object
+            .properties
+            .insert(u32::MAX.to_string(), Value::Int(50));
+        object
+            .properties
+            .insert("length".to_string(), Value::Int(3));
+        object.cached_dense_length = Some(3);
+
+        assert_eq!(
+            InterpreterCore::array_length_truncation_keys(&object, 4),
+            None,
+            "known growth must not enumerate existing array properties"
+        );
+        assert_eq!(
+            InterpreterCore::array_length_truncation_keys(&object, 3),
+            Some(Vec::new()),
+            "an unchanged low-level length must retain conservative enumeration"
+        );
+        assert_eq!(
+            InterpreterCore::array_length_truncation_keys(&object, 1),
+            Some(vec!["1".to_string(), "2".to_string()]),
+            "shrink must retain the exact canonical index deletion set"
+        );
+
+        object
+            .properties
+            .insert("length".to_string(), Value::str("malformed"));
+        assert_eq!(
+            InterpreterCore::array_length_truncation_keys(&object, 1),
+            Some(vec!["1".to_string(), "2".to_string()]),
+            "malformed prior length must preserve conservative enumeration"
+        );
+
+        object
+            .properties
+            .insert("length".to_string(), Value::Int(3));
+        object.properties.insert("5".to_string(), Value::Int(60));
+        object.cached_dense_length = None;
+        assert_eq!(
+            InterpreterCore::array_length_truncation_keys(&object, 4),
+            Some(vec!["5".to_string()]),
+            "an untrusted sparse state must scan even when the visible length grows"
+        );
+    }
+
+    #[test]
+    fn public_sparse_array_state_keeps_conservative_length_truncation() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("array allocation should succeed");
+        core.set_object_property(array, "length".to_string(), Value::Int(3))
+            .expect("initial length write should succeed");
+        core.set_object_property(array, "5".to_string(), Value::Int(50))
+            .expect("low-level sparse index write should succeed");
+        assert_eq!(
+            core.heap[array.0 as usize].cached_dense_length, None,
+            "a low-level out-of-bounds index must invalidate dense-length trust"
+        );
+
+        core.set_object_property(array, "length".to_string(), Value::Int(4))
+            .expect("length growth over an untrusted sparse state should succeed");
+        let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties.get("5"), None);
+        assert_eq!(object.properties.get("length"), Some(&Value::Int(4)));
+    }
+
+    #[test]
+    fn public_boundary_index_keeps_conservative_equal_length_truncation() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("array allocation should succeed");
+        core.set_object_property(array, "length".to_string(), Value::Int(3))
+            .expect("initial length write should succeed");
+        core.set_object_property(array, "3".to_string(), Value::Int(30))
+            .expect("low-level boundary index write should succeed");
+        assert_eq!(
+            core.heap[array.0 as usize].cached_dense_length,
+            Some(3),
+            "the low-level boundary write demonstrates why equality cannot use the shortcut"
+        );
+
+        core.set_object_property(array, "length".to_string(), Value::Int(3))
+            .expect("equal length write should succeed");
+        let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties.get("3"), None);
+        assert_eq!(object.properties.get("length"), Some(&Value::Int(3)));
     }
 
     /// Index assignment at `arr.length` must grow the ES array length and the

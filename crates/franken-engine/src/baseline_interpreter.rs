@@ -74347,6 +74347,166 @@ mod active_builtin_regressions {
     }
 
     #[test]
+    fn array_pop_callmethod_fast_and_forced_fallback_match_invariants() {
+        fn execute_pop(force_fallback: bool) -> (InterpreterCore, ExecutionResult, ObjectId) {
+            let mut core = test_core();
+            core.decision_receipts = EvidenceLog::with_key([0x5A; 32]);
+            let array = core
+                .alloc_array_from_values(&[Value::Int(10), Value::Int(20), Value::Int(30)])
+                .expect("array allocation should succeed");
+            core.mutate_heap(|heap| {
+                heap[array.0 as usize].cached_dense_length =
+                    if force_fallback { None } else { Some(3) };
+            });
+            assert_eq!(
+                core.heap[array.0 as usize].cached_dense_length,
+                if force_fallback { None } else { Some(3) },
+                "the two arms must differ only in fast-path eligibility"
+            );
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Object(array);
+                registers[1] = Value::BuiltinFunction(BuiltinFunction::array_pop());
+                registers[2] = Value::Undefined;
+            });
+            core.set_register_label(0, Label::Secret)
+                .expect("receiver label should be settable");
+            core.set_register_label(2, Label::Public)
+                .expect("destination label should be settable");
+
+            let mut module = halted_test_module();
+            module.instructions.insert(
+                0,
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 3, count: 0 },
+                    dst: 2,
+                },
+            );
+            let result = core
+                .execute(&module)
+                .expect("Array.prototype.pop CallMethod should execute");
+            (core, result, array)
+        }
+
+        let (fast, fast_result, fast_array) = execute_pop(false);
+        let (fallback, fallback_result, fallback_array) = execute_pop(true);
+
+        assert_eq!(fallback_array, fast_array);
+        assert_eq!(fast.registers[2], Value::Int(30));
+        assert_eq!(fallback.registers[2], fast.registers[2]);
+        assert_eq!(
+            fast.get_register_label(2)
+                .expect("fast result label should exist"),
+            &Label::Secret
+        );
+        assert_eq!(
+            fallback
+                .get_register_label(2)
+                .expect("fallback result label should exist"),
+            fast.get_register_label(2)
+                .expect("fast result label should exist")
+        );
+
+        let fast_object = &fast.heap[fast_array.0 as usize];
+        let fallback_object = &fallback.heap[fallback_array.0 as usize];
+        let fast_properties: Vec<_> = fast_object
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let fallback_properties: Vec<_> = fallback_object
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        assert_eq!(
+            fast_properties,
+            vec![
+                ("0".to_string(), Value::Int(10)),
+                ("1".to_string(), Value::Int(20)),
+                ("length".to_string(), Value::Int(2)),
+            ]
+        );
+        assert_eq!(fallback_properties, fast_properties);
+        assert_eq!(fast_object.cached_dense_length, Some(2));
+        assert_eq!(fallback_object.cached_dense_length, Some(2));
+        assert_eq!(
+            fast.object_mutation_labels.get(&fast_array),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            fallback.object_mutation_labels.get(&fallback_array),
+            Some(&Label::Secret)
+        );
+
+        assert_eq!(
+            fast.estimated_memory_bytes(),
+            fast.recompute_estimated_memory_bytes(),
+            "fast CallMethod execution must preserve exact memory accounting"
+        );
+        assert_eq!(
+            fallback.estimated_memory_bytes(),
+            fallback.recompute_estimated_memory_bytes(),
+            "fallback CallMethod execution must preserve exact memory accounting"
+        );
+        assert_eq!(
+            fallback.estimated_memory_bytes(),
+            fast.estimated_memory_bytes(),
+            "fast and fallback arms must retain the same final live state"
+        );
+
+        assert_eq!(fast_result.value, Value::Object(fast_array));
+        assert_eq!(fallback_result.value, Value::Object(fallback_array));
+        assert_eq!(fast_result.completion_label, Label::Secret);
+        assert_eq!(
+            fallback_result.completion_label,
+            fast_result.completion_label
+        );
+        assert_eq!(
+            fallback_result.instructions_executed,
+            fast_result.instructions_executed
+        );
+        assert_eq!(
+            fallback_result.requested_hook_action,
+            fast_result.requested_hook_action
+        );
+        assert!(fast_result.requested_hook_action.is_none());
+        assert_eq!(fallback_result.witness_events, fast_result.witness_events);
+        assert_eq!(
+            fallback_result.hostcall_decisions,
+            fast_result.hostcall_decisions
+        );
+        assert!(fast_result.hostcall_decisions.is_empty());
+        assert_eq!(fallback_result.events, fast_result.events);
+        assert_eq!(fallback_result.console_output, fast_result.console_output);
+        assert_eq!(
+            fallback_result.iteration_traces,
+            fast_result.iteration_traces
+        );
+        assert_eq!(
+            fallback_result.nondeterminism_trace,
+            fast_result.nondeterminism_trace
+        );
+        assert_eq!(
+            fallback_result.generated_code_audit,
+            fast_result.generated_code_audit
+        );
+        assert_eq!(
+            fallback.decision_receipts().receipts(),
+            fast.decision_receipts().receipts()
+        );
+        assert!(fast.decision_receipts().is_empty());
+        assert!(fast.verify_decision_receipt_chain());
+        assert!(fallback.verify_decision_receipt_chain());
+        assert_eq!(fallback.seed_epoch, fast.seed_epoch);
+        assert!(fast.pending_exception.is_none());
+        assert!(fallback.pending_exception.is_none());
+        assert!(fast.pending_return.is_none());
+        assert!(fallback.pending_return.is_none());
+    }
+
+    #[test]
     fn array_buffer_constructor_allocates_zero_filled_shared_backing() {
         let mut core = test_core();
         core.mutate_registers(|r| {

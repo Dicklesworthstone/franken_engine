@@ -31826,15 +31826,28 @@ impl InterpreterCore {
                 if len == 0 {
                     return Ok(Value::Undefined);
                 }
-                let was_dense = self.array_cache_is_dense(arr_id);
                 let last = len - 1;
                 let element = self
                     .array_index_value(arr_id, last)?
                     .unwrap_or(Value::Undefined);
-                self.remove_object_property(arr_id, &last.to_string())?;
-                let new_len = i64::try_from(last).unwrap_or(i64::MAX);
-                self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
-                self.refresh_dense_length_cache(arr_id, last, was_dense);
+                // Sample trust immediately before the destructive mutation.
+                let was_dense = self.array_cache_is_dense(arr_id);
+                let trusted_dense_length = self.array_cache_matches_visible_length(arr_id, len);
+                let last_key = last.to_string();
+                let removed_tail = self.remove_object_property(arr_id, &last_key)?;
+                let updated_without_scan = trusted_dense_length
+                    && removed_tail
+                    && self.set_array_length_after_dense_tail_removal(
+                        arr_id,
+                        len,
+                        last,
+                        &last_key,
+                    )?;
+                if !updated_without_scan {
+                    let new_len = i64::try_from(last).unwrap_or(i64::MAX);
+                    self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
+                    self.refresh_dense_length_cache(arr_id, last, was_dense);
+                }
                 Ok(element)
             }
             BuiltinFunctionKind::ArrayShift => {
@@ -51267,6 +51280,92 @@ impl InterpreterCore {
             .get(array_id.0 as usize)
             .map(|object| object.cached_dense_length.is_some())
             .unwrap_or(false)
+    }
+
+    /// Whether the runtime-maintained dense cache agrees with the visible
+    /// integral Array length. A populated but stale low-level cache is not
+    /// authority for a mutation shortcut.
+    fn array_cache_matches_visible_length(&self, array_id: ObjectId, length: usize) -> bool {
+        let Ok(cached_length) = u32::try_from(length) else {
+            return false;
+        };
+        self.heap.get(array_id.0 as usize).is_some_and(|object| {
+            object.is_array
+                && object.cached_dense_length == Some(cached_length)
+                && matches!(
+                    object.properties.get("length"),
+                    Some(Value::Int(visible_length))
+                        if usize::try_from(*visible_length)
+                            .is_ok_and(|visible_length| visible_length == length)
+                )
+        })
+    }
+
+    /// Finish receiver-aware `Array.prototype.pop` after a trusted dense tail
+    /// was removed. The general Array `length` setter must enumerate every own
+    /// property on shrink because arbitrary sparse indices may need deletion.
+    /// Here the dense cache matched `old_length`, the exact tail removal
+    /// succeeded, and this helper rechecks that the visible state still has the
+    /// expected shape. Updating the remaining `length` entry therefore cannot
+    /// truncate another index and needs no carrier scan. Any failed recheck
+    /// returns `false` so the caller preserves the conservative setter path.
+    fn set_array_length_after_dense_tail_removal(
+        &mut self,
+        array_id: ObjectId,
+        old_length: usize,
+        new_length: usize,
+        removed_tail_key: &str,
+    ) -> Result<bool, InterpreterError> {
+        let heap_index = array_id.0 as usize;
+        let Some(object) = self.heap.get(heap_index) else {
+            return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
+        };
+        // A low-level write at exactly the visible length does not invalidate
+        // the cache, yet a subsequent shrink must delete that boundary index.
+        // Larger out-of-bounds writes do invalidate the cache, so this single
+        // lookup closes the only trusted-cache escape without restoring a scan.
+        let boundary_index_key = u32::try_from(old_length)
+            .ok()
+            .filter(|index| *index != u32::MAX)
+            .map(|index| index.to_string());
+        if !object.is_array
+            || object.is_frozen
+            || old_length.checked_sub(1) != Some(new_length)
+            || object.properties.exact_len() != object.properties.len()
+            || object.properties.get(removed_tail_key).is_some()
+            || boundary_index_key
+                .as_ref()
+                .is_some_and(|key| object.properties.get(key).is_some())
+            || !matches!(
+                object.properties.get("length"),
+                Some(Value::Int(visible_length))
+                    if usize::try_from(*visible_length)
+                        .is_ok_and(|visible_length| visible_length == old_length)
+            )
+        {
+            return Ok(false);
+        }
+
+        let Ok(cached_length) = u32::try_from(new_length) else {
+            return Ok(false);
+        };
+        let new_length_value = Value::Int(i64::from(cached_length));
+        let previous_bytes = object.properties.get("length").map_or(0, |previous| {
+            Self::estimate_property_entry_bytes("length", previous)
+        });
+        let new_bytes = Self::estimate_property_entry_bytes("length", &new_length_value);
+        self.apply_memory_component_delta(previous_bytes, new_bytes)?;
+        self.mutate_heap(|heap| {
+            let object = &mut heap[heap_index];
+            let length = object
+                .properties
+                .get_mut("length")
+                .expect("visible length was checked immediately before mutation");
+            *length = new_length_value;
+            object.cached_dense_length = Some(cached_length);
+        });
+        self.gc_write_barrier(array_id);
+        Ok(true)
     }
 
     /// Re-establish the dense-length cache after a contiguous in-place array
@@ -74090,6 +74189,161 @@ mod active_builtin_regressions {
             Some(Value::Object(receiver)),
             None,
         )
+    }
+
+    #[test]
+    fn dense_array_pop_updates_tail_length_without_state_drift() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(10), Value::Int(20), Value::Int(30)])
+            .expect("dense array allocation should succeed");
+        let pop = BuiltinFunction::array_pop();
+
+        for (expected_value, expected_length) in [
+            (Value::Int(30), 2),
+            (Value::Int(20), 1),
+            (Value::Int(10), 0),
+        ] {
+            assert_eq!(
+                call_builtin_for_test(&mut core, pop.clone(), array, &[])
+                    .expect("dense Array.prototype.pop should succeed"),
+                expected_value
+            );
+            let object = &core.heap[array.0 as usize];
+            assert_eq!(
+                object.properties.get("length"),
+                Some(&Value::Int(expected_length))
+            );
+            assert_eq!(
+                object.cached_dense_length,
+                Some(u32::try_from(expected_length).expect("small test length fits u32"))
+            );
+            assert_eq!(
+                object.properties.get(&expected_length.to_string()),
+                None,
+                "the removed tail must not remain visible"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "dense pop must keep incremental memory accounting exact"
+            );
+        }
+
+        let memory_at_empty = core.estimated_memory_bytes();
+        assert_eq!(
+            call_builtin_for_test(&mut core, pop, array, &[])
+                .expect("popping an empty dense array should succeed"),
+            Value::Undefined
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_at_empty);
+
+        assert_eq!(
+            call_builtin_for_test(
+                &mut core,
+                BuiltinFunction::array_push(),
+                array,
+                &[Value::Int(40)],
+            )
+            .expect("push after draining the array should succeed"),
+            Value::Int(1)
+        );
+        let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties.get("0"), Some(&Value::Int(40)));
+        assert_eq!(object.properties.get("length"), Some(&Value::Int(1)));
+        assert_eq!(object.cached_dense_length, Some(1));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn sparse_array_pop_keeps_conservative_truncation_fallback() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation should succeed");
+        core.set_object_property(array, "5".to_string(), Value::Int(99))
+            .expect("low-level sparse index write should succeed");
+        assert_eq!(core.heap[array.0 as usize].cached_dense_length, None);
+
+        assert_eq!(
+            call_builtin_for_test(&mut core, BuiltinFunction::array_pop(), array, &[])
+                .expect("sparse Array.prototype.pop should use the general length setter"),
+            Value::Int(3)
+        );
+        let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties.get("2"), None);
+        assert_eq!(
+            object.properties.get("5"),
+            None,
+            "the conservative shrink path must delete a sparse index above the new length"
+        );
+        assert_eq!(object.properties.get("length"), Some(&Value::Int(2)));
+        assert_eq!(object.cached_dense_length, Some(2));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn boundary_index_array_pop_keeps_conservative_truncation_fallback() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation should succeed");
+        core.set_object_property(array, "3".to_string(), Value::Int(99))
+            .expect("low-level boundary index write should succeed");
+        assert_eq!(
+            core.heap[array.0 as usize].cached_dense_length,
+            Some(3),
+            "the boundary write is the trusted-cache escape this regression covers"
+        );
+
+        assert_eq!(
+            call_builtin_for_test(&mut core, BuiltinFunction::array_pop(), array, &[])
+                .expect("boundary-index Array.prototype.pop should use the general length setter"),
+            Value::Int(3)
+        );
+        let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties.get("2"), None);
+        assert_eq!(
+            object.properties.get("3"),
+            None,
+            "the conservative shrink path must delete the old-length boundary index"
+        );
+        assert_eq!(object.properties.get("length"), Some(&Value::Int(2)));
+        assert_eq!(object.cached_dense_length, Some(2));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn frozen_array_pop_preserves_error_and_state() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(7), Value::Int(8)])
+            .expect("array allocation should succeed");
+        core.mutate_heap(|heap| heap[array.0 as usize].is_frozen = true);
+        let memory_before = core.estimated_memory_bytes();
+
+        let error = call_builtin_for_test(&mut core, BuiltinFunction::array_pop(), array, &[])
+            .expect_err("popping a frozen array must fail");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+
+        let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties.get("1"), Some(&Value::Int(8)));
+        assert_eq!(object.properties.get("length"), Some(&Value::Int(2)));
+        assert_eq!(object.cached_dense_length, Some(2));
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

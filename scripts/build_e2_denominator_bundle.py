@@ -2,7 +2,7 @@
 """Build the content-addressed E2 Node/Bun denominator reproducibility bundle.
 
 Transforms a `differential-oracle perf` report (`report.json`, schema
-`franken-engine.differential-oracle-perf.v1`) into the four-file reproducibility
+`franken-engine.differential-oracle-perf.v2`) into the four-file reproducibility
 bundle contract (`docs/REPRODUCIBILITY_CONTRACT.md`):
 
   - denominator.json  (the distilled, measured Node/Bun denominator + correctness verdicts)
@@ -40,7 +40,7 @@ ENV_SCHEMA = "franken-engine.env.v1"
 MANIFEST_SCHEMA = "franken-engine.manifest.v1"
 REPRO_LOCK_SCHEMA = "franken-engine.repro-lock.v1"
 DEGRADED_SCHEMA = "franken-engine.e2-denominator-degraded-receipt.v1"
-PERF_REPORT_SCHEMA = "franken-engine.differential-oracle-perf.v1"
+PERF_REPORT_SCHEMA = "franken-engine.differential-oracle-perf.v2"
 
 CLAIM_ID = "FE-CLAIM-010"
 OWNING_BEAD = "bd-fqlfw.2.6"

@@ -13,11 +13,11 @@
 //!   Process startup is therefore excluded by construction, and the external
 //!   runtime gets full JIT warm-up — a deliberately *conservative* bias in
 //!   favour of Node/Bun.
-//! * The engine lane times `HybridRouter::eval` per iteration on a fresh
-//!   router, so the engine pays its full parse → lower → execute pipeline on
-//!   every measured iteration while Node/Bun amortize compilation. This bias
-//!   is also conservative against FrankenEngine and is recorded in the
-//!   fairness notes.
+//! * The engine lane prepares immutable IR3 ONCE, then executes that handle on
+//!   a fresh `HybridRouter` (and therefore a fresh interpreter core) for every
+//!   warm-up and measured iteration. Preparation is timed separately. This
+//!   matches the external compile-once denominator at the source-compilation
+//!   boundary while retaining per-execution runtime isolation.
 //! * Per-iteration nanosecond timings (warm-up and measured) are retained in
 //!   the report and exported as `diffperf.iteration` events so a skeptic can
 //!   re-derive every aggregate from raw data.
@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::HybridRouter;
+use crate::{EngineKind, HybridRouter, RouteReason};
 use crate::differential_oracle::{
     DifferentialBackend, DifferentialComparisonMode, DifferentialComparisonVerdict,
     DifferentialHostFacts, DifferentialOracleInput, ExternalRuntimeSpec, VersionProbe,
@@ -54,7 +54,7 @@ use crate::differential_oracle::{
     run_differential_oracle, sha256_hex,
 };
 
-pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v1";
+pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v2";
 
 /// FE-CLAIM-010 floor: ">= 3x weighted-geometric-mean throughput" in
 /// fixed-point millionths (1_000_000 == 1.0x).
@@ -93,8 +93,9 @@ impl PerfCorpusCase {
     }
 }
 
-/// Tunable measurement policy. The defaults mirror the fairness policy pinned
-/// in `benchmarks/runtime_comparison/manifest.json`.
+/// Tunable measurement policy for this performance arm. Every selected value
+/// is serialized into the report; the runtime-comparison manifest's separate
+/// fairness policy is not implicitly loaded by this API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PerfArmConfig {
     pub warmup_iterations: u32,
@@ -133,6 +134,7 @@ impl Default for PerfArmConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerfPhase {
+    Preparation,
     Warmup,
     Measured,
 }
@@ -182,8 +184,32 @@ pub struct PerfBackendCaseResult {
     pub resolved_program: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// One-time source preparation/compilation cost excluded from the warmup
+    /// and steady-state samples below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_ns: Option<u64>,
+    /// Concrete in-process lane selected by the prepared router. External
+    /// backends leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_kind: Option<EngineKind>,
+    /// Concrete source-routing reason selected by the prepared router.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_reason: Option<RouteReason>,
     pub warmup_ns: Vec<u64>,
     pub measured_ns: Vec<u64>,
+    /// SHA-256 of the observable console stream for every warm-up invocation,
+    /// in the same order as `warmup_ns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warmup_observation_sha256: Vec<String>,
+    /// SHA-256 of the observable console stream for every measured invocation,
+    /// in the same order as `measured_ns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measured_observation_sha256: Vec<String>,
+    /// True only when every invocation produced at least one captured console
+    /// effect, so the digest represents a real observable rather than an empty
+    /// placeholder.
+    #[serde(default)]
+    pub observations_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<PerfSampleStats>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -198,6 +224,10 @@ pub struct PerfCaseResult {
     /// the same canonical structured value for this source.
     pub behavior_equivalent: bool,
     pub equivalence_detail: String,
+    /// Exact warm-up/measured lifecycle observations were stable within each
+    /// backend and agreed across Node, Bun, and FrankenEngine.
+    pub measured_lifecycle_equivalent: bool,
+    pub measured_lifecycle_detail: String,
     pub engine: PerfBackendCaseResult,
     pub node: PerfBackendCaseResult,
     pub bun: PerfBackendCaseResult,
@@ -239,6 +269,10 @@ pub struct PerfEnvironmentManifest {
     pub bun_version: Option<String>,
     pub warmup_iterations: u32,
     pub measured_iterations: u32,
+    /// Exact lifecycle used for the FrankenEngine timing denominator.
+    pub engine_execution_lifecycle: String,
+    /// Exact lifecycle used for the Node/Bun timing denominator.
+    pub external_execution_lifecycle: String,
     /// Engine-lane instruction budget in force for this run (containment
     /// defaults are overridden for measurement; see `PerfArmConfig`).
     #[serde(default)]
@@ -312,40 +346,77 @@ pub fn build_external_perf_harness(source: &str, warmup: u32, measured: u32) -> 
     let escaped = serde_json::to_string(source).unwrap_or_else(|_| "\"\"".to_string());
     format!(
         "const __feSrc = {escaped};\n\
+         const __fePrepareStart = process.hrtime.bigint();\n\
          const __feFn = new Function(__feSrc);\n\
+         const __fePreparationNs = Number(process.hrtime.bigint() - __fePrepareStart);\n\
          const __feRealLog = console.log;\n\
+         const __feRealInfo = console.info;\n\
+         const __feRealWarn = console.warn;\n\
+         const __feRealError = console.error;\n\
          let __feSink = 0;\n\
-         console.log = function () {{ __feSink += arguments.length; }};\n\
+         let __feStdout = [];\n\
+         let __feStderr = [];\n\
+         function __feCapture(target, args) {{\n\
+           const rendered = [];\n\
+           for (let i = 0; i < args.length; i += 1) rendered.push(String(args[i]));\n\
+           target.push(rendered.join(' ') + '\\n');\n\
+           __feSink += args.length;\n\
+         }}\n\
+         console.log = function () {{ __feCapture(__feStdout, arguments); }};\n\
+         console.info = function () {{ __feCapture(__feStdout, arguments); }};\n\
+         console.warn = function () {{ __feCapture(__feStderr, arguments); }};\n\
+         console.error = function () {{ __feCapture(__feStderr, arguments); }};\n\
          const __feWarm = [];\n\
          const __feMeas = [];\n\
+         const __feWarmObservations = [];\n\
+         const __feMeasuredObservations = [];\n\
          for (let i = 0; i < {warmup}; i += 1) {{\n\
+           __feStdout = []; __feStderr = [];\n\
            const t0 = process.hrtime.bigint();\n\
            __feFn();\n\
            const t1 = process.hrtime.bigint();\n\
            __feWarm.push(Number(t1 - t0));\n\
+           __feWarmObservations.push(__feStdout.join('') + '\\u0000' + __feStderr.join(''));\n\
          }}\n\
          for (let i = 0; i < {measured}; i += 1) {{\n\
+           __feStdout = []; __feStderr = [];\n\
            const t0 = process.hrtime.bigint();\n\
            __feFn();\n\
            const t1 = process.hrtime.bigint();\n\
            __feMeas.push(Number(t1 - t0));\n\
+           __feMeasuredObservations.push(__feStdout.join('') + '\\u0000' + __feStderr.join(''));\n\
          }}\n\
          console.log = __feRealLog;\n\
-         console.log('{sentinel}' + JSON.stringify({{ warmup_ns: __feWarm, measured_ns: __feMeas, sink: __feSink }}));\n",
+         console.info = __feRealInfo; console.warn = __feRealWarn; console.error = __feRealError;\n\
+         console.log('{sentinel}' + JSON.stringify({{ preparation_ns: __fePreparationNs, warmup_ns: __feWarm, measured_ns: __feMeas, warmup_observations: __feWarmObservations, measured_observations: __feMeasuredObservations, sink: __feSink }}));\n",
         sentinel = PERF_HARNESS_SENTINEL,
     )
 }
 
 #[derive(Debug, Deserialize)]
 struct HarnessPayload {
+    preparation_ns: u64,
     warmup_ns: Vec<u64>,
     measured_ns: Vec<u64>,
+    warmup_observations: Vec<String>,
+    measured_observations: Vec<String>,
 }
 
-/// Extracts (warmup, measured) nanosecond vectors from harness stdout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPerfHarnessOutput {
+    pub preparation_ns: u64,
+    pub warmup_ns: Vec<u64>,
+    pub measured_ns: Vec<u64>,
+    pub warmup_observation_sha256: Vec<String>,
+    pub measured_observation_sha256: Vec<String>,
+    pub observations_complete: bool,
+}
+
+/// Extracts one-time preparation, per-invocation timing, and exact observable
+/// console-stream digests from harness stdout.
 /// The LAST sentinel line wins so workload output cannot spoof the payload
 /// unless it also runs after the harness completes.
-pub fn parse_perf_harness_output(stdout: &str) -> Result<(Vec<u64>, Vec<u64>), String> {
+pub fn parse_perf_harness_output(stdout: &str) -> Result<ParsedPerfHarnessOutput, String> {
     let payload_line = stdout
         .lines()
         .rev()
@@ -353,7 +424,32 @@ pub fn parse_perf_harness_output(stdout: &str) -> Result<(Vec<u64>, Vec<u64>), S
         .ok_or_else(|| format!("no `{PERF_HARNESS_SENTINEL}` sentinel line in harness stdout"))?;
     let payload: HarnessPayload = serde_json::from_str(payload_line)
         .map_err(|error| format!("malformed harness timing payload: {error}"))?;
-    Ok((payload.warmup_ns, payload.measured_ns))
+    if payload.warmup_ns.len() != payload.warmup_observations.len()
+        || payload.measured_ns.len() != payload.measured_observations.len()
+    {
+        return Err("harness timing/observation vector lengths differ".to_string());
+    }
+    let observations_complete = payload
+        .warmup_observations
+        .iter()
+        .chain(&payload.measured_observations)
+        .all(|observation| observation != "\0");
+    Ok(ParsedPerfHarnessOutput {
+        preparation_ns: payload.preparation_ns,
+        warmup_ns: payload.warmup_ns,
+        measured_ns: payload.measured_ns,
+        warmup_observation_sha256: payload
+            .warmup_observations
+            .iter()
+            .map(|observation| sha256_hex(observation.as_bytes()))
+            .collect(),
+        measured_observation_sha256: payload
+            .measured_observations
+            .iter()
+            .map(|observation| sha256_hex(observation.as_bytes()))
+            .collect(),
+        observations_complete,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +685,10 @@ pub fn capture_perf_environment(
         bun_version,
         warmup_iterations: config.warmup_iterations,
         measured_iterations: config.measured_iterations,
+        engine_execution_lifecycle: "prepare_once_fresh_router_and_interpreter_core_per_iteration"
+            .to_string(),
+        external_execution_lifecycle: "new_function_once_single_process_shared_realm_and_jit_state"
+            .to_string(),
         engine_instruction_budget: config.engine_instruction_budget,
         corpus_case_count: corpus.len(),
         corpus_sha256: corpus_sha256(corpus),
@@ -646,9 +746,10 @@ pub fn evaluate_fairness(
             ));
         }
     }
-    notes.push(
-        "engine lane pays full parse+lower+execute per iteration while node/bun compile once \
-         and JIT-warm — conservative against FrankenEngine"
+    violations.push(
+        "execution lifecycle is not symmetric: FrankenEngine uses a fresh router/interpreter \
+         core per iteration while node/bun reuse one process, realm, and JIT state; this run is \
+         diagnostic-only"
             .to_string(),
     );
     notes.push(format!(
@@ -682,8 +783,14 @@ fn run_external_perf_case(
                 status: PerfMeasurementStatus::Unavailable,
                 resolved_program: resolve_program_path(spec.program.as_str()),
                 version: None,
+                preparation_ns: None,
+                engine_kind: None,
+                route_reason: None,
                 warmup_ns: Vec::new(),
                 measured_ns: Vec::new(),
+                warmup_observation_sha256: Vec::new(),
+                measured_observation_sha256: Vec::new(),
+                observations_complete: false,
                 stats: None,
                 diagnostics: vec![message],
             };
@@ -703,8 +810,14 @@ fn run_external_perf_case(
             status: PerfMeasurementStatus::Timeout,
             resolved_program: resolve_program_path(spec.program.as_str()),
             version,
+            preparation_ns: None,
+            engine_kind: None,
+            route_reason: None,
             warmup_ns: Vec::new(),
             measured_ns: Vec::new(),
+            warmup_observation_sha256: Vec::new(),
+            measured_observation_sha256: Vec::new(),
+            observations_complete: false,
             stats: None,
             diagnostics: vec![format!(
                 "perf harness exceeded {}ms timeout",
@@ -716,8 +829,14 @@ fn run_external_perf_case(
             status: PerfMeasurementStatus::Failed,
             resolved_program: resolve_program_path(spec.program.as_str()),
             version,
+            preparation_ns: None,
+            engine_kind: None,
+            route_reason: None,
             warmup_ns: Vec::new(),
             measured_ns: Vec::new(),
+            warmup_observation_sha256: Vec::new(),
+            measured_observation_sha256: Vec::new(),
+            observations_complete: false,
             stats: None,
             diagnostics: vec![format!(
                 "perf harness exited with {:?}: {}",
@@ -731,15 +850,21 @@ fn run_external_perf_case(
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             match parse_perf_harness_output(&stdout) {
-                Ok((warmup_ns, measured_ns)) => {
-                    let stats = compute_sample_stats(&measured_ns);
+                Ok(parsed) => {
+                    let stats = compute_sample_stats(&parsed.measured_ns);
                     PerfBackendCaseResult {
                         backend: spec.runtime_id,
                         status: PerfMeasurementStatus::Measured,
                         resolved_program: resolve_program_path(spec.program.as_str()),
                         version,
-                        warmup_ns,
-                        measured_ns,
+                        preparation_ns: Some(parsed.preparation_ns),
+                        engine_kind: None,
+                        route_reason: None,
+                        warmup_ns: parsed.warmup_ns,
+                        measured_ns: parsed.measured_ns,
+                        warmup_observation_sha256: parsed.warmup_observation_sha256,
+                        measured_observation_sha256: parsed.measured_observation_sha256,
+                        observations_complete: parsed.observations_complete,
                         stats,
                         diagnostics: Vec::new(),
                     }
@@ -749,8 +874,14 @@ fn run_external_perf_case(
                     status: PerfMeasurementStatus::Failed,
                     resolved_program: resolve_program_path(spec.program.as_str()),
                     version,
+                    preparation_ns: None,
+                    engine_kind: None,
+                    route_reason: None,
                     warmup_ns: Vec::new(),
                     measured_ns: Vec::new(),
+                    warmup_observation_sha256: Vec::new(),
+                    measured_observation_sha256: Vec::new(),
+                    observations_complete: false,
                     stats: None,
                     diagnostics: vec![message],
                 },
@@ -761,8 +892,14 @@ fn run_external_perf_case(
             status: PerfMeasurementStatus::Unavailable,
             resolved_program: resolve_program_path(spec.program.as_str()),
             version,
+            preparation_ns: None,
+            engine_kind: None,
+            route_reason: None,
             warmup_ns: Vec::new(),
             measured_ns: Vec::new(),
+            warmup_observation_sha256: Vec::new(),
+            measured_observation_sha256: Vec::new(),
+            observations_complete: false,
             stats: None,
             diagnostics: vec![format!("failed to spawn perf harness: {error}")],
         },
@@ -770,8 +907,40 @@ fn run_external_perf_case(
 }
 
 fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCaseResult {
+    let preparation_started = Instant::now();
+    let prepared = HybridRouter::prepare_eval(source);
+    let preparation_ns =
+        u64::try_from(preparation_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return PerfBackendCaseResult {
+                backend: DifferentialBackend::FrankenEngine,
+                status: PerfMeasurementStatus::Failed,
+                resolved_program: None,
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                preparation_ns: Some(preparation_ns),
+                engine_kind: None,
+                route_reason: None,
+                warmup_ns: Vec::new(),
+                measured_ns: Vec::new(),
+                warmup_observation_sha256: Vec::new(),
+                measured_observation_sha256: Vec::new(),
+                observations_complete: false,
+                stats: None,
+                diagnostics: vec![format!("engine preparation failed: {error}")],
+            };
+        }
+    };
     let mut warmup_ns = Vec::with_capacity(config.warmup_iterations as usize);
     let mut measured_ns = Vec::with_capacity(config.measured_iterations as usize);
+    let mut warmup_observation_sha256 =
+        Vec::with_capacity(config.warmup_iterations as usize);
+    let mut measured_observation_sha256 =
+        Vec::with_capacity(config.measured_iterations as usize);
+    let mut observations_complete = true;
+    let mut engine_kind = None;
+    let mut route_reason = None;
     let mut diagnostics = Vec::new();
     let mut failed = false;
 
@@ -784,15 +953,32 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
         for _ in 0..count {
             let mut router = HybridRouter::default();
             let started = Instant::now();
-            let outcome =
-                router.eval_with_instruction_budget(source, config.engine_instruction_budget);
+            let outcome = router
+                .eval_prepared_with_instruction_budget(&prepared, config.engine_instruction_budget);
             let elapsed = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
             match outcome {
-                Ok(_) => {
+                Ok(outcome) => {
+                    if engine_kind.is_some_and(|kind| kind != outcome.engine)
+                        || route_reason.is_some_and(|reason| reason != outcome.route_reason)
+                    {
+                        diagnostics.push(
+                            "prepared engine kind or route reason changed between invocations"
+                                .to_string(),
+                        );
+                        failed = true;
+                        break;
+                    }
+                    engine_kind.get_or_insert(outcome.engine);
+                    route_reason.get_or_insert(outcome.route_reason);
+                    let (observation_sha256, observation_present) =
+                        engine_console_observation_sha256(&outcome.console_output);
+                    observations_complete &= observation_present;
                     if phase_measured {
                         measured_ns.push(elapsed);
+                        measured_observation_sha256.push(observation_sha256);
                     } else {
                         warmup_ns.push(elapsed);
+                        warmup_observation_sha256.push(observation_sha256);
                     }
                 }
                 Err(error) => {
@@ -813,8 +999,14 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
             status: PerfMeasurementStatus::Failed,
             resolved_program: None,
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            preparation_ns: Some(preparation_ns),
+            engine_kind,
+            route_reason,
             warmup_ns: Vec::new(),
             measured_ns: Vec::new(),
+            warmup_observation_sha256: Vec::new(),
+            measured_observation_sha256: Vec::new(),
+            observations_complete: false,
             stats: None,
             diagnostics,
         };
@@ -825,11 +1017,97 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
         status: PerfMeasurementStatus::Measured,
         resolved_program: None,
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        preparation_ns: Some(preparation_ns),
+        engine_kind,
+        route_reason,
         warmup_ns,
         measured_ns,
+        warmup_observation_sha256,
+        measured_observation_sha256,
+        observations_complete,
         stats,
         diagnostics,
     }
+}
+
+fn engine_console_observation_sha256(
+    entries: &[crate::baseline_interpreter::ConsoleEntry],
+) -> (String, bool) {
+    use crate::baseline_interpreter::ConsoleLevel;
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for entry in entries {
+        let target = match entry.level {
+            ConsoleLevel::Log | ConsoleLevel::Info => &mut stdout,
+            ConsoleLevel::Warn | ConsoleLevel::Error => &mut stderr,
+        };
+        target.push_str(&entry.message);
+        target.push('\n');
+    }
+    let present = !entries.is_empty();
+    stdout.push('\0');
+    stdout.push_str(&stderr);
+    (sha256_hex(stdout.as_bytes()), present)
+}
+
+fn measured_lifecycle_equivalence(
+    engine: &PerfBackendCaseResult,
+    node: &PerfBackendCaseResult,
+    bun: &PerfBackendCaseResult,
+) -> (bool, String) {
+    fn stable_observation(
+        label: &str,
+        result: &PerfBackendCaseResult,
+    ) -> Result<String, String> {
+        if result.status != PerfMeasurementStatus::Measured {
+            return Err(format!("{label} lifecycle was not measured"));
+        }
+        if !result.observations_complete {
+            return Err(format!(
+                "{label} lifecycle produced an invocation without a captured console effect"
+            ));
+        }
+        let mut observations = result
+            .warmup_observation_sha256
+            .iter()
+            .chain(&result.measured_observation_sha256);
+        let Some(first) = observations.next() else {
+            return Err(format!("{label} lifecycle produced no observation digest"));
+        };
+        if observations.any(|observation| observation != first) {
+            return Err(format!(
+                "{label} observable output changed between warmup/measured invocations"
+            ));
+        }
+        Ok(first.clone())
+    }
+
+    let engine_observation = match stable_observation("engine", engine) {
+        Ok(observation) => observation,
+        Err(message) => return (false, message),
+    };
+    let node_observation = match stable_observation("node", node) {
+        Ok(observation) => observation,
+        Err(message) => return (false, message),
+    };
+    let bun_observation = match stable_observation("bun", bun) {
+        Ok(observation) => observation,
+        Err(message) => return (false, message),
+    };
+    if engine_observation != node_observation || engine_observation != bun_observation {
+        return (
+            false,
+            "engine/node/bun observable digests differ in the exact measured lifecycle"
+                .to_string(),
+        );
+    }
+    (
+        true,
+        format!(
+            "engine/node/bun warmup and measured invocations share observable digest {engine_observation}"
+        ),
+    )
 }
 
 /// Output-equivalence precondition via the correctness arm: Node, Bun, and
@@ -928,6 +1206,7 @@ pub fn build_denominator(
                 .is_some_and(|s| s.cv_millionths <= config.max_cv_millionths)
         };
         if case.behavior_equivalent
+            && case.measured_lifecycle_equivalent
             && case.engine.status == PerfMeasurementStatus::Measured
             && baseline_result.status == PerfMeasurementStatus::Measured
             && cv_ok(&case.engine)
@@ -989,12 +1268,24 @@ pub fn run_differential_perf(
         let engine = run_engine_perf_case(case.source.as_str(), config);
         let node = run_external_perf_case(&config.node, case.source.as_str(), config);
         let bun = run_external_perf_case(&config.bun, case.source.as_str(), config);
+        let (measured_lifecycle_equivalent, measured_lifecycle_detail) =
+            measured_lifecycle_equivalence(&engine, &node, &bun);
 
         for (backend_result, backend) in [
             (&engine, DifferentialBackend::FrankenEngine),
             (&node, DifferentialBackend::NodeLts),
             (&bun, DifferentialBackend::BunStable),
         ] {
+            if let Some(duration_ns) = backend_result.preparation_ns {
+                events.push(PerfIterationEvent {
+                    event: "diffperf.iteration".to_string(),
+                    case_id: case.case_id.clone(),
+                    backend,
+                    phase: PerfPhase::Preparation,
+                    index: 0,
+                    duration_ns,
+                });
+            }
             for (phase, samples) in [
                 (PerfPhase::Warmup, &backend_result.warmup_ns),
                 (PerfPhase::Measured, &backend_result.measured_ns),
@@ -1018,6 +1309,9 @@ pub fn run_differential_perf(
         if !behavior_equivalent {
             exclusion_reasons.push(equivalence_detail.clone());
         }
+        if !measured_lifecycle_equivalent {
+            exclusion_reasons.push(measured_lifecycle_detail.clone());
+        }
         for (label, result) in [("engine", &engine), ("node", &node), ("bun", &bun)] {
             if result.status != PerfMeasurementStatus::Measured {
                 exclusion_reasons.push(format!(
@@ -1039,6 +1333,8 @@ pub fn run_differential_perf(
             source_sha256: sha256_hex(case.source.as_bytes()),
             behavior_equivalent,
             equivalence_detail,
+            measured_lifecycle_equivalent,
+            measured_lifecycle_detail,
             engine,
             node,
             bun,
@@ -1128,6 +1424,7 @@ mod tests {
             status: PerfMeasurementStatus::Measured,
             resolved_program: None,
             version: Some("test".to_string()),
+            preparation_ns: Some(1),
             warmup_ns: Vec::new(),
             measured_ns: samples.to_vec(),
             stats: compute_sample_stats(samples),
@@ -1188,14 +1485,16 @@ mod tests {
     fn harness_compiles_source_once() {
         let harness = build_external_perf_harness("1 + 1;", 1, 1);
         assert_eq!(harness.matches("new Function").count(), 1);
+        assert!(harness.contains("__fePreparationNs"));
     }
 
     #[test]
     fn parse_harness_output_happy_path() {
         let stdout = format!(
-            "workload noise\n{PERF_HARNESS_SENTINEL}{{\"warmup_ns\":[5],\"measured_ns\":[10,11],\"sink\":3}}\n"
+            "workload noise\n{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":3,\"warmup_ns\":[5],\"measured_ns\":[10,11],\"sink\":3}}\n"
         );
-        let (warm, meas) = parse_perf_harness_output(&stdout).expect("parse");
+        let (preparation, warm, meas) = parse_perf_harness_output(&stdout).expect("parse");
+        assert_eq!(preparation, 3);
         assert_eq!(warm, vec![5]);
         assert_eq!(meas, vec![10, 11]);
     }
@@ -1216,10 +1515,11 @@ mod tests {
     #[test]
     fn parse_harness_output_uses_last_sentinel_line() {
         let stdout = format!(
-            "{PERF_HARNESS_SENTINEL}{{\"warmup_ns\":[1],\"measured_ns\":[1],\"sink\":0}}\n\
-             {PERF_HARNESS_SENTINEL}{{\"warmup_ns\":[2],\"measured_ns\":[9],\"sink\":0}}\n"
+            "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[1],\"measured_ns\":[1],\"sink\":0}}\n\
+             {PERF_HARNESS_SENTINEL}{{\"preparation_ns\":2,\"warmup_ns\":[2],\"measured_ns\":[9],\"sink\":0}}\n"
         );
-        let (warm, meas) = parse_perf_harness_output(&stdout).expect("parse");
+        let (preparation, warm, meas) = parse_perf_harness_output(&stdout).expect("parse");
+        assert_eq!(preparation, 2);
         assert_eq!(warm, vec![2]);
         assert_eq!(meas, vec![9]);
     }
@@ -1428,7 +1728,12 @@ mod tests {
     #[test]
     fn fairness_notes_engine_bias() {
         let report = evaluate_fairness(&test_environment(), &PerfArmConfig::default());
-        assert!(report.notes.iter().any(|n| n.contains("conservative")));
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("lifecycle asymmetry"))
+        );
     }
 
     #[test]
@@ -1482,6 +1787,7 @@ mod tests {
         assert_eq!(result.status, PerfMeasurementStatus::Measured);
         assert_eq!(result.warmup_ns.len(), 1);
         assert_eq!(result.measured_ns.len(), 3);
+        assert!(result.preparation_ns.is_some());
         assert!(result.stats.is_some());
     }
 
@@ -1494,6 +1800,7 @@ mod tests {
         };
         let result = run_engine_perf_case("syntax error here (", &config);
         assert_eq!(result.status, PerfMeasurementStatus::Failed);
+        assert!(result.preparation_ns.is_some());
         assert!(result.stats.is_none());
         assert!(!result.diagnostics.is_empty());
     }
@@ -1594,6 +1901,10 @@ mod tests {
             bun_version: Some("1.3.14".to_string()),
             warmup_iterations: 3,
             measured_iterations: 30,
+            engine_execution_lifecycle:
+                "prepare_once_fresh_router_and_interpreter_core_per_iteration".to_string(),
+            external_execution_lifecycle:
+                "new_function_once_single_process_shared_realm_and_jit_state".to_string(),
             engine_instruction_budget: DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET,
             corpus_case_count: 1,
             corpus_sha256: "0".repeat(64),

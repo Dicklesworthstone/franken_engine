@@ -90,7 +90,7 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
             .expect("report should parse");
     assert_eq!(
         report["schema_version"].as_str(),
-        Some("franken-engine.differential-oracle-perf.v1")
+        Some("franken-engine.differential-oracle-perf.v2")
     );
     let cases = report["cases"].as_array().expect("cases array");
     assert_eq!(cases.len(), 1);
@@ -98,6 +98,7 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
 
     // Engine lane is in-process and must always carry real samples.
     assert_eq!(case["engine"]["status"].as_str(), Some("measured"));
+    assert!(case["engine"]["preparation_ns"].as_u64().is_some());
     assert_eq!(
         case["engine"]["measured_ns"]
             .as_array()
@@ -112,6 +113,14 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
     assert_eq!(environment["measured_iterations"].as_u64(), Some(10));
     assert_eq!(environment["corpus_case_count"].as_u64(), Some(1));
     assert_eq!(
+        environment["engine_execution_lifecycle"].as_str(),
+        Some("prepare_once_fresh_router_and_interpreter_core_per_iteration")
+    );
+    assert_eq!(
+        environment["external_execution_lifecycle"].as_str(),
+        Some("new_function_once_single_process_shared_realm_and_jit_state")
+    );
+    assert_eq!(
         environment["corpus_sha256"]
             .as_str()
             .expect("corpus sha")
@@ -124,6 +133,10 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
     for lane in ["node", "bun"] {
         let status = case[lane]["status"].as_str().expect("lane status");
         if status == "measured" {
+            assert!(
+                case[lane]["preparation_ns"].as_u64().is_some(),
+                "{lane} lane should record one-time compilation cost"
+            );
             assert_eq!(
                 case[lane]["measured_ns"]
                     .as_array()
@@ -166,14 +179,17 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
         }
     }
 
-    // Raw per-iteration events stream: engine contributes 1 warmup + 10
-    // measured lines; external lanes contribute when measured.
+    // Raw phase events stream: engine contributes 1 preparation + 1 warmup +
+    // 10 measured lines; external lanes contribute when measured.
     let events_text = fs::read_to_string(&events_path).expect("events file should exist");
     let engine_lines = events_text
         .lines()
         .filter(|line| line.contains("\"franken_engine\""))
         .count();
-    assert_eq!(engine_lines, 11, "engine should log 1 warmup + 10 measured");
+    assert_eq!(
+        engine_lines, 12,
+        "engine should log 1 preparation + 1 warmup + 10 measured"
+    );
     for line in events_text.lines() {
         let event: serde_json::Value = serde_json::from_str(line).expect("event line should parse");
         assert_eq!(event["event"].as_str(), Some("diffperf.iteration"));

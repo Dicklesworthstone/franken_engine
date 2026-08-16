@@ -1376,22 +1376,17 @@ impl QuickJsInspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(
-            prepared,
-            LaneChoice::QuickJs,
-            route_reason,
-            EngineEvalBudgets::default(),
-        )
+        let prepared = compile_prepared_eval_source(prepared, route_reason)?;
+        eval_prepared_with_lane(&prepared, LaneChoice::QuickJs, EngineEvalBudgets::default())
     }
 
     #[allow(clippy::result_large_err)]
-    fn eval_prepared_with_budget(
+    fn eval_compiled_with_budget(
         &mut self,
-        prepared: PreparedEvalSource,
-        route_reason: RouteReason,
+        prepared: &PreparedHybridEval,
         budgets: EngineEvalBudgets,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason, budgets)
+        eval_prepared_with_lane(prepared, LaneChoice::QuickJs, budgets)
     }
 }
 
@@ -1402,22 +1397,17 @@ impl V8InspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(
-            prepared,
-            LaneChoice::V8,
-            route_reason,
-            EngineEvalBudgets::default(),
-        )
+        let prepared = compile_prepared_eval_source(prepared, route_reason)?;
+        eval_prepared_with_lane(&prepared, LaneChoice::V8, EngineEvalBudgets::default())
     }
 
     #[allow(clippy::result_large_err)]
-    fn eval_prepared_with_budget(
+    fn eval_compiled_with_budget(
         &mut self,
-        prepared: PreparedEvalSource,
-        route_reason: RouteReason,
+        prepared: &PreparedHybridEval,
         budgets: EngineEvalBudgets,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::V8, route_reason, budgets)
+        eval_prepared_with_lane(prepared, LaneChoice::V8, budgets)
     }
 }
 
@@ -1520,18 +1510,86 @@ impl HybridRouter {
         )
     }
 
+    /// Parse, statically validate, and lower one trusted Hybrid eval source
+    /// into immutable IR3 that can be executed repeatedly with fresh runtime
+    /// state. The handle has no public constructor or mutable IR accessor: it
+    /// can only be produced by this canonical frontend and consumed by the
+    /// routed execution methods below.
     #[allow(clippy::result_large_err)]
-    fn eval_routed(&mut self, source: &str, budgets: EngineEvalBudgets) -> EvalResult<EvalOutcome> {
+    pub fn prepare_eval(source: &str) -> EvalResult<PreparedHybridEval> {
         let prepared = prepare_eval_source(source, "hybrid")?;
         let route_reason = Self::classify_source_route(prepared.prepared_source.as_str());
-        match route_reason {
-            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => self
-                .v8_lineage
-                .eval_prepared_with_budget(prepared, route_reason, budgets),
-            RouteReason::DefaultQuickJsPath => {
-                self.quickjs_lineage
-                    .eval_prepared_with_budget(prepared, route_reason, budgets)
+        compile_prepared_eval_source(prepared, route_reason)
+    }
+
+    /// Execute a prepared eval with the normal per-lane containment budgets.
+    /// Runtime state, capabilities, IFC state, replay capture, and evidence
+    /// collectors are recreated for every call; only the validated IR3 is
+    /// reused.
+    #[allow(clippy::result_large_err)]
+    pub fn eval_prepared(
+        &mut self,
+        prepared: &PreparedHybridEval,
+    ) -> EvalResult<EvalOutcome> {
+        self.eval_prepared_routed(prepared, EngineEvalBudgets::default())
+    }
+
+    /// Execute a prepared eval with an explicit instruction budget. The
+    /// override remains a per-execution fact and is not cached in the handle.
+    #[allow(clippy::result_large_err)]
+    pub fn eval_prepared_with_instruction_budget(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        instruction_budget: u64,
+    ) -> EvalResult<EvalOutcome> {
+        self.eval_prepared_routed(
+            prepared,
+            EngineEvalBudgets {
+                instruction_budget: Some(instruction_budget),
+                memory_budget: None,
+            },
+        )
+    }
+
+    /// Execute a prepared eval with per-execution instruction and/or memory
+    /// budget overrides. This is the prepared-handle counterpart of
+    /// [`Self::eval_with_budgets`]; no override becomes part of the immutable
+    /// handle or carries into a later execution.
+    #[allow(clippy::result_large_err)]
+    pub fn eval_prepared_with_budgets(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        instruction_budget: Option<u64>,
+        memory_budget: Option<EngineMemoryBudget>,
+    ) -> EvalResult<EvalOutcome> {
+        self.eval_prepared_routed(
+            prepared,
+            EngineEvalBudgets {
+                instruction_budget,
+                memory_budget,
+            },
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_routed(&mut self, source: &str, budgets: EngineEvalBudgets) -> EvalResult<EvalOutcome> {
+        let prepared = Self::prepare_eval(source)?;
+        self.eval_prepared_routed(&prepared, budgets)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared_routed(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        budgets: EngineEvalBudgets,
+    ) -> EvalResult<EvalOutcome> {
+        match prepared.route_reason {
+            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
+                self.v8_lineage.eval_compiled_with_budget(prepared, budgets)
             }
+            RouteReason::DefaultQuickJsPath => self
+                .quickjs_lineage
+                .eval_compiled_with_budget(prepared, budgets),
             RouteReason::DirectEngineInvocation => Err(EvalError::new(
                 EvalErrorCode::InvariantViolation,
                 "router never emits direct route",
@@ -1841,6 +1899,20 @@ struct PreparedEvalSource {
     policy_id: String,
 }
 
+/// Canonically parsed and lowered trusted Hybrid eval input. This type is
+/// deliberately crate-private, non-serializable, and immutable so prepared
+/// execution cannot bypass frontend validation or become a persistent artifact
+/// compatibility promise.
+#[derive(Debug)]
+pub struct PreparedHybridEval {
+    ir3: Ir3Module,
+    route_reason: RouteReason,
+    source_ingestion: SourceIngestionSummary,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+}
+
 #[allow(clippy::result_large_err)]
 fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEvalSource> {
     let normalized = normalize_source(source)?;
@@ -1883,21 +1955,20 @@ fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEv
 }
 
 #[allow(clippy::result_large_err)]
-fn eval_with_lane(
-    prepared: PreparedEvalSource,
+fn eval_prepared_with_lane(
+    prepared: &PreparedHybridEval,
     lane: LaneChoice,
-    route_reason: RouteReason,
     budgets: EngineEvalBudgets,
 ) -> EvalResult<EvalOutcome> {
-    let output = eval_via_native_pipeline(&prepared, lane, budgets)?;
+    let output = execute_prepared_eval(prepared, lane, budgets)?;
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
         value_wtf16: output.value_wtf16,
         completion_label: Some(output.completion_label),
-        route_reason,
+        route_reason: prepared.route_reason,
         console_output: output.console_output,
-        source_ingestion: prepared.source_ingestion,
+        source_ingestion: prepared.source_ingestion.clone(),
         generated_code_audit: output.generated_code_audit,
         instructions_executed: output.instructions_executed,
     })
@@ -1920,11 +1991,10 @@ struct NativeEvalOutput {
 }
 
 #[allow(clippy::result_large_err)]
-fn eval_via_native_pipeline(
-    prepared: &PreparedEvalSource,
-    lane: LaneChoice,
-    budgets: EngineEvalBudgets,
-) -> EvalResult<NativeEvalOutput> {
+fn compile_prepared_eval_source(
+    prepared: PreparedEvalSource,
+    route_reason: RouteReason,
+) -> EvalResult<PreparedHybridEval> {
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
         .parse_with_options(
@@ -2008,9 +2078,25 @@ fn eval_via_native_pipeline(
     let mut ir3 = lowering_output.ir3;
     patch_eval_completion_value(&mut ir3);
 
-    let lane_router = eval_lane_router_for_ir3(&ir3, budgets);
+    Ok(PreparedHybridEval {
+        ir3,
+        route_reason,
+        source_ingestion: prepared.source_ingestion,
+        trace_id: prepared.trace_id,
+        decision_id: prepared.decision_id,
+        policy_id: prepared.policy_id,
+    })
+}
+
+#[allow(clippy::result_large_err)]
+fn execute_prepared_eval(
+    prepared: &PreparedHybridEval,
+    lane: LaneChoice,
+    budgets: EngineEvalBudgets,
+) -> EvalResult<NativeEvalOutput> {
+    let lane_router = eval_lane_router_for_ir3(&prepared.ir3, budgets);
     let routed = lane_router
-        .execute(&ir3, prepared.trace_id.as_str(), Some(lane))
+        .execute(&prepared.ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
         .map_err(|error| {
             attach_eval_correlation(
@@ -2274,6 +2360,54 @@ mod tests {
         let mut router = HybridRouter::default();
         let out = router.eval("1 + 1;").expect("eval should succeed");
         assert_eq!(out.value, "2");
+    }
+
+    #[test]
+    fn prepared_eval_matches_one_shot_and_resets_runtime_state() {
+        let source = "var values = [1]; values.push(2); console.log(values.length); values.length;";
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare");
+
+        let mut one_shot_router = HybridRouter::default();
+        let one_shot = one_shot_router
+            .eval_with_instruction_budget(source, 1_000_000)
+            .expect("one-shot eval");
+
+        let mut first_router = HybridRouter::default();
+        let first = first_router
+            .eval_prepared_with_instruction_budget(&prepared, 1_000_000)
+            .expect("first prepared eval");
+        let mut second_router = HybridRouter::default();
+        let second = second_router
+            .eval_prepared_with_instruction_budget(&prepared, 1_000_000)
+            .expect("second prepared eval");
+
+        assert_eq!(first, one_shot);
+        assert_eq!(second, one_shot);
+        assert_eq!(first.value, "2");
+        assert_eq!(first.console_output.len(), 1);
+    }
+
+    #[test]
+    fn prepared_eval_preserves_per_execution_budget_failure() {
+        let source = "var i = 0; while (i < 100) { i = i + 1; } i;";
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare");
+
+        let mut one_shot_router = HybridRouter::default();
+        let one_shot_error = one_shot_router
+            .eval_with_instruction_budget(source, 5)
+            .expect_err("one-shot budget must fail closed");
+        let mut prepared_router = HybridRouter::default();
+        let prepared_error = prepared_router
+            .eval_prepared_with_instruction_budget(&prepared, 5)
+            .expect_err("prepared budget must fail closed");
+
+        assert_eq!(prepared_error, one_shot_error);
+
+        let mut retry_router = HybridRouter::default();
+        let retry = retry_router
+            .eval_prepared_with_instruction_budget(&prepared, 1_000_000)
+            .expect("a refused execution must not poison the immutable handle");
+        assert_eq!(retry.value, "100");
     }
 
     #[test]

@@ -1881,7 +1881,7 @@ mod tests {
         permit.complete(&outcome).expect("first commit");
         assert_eq!(
             authority.outcomes.lock().expect("outcomes").as_slice(),
-            &[outcome.clone()]
+            std::slice::from_ref(&outcome)
         );
         assert!(matches!(
             duplicate.complete(&outcome),

@@ -90,7 +90,7 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
             .expect("report should parse");
     assert_eq!(
         report["schema_version"].as_str(),
-        Some("franken-engine.differential-oracle-perf.v2")
+        Some("franken-engine.differential-oracle-perf.v3")
     );
     let cases = report["cases"].as_array().expect("cases array");
     assert_eq!(cases.len(), 1);
@@ -130,6 +130,7 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
     let environment = &report["environment"];
     assert_eq!(environment["warmup_iterations"].as_u64(), Some(1));
     assert_eq!(environment["measured_iterations"].as_u64(), Some(10));
+    assert_eq!(environment["max_cv_millionths"].as_u64(), Some(150_000));
     assert_eq!(environment["corpus_case_count"].as_u64(), Some(1));
     assert_eq!(
         environment["engine_execution_lifecycle"].as_str(),
@@ -172,6 +173,11 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
                 10,
                 "{lane} lane should carry 10 measured observation digests"
             );
+            assert_eq!(
+                case[lane]["observations_complete"].as_bool(),
+                Some(true),
+                "{lane} measured the governed undefined-return corpus but did not retain complete observations"
+            );
         } else {
             assert!(
                 case[lane]["diagnostics"]
@@ -181,29 +187,39 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
             );
         }
     }
+    if ["node", "bun"]
+        .iter()
+        .all(|lane| case[*lane]["status"].as_str() == Some("measured"))
+    {
+        assert_eq!(
+            case["measured_lifecycle_equivalent"].as_bool(),
+            Some(true),
+            "all three measured lanes must agree on the stable primitive-output/undefined-return observation"
+        );
+    }
 
-    // Denominators must be present and either published with a ratio or
-    // degraded with reasons — never silently empty.
+    assert_eq!(report["fairness"]["compliant"].as_bool(), Some(false));
+    assert!(
+        report["fairness"]["violations"]
+            .as_array()
+            .is_some_and(|violations| violations.iter().any(|violation| violation
+                .as_str()
+                .is_some_and(|text| text.contains("execution lifecycle is not symmetric"))))
+    );
+
+    // V3 deliberately keeps the fresh-engine/shared-realm lifecycle
+    // diagnostic-only. Neither denominator may expose a publishable ratio.
     for denominator_key in ["node_denominator", "bun_denominator"] {
         let denominator = &summary[denominator_key];
-        match denominator["status"].as_str() {
-            Some("published") => {
-                assert!(
-                    denominator["geomean_speedup_millionths"].as_u64().is_some(),
-                    "{denominator_key} published without a ratio"
-                );
-                assert!(denominator["meets_3x_floor"].as_bool().is_some());
-            }
-            Some("degraded") => {
-                assert!(
-                    denominator["degraded_reasons"]
-                        .as_array()
-                        .is_some_and(|r| !r.is_empty()),
-                    "{denominator_key} degraded without reasons"
-                );
-            }
-            other => panic!("{denominator_key} has unexpected status {other:?}"),
-        }
+        assert_eq!(denominator["status"].as_str(), Some("degraded"));
+        assert!(denominator["geomean_speedup_millionths"].is_null());
+        assert!(denominator["meets_3x_floor"].is_null());
+        assert!(
+            denominator["degraded_reasons"]
+                .as_array()
+                .is_some_and(|r| !r.is_empty()),
+            "{denominator_key} degraded without reasons"
+        );
     }
 
     // Raw phase events stream: engine contributes 1 preparation + 1 warmup +

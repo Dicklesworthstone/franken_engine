@@ -10,6 +10,7 @@
 //! is downgraded and has rollout blocked.
 
 use std::path::PathBuf;
+use std::process::Command;
 
 use frankenengine_engine::benchmark_freshness_gate::{
     AcquisitionEvidence, AcquisitionStatus, BenchmarkClaim, ClaimSurface,
@@ -224,5 +225,166 @@ fn committed_bundle_clears_sample_floor() {
     assert!(
         status == "published" || status == "degraded",
         "bundle_status must be published|degraded, got {status}"
+    );
+}
+
+/// The v3 bundle builder must not trust producer-declared iteration counts or
+/// lifecycle equivalence. Exercise its Python validator entirely in memory so
+/// this test creates no replacement bundle or temporary evidence files.
+#[test]
+fn v3_builder_rejects_truncated_or_inconsistent_raw_measurements() {
+    let builder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/build_e2_denominator_bundle.py");
+    let program = r#"
+import copy
+import runpy
+import sys
+
+builder = runpy.run_path(sys.argv[1])
+validator = builder["validate_v3_report"]
+interpretation_lines = builder["interpretation_lines"]
+build_correctness_verdicts = builder["build_correctness_verdicts"]
+correctness_verdict_hash = builder["correctness_verdict_hash"]
+measurement_evidence_view = builder["measurement_evidence_view"]
+digest = "a" * 64
+
+def lane(name):
+    result = {
+        "backend": name,
+        "status": "measured",
+        "preparation_ns": 1,
+        "warmup_ns": [10],
+        "measured_ns": [20, 21],
+        "warmup_observation_sha256": [digest],
+        "measured_observation_sha256": [digest, digest],
+        "observations_complete": True,
+        "stats": {
+            "sample_count": 2,
+            "mean_ns": 20,
+            "stddev_ns": 1,
+            "cv_millionths": 50000,
+            "ci95_lower_ns": 19,
+            "ci95_upper_ns": 21,
+            "min_ns": 20,
+            "max_ns": 21,
+        },
+        "diagnostics": [],
+    }
+    return result
+
+engine = lane("franken_engine")
+engine["engine_kind"] = "quick_js_inspired_native"
+engine["route_reason"] = "default_quick_js_path"
+case = {
+    "case_id": "fixture",
+    "source_sha256": "0" * 64,
+    "behavior_equivalent": True,
+    "measured_lifecycle_equivalent": True,
+    "measured_lifecycle_detail": "fixture",
+    "engine": engine,
+    "node": lane("node_lts"),
+    "bun": lane("bun_stable"),
+    "node_over_engine_speedup_millionths": 1000000,
+    "bun_over_engine_speedup_millionths": 1000000,
+    "admitted": True,
+    "exclusion_reasons": [],
+}
+denominator = {
+    "baseline": "node",
+    "admitted_cases": 1,
+    "excluded_cases": 0,
+    "geomean_speedup_millionths": None,
+    "meets_3x_floor": None,
+    "status": "degraded",
+    "degraded_reasons": ["lifecycle asymmetry"],
+}
+report = {
+    "environment": {
+        "engine_execution_lifecycle": "prepare_once_fresh_router_and_interpreter_core_per_iteration",
+        "external_execution_lifecycle": "new_function_once_single_process_shared_realm_and_jit_state",
+        "warmup_iterations": 1,
+        "measured_iterations": 2,
+        "max_cv_millionths": 150000,
+        "corpus_case_count": 1,
+    },
+    "fairness": {"compliant": False, "violations": ["asymmetric"]},
+    "cases": [case],
+    "node_denominator": copy.deepcopy(denominator),
+    "bun_denominator": copy.deepcopy(denominator),
+}
+report["bun_denominator"]["baseline"] = "bun"
+assert validator(report) == [], validator(report)
+degraded_interpretation = " ".join(
+    interpretation_lines(report["node_denominator"], report["bun_denominator"])
+)
+assert "NOT EVALUABLE" in degraded_interpretation, degraded_interpretation
+assert "backed by real numbers" not in degraded_interpretation, degraded_interpretation
+
+# Timing/CV admission is measurement evidence, not correctness identity.
+admission_flipped = copy.deepcopy(case)
+admission_flipped["admitted"] = False
+original_verdicts = build_correctness_verdicts([case])
+flipped_verdicts = build_correctness_verdicts([admission_flipped])
+assert "admitted" not in original_verdicts[0], original_verdicts
+assert correctness_verdict_hash(original_verdicts) == correctness_verdict_hash(flipped_verdicts)
+assert measurement_evidence_view([case])[0]["admitted"] is True
+assert measurement_evidence_view([admission_flipped])[0]["admitted"] is False
+
+truncated = copy.deepcopy(report)
+truncated["cases"][0]["node"]["measured_ns"].pop()
+assert any("count" in error or "lengths differ" in error for error in validator(truncated))
+
+changing = copy.deepcopy(report)
+changing["cases"][0]["node"]["measured_observation_sha256"][1] = "b" * 64
+assert any("disagrees with raw observations" in error for error in validator(changing))
+
+malformed = copy.deepcopy(report)
+malformed["cases"][0]["bun"]["measured_observation_sha256"][0] = "not-a-digest"
+assert any("lowercase hex64" in error for error in validator(malformed))
+
+# Baseline admission is intentionally asymmetric: a noisy Bun lane does not
+# remove an otherwise valid Node comparison.
+asymmetric = copy.deepcopy(report)
+asymmetric_case = asymmetric["cases"][0]
+asymmetric_case["bun"]["measured_ns"] = [20, 40]
+asymmetric_case["bun"]["stats"] = {
+    "sample_count": 2,
+    "mean_ns": 30,
+    "stddev_ns": 14,
+    "cv_millionths": 466666,
+    "ci95_lower_ns": 11,
+    "ci95_upper_ns": 49,
+    "min_ns": 20,
+    "max_ns": 40,
+}
+asymmetric_case["bun_over_engine_speedup_millionths"] = 1500000
+asymmetric_case["admitted"] = False
+asymmetric["node_denominator"]["admitted_cases"] = 1
+asymmetric["node_denominator"]["excluded_cases"] = 0
+asymmetric["bun_denominator"]["admitted_cases"] = 0
+asymmetric["bun_denominator"]["excluded_cases"] = 1
+asymmetric["bun_denominator"]["degraded_reasons"] = ["no admissible Bun cases"]
+assert validator(asymmetric) == [], validator(asymmetric)
+
+fabricated_publication = copy.deepcopy(report)
+fabricated_publication["fairness"] = {"compliant": True, "violations": []}
+for name in ("node_denominator", "bun_denominator"):
+    fabricated_publication[name]["status"] = "published"
+    fabricated_publication[name]["geomean_speedup_millionths"] = 1000000
+    fabricated_publication[name]["meets_3x_floor"] = False
+assert any("fairness-degraded" in error for error in validator(fabricated_publication))
+"#;
+
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(program)
+        .arg(&builder)
+        .output()
+        .expect("python3 must be available for the denominator builder gate");
+    assert!(
+        output.status.success(),
+        "v3 validator self-check failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }

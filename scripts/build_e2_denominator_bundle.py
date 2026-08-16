@@ -2,7 +2,7 @@
 """Build the content-addressed E2 Node/Bun denominator reproducibility bundle.
 
 Transforms a `differential-oracle perf` report (`report.json`, schema
-`franken-engine.differential-oracle-perf.v2`) into the four-file reproducibility
+`franken-engine.differential-oracle-perf.v3`) into the four-file reproducibility
 bundle contract (`docs/REPRODUCIBILITY_CONTRACT.md`):
 
   - denominator.json  (the distilled, measured Node/Bun denominator + correctness verdicts)
@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -40,7 +41,7 @@ ENV_SCHEMA = "franken-engine.env.v1"
 MANIFEST_SCHEMA = "franken-engine.manifest.v1"
 REPRO_LOCK_SCHEMA = "franken-engine.repro-lock.v1"
 DEGRADED_SCHEMA = "franken-engine.e2-denominator-degraded-receipt.v1"
-PERF_REPORT_SCHEMA = "franken-engine.differential-oracle-perf.v2"
+PERF_REPORT_SCHEMA = "franken-engine.differential-oracle-perf.v3"
 
 CLAIM_ID = "FE-CLAIM-010"
 OWNING_BEAD = "bd-fqlfw.2.6"
@@ -48,6 +49,55 @@ POLICY_ID = "policy-e2-denominator-bundle-v1"
 FLOOR_MILLIONTHS = 3_000_000  # >= 3x throughput floor (DENOMINATOR_FLOOR_MILLIONTHS)
 
 _EQUIV_GROUP_RE = re.compile(r"group\s+([0-9a-f]{16,64})")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_MILLIONTHS = 1_000_000
+_U32_MAX = (1 << 32) - 1
+_U64_MAX = (1 << 64) - 1
+_V3_ENGINE_LIFECYCLE = "prepare_once_fresh_router_and_interpreter_core_per_iteration"
+_V3_EXTERNAL_LIFECYCLE = "new_function_once_single_process_shared_realm_and_jit_state"
+
+
+def _sample_stats(samples: list[int]) -> dict[str, int] | None:
+    """Mirror differential_oracle_perf::compute_sample_stats exactly."""
+    if not samples:
+        return None
+    count = len(samples)
+    mean = sum(samples) // count
+    if count < 2:
+        variance = 0
+    else:
+        variance = sum(abs(sample - mean) ** 2 for sample in samples) // (count - 1)
+    stddev = math.isqrt(variance)
+    cv = 0 if mean == 0 else min((stddev * _MILLIONTHS) // mean, _U32_MAX)
+    sqrt_n_millionths = math.isqrt(count * 1_000_000_000_000)
+    ci_half = 0 if sqrt_n_millionths == 0 else (stddev * 1_960_000) // sqrt_n_millionths
+    return {
+        "sample_count": count,
+        "mean_ns": mean,
+        "stddev_ns": stddev,
+        "cv_millionths": cv,
+        "ci95_lower_ns": max(mean - ci_half, 0),
+        "ci95_upper_ns": min(mean + ci_half, _U64_MAX),
+        "min_ns": min(samples),
+        "max_ns": max(samples),
+    }
+
+
+def _speedup_millionths(engine_mean: int, baseline_mean: int) -> int | None:
+    if engine_mean == 0:
+        return None
+    return min((baseline_mean * _MILLIONTHS) // engine_mean, _U64_MAX)
+
+
+def _geomean_millionths(ratios: list[int]) -> int | None:
+    """Mirror positive-ratio Rust f64 log/exp aggregation and rounding."""
+    if not ratios or 0 in ratios:
+        return None
+    value = math.exp(sum(math.log(ratio / _MILLIONTHS) for ratio in ratios) / len(ratios))
+    scaled = value * _MILLIONTHS
+    if not math.isfinite(scaled) or scaled < 0:
+        return None
+    return min(math.floor(scaled + 0.5), _U64_MAX)
 
 
 def canonical_bytes(obj: Any) -> bytes:
@@ -84,7 +134,6 @@ def build_correctness_verdicts(cases: list[dict]) -> list[dict]:
                 "equivalence_group": extract_equivalence_group(
                     case.get("equivalence_detail")
                 ),
-                "admitted": bool(case.get("admitted", False)),
             }
         )
     verdicts.sort(key=lambda v: v["case_id"])
@@ -133,11 +182,24 @@ def interpretation_lines(node: dict, bun: dict) -> list[str]:
             lines.append(
                 f"{label}: engine geomean speedup {g} millionths; meets_3x_floor={meets}."
             )
-    lines.append(
-        "FE-CLAIM-010 (>= 3x throughput vs Node and Bun) is NOT met by the "
-        "measured denominator; the claim stays TARGET, now backed by real "
-        "numbers rather than absence of data."
-    )
+    if node.get("status") == "published" and bun.get("status") == "published":
+        if node.get("meets_3x_floor") is True and bun.get("meets_3x_floor") is True:
+            lines.append(
+                "This bundle's published denominators meet the FE-CLAIM-010 >= 3x "
+                "floor for both Node and Bun; claim promotion remains a separate "
+                "claim-matrix decision."
+            )
+        else:
+            lines.append(
+                "FE-CLAIM-010 (>= 3x throughput vs Node and Bun) is NOT met by "
+                "this bundle's published denominators and remains TARGET."
+            )
+    else:
+        lines.append(
+            "FE-CLAIM-010 is NOT EVALUABLE from this bundle because at least one "
+            "denominator is degraded. The claim remains TARGET; retained raw "
+            "per-case measurements are diagnostic evidence only."
+        )
     return lines
 
 
@@ -146,60 +208,291 @@ def load_json(path: Path) -> dict:
         return json.load(fh)
 
 
-def validate_v2_report(report: dict) -> list[str]:
-    """Fail closed when a nominal v2 report omits lifecycle/raw evidence."""
+def validate_v3_report(report: dict) -> list[str]:
+    """Recompute raw statistics, lifecycle stability, and both denominators."""
     errors: list[str] = []
+
+    def uint(value: object, maximum: int = _U64_MAX) -> bool:
+        return (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 <= value <= maximum
+        )
+
     environment = report.get("environment")
     if not isinstance(environment, dict):
         return ["environment must be an object"]
     for field in ("engine_execution_lifecycle", "external_execution_lifecycle"):
         if not isinstance(environment.get(field), str) or not environment[field]:
             errors.append(f"environment.{field} must be a non-empty string")
+    if environment.get("engine_execution_lifecycle") != _V3_ENGINE_LIFECYCLE:
+        errors.append("environment.engine_execution_lifecycle is not the v3 contract")
+    if environment.get("external_execution_lifecycle") != _V3_EXTERNAL_LIFECYCLE:
+        errors.append("environment.external_execution_lifecycle is not the v3 contract")
+    expected_warmup = environment.get("warmup_iterations")
+    expected_measured = environment.get("measured_iterations")
+    max_cv = environment.get("max_cv_millionths")
+    if not uint(expected_warmup, _U32_MAX):
+        errors.append("environment.warmup_iterations must be a nonnegative u32")
+        expected_warmup = None
+    if not uint(expected_measured, _U32_MAX) or expected_measured == 0:
+        errors.append("environment.measured_iterations must be a positive u32")
+        expected_measured = None
+    if not uint(max_cv, _U32_MAX):
+        errors.append("environment.max_cv_millionths must be a nonnegative u32")
+        max_cv = None
 
     cases = report.get("cases")
     if not isinstance(cases, list):
         return errors + ["cases must be an array"]
+    if environment.get("corpus_case_count") != len(cases):
+        errors.append("environment.corpus_case_count disagrees with cases")
+
+    expected_backends = {
+        "engine": "franken_engine",
+        "node": "node_lts",
+        "bun": "bun_stable",
+    }
+    seen_case_ids: set[str] = set()
+    recomputed_cases: list[dict[str, Any]] = []
     for case_index, case in enumerate(cases):
         if not isinstance(case, dict):
             errors.append(f"cases[{case_index}] must be an object")
             continue
         case_id = case.get("case_id", f"index-{case_index}")
-        if not isinstance(case.get("measured_lifecycle_equivalent"), bool):
-            errors.append(f"case {case_id}: measured_lifecycle_equivalent must be boolean")
+        if not isinstance(case_id, str) or not case_id:
+            errors.append(f"cases[{case_index}].case_id must be a non-empty string")
+            case_id = f"index-{case_index}"
+        elif case_id in seen_case_ids:
+            errors.append(f"duplicate case_id: {case_id}")
+        seen_case_ids.add(case_id)
+        if not isinstance(case.get("source_sha256"), str) or not _HEX64_RE.fullmatch(
+            case.get("source_sha256", "")
+        ):
+            errors.append(f"case {case_id}: source_sha256 must be lowercase hex64")
+        for field in ("behavior_equivalent", "measured_lifecycle_equivalent", "admitted"):
+            if not isinstance(case.get(field), bool):
+                errors.append(f"case {case_id}: {field} must be boolean")
         if not isinstance(case.get("measured_lifecycle_detail"), str):
             errors.append(f"case {case_id}: measured_lifecycle_detail must be string")
+
+        lane_results: dict[str, dict] = {}
+        lane_stats: dict[str, dict[str, int] | None] = {}
         for lane in ("engine", "node", "bun"):
             result = case.get(lane)
             if not isinstance(result, dict):
                 errors.append(f"case {case_id}: {lane} must be an object")
                 continue
-            if result.get("status") != "measured":
+            lane_results[lane] = result
+            if result.get("backend") != expected_backends[lane]:
+                errors.append(f"case {case_id}: {lane}.backend is incorrect")
+            status = result.get("status")
+            if status not in {"measured", "failed", "unavailable", "timeout"}:
+                errors.append(f"case {case_id}: {lane}.status is invalid")
                 continue
-            if not isinstance(result.get("preparation_ns"), int):
-                errors.append(f"case {case_id}: {lane}.preparation_ns must be integer")
+            if not isinstance(result.get("observations_complete"), bool):
+                errors.append(f"case {case_id}: {lane}.observations_complete must be boolean")
             warmup = result.get("warmup_ns")
             measured = result.get("measured_ns")
-            warmup_obs = result.get("warmup_observation_sha256")
-            measured_obs = result.get("measured_observation_sha256")
-            for field, value in (
+            warmup_obs = result.get("warmup_observation_sha256", [])
+            measured_obs = result.get("measured_observation_sha256", [])
+            arrays = (
                 ("warmup_ns", warmup),
                 ("measured_ns", measured),
                 ("warmup_observation_sha256", warmup_obs),
                 ("measured_observation_sha256", measured_obs),
-            ):
+            )
+            for field, value in arrays:
                 if not isinstance(value, list):
                     errors.append(f"case {case_id}: {lane}.{field} must be an array")
-            if isinstance(warmup, list) and isinstance(warmup_obs, list) and len(warmup) != len(warmup_obs):
-                errors.append(f"case {case_id}: {lane} warmup timing/observation lengths differ")
-            if isinstance(measured, list) and isinstance(measured_obs, list) and len(measured) != len(measured_obs):
-                errors.append(f"case {case_id}: {lane} measured timing/observation lengths differ")
-            if not isinstance(result.get("observations_complete"), bool):
-                errors.append(f"case {case_id}: {lane}.observations_complete must be boolean")
+
+            if status != "measured":
+                if any(isinstance(value, list) and value for _, value in arrays):
+                    errors.append(f"case {case_id}: unmeasured {lane} carries raw samples")
+                if result.get("stats") is not None:
+                    errors.append(f"case {case_id}: unmeasured {lane} carries statistics")
+                lane_stats[lane] = None
+                continue
+
+            if not uint(result.get("preparation_ns")):
+                errors.append(
+                    f"case {case_id}: {lane}.preparation_ns must be a nonnegative u64"
+                )
+            if isinstance(warmup, list):
+                if expected_warmup is not None and len(warmup) != expected_warmup:
+                    errors.append(
+                        f"case {case_id}: {lane}.warmup_ns count {len(warmup)} "
+                        f"does not match environment {expected_warmup}"
+                    )
+                if not all(uint(value) for value in warmup):
+                    errors.append(f"case {case_id}: {lane}.warmup_ns values must be u64")
+            if isinstance(measured, list):
+                if expected_measured is not None and len(measured) != expected_measured:
+                    errors.append(
+                        f"case {case_id}: {lane}.measured_ns count {len(measured)} "
+                        f"does not match environment {expected_measured}"
+                    )
+                if not all(uint(value) for value in measured):
+                    errors.append(f"case {case_id}: {lane}.measured_ns values must be u64")
+            for phase, timings, observations in (
+                ("warmup", warmup, warmup_obs),
+                ("measured", measured, measured_obs),
+            ):
+                if isinstance(timings, list) and isinstance(observations, list):
+                    if len(timings) != len(observations):
+                        errors.append(
+                            f"case {case_id}: {lane} {phase} timing/observation lengths differ"
+                        )
+                    if not all(
+                        isinstance(value, str) and _HEX64_RE.fullmatch(value)
+                        for value in observations
+                    ):
+                        errors.append(
+                            f"case {case_id}: {lane} {phase} observation digests must be lowercase hex64"
+                        )
+            recomputed_stats = (
+                _sample_stats(measured)
+                if isinstance(measured, list) and all(uint(value) for value in measured)
+                else None
+            )
+            lane_stats[lane] = recomputed_stats
+            if result.get("stats") != recomputed_stats:
+                errors.append(f"case {case_id}: {lane}.stats disagrees with raw samples")
             if lane == "engine":
                 if not isinstance(result.get("engine_kind"), str):
                     errors.append(f"case {case_id}: engine.engine_kind must be string")
                 if not isinstance(result.get("route_reason"), str):
                     errors.append(f"case {case_id}: engine.route_reason must be string")
+
+        lifecycle_recomputed = False
+        if len(lane_results) == 3:
+            stable_digests: list[str] = []
+            lifecycle_recomputed = True
+            for lane in ("engine", "node", "bun"):
+                result = lane_results[lane]
+                warmup_obs = result.get("warmup_observation_sha256", [])
+                measured_obs = result.get("measured_observation_sha256", [])
+                digests = (
+                    warmup_obs + measured_obs
+                    if isinstance(warmup_obs, list) and isinstance(measured_obs, list)
+                    else []
+                )
+                if (
+                    result.get("status") != "measured"
+                    or result.get("observations_complete") is not True
+                    or not digests
+                    or any(digest != digests[0] for digest in digests)
+                ):
+                    lifecycle_recomputed = False
+                    break
+                stable_digests.append(digests[0])
+            lifecycle_recomputed = lifecycle_recomputed and len(set(stable_digests)) == 1
+        if case.get("measured_lifecycle_equivalent") != lifecycle_recomputed:
+            errors.append(
+                f"case {case_id}: measured_lifecycle_equivalent disagrees with raw observations"
+            )
+
+        engine_stats = lane_stats.get("engine")
+        node_stats = lane_stats.get("node")
+        bun_stats = lane_stats.get("bun")
+        node_ratio = (
+            _speedup_millionths(engine_stats["mean_ns"], node_stats["mean_ns"])
+            if engine_stats is not None and node_stats is not None
+            else None
+        )
+        bun_ratio = (
+            _speedup_millionths(engine_stats["mean_ns"], bun_stats["mean_ns"])
+            if engine_stats is not None and bun_stats is not None
+            else None
+        )
+        if case.get("node_over_engine_speedup_millionths") != node_ratio:
+            errors.append(f"case {case_id}: Node speedup disagrees with raw samples")
+        if case.get("bun_over_engine_speedup_millionths") != bun_ratio:
+            errors.append(f"case {case_id}: Bun speedup disagrees with raw samples")
+        global_admitted = (
+            case.get("behavior_equivalent") is True
+            and lifecycle_recomputed
+            and len(lane_results) == 3
+            and all(result.get("status") == "measured" for result in lane_results.values())
+            and max_cv is not None
+            and all(
+                stats is not None and stats["cv_millionths"] <= max_cv
+                for stats in (engine_stats, node_stats, bun_stats)
+            )
+        )
+        if case.get("admitted") != global_admitted:
+            errors.append(f"case {case_id}: admitted disagrees with raw admission gates")
+        recomputed_cases.append(
+            {
+                "behavior_equivalent": case.get("behavior_equivalent") is True,
+                "lifecycle_equivalent": lifecycle_recomputed,
+                "lane_results": lane_results,
+                "lane_stats": lane_stats,
+                "node_ratio": node_ratio,
+                "bun_ratio": bun_ratio,
+            }
+        )
+
+    fairness = report.get("fairness")
+    fairness_compliant = isinstance(fairness, dict) and fairness.get("compliant") is True
+    if not isinstance(fairness, dict) or not isinstance(fairness.get("compliant"), bool):
+        errors.append("fairness.compliant must be boolean")
+    else:
+        violations = fairness.get("violations", [])
+        if not isinstance(violations, list) or not all(
+            isinstance(value, str) and value for value in violations
+        ):
+            errors.append("fairness.violations must be an array of non-empty strings")
+        elif fairness_compliant == bool(violations):
+            errors.append("fairness.compliant disagrees with fairness.violations")
+        if fairness_compliant:
+            errors.append("v3 fresh-engine/shared-realm lifecycle must remain fairness-degraded")
+
+    for lane, name in (("node", "node_denominator"), ("bun", "bun_denominator")):
+        denominator = report.get(name)
+        if not isinstance(denominator, dict):
+            errors.append(f"{name} must be an object")
+            continue
+        admitted_ratios: list[int] = []
+        for recomputed in recomputed_cases:
+            engine_stats = recomputed["lane_stats"].get("engine")
+            baseline_stats = recomputed["lane_stats"].get(lane)
+            ratio = recomputed[f"{lane}_ratio"]
+            if (
+                recomputed["behavior_equivalent"]
+                and recomputed["lifecycle_equivalent"]
+                and recomputed["lane_results"].get("engine", {}).get("status") == "measured"
+                and recomputed["lane_results"].get(lane, {}).get("status") == "measured"
+                and max_cv is not None
+                and engine_stats is not None
+                and baseline_stats is not None
+                and engine_stats["cv_millionths"] <= max_cv
+                and baseline_stats["cv_millionths"] <= max_cv
+                and ratio is not None
+            ):
+                admitted_ratios.append(ratio)
+        geomean = _geomean_millionths(admitted_ratios)
+        publishable = fairness_compliant and bool(admitted_ratios) and geomean is not None
+        expected_status = "published" if publishable else "degraded"
+        expected_geomean = geomean if publishable else None
+        expected_floor = geomean >= FLOOR_MILLIONTHS if publishable else None
+        if denominator.get("baseline") != lane:
+            errors.append(f"{name}.baseline must be {lane}")
+        if denominator.get("admitted_cases") != len(admitted_ratios):
+            errors.append(f"{name}.admitted_cases disagrees with baseline-specific gates")
+        if denominator.get("excluded_cases") != len(cases) - len(admitted_ratios):
+            errors.append(f"{name}.excluded_cases disagrees with baseline-specific gates")
+        if denominator.get("status") != expected_status:
+            errors.append(f"{name}.status disagrees with recomputed publication gates")
+        if denominator.get("geomean_speedup_millionths") != expected_geomean:
+            errors.append(f"{name}.geomean_speedup_millionths disagrees with raw samples")
+        if denominator.get("meets_3x_floor") != expected_floor:
+            errors.append(f"{name}.meets_3x_floor disagrees with raw samples")
+        degraded_reasons = denominator.get("degraded_reasons", [])
+        if expected_status == "degraded" and (
+            not isinstance(degraded_reasons, list) or not degraded_reasons
+        ):
+            errors.append(f"{name}.degraded_reasons must explain degraded status")
     return errors
 
 
@@ -223,6 +516,7 @@ def measurement_evidence_view(cases: list[dict]) -> list[dict]:
         evidence.append(
             {
                 "case_id": case.get("case_id", ""),
+                "admitted": bool(case.get("admitted", False)),
                 "measured_lifecycle_equivalent": case.get("measured_lifecycle_equivalent", False),
                 "measured_lifecycle_detail": case.get("measured_lifecycle_detail", ""),
                 "lanes": lanes,
@@ -270,10 +564,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    validation_errors = validate_v2_report(report)
+    validation_errors = validate_v3_report(report)
     if validation_errors:
         for error in validation_errors:
-            print(f"ERROR: invalid v2 report: {error}", file=sys.stderr)
+            print(f"ERROR: invalid v3 report: {error}", file=sys.stderr)
         return 2
 
     out_dir = Path(args.out_dir)
@@ -334,6 +628,7 @@ def main() -> int:
         "measurement": {
             "warmup_iterations": env_in.get("warmup_iterations"),
             "measured_iterations": env_in.get("measured_iterations"),
+            "max_cv_millionths": env_in.get("max_cv_millionths"),
             "engine_instruction_budget": env_in.get("engine_instruction_budget"),
             "engine_execution_lifecycle": env_in.get("engine_execution_lifecycle"),
             "external_execution_lifecycle": env_in.get("external_execution_lifecycle"),
@@ -410,6 +705,7 @@ def main() -> int:
             "engine_instruction_budget": env_in.get("engine_instruction_budget"),
             "warmup_iterations": env_in.get("warmup_iterations"),
             "measured_iterations": env_in.get("measured_iterations"),
+            "max_cv_millionths": env_in.get("max_cv_millionths"),
             "engine_execution_lifecycle": env_in.get("engine_execution_lifecycle"),
             "external_execution_lifecycle": env_in.get("external_execution_lifecycle"),
         },

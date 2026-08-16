@@ -1300,6 +1300,13 @@ impl<'de> Deserialize<'de> for RouteReason {
 pub struct EvalOutcome {
     pub engine: EngineKind,
     pub value: String,
+    /// ECMAScript `typeof` classification of the completion value. New native
+    /// executions always populate this field; `None` is reserved for legacy
+    /// serialized outcomes. Keeping the type alongside the display projection
+    /// prevents evidence consumers from conflating values such as number `1`
+    /// and string `"1"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_type: Option<String>,
     /// Exact UTF-16 code units of the completion value, present iff it is a
     /// string containing lone surrogates (bd-2vzgi). `value` then carries the
     /// U+FFFD projection; exact-semantics consumers (the differential oracle)
@@ -1897,9 +1904,9 @@ struct PreparedEvalSource {
 }
 
 /// Canonically parsed and lowered trusted Hybrid eval input. This type is
-/// deliberately crate-private, non-serializable, and immutable so prepared
-/// execution cannot bypass frontend validation or become a persistent artifact
-/// compatibility promise.
+/// deliberately non-serializable and immutable so prepared execution cannot
+/// bypass frontend validation or become a persistent artifact compatibility
+/// promise. Its fields remain private even though the opaque handle is public.
 #[derive(Debug)]
 pub struct PreparedHybridEval {
     ir3: Ir3Module,
@@ -1961,6 +1968,7 @@ fn eval_prepared_with_lane(
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
+        completion_type: Some(output.completion_type),
         value_wtf16: output.value_wtf16,
         completion_label: Some(output.completion_label),
         route_reason: prepared.route_reason,
@@ -1980,6 +1988,7 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 
 struct NativeEvalOutput {
     value: String,
+    completion_type: String,
     value_wtf16: Option<Vec<u16>>,
     completion_label: crate::ifc_artifacts::Label,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
@@ -2106,12 +2115,14 @@ fn execute_prepared_eval(
 
     // A lone-surrogate string completion value cannot survive the Display
     // projection below; carry its exact code units alongside (bd-2vzgi).
+    let completion_type = routed.result.value.typeof_name().to_string();
     let value_wtf16 = match &routed.result.value {
         baseline_interpreter::Value::Str(s) if !s.is_well_formed() => Some(s.code_units_vec()),
         _ => None,
     };
     Ok(NativeEvalOutput {
         value: routed.result.value.to_string(),
+        completion_type,
         value_wtf16,
         completion_label: routed.result.completion_label,
         console_output: routed.result.console_output,
@@ -2963,6 +2974,7 @@ mod tests {
         let outcome = EvalOutcome {
             engine: EngineKind::V8InspiredNative,
             value: "42".to_string(),
+            completion_type: Some("number".to_string()),
             value_wtf16: None,
             completion_label: Some(crate::ifc_artifacts::Label::Public),
             route_reason: RouteReason::ContainsAwaitKeyword,

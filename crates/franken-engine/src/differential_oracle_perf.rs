@@ -1,8 +1,10 @@
 //! Performance arm of the differential oracle (E2.T4, bd-fqlfw.2.4).
 //!
 //! Measures steady-state throughput of the same JS corpus the correctness arm
-//! compares, and emits a MEASURED Node/Bun denominator — the artifact
-//! FE-CLAIM-010 requires before its ">= 3x" wording can ever promote.
+//! compares and emits raw Node/Bun diagnostic evidence. The report deliberately
+//! keeps its denominators degraded while the engine and external lifecycle
+//! contracts differ; a lifecycle-symmetric successor is required before
+//! FE-CLAIM-010 can use these measurements for promotion.
 //!
 //! ## Measurement protocol (binding)
 //!
@@ -16,8 +18,9 @@
 //! * The engine lane prepares immutable IR3 ONCE, then executes that handle on
 //!   a fresh `HybridRouter` (and therefore a fresh interpreter core) for every
 //!   warm-up and measured iteration. Preparation is timed separately. This
-//!   matches the external compile-once denominator at the source-compilation
-//!   boundary while retaining per-execution runtime isolation.
+//!   matches the external compile-once boundary while retaining per-execution
+//!   runtime isolation. Node/Bun retain a shared realm and JIT state, however,
+//!   so this is not full lifecycle parity.
 //! * Per-iteration nanosecond timings (warm-up and measured) are retained in
 //!   the report and exported as `diffperf.iteration` events so a skeptic can
 //!   re-derive every aggregate from raw data.
@@ -26,18 +29,19 @@
 //!
 //! Identical hardware and corpus for all runtimes, pinned + recorded runtime
 //! versions and resolved binary paths, a documented warm-up protocol, a full
-//! environment manifest, and geometric-mean aggregation. A run that cannot
-//! meet the rules emits a DEGRADED receipt instead of a number. One trap this
-//! module checks explicitly: `node` on PATH may be Bun's `node` shim, which
-//! would make the "Node" lane silently measure Bun (`node_genuine`).
+//! environment manifest, and geometric-mean aggregation. V3 records the
+//! fresh-engine/shared-realm asymmetry as a fairness violation, so its
+//! denominators remain DEGRADED rather than publishing a ratio. One additional
+//! trap this module checks explicitly: `node` on PATH may be Bun's `node` shim,
+//! which would make the "Node" lane silently measure Bun (`node_genuine`).
 //!
 //! ## Honest outcome
 //!
-//! Cases are admitted into the denominator only when the correctness arm
-//! reports structured-value consensus between Node, Bun, and FrankenEngine
-//! ("output equivalence before throughput"). If the measured weighted
-//! geometric mean is below the 3x floor, the result is still published with
-//! `meets_3x_floor: false` — the number is surfaced, never massaged.
+//! Cases are eligible for baseline-specific diagnostic aggregation only when
+//! the correctness arm reports structured-value consensus between Node, Bun,
+//! and FrankenEngine and the per-invocation observations are stable and equal.
+//! The report retains raw samples and per-case ratios, but V3 exposes no
+//! publishable aggregate or `meets_3x_floor` verdict while fairness is degraded.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -54,10 +58,11 @@ use crate::differential_oracle::{
 };
 use crate::{EngineKind, HybridRouter, RouteReason};
 
-pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v2";
+pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v3";
 
-/// FE-CLAIM-010 floor: ">= 3x weighted-geometric-mean throughput" in
-/// fixed-point millionths (1_000_000 == 1.0x).
+/// FE-CLAIM-010's requested ">= 3x throughput" floor in fixed-point
+/// millionths (1_000_000 == 1.0x). V3 cannot publish a verdict against it
+/// because its execution lifecycles are asymmetric.
 pub const DENOMINATOR_FLOOR_MILLIONTHS: u64 = 3_000_000;
 
 /// Sentinel prefix the external harness prints before its timing payload.
@@ -197,17 +202,23 @@ pub struct PerfBackendCaseResult {
     pub route_reason: Option<RouteReason>,
     pub warmup_ns: Vec<u64>,
     pub measured_ns: Vec<u64>,
-    /// SHA-256 of the observable console stream for every warm-up invocation,
-    /// in the same order as `warmup_ns`.
+    /// SHA-256 of the captured console streams plus typed invocation-return
+    /// projection for every warm-up invocation, in the same order as
+    /// `warmup_ns`. For the external `new Function` lanes this is the function
+    /// return, not arbitrary Script completion. V3 therefore marks the
+    /// observation complete only for an `undefined` return, which is also the
+    /// observed completion shape of the checked-in benchmark corpus; lifecycle
+    /// asymmetry remains a publication-blocking fairness violation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warmup_observation_sha256: Vec<String>,
-    /// SHA-256 of the observable console stream for every measured invocation,
-    /// in the same order as `measured_ns`.
+    /// SHA-256 of the captured console streams plus typed invocation-return
+    /// projection for every measured invocation, in the same order as
+    /// `measured_ns`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub measured_observation_sha256: Vec<String>,
-    /// True only when every invocation produced at least one captured console
-    /// effect, so the digest represents a real observable rather than an empty
-    /// placeholder.
+    /// True only when every invocation produced a structurally valid console
+    /// observation and the v3-supported exact `undefined` invocation return,
+    /// so the digest cannot be an empty or unsupported placeholder.
     #[serde(default)]
     pub observations_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,8 +235,9 @@ pub struct PerfCaseResult {
     /// the same canonical structured value for this source.
     pub behavior_equivalent: bool,
     pub equivalence_detail: String,
-    /// Exact warm-up/measured lifecycle observations were stable within each
-    /// backend and agreed across Node, Bun, and FrankenEngine.
+    /// Captured console streams and typed invocation-return projections were
+    /// stable across warm-up/measured invocations within each backend and
+    /// agreed across Node, Bun, and FrankenEngine.
     pub measured_lifecycle_equivalent: bool,
     pub measured_lifecycle_detail: String,
     pub engine: PerfBackendCaseResult,
@@ -269,6 +281,10 @@ pub struct PerfEnvironmentManifest {
     pub bun_version: Option<String>,
     pub warmup_iterations: u32,
     pub measured_iterations: u32,
+    /// Maximum admitted coefficient of variation, in millionths. Persisting
+    /// the threshold lets downstream bundle validation recompute each
+    /// baseline's admission set from raw samples.
+    pub max_cv_millionths: u32,
     /// Exact lifecycle used for the FrankenEngine timing denominator.
     pub engine_execution_lifecycle: String,
     /// Exact lifecycle used for the Node/Bun timing denominator.
@@ -340,8 +356,12 @@ pub struct DifferentialPerfReport {
 /// Builds the JS harness an external runtime executes for one case.
 ///
 /// The case source is embedded as a JSON string literal and compiled once via
-/// `new Function`; `console.log` is replaced with an accumulator during the
-/// timed loops so I/O cost does not dominate the workload being measured.
+/// `new Function`; console methods are replaced with accumulators during the
+/// timed loops so I/O cost does not dominate the workload being measured. The
+/// function-return projection is captured after the timer stops and joins the
+/// console streams in the per-invocation observation. This is deliberately not
+/// described as general Script completion: `new Function(source)()` returns
+/// `undefined` unless the function body executes `return`.
 pub fn build_external_perf_harness(source: &str, warmup: u32, measured: u32) -> String {
     let escaped = serde_json::to_string(source).unwrap_or_else(|_| "\"\"".to_string());
     format!(
@@ -349,46 +369,58 @@ pub fn build_external_perf_harness(source: &str, warmup: u32, measured: u32) -> 
          const __fePrepareStart = process.hrtime.bigint();\n\
          const __feFn = new Function(__feSrc);\n\
          const __fePreparationNs = Number(process.hrtime.bigint() - __fePrepareStart);\n\
-         const __feRealLog = console.log;\n\
-         const __feRealInfo = console.info;\n\
-         const __feRealWarn = console.warn;\n\
-         const __feRealError = console.error;\n\
+         const __feConsole = console;\n\
+         const __feRealLog = __feConsole.log;\n\
+         const __feRealInfo = __feConsole.info;\n\
+         const __feRealWarn = __feConsole.warn;\n\
+         const __feRealError = __feConsole.error;\n\
+         const __feNow = process.hrtime.bigint.bind(process.hrtime);\n\
+         const __feString = String;\n\
+         const __feNumber = Number;\n\
+         const __feJsonStringify = JSON.stringify;\n\
+         const __feArrayPush = Function.call.bind(Array.prototype.push);\n\
+         const __feArrayJoin = Function.call.bind(Array.prototype.join);\n\
          let __feSink = 0;\n\
          let __feStdout = [];\n\
          let __feStderr = [];\n\
          function __feCapture(target, args) {{\n\
            const rendered = [];\n\
-           for (let i = 0; i < args.length; i += 1) rendered.push(String(args[i]));\n\
-           target.push(rendered.join(' ') + '\\n');\n\
+           for (let i = 0; i < args.length; i += 1) __feArrayPush(rendered, __feString(args[i]));\n\
+           __feArrayPush(target, __feArrayJoin(rendered, ' ') + '\\n');\n\
            __feSink += args.length;\n\
          }}\n\
-         console.log = function () {{ __feCapture(__feStdout, arguments); }};\n\
-         console.info = function () {{ __feCapture(__feStdout, arguments); }};\n\
-         console.warn = function () {{ __feCapture(__feStderr, arguments); }};\n\
-         console.error = function () {{ __feCapture(__feStderr, arguments); }};\n\
+         function __feObservation(completion) {{\n\
+           const completionType = typeof completion;\n\
+           const completionValue = completionType === 'undefined' ? 'undefined' : '<unsupported>';\n\
+           return __feJsonStringify([__feArrayJoin(__feStdout, ''), __feArrayJoin(__feStderr, ''), completionType, completionValue]);\n\
+         }}\n\
+         __feConsole.log = function () {{ __feCapture(__feStdout, arguments); }};\n\
+         __feConsole.info = function () {{ __feCapture(__feStdout, arguments); }};\n\
+         __feConsole.warn = function () {{ __feCapture(__feStderr, arguments); }};\n\
+         __feConsole.error = function () {{ __feCapture(__feStderr, arguments); }};\n\
          const __feWarm = [];\n\
          const __feMeas = [];\n\
          const __feWarmObservations = [];\n\
          const __feMeasuredObservations = [];\n\
          for (let i = 0; i < {warmup}; i += 1) {{\n\
            __feStdout = []; __feStderr = [];\n\
-           const t0 = process.hrtime.bigint();\n\
-           __feFn();\n\
-           const t1 = process.hrtime.bigint();\n\
-           __feWarm.push(Number(t1 - t0));\n\
-           __feWarmObservations.push(__feStdout.join('') + '\\u0000' + __feStderr.join(''));\n\
+           const t0 = __feNow();\n\
+           const completion = __feFn();\n\
+           const t1 = __feNow();\n\
+           __feArrayPush(__feWarm, __feNumber(t1 - t0));\n\
+           __feArrayPush(__feWarmObservations, __feObservation(completion));\n\
          }}\n\
          for (let i = 0; i < {measured}; i += 1) {{\n\
            __feStdout = []; __feStderr = [];\n\
-           const t0 = process.hrtime.bigint();\n\
-           __feFn();\n\
-           const t1 = process.hrtime.bigint();\n\
-           __feMeas.push(Number(t1 - t0));\n\
-           __feMeasuredObservations.push(__feStdout.join('') + '\\u0000' + __feStderr.join(''));\n\
+           const t0 = __feNow();\n\
+           const completion = __feFn();\n\
+           const t1 = __feNow();\n\
+           __feArrayPush(__feMeas, __feNumber(t1 - t0));\n\
+           __feArrayPush(__feMeasuredObservations, __feObservation(completion));\n\
          }}\n\
-         console.log = __feRealLog;\n\
-         console.info = __feRealInfo; console.warn = __feRealWarn; console.error = __feRealError;\n\
-         console.log('{sentinel}' + JSON.stringify({{ preparation_ns: __fePreparationNs, warmup_ns: __feWarm, measured_ns: __feMeas, warmup_observations: __feWarmObservations, measured_observations: __feMeasuredObservations, sink: __feSink }}));\n",
+         __feConsole.log = __feRealLog;\n\
+         __feConsole.info = __feRealInfo; __feConsole.warn = __feRealWarn; __feConsole.error = __feRealError;\n\
+         __feRealLog('{sentinel}' + __feJsonStringify({{ preparation_ns: __fePreparationNs, warmup_ns: __feWarm, measured_ns: __feMeas, warmup_observations: __feWarmObservations, measured_observations: __feMeasuredObservations, sink: __feSink }}));\n",
         sentinel = PERF_HARNESS_SENTINEL,
     )
 }
@@ -412,8 +444,8 @@ pub struct ParsedPerfHarnessOutput {
     pub observations_complete: bool,
 }
 
-/// Extracts one-time preparation, per-invocation timing, and exact observable
-/// console-stream digests from harness stdout.
+/// Extracts one-time preparation, per-invocation timing, and captured
+/// console/completion-observation digests from harness stdout.
 /// The LAST sentinel line wins so workload output cannot spoof the payload
 /// unless it also runs after the harness completes.
 pub fn parse_perf_harness_output(stdout: &str) -> Result<ParsedPerfHarnessOutput, String> {
@@ -438,7 +470,10 @@ pub fn parse_perf_harness_output(stdout: &str) -> Result<ParsedPerfHarnessOutput
             .warmup_observations
             .iter()
             .chain(&payload.measured_observations)
-            .all(|observation| observation != "\0");
+            .all(|observation| {
+                serde_json::from_str::<[String; 4]>(observation)
+                    .is_ok_and(|fields| fields[2] == "undefined" && fields[3] == "undefined")
+            });
     Ok(ParsedPerfHarnessOutput {
         preparation_ns: payload.preparation_ns,
         warmup_ns: payload.warmup_ns,
@@ -455,6 +490,31 @@ pub fn parse_perf_harness_output(stdout: &str) -> Result<ParsedPerfHarnessOutput
             .collect(),
         observations_complete,
     })
+}
+
+fn validate_harness_sample_counts(
+    parsed: &ParsedPerfHarnessOutput,
+    expected_warmup: u32,
+    expected_measured: u32,
+) -> Result<(), String> {
+    let expected_warmup = expected_warmup as usize;
+    let expected_measured = expected_measured as usize;
+    if parsed.warmup_ns.len() != expected_warmup
+        || parsed.warmup_observation_sha256.len() != expected_warmup
+        || parsed.measured_ns.len() != expected_measured
+        || parsed.measured_observation_sha256.len() != expected_measured
+    {
+        return Err(format!(
+            "harness sample counts differ from request: warmup timing/observation={}/{}, expected {}; measured timing/observation={}/{}, expected {}",
+            parsed.warmup_ns.len(),
+            parsed.warmup_observation_sha256.len(),
+            expected_warmup,
+            parsed.measured_ns.len(),
+            parsed.measured_observation_sha256.len(),
+            expected_measured,
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +750,7 @@ pub fn capture_perf_environment(
         bun_version,
         warmup_iterations: config.warmup_iterations,
         measured_iterations: config.measured_iterations,
+        max_cv_millionths: config.max_cv_millionths,
         engine_execution_lifecycle: "prepare_once_fresh_router_and_interpreter_core_per_iteration"
             .to_string(),
         external_execution_lifecycle: "new_function_once_single_process_shared_realm_and_jit_state"
@@ -856,6 +917,28 @@ fn run_external_perf_case(
             let stdout = String::from_utf8_lossy(&output.stdout);
             match parse_perf_harness_output(&stdout) {
                 Ok(parsed) => {
+                    if let Err(message) = validate_harness_sample_counts(
+                        &parsed,
+                        config.warmup_iterations,
+                        config.measured_iterations,
+                    ) {
+                        return PerfBackendCaseResult {
+                            backend: spec.runtime_id,
+                            status: PerfMeasurementStatus::Failed,
+                            resolved_program: resolve_program_path(spec.program.as_str()),
+                            version,
+                            preparation_ns: Some(parsed.preparation_ns),
+                            engine_kind: None,
+                            route_reason: None,
+                            warmup_ns: Vec::new(),
+                            measured_ns: Vec::new(),
+                            warmup_observation_sha256: Vec::new(),
+                            measured_observation_sha256: Vec::new(),
+                            observations_complete: false,
+                            stats: None,
+                            diagnostics: vec![message],
+                        };
+                    }
                     let stats = compute_sample_stats(&parsed.measured_ns);
                     PerfBackendCaseResult {
                         backend: spec.runtime_id,
@@ -974,7 +1057,7 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
                     engine_kind.get_or_insert(outcome.engine);
                     route_reason.get_or_insert(outcome.route_reason);
                     let (observation_sha256, observation_present) =
-                        engine_console_observation_sha256(&outcome.console_output);
+                        engine_observation_sha256(&outcome);
                     observations_complete &= observation_present;
                     if phase_measured {
                         measured_ns.push(elapsed);
@@ -1035,14 +1118,12 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
     }
 }
 
-fn engine_console_observation_sha256(
-    entries: &[crate::baseline_interpreter::ConsoleEntry],
-) -> (String, bool) {
+fn engine_observation_sha256(outcome: &crate::EvalOutcome) -> (String, bool) {
     use crate::baseline_interpreter::ConsoleLevel;
 
     let mut stdout = String::new();
     let mut stderr = String::new();
-    for entry in entries {
+    for entry in &outcome.console_output {
         let target = match entry.level {
             ConsoleLevel::Log | ConsoleLevel::Info => &mut stdout,
             ConsoleLevel::Warn | ConsoleLevel::Error => &mut stderr,
@@ -1050,10 +1131,23 @@ fn engine_console_observation_sha256(
         target.push_str(&entry.message);
         target.push('\n');
     }
-    let present = !entries.is_empty();
-    stdout.push('\0');
-    stdout.push_str(&stderr);
-    (sha256_hex(stdout.as_bytes()), present)
+    let Some(completion_type) = outcome.completion_type.as_deref() else {
+        return (String::new(), false);
+    };
+    // The external v3 harness executes a Function body, whose return is not
+    // general ECMAScript Script completion. Restrict evidence admission to the
+    // one representation that is exact on both sides for the governed corpus.
+    // A future richer canonical completion contract must bump the schema.
+    let supported_completion = completion_type == "undefined" && outcome.value == "undefined";
+    let observation = serde_json::to_string(&[
+        stdout.as_str(),
+        stderr.as_str(),
+        completion_type,
+        outcome.value.as_str(),
+    ])
+    .unwrap_or_default();
+    let present = !observation.is_empty() && supported_completion;
+    (sha256_hex(observation.as_bytes()), present)
 }
 
 fn measured_lifecycle_equivalence(
@@ -1067,7 +1161,7 @@ fn measured_lifecycle_equivalence(
         }
         if !result.observations_complete {
             return Err(format!(
-                "{label} lifecycle produced an invocation without a captured console effect"
+                "{label} lifecycle produced an invocation without a complete console/completion observation"
             ));
         }
         let mut observations = result
@@ -1100,7 +1194,8 @@ fn measured_lifecycle_equivalence(
     if engine_observation != node_observation || engine_observation != bun_observation {
         return (
             false,
-            "engine/node/bun observable digests differ in the exact measured lifecycle".to_string(),
+            "engine/node/bun console/completion digests differ in the measured lifecycle"
+                .to_string(),
         );
     }
     (
@@ -1227,6 +1322,10 @@ pub fn build_denominator(
     }
     if admitted_ratios.is_empty() {
         degraded_reasons.push("no case satisfied the admission preconditions".to_string());
+    }
+    if !admitted_ratios.is_empty() && geomean.is_none() {
+        degraded_reasons
+            .push("admitted ratios did not yield a finite positive geometric mean".to_string());
     }
     let status = if degraded_reasons.is_empty() {
         PerfDenominatorStatus::Published
@@ -1482,6 +1581,8 @@ mod tests {
         assert!(harness.contains(PERF_HARNESS_SENTINEL));
         assert!(harness.contains("i < 2"));
         assert!(harness.contains("i < 7"));
+        assert!(harness.contains("const completion = __feFn()"));
+        assert!(harness.contains("__feObservation(completion)"));
     }
 
     #[test]
@@ -1500,8 +1601,20 @@ mod tests {
 
     #[test]
     fn parse_harness_output_happy_path() {
+        let warmup_observation =
+            serde_json::to_string(&["5\n", "", "undefined", "undefined"]).expect("observation");
+        let measured_observation =
+            serde_json::to_string(&["10\n", "", "undefined", "undefined"]).expect("observation");
         let stdout = format!(
-            "workload noise\n{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":3,\"warmup_ns\":[5],\"measured_ns\":[10,11],\"warmup_observations\":[\"5\\u0000\"],\"measured_observations\":[\"10\\u0000\",\"10\\u0000\"],\"sink\":3}}\n"
+            "workload noise\n{PERF_HARNESS_SENTINEL}{}\n",
+            serde_json::json!({
+                "preparation_ns": 3,
+                "warmup_ns": [5],
+                "measured_ns": [10, 11],
+                "warmup_observations": [warmup_observation],
+                "measured_observations": [measured_observation.clone(), measured_observation],
+                "sink": 3,
+            })
         );
         let parsed = parse_perf_harness_output(&stdout).expect("parse");
         assert_eq!(parsed.preparation_ns, 3);
@@ -1535,10 +1648,70 @@ mod tests {
     }
 
     #[test]
-    fn parse_harness_output_uses_last_sentinel_line() {
+    fn parse_harness_output_marks_malformed_observation_incomplete() {
         let stdout = format!(
-            "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[1],\"measured_ns\":[1],\"warmup_observations\":[\"1\\u0000\"],\"measured_observations\":[\"1\\u0000\"],\"sink\":0}}\n\
-             {PERF_HARNESS_SENTINEL}{{\"preparation_ns\":2,\"warmup_ns\":[2],\"measured_ns\":[9],\"warmup_observations\":[\"2\\u0000\"],\"measured_observations\":[\"9\\u0000\"],\"sink\":0}}\n"
+            "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[],\"measured_ns\":[2],\"warmup_observations\":[],\"measured_observations\":[\"console-only\"]}}"
+        );
+        let parsed = parse_perf_harness_output(&stdout).expect("parse shape");
+        assert!(!parsed.observations_complete);
+    }
+
+    #[test]
+    fn parse_harness_output_rejects_non_undefined_function_return() {
+        let observation = serde_json::to_string(&["", "", "number", "1"]).expect("observation");
+        let stdout = format!(
+            "{PERF_HARNESS_SENTINEL}{}",
+            serde_json::json!({
+                "preparation_ns": 1,
+                "warmup_ns": [],
+                "measured_ns": [2],
+                "warmup_observations": [],
+                "measured_observations": [observation],
+            })
+        );
+        let parsed = parse_perf_harness_output(&stdout).expect("parse shape");
+        assert!(!parsed.observations_complete);
+    }
+
+    #[test]
+    fn requested_sample_counts_are_exact() {
+        let parsed = ParsedPerfHarnessOutput {
+            preparation_ns: 1,
+            warmup_ns: vec![1],
+            measured_ns: vec![2, 3],
+            warmup_observation_sha256: vec!["a".repeat(64)],
+            measured_observation_sha256: vec!["b".repeat(64), "c".repeat(64)],
+            observations_complete: true,
+        };
+        validate_harness_sample_counts(&parsed, 1, 2).expect("exact counts");
+        let error = validate_harness_sample_counts(&parsed, 2, 2).unwrap_err();
+        assert!(error.contains("differ from request"));
+        let error = validate_harness_sample_counts(&parsed, 1, 3).unwrap_err();
+        assert!(error.contains("differ from request"));
+    }
+
+    #[test]
+    fn parse_harness_output_uses_last_sentinel_line() {
+        let observation =
+            serde_json::to_string(&["1\n", "", "undefined", "undefined"]).expect("observation");
+        let stdout = format!(
+            "{PERF_HARNESS_SENTINEL}{}\n{PERF_HARNESS_SENTINEL}{}\n",
+            serde_json::json!({
+                "preparation_ns": 1,
+                "warmup_ns": [1],
+                "measured_ns": [1],
+                "warmup_observations": [observation.clone()],
+                "measured_observations": [observation.clone()],
+                "sink": 0,
+            }),
+            serde_json::json!({
+                "preparation_ns": 2,
+                "warmup_ns": [2],
+                "measured_ns": [9],
+                "warmup_observations": [observation.clone()],
+                "measured_observations": [observation],
+                "sink": 0,
+            })
         );
         let parsed = parse_perf_harness_output(&stdout).expect("parse");
         assert_eq!(parsed.preparation_ns, 2);
@@ -1579,7 +1752,27 @@ mod tests {
         missing_bun.observations_complete = false;
         let (equivalent, detail) = measured_lifecycle_equivalence(&engine, &node, &missing_bun);
         assert!(!equivalent);
-        assert!(detail.contains("without a captured console effect"));
+        assert!(detail.contains("without a complete console/completion observation"));
+    }
+
+    #[test]
+    fn engine_observation_fails_closed_for_non_undefined_completion() {
+        let mut router = HybridRouter::default();
+        let number = router.eval("1;").expect("number completion");
+        let string = router.eval("'1';").expect("string completion");
+        assert!(number.console_output.is_empty());
+        assert!(string.console_output.is_empty());
+        let (number_digest, number_complete) = engine_observation_sha256(&number);
+        let (string_digest, string_complete) = engine_observation_sha256(&string);
+        assert!(!number_complete);
+        assert!(!string_complete);
+        assert_eq!(number_digest.len(), 64);
+        assert_eq!(string_digest.len(), 64);
+
+        let undefined = router.eval("undefined;").expect("undefined completion");
+        let (undefined_digest, undefined_complete) = engine_observation_sha256(&undefined);
+        assert!(undefined_complete);
+        assert_eq!(undefined_digest.len(), 64);
     }
 
     #[test]
@@ -1683,6 +1876,21 @@ mod tests {
         assert_eq!(node.status, PerfDenominatorStatus::Published);
         assert_eq!(node.geomean_speedup_millionths, Some(500_000));
         assert_eq!(node.meets_3x_floor, Some(false));
+    }
+
+    #[test]
+    fn denominator_degrades_when_positive_geomean_is_undefined() {
+        let cases = vec![equivalent_case("a", &[u64::MAX; 12], &[0; 12], &[0; 12])];
+        let node = build_denominator(
+            &cases,
+            DifferentialBackend::NodeLts,
+            &compliant_fairness(),
+            &PerfArmConfig::default(),
+        );
+        assert_eq!(node.admitted_cases, 1);
+        assert_eq!(node.status, PerfDenominatorStatus::Degraded);
+        assert_eq!(node.geomean_speedup_millionths, None);
+        assert_eq!(node.meets_3x_floor, None);
     }
 
     #[test]
@@ -1950,6 +2158,7 @@ mod tests {
             bun_version: Some("1.3.14".to_string()),
             warmup_iterations: 3,
             measured_iterations: 30,
+            max_cv_millionths: 150_000,
             engine_execution_lifecycle:
                 "prepare_once_fresh_router_and_interpreter_core_per_iteration".to_string(),
             external_execution_lifecycle:

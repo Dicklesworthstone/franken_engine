@@ -39338,6 +39338,9 @@ impl InterpreterCore {
                         Value::Object(object_id) => Some(*object_id),
                         _ => None,
                     };
+                    let ordinary_own_property_fast_path = object_id.is_some_and(|object_id| {
+                        self.ordinary_own_property_read_fast_path_eligible(object_id, &property_key)
+                    });
                     let has_hook_target = object_id.is_some()
                         || matches!(
                             &obj_val,
@@ -39357,43 +39360,45 @@ impl InterpreterCore {
                             &method.definition_label,
                         )?;
                     }
-                    if let Some(binary_storage_label) =
-                        object_id.and_then(|id| self.binary_storage_label_ref(id))
-                    {
-                        result_label = self.join_owned_label_with_temporary_budget(
-                            result_label,
-                            binary_storage_label,
-                        )?;
+                    if !ordinary_own_property_fast_path {
+                        if let Some(binary_storage_label) =
+                            object_id.and_then(|id| self.binary_storage_label_ref(id))
+                        {
+                            result_label = self.join_owned_label_with_temporary_budget(
+                                result_label,
+                                binary_storage_label,
+                            )?;
+                        }
+                        if let Some(url_state_label) =
+                            object_id.and_then(|id| self.url_state_label_ref(id))
+                        {
+                            result_label = self.join_owned_label_with_temporary_budget(
+                                result_label,
+                                url_state_label,
+                            )?;
+                        }
+                        if let Some(cluster_state_label) =
+                            object_id.and_then(|id| self.cluster_state_label_ref(id))
+                        {
+                            result_label = self.join_owned_label_with_temporary_budget(
+                                result_label,
+                                cluster_state_label,
+                            )?;
+                        }
+                        let stream_state_label = if let Some(object_id) = object_id {
+                            self.stream_state_label_with_temporary_budget(
+                                object_id,
+                                Self::estimate_label_bytes(&result_label),
+                            )?
+                        } else {
+                            Label::Public
+                        };
+                        result_label = if result_label >= stream_state_label {
+                            result_label
+                        } else {
+                            stream_state_label
+                        };
                     }
-                    if let Some(url_state_label) =
-                        object_id.and_then(|id| self.url_state_label_ref(id))
-                    {
-                        result_label = self.join_owned_label_with_temporary_budget(
-                            result_label,
-                            url_state_label,
-                        )?;
-                    }
-                    if let Some(cluster_state_label) =
-                        object_id.and_then(|id| self.cluster_state_label_ref(id))
-                    {
-                        result_label = self.join_owned_label_with_temporary_budget(
-                            result_label,
-                            cluster_state_label,
-                        )?;
-                    }
-                    let stream_state_label = if let Some(object_id) = object_id {
-                        self.stream_state_label_with_temporary_budget(
-                            object_id,
-                            Self::estimate_label_bytes(&result_label),
-                        )?
-                    } else {
-                        Label::Public
-                    };
-                    result_label = if result_label >= stream_state_label {
-                        result_label
-                    } else {
-                        stream_state_label
-                    };
 
                     let prop = match obj_val {
                         Value::Object(oid) => {
@@ -39407,6 +39412,18 @@ impl InterpreterCore {
                                     .and_then(|o| o.prototype)
                                     .map(Value::Object)
                                     .unwrap_or(Value::Null)
+                            } else if ordinary_own_property_fast_path {
+                                let value = self
+                                    .heap
+                                    .get(oid.0 as usize)
+                                    .and_then(|object| {
+                                        object.own_runtime_property_value(&property_key)
+                                    })
+                                    .expect(
+                                        "ordinary own-property fast-path eligibility was checked",
+                                    );
+                                self.capture_property_resolution_found(&property_key, oid, 0);
+                                self.resolve_accessor_get(Some(module), value, Value::Object(oid))?
                             } else {
                                 self.proxy_aware_get_runtime_property(
                                     Some(module),
@@ -43812,18 +43829,7 @@ impl InterpreterCore {
             };
             if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
-                self.nondeterminism_trace.capture(
-                    NondeterminismSource::PropertyResolution,
-                    format!(
-                        "property_found:key={},object_id={},depth={}",
-                        key.diagnostic(),
-                        id.0,
-                        depth
-                    )
-                    .into_bytes(),
-                    self.instructions_executed,
-                    "baseline_interpreter",
-                );
+                self.capture_property_resolution_found(key, id, depth);
                 return self.resolve_accessor_get(module, val, receiver);
             }
             current = next_prototype;
@@ -43948,6 +43954,74 @@ impl InterpreterCore {
             "baseline_interpreter",
         );
         Ok(Value::Undefined)
+    }
+
+    /// Return whether an existing own-property read can bypass the generic
+    /// proxy/prototype resolver and the special-object IFC carrier scans.
+    ///
+    /// This is deliberately a proof-by-exclusion fast path: every object kind
+    /// with native property behavior or side-table labels remains on the
+    /// generic path. The caller still runs the typed property hook, resolves
+    /// accessors, joins stored-property and destination labels, and emits the
+    /// same deterministic property-resolution event.
+    fn ordinary_own_property_read_fast_path_eligible(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> bool {
+        if key.as_str() == Some("__proto__") {
+            return false;
+        }
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return false;
+        };
+        if object.is_import_meta
+            || object.prototype.is_some()
+            || object.array_buffer.is_some()
+            || object.typed_array.is_some()
+            || object.data_view.is_some()
+            || matches!(
+                object.properties.get("__type"),
+                Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
+            )
+            || !object.contains_own_runtime_property(key)
+        {
+            return false;
+        }
+
+        !self.url_objects.contains_key(&object_id)
+            && !self.url_search_params.contains_key(&object_id)
+            && !self.cluster_facades.contains_key(&object_id)
+            && !self
+                .cluster_facades
+                .values()
+                .any(|state| state.settings == object_id)
+            && !self.readable_from_streams.contains_key(&object_id)
+            && !self.readable_terminal_states.contains_key(&object_id)
+            && !self.writable_streams.contains_key(&object_id)
+            && !self.writable_terminal_states.contains_key(&object_id)
+            && !self.loopback_servers.contains_key(&object_id)
+            && !self.loopback_sockets.contains_key(&object_id)
+    }
+
+    fn capture_property_resolution_found(
+        &mut self,
+        key: &RuntimePropertyKey,
+        object_id: ObjectId,
+        depth: u32,
+    ) {
+        self.nondeterminism_trace.capture(
+            NondeterminismSource::PropertyResolution,
+            format!(
+                "property_found:key={},object_id={},depth={}",
+                key.diagnostic(),
+                object_id.0,
+                depth
+            )
+            .into_bytes(),
+            self.instructions_executed,
+            "baseline_interpreter",
+        );
     }
 
     /// Resolve an `Array.prototype` method name to its receiver-aware builtin
@@ -94830,6 +94904,102 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "GetProperty join must not lower a dst that already holds higher taint"
+        );
+    }
+
+    #[test]
+    fn ordinary_own_property_fast_path_matches_forced_fallback_trace_and_ifc() {
+        let run = |force_fallback: bool| {
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                vec![],
+            );
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_properties(&[("data", Value::Int(41))])
+                .expect("ordinary object should allocate");
+            if force_fallback {
+                let empty_prototype = core
+                    .alloc_object_with_prototype(None)
+                    .expect("empty prototype should allocate");
+                let index = object.0 as usize;
+                core.mutate_heap(|heap| {
+                    heap[index].prototype = Some(empty_prototype);
+                });
+            }
+            core.set_own_property_label(object, "data", &Label::Secret);
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Object(object);
+                registers[1] = Value::str("data");
+                registers[2] = Value::Undefined;
+            });
+            core.set_register_label(0, Label::Public)
+                .expect("object label should be settable");
+            core.set_register_label(1, Label::Public)
+                .expect("key label should be settable");
+            core.set_register_label(2, Label::Confidential)
+                .expect("destination label should be settable");
+
+            assert_eq!(
+                core.ordinary_own_property_read_fast_path_eligible(
+                    object,
+                    &RuntimePropertyKey::String(JsString::from("data")),
+                ),
+                !force_fallback,
+                "the empty prototype forces the generic path without changing the depth-0 hit"
+            );
+            core.execute(&module)
+                .expect("ordinary own-property read should execute");
+
+            (
+                core.read_reg(2).expect("destination value should exist"),
+                core.get_register_label(2)
+                    .expect("destination label should exist")
+                    .clone(),
+                core.nondeterminism_trace_ref().clone(),
+                core.instructions_executed,
+            )
+        };
+
+        let fast = run(false);
+        let fallback = run(true);
+        assert_eq!(fast.0, Value::Int(41));
+        assert_eq!(fast.1, Label::Secret);
+        assert_eq!(
+            fast, fallback,
+            "fast and generic paths must be artifact exact"
+        );
+    }
+
+    #[test]
+    fn ordinary_own_property_fast_path_excludes_proto_proxy_and_missing_keys() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7))])
+            .expect("ordinary object should allocate");
+        let data_key = RuntimePropertyKey::String(JsString::from("data"));
+        assert!(core.ordinary_own_property_read_fast_path_eligible(object, &data_key));
+        assert!(!core.ordinary_own_property_read_fast_path_eligible(
+            object,
+            &RuntimePropertyKey::String(JsString::from("missing")),
+        ));
+        assert!(!core.ordinary_own_property_read_fast_path_eligible(
+            object,
+            &RuntimePropertyKey::String(JsString::from("__proto__")),
+        ));
+
+        core.set_object_property(object, "__type".to_string(), Value::str(PROXY_TYPE_TAG))
+            .expect("proxy marker should fit");
+        assert!(
+            !core.ordinary_own_property_read_fast_path_eligible(object, &data_key),
+            "even a malformed proxy-tagged object must fail closed to proxy validation"
         );
     }
 

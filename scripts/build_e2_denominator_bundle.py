@@ -778,11 +778,28 @@ def main() -> int:
         (args.commit + "\x1f" + corpus_content_digest + "\x1f" + cv_hash).encode("utf-8")
     )
     perf_command = reproduction_perf_command(args.corpus, args.profile, env_in, cases)
-    build_command = (
-        "scripts/build_e2_denominator_bundle.py --report report.json "
-        f"--corpus {shlex.quote(args.corpus)} "
-        "--out-dir docs/perf/e2_denominator_bundle_v1 "
-        f"--profile {shlex.quote(args.profile)}"
+    build_command = shlex.join(
+        [
+            "scripts/build_e2_denominator_bundle.py",
+            "--report",
+            "report.json",
+            "--corpus",
+            args.corpus,
+            "--out-dir",
+            str(out_dir),
+            "--commit",
+            args.commit,
+            "--rustc",
+            args.rustc,
+            "--cargo",
+            args.cargo,
+            "--profile",
+            args.profile,
+            "--generated-at-utc",
+            args.generated_at_utc,
+            "--dirty",
+            str(dirty).lower(),
+        ]
     )
     repro_required = [
         "schema_version",

@@ -68057,6 +68057,77 @@ impl InterpreterCore {
         Ok(Some(peak))
     }
 
+    /// True when replacing an existing register can neither change logical
+    /// memory ownership nor inherit an execution-context label.
+    ///
+    /// This is deliberately exhaustive over `Value`: adding a value kind
+    /// forces its ownership model to be classified before it can enter the
+    /// scalar fast path. Dynamic strings, BigInts, builtins, accessors, and
+    /// custom IFC labels retain the fully accounted path below.
+    #[inline(always)]
+    fn static_register_value(value: &Value) -> bool {
+        match value {
+            Value::Undefined
+            | Value::Null
+            | Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Object(_)
+            | Value::Function(_)
+            | Value::Closure(_)
+            | Value::Iterator(_)
+            | Value::GeneratorFunction(_)
+            | Value::Generator(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::AsyncGeneratorObject(_)
+            | Value::Promise(_)
+            | Value::Symbol(_) => true,
+            Value::BigInt(_)
+            | Value::Str(_)
+            | Value::BuiltinFunction(_)
+            | Value::Accessor { .. } => false,
+        }
+    }
+
+    #[inline(always)]
+    fn static_register_label(label: &Label) -> bool {
+        match label {
+            Label::Public
+            | Label::Internal
+            | Label::Confidential
+            | Label::Secret
+            | Label::TopSecret => true,
+            Label::Custom { .. } => false,
+        }
+    }
+
+    #[inline(always)]
+    fn static_register_write_eligible(
+        &self,
+        actual_reg: usize,
+        value: &Value,
+        next_label: &Label,
+    ) -> bool {
+        self.active_inline_callback_context_label.is_none()
+            && self.call_stack.is_empty()
+            && self
+                .registers
+                .get(actual_reg)
+                .is_some_and(Self::static_register_value)
+            && self
+                .register_labels
+                .get(actual_reg)
+                .is_some_and(Self::static_register_label)
+            && Self::static_register_value(value)
+            && Self::static_register_label(next_label)
+            && !self.memory_request_exceeds_budget(
+                self.estimated_memory_bytes,
+                self.config.max_total_memory_bytes,
+            )
+    }
+
     fn write_reg(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         if reg >= self.config.max_registers {
             return Err(InterpreterError::RegisterOutOfBounds {
@@ -68065,6 +68136,26 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        let fast_path_eligible = self
+            .register_labels
+            .get(actual_reg)
+            .is_some_and(|label| self.static_register_write_eligible(actual_reg, &value, label));
+        if fast_path_eligible {
+            // Preserve the sole execution-seed mutation chokepoint before the
+            // direct replacement. Eligibility proves the value/label logical
+            // byte total is unchanged and no context label can dominate.
+            self.mutate_registers(|registers| registers[actual_reg] = value);
+            return Ok(());
+        }
+        self.write_reg_accounted(actual_reg, value)
+    }
+
+    #[inline]
+    fn write_reg_accounted(
+        &mut self,
+        actual_reg: usize,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,
         // closures, call stack, iterators, and generators each time — turning every
@@ -68142,6 +68233,24 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        if self.static_register_write_eligible(actual_reg, &value, &label) {
+            // The existing and replacement value/label pairs own zero dynamic
+            // bytes. Keep seed materialization and epoch advancement exact,
+            // then replace both parallel register files as one logical write.
+            self.mutate_registers(|registers| registers[actual_reg] = value);
+            self.register_labels[actual_reg] = label;
+            return Ok(());
+        }
+        self.write_reg_with_label_accounted(actual_reg, value, label)
+    }
+
+    #[inline]
+    fn write_reg_with_label_accounted(
+        &mut self,
+        actual_reg: usize,
+        value: Value,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
         let previous_value_bytes = self
             .registers
             .get(actual_reg)
@@ -119182,12 +119291,122 @@ mod lazy_seed_tests {
         core
     }
 
+    fn static_register_write_core() -> InterpreterCore {
+        let mut core = test_core_with_registers(vec![Value::Int(1)]);
+        core.register_labels.push(Label::Internal);
+        core.sync_estimated_memory_bytes()
+            .expect("static register-write fixture must fit");
+        core
+    }
+
     fn capture_execution_seed_eager_for_test(core: &mut InterpreterCore) -> ExecutionSeedHandle {
         let seed = core
             .capture_execution_seed()
             .expect("eager test execution-seed capture must fit");
         core.materialize_pending_lazy_seeds_with_current_state();
         seed
+    }
+
+    #[test]
+    fn static_register_write_matches_accounted_path_and_seed_state() {
+        let mut fast = static_register_write_core();
+        let mut accounted = static_register_write_core();
+        let fast_seed = fast
+            .capture_execution_seed()
+            .expect("fast-path seed reservation must fit");
+        let accounted_seed = accounted
+            .capture_execution_seed()
+            .expect("accounted-path seed reservation must fit");
+        let fast_epoch_before = fast.seed_epoch;
+        let accounted_epoch_before = accounted.seed_epoch;
+
+        assert!(fast.static_register_write_eligible(0, &Value::Int(9), &Label::Secret));
+        fast.write_reg_with_label(0, Value::Int(9), Label::Secret)
+            .expect("eligible static write must succeed");
+        accounted
+            .write_reg_with_label_accounted(0, Value::Int(9), Label::Secret)
+            .expect("reference accounted write must succeed");
+
+        assert_eq!(fast.registers.value, accounted.registers.value);
+        assert_eq!(fast.register_labels, accounted.register_labels);
+        assert_eq!(
+            fast.estimated_memory_bytes,
+            accounted.estimated_memory_bytes
+        );
+        assert_eq!(
+            fast.live_execution_seed_reserved_bytes(),
+            accounted.live_execution_seed_reserved_bytes()
+        );
+        assert_eq!(fast.seed_epoch, fast_epoch_before.wrapping_add(1));
+        assert_eq!(accounted.seed_epoch, accounted_epoch_before.wrapping_add(1));
+        assert_eq!(fast.seed_epoch, accounted.seed_epoch);
+        assert_eq!(
+            fast.estimated_memory_bytes(),
+            fast.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            accounted.estimated_memory_bytes(),
+            accounted.recompute_estimated_memory_bytes()
+        );
+        for seed in [&fast_seed, &accounted_seed] {
+            seed.inspect(|state| match state {
+                ExecutionSeed::Materialized { registers, .. } => {
+                    assert_eq!(registers, &vec![Value::Int(1)]);
+                }
+                ExecutionSeed::Lazy { .. } => {
+                    panic!("the pre-write seed must be materialized")
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn static_register_write_preserves_label_and_accounted_refusals() {
+        let mut fast = static_register_write_core();
+        let mut accounted = static_register_write_core();
+
+        let accounted_reg = accounted.register_base;
+        assert!(fast.static_register_write_eligible(0, &Value::Bool(true), &Label::Internal));
+        fast.write_reg(0, Value::Bool(true))
+            .expect("eligible value-only write must succeed");
+        accounted
+            .write_reg_accounted(accounted_reg, Value::Bool(true))
+            .expect("reference accounted value-only write must succeed");
+        assert_eq!(fast.registers.value, accounted.registers.value);
+        assert_eq!(fast.register_labels, accounted.register_labels);
+        assert_eq!(
+            fast.estimated_memory_bytes,
+            accounted.estimated_memory_bytes
+        );
+
+        assert!(!fast.static_register_write_eligible(0, &Value::str("dynamic"), &Label::Internal));
+        assert!(!fast.static_register_write_eligible(
+            0,
+            &Value::Int(10),
+            &Label::Custom {
+                name: "tenant".to_string(),
+                level: 3,
+            }
+        ));
+        assert!(!fast.static_register_write_eligible(1, &Value::Int(10), &Label::Public));
+        fast.active_inline_callback_context_label = Some(Label::Secret);
+        assert!(!fast.static_register_write_eligible(0, &Value::Int(10), &Label::Public));
+        fast.active_inline_callback_context_label = None;
+
+        fast.config.max_total_memory_bytes = fast.estimated_memory_bytes().saturating_sub(1);
+        let before_value = fast.registers[0].clone();
+        let before_label = fast.register_labels[0].clone();
+        let before_epoch = fast.seed_epoch;
+        let error = fast
+            .write_reg_with_label(0, Value::Int(11), Label::Public)
+            .expect_err("an over-budget static replacement must retain accounted refusal");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(fast.registers[0], before_value);
+        assert_eq!(fast.register_labels[0], before_label);
+        assert_eq!(fast.seed_epoch, before_epoch);
     }
 
     #[test]

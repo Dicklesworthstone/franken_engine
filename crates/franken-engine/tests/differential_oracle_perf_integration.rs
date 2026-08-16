@@ -100,12 +100,28 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
     assert_eq!(case["engine"]["status"].as_str(), Some("measured"));
     assert!(case["engine"]["preparation_ns"].as_u64().is_some());
     assert_eq!(
+        case["engine"]["engine_kind"].as_str(),
+        Some("baseline_deterministic_profile")
+    );
+    assert_eq!(
+        case["engine"]["route_reason"].as_str(),
+        Some("default_deterministic_profile")
+    );
+    assert_eq!(
         case["engine"]["measured_ns"]
             .as_array()
             .expect("engine samples")
             .len(),
         10
     );
+    assert_eq!(
+        case["engine"]["measured_observation_sha256"]
+            .as_array()
+            .expect("engine observation digests")
+            .len(),
+        10
+    );
+    assert_eq!(case["engine"]["observations_complete"].as_bool(), Some(true));
 
     // The environment manifest must record the corpus and iteration protocol.
     let environment = &report["environment"];
@@ -144,6 +160,14 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
                     .len(),
                 10,
                 "{lane} lane should carry 10 measured samples"
+            );
+            assert_eq!(
+                case[lane]["measured_observation_sha256"]
+                    .as_array()
+                    .expect("lane observation digests")
+                    .len(),
+                10,
+                "{lane} lane should carry 10 measured observation digests"
             );
         } else {
             assert!(

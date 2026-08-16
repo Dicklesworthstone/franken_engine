@@ -146,6 +146,91 @@ def load_json(path: Path) -> dict:
         return json.load(fh)
 
 
+def validate_v2_report(report: dict) -> list[str]:
+    """Fail closed when a nominal v2 report omits lifecycle/raw evidence."""
+    errors: list[str] = []
+    environment = report.get("environment")
+    if not isinstance(environment, dict):
+        return ["environment must be an object"]
+    for field in ("engine_execution_lifecycle", "external_execution_lifecycle"):
+        if not isinstance(environment.get(field), str) or not environment[field]:
+            errors.append(f"environment.{field} must be a non-empty string")
+
+    cases = report.get("cases")
+    if not isinstance(cases, list):
+        return errors + ["cases must be an array"]
+    for case_index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            errors.append(f"cases[{case_index}] must be an object")
+            continue
+        case_id = case.get("case_id", f"index-{case_index}")
+        if not isinstance(case.get("measured_lifecycle_equivalent"), bool):
+            errors.append(f"case {case_id}: measured_lifecycle_equivalent must be boolean")
+        if not isinstance(case.get("measured_lifecycle_detail"), str):
+            errors.append(f"case {case_id}: measured_lifecycle_detail must be string")
+        for lane in ("engine", "node", "bun"):
+            result = case.get(lane)
+            if not isinstance(result, dict):
+                errors.append(f"case {case_id}: {lane} must be an object")
+                continue
+            if result.get("status") != "measured":
+                continue
+            if not isinstance(result.get("preparation_ns"), int):
+                errors.append(f"case {case_id}: {lane}.preparation_ns must be integer")
+            warmup = result.get("warmup_ns")
+            measured = result.get("measured_ns")
+            warmup_obs = result.get("warmup_observation_sha256")
+            measured_obs = result.get("measured_observation_sha256")
+            for field, value in (
+                ("warmup_ns", warmup),
+                ("measured_ns", measured),
+                ("warmup_observation_sha256", warmup_obs),
+                ("measured_observation_sha256", measured_obs),
+            ):
+                if not isinstance(value, list):
+                    errors.append(f"case {case_id}: {lane}.{field} must be an array")
+            if isinstance(warmup, list) and isinstance(warmup_obs, list) and len(warmup) != len(warmup_obs):
+                errors.append(f"case {case_id}: {lane} warmup timing/observation lengths differ")
+            if isinstance(measured, list) and isinstance(measured_obs, list) and len(measured) != len(measured_obs):
+                errors.append(f"case {case_id}: {lane} measured timing/observation lengths differ")
+            if not isinstance(result.get("observations_complete"), bool):
+                errors.append(f"case {case_id}: {lane}.observations_complete must be boolean")
+            if lane == "engine":
+                if not isinstance(result.get("engine_kind"), str):
+                    errors.append(f"case {case_id}: engine.engine_kind must be string")
+                if not isinstance(result.get("route_reason"), str):
+                    errors.append(f"case {case_id}: engine.route_reason must be string")
+    return errors
+
+
+def measurement_evidence_view(cases: list[dict]) -> list[dict]:
+    evidence: list[dict] = []
+    for case in cases:
+        lanes: dict[str, dict] = {}
+        for lane in ("engine", "node", "bun"):
+            result = case.get(lane, {})
+            lanes[lane] = {
+                "status": result.get("status"),
+                "preparation_ns": result.get("preparation_ns"),
+                "engine_kind": result.get("engine_kind"),
+                "route_reason": result.get("route_reason"),
+                "warmup_ns": result.get("warmup_ns", []),
+                "measured_ns": result.get("measured_ns", []),
+                "warmup_observation_sha256": result.get("warmup_observation_sha256", []),
+                "measured_observation_sha256": result.get("measured_observation_sha256", []),
+                "observations_complete": result.get("observations_complete", False),
+            }
+        evidence.append(
+            {
+                "case_id": case.get("case_id", ""),
+                "measured_lifecycle_equivalent": case.get("measured_lifecycle_equivalent", False),
+                "measured_lifecycle_detail": case.get("measured_lifecycle_detail", ""),
+                "lanes": lanes,
+            }
+        )
+    return evidence
+
+
 def write_canonical(path: Path, obj: Any) -> str:
     data = canonical_bytes(obj)
     path.write_bytes(data)
@@ -184,6 +269,11 @@ def main() -> int:
             f"got {report.get('schema_version')}",
             file=sys.stderr,
         )
+        return 2
+    validation_errors = validate_v2_report(report)
+    if validation_errors:
+        for error in validation_errors:
+            print(f"ERROR: invalid v2 report: {error}", file=sys.stderr)
         return 2
 
     out_dir = Path(args.out_dir)
@@ -245,6 +335,10 @@ def main() -> int:
             "warmup_iterations": env_in.get("warmup_iterations"),
             "measured_iterations": env_in.get("measured_iterations"),
             "engine_instruction_budget": env_in.get("engine_instruction_budget"),
+            "engine_execution_lifecycle": env_in.get("engine_execution_lifecycle"),
+            "external_execution_lifecycle": env_in.get("external_execution_lifecycle"),
+            "source_report_path": str(report_path),
+            "source_report_sha256": "sha256:" + sha256_hex(report_path.read_bytes()),
         },
         "baselines": {
             "node": {
@@ -267,6 +361,7 @@ def main() -> int:
         "bun_denominator": bun_dn,
         "correctness_verdicts": verdicts,
         "correctness_verdict_hash": cv_hash,
+        "measurement_evidence": measurement_evidence_view(cases),
         "interpretation": interpretation_lines(node_dn, bun_dn),
     }
     results_sha = write_canonical(out_dir / "denominator.json", denominator)
@@ -315,6 +410,8 @@ def main() -> int:
             "engine_instruction_budget": env_in.get("engine_instruction_budget"),
             "warmup_iterations": env_in.get("warmup_iterations"),
             "measured_iterations": env_in.get("measured_iterations"),
+            "engine_execution_lifecycle": env_in.get("engine_execution_lifecycle"),
+            "external_execution_lifecycle": env_in.get("external_execution_lifecycle"),
         },
         "baselines": {
             "node_version": env_in.get("node_version", ""),

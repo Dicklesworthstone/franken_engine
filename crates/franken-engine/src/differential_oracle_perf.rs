@@ -429,11 +429,16 @@ pub fn parse_perf_harness_output(stdout: &str) -> Result<ParsedPerfHarnessOutput
     {
         return Err("harness timing/observation vector lengths differ".to_string());
     }
-    let observations_complete = payload
+    let observation_count = payload
         .warmup_observations
-        .iter()
-        .chain(&payload.measured_observations)
-        .all(|observation| observation != "\0");
+        .len()
+        .saturating_add(payload.measured_observations.len());
+    let observations_complete = observation_count > 0
+        && payload
+            .warmup_observations
+            .iter()
+            .chain(&payload.measured_observations)
+            .all(|observation| observation != "\0");
     Ok(ParsedPerfHarnessOutput {
         preparation_ns: payload.preparation_ns,
         warmup_ns: payload.warmup_ns,
@@ -1011,6 +1016,8 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
             diagnostics,
         };
     }
+    observations_complete &=
+        !warmup_observation_sha256.is_empty() || !measured_observation_sha256.is_empty();
     let stats = compute_sample_stats(&measured_ns);
     PerfBackendCaseResult {
         backend: DifferentialBackend::FrankenEngine,
@@ -1425,8 +1432,15 @@ mod tests {
             resolved_program: None,
             version: Some("test".to_string()),
             preparation_ns: Some(1),
+            engine_kind: (backend == DifferentialBackend::FrankenEngine)
+                .then_some(EngineKind::QuickJsInspiredNative),
+            route_reason: (backend == DifferentialBackend::FrankenEngine)
+                .then_some(RouteReason::DefaultQuickJsPath),
             warmup_ns: Vec::new(),
             measured_ns: samples.to_vec(),
+            warmup_observation_sha256: Vec::new(),
+            measured_observation_sha256: vec!["digest".to_string(); samples.len()],
+            observations_complete: true,
             stats: compute_sample_stats(samples),
             diagnostics: Vec::new(),
         }
@@ -1448,6 +1462,8 @@ mod tests {
             source_sha256: sha256_hex(case_id.as_bytes()),
             behavior_equivalent: true,
             equivalence_detail: "test".to_string(),
+            measured_lifecycle_equivalent: true,
+            measured_lifecycle_detail: "test".to_string(),
             engine,
             node,
             bun,
@@ -1491,12 +1507,15 @@ mod tests {
     #[test]
     fn parse_harness_output_happy_path() {
         let stdout = format!(
-            "workload noise\n{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":3,\"warmup_ns\":[5],\"measured_ns\":[10,11],\"sink\":3}}\n"
+            "workload noise\n{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":3,\"warmup_ns\":[5],\"measured_ns\":[10,11],\"warmup_observations\":[\"5\\u0000\"],\"measured_observations\":[\"10\\u0000\",\"10\\u0000\"],\"sink\":3}}\n"
         );
-        let (preparation, warm, meas) = parse_perf_harness_output(&stdout).expect("parse");
-        assert_eq!(preparation, 3);
-        assert_eq!(warm, vec![5]);
-        assert_eq!(meas, vec![10, 11]);
+        let parsed = parse_perf_harness_output(&stdout).expect("parse");
+        assert_eq!(parsed.preparation_ns, 3);
+        assert_eq!(parsed.warmup_ns, vec![5]);
+        assert_eq!(parsed.measured_ns, vec![10, 11]);
+        assert!(parsed.observations_complete);
+        assert_eq!(parsed.warmup_observation_sha256.len(), 1);
+        assert_eq!(parsed.measured_observation_sha256.len(), 2);
     }
 
     #[test]
@@ -1515,13 +1534,13 @@ mod tests {
     #[test]
     fn parse_harness_output_uses_last_sentinel_line() {
         let stdout = format!(
-            "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[1],\"measured_ns\":[1],\"sink\":0}}\n\
-             {PERF_HARNESS_SENTINEL}{{\"preparation_ns\":2,\"warmup_ns\":[2],\"measured_ns\":[9],\"sink\":0}}\n"
+            "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[1],\"measured_ns\":[1],\"warmup_observations\":[\"1\\u0000\"],\"measured_observations\":[\"1\\u0000\"],\"sink\":0}}\n\
+             {PERF_HARNESS_SENTINEL}{{\"preparation_ns\":2,\"warmup_ns\":[2],\"measured_ns\":[9],\"warmup_observations\":[\"2\\u0000\"],\"measured_observations\":[\"9\\u0000\"],\"sink\":0}}\n"
         );
-        let (preparation, warm, meas) = parse_perf_harness_output(&stdout).expect("parse");
-        assert_eq!(preparation, 2);
-        assert_eq!(warm, vec![2]);
-        assert_eq!(meas, vec![9]);
+        let parsed = parse_perf_harness_output(&stdout).expect("parse");
+        assert_eq!(parsed.preparation_ns, 2);
+        assert_eq!(parsed.warmup_ns, vec![2]);
+        assert_eq!(parsed.measured_ns, vec![9]);
     }
 
     #[test]
@@ -1718,21 +1737,27 @@ mod tests {
     }
 
     #[test]
-    fn fairness_accepts_clean_environment() {
+    fn fairness_rejects_asymmetric_runtime_lifecycle() {
         let config = PerfArmConfig::default();
         let environment = test_environment();
         let report = evaluate_fairness(&environment, &config);
-        assert!(report.compliant, "violations: {:?}", report.violations);
+        assert!(!report.compliant);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.contains("not symmetric"))
+        );
     }
 
     #[test]
-    fn fairness_notes_engine_bias() {
+    fn fairness_flags_engine_lifecycle_asymmetry() {
         let report = evaluate_fairness(&test_environment(), &PerfArmConfig::default());
         assert!(
             report
-                .notes
+                .violations
                 .iter()
-                .any(|n| n.contains("lifecycle asymmetry"))
+                .any(|violation| violation.contains("fresh router/interpreter"))
         );
     }
 

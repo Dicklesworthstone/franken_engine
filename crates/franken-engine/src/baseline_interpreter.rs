@@ -7578,6 +7578,15 @@ pub struct ExecutionResult {
     pub generated_code_audit: Vec<GeneratedCodeAuditEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraceHandoff {
+    /// Preserve the public post-execution `InterpreterCore` trace view.
+    RetainInCore,
+    /// Move the trace out of a private one-shot lane core that is about to be
+    /// dropped, avoiding a deep clone of every event payload and component.
+    DrainEphemeralCore,
+}
+
 // ExecutionSeed moved to line 2266 as an enum for lazy materialization (PERF-H2.2)
 
 #[derive(Debug, Clone)]
@@ -27719,10 +27728,24 @@ impl InterpreterCore {
         });
     }
 
+    #[cfg(test)]
     fn take_execution_result(
         &mut self,
         completion: LabeledReturn,
         requested_hook_action: Option<HookAction>,
+    ) -> ExecutionResult {
+        self.take_execution_result_with_trace_handoff(
+            completion,
+            requested_hook_action,
+            TraceHandoff::RetainInCore,
+        )
+    }
+
+    fn take_execution_result_with_trace_handoff(
+        &mut self,
+        completion: LabeledReturn,
+        requested_hook_action: Option<HookAction>,
+        trace_handoff: TraceHandoff,
     ) -> ExecutionResult {
         // Finalise the nondeterminism trace at the end-of-execution virtual
         // timestamp so the exposed copy is replay-ready: `validate_for_replay`
@@ -27749,6 +27772,13 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .saturating_sub(self.general_event_bytes);
         self.general_event_bytes = 0;
+        let nondeterminism_trace = match trace_handoff {
+            TraceHandoff::RetainInCore => self.nondeterminism_trace.clone(),
+            TraceHandoff::DrainEphemeralCore => std::mem::replace(
+                &mut self.nondeterminism_trace,
+                NondeterminismTrace::new(String::new()),
+            ),
+        };
         ExecutionResult {
             value: completion.value,
             completion_label: completion.label,
@@ -27759,13 +27789,28 @@ impl InterpreterCore {
             events: std::mem::take(&mut self.events),
             console_output: std::mem::take(&mut self.console_output),
             iteration_traces: std::mem::take(&mut self.iteration_traces),
-            nondeterminism_trace: self.nondeterminism_trace.clone(),
+            nondeterminism_trace,
             generated_code_audit: std::mem::take(&mut self.generated_code_audit),
         }
     }
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_trace_handoff(module, TraceHandoff::RetainInCore)
+    }
+
+    fn execute_ephemeral(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_trace_handoff(module, TraceHandoff::DrainEphemeralCore)
+    }
+
+    fn execute_with_trace_handoff(
+        &mut self,
+        module: &Ir3Module,
+        trace_handoff: TraceHandoff,
+    ) -> Result<ExecutionResult, InterpreterError> {
         crate::ir_contract::verify_ir3_specialization(module).map_err(|error| {
             InterpreterError::TypeError {
                 expected: "supported, structurally valid engine IR3 module".to_string(),
@@ -27780,7 +27825,7 @@ impl InterpreterCore {
         self.check_state_capture_boundary();
         self.record_execution_outcome(&entry_specifier, &result);
         self.last_post_run_epoch = Some(self.seed_epoch);
-        self.finish_execution_result(result)
+        self.finish_execution_result_with_trace_handoff(result, trace_handoff)
     }
 
     /// Arm a deterministic interpreter-state capture at the given
@@ -28277,14 +28322,23 @@ impl InterpreterCore {
         }
     }
 
+    #[cfg(test)]
     fn finish_execution_result(
         &mut self,
         result: Result<LabeledReturn, InterpreterError>,
     ) -> Result<ExecutionResult, InterpreterError> {
+        self.finish_execution_result_with_trace_handoff(result, TraceHandoff::RetainInCore)
+    }
+
+    fn finish_execution_result_with_trace_handoff(
+        &mut self,
+        result: Result<LabeledReturn, InterpreterError>,
+        trace_handoff: TraceHandoff,
+    ) -> Result<ExecutionResult, InterpreterError> {
         match result {
             Ok(completion) => {
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-                Ok(self.take_execution_result(completion, None))
+                Ok(self.take_execution_result_with_trace_handoff(completion, None, trace_handoff))
             }
             Err(InterpreterError::Halted) => {
                 // Halt is normal termination; return whatever is in r0 with
@@ -28292,7 +28346,11 @@ impl InterpreterCore {
                 let value = self.read_reg(0).unwrap_or(Value::Undefined);
                 let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-                Ok(self.take_execution_result(LabeledReturn { value, label }, None))
+                Ok(self.take_execution_result_with_trace_handoff(
+                    LabeledReturn { value, label },
+                    None,
+                    trace_handoff,
+                ))
             }
             Err(e) => Err(e),
         }
@@ -73021,18 +73079,19 @@ impl QuickJsLane {
         if let Some(authority) = self.timer_effect_authority.clone() {
             core.set_timer_effect_authority(authority);
         }
-        match core.execute(module) {
+        match core.execute_ephemeral(module) {
             Ok(result) => Ok(result),
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result(
+                Ok(core.take_execution_result_with_trace_handoff(
                     LabeledReturn {
                         value: Value::Undefined,
                         label: Label::Public,
                     },
                     Some(requested_hook_action),
+                    TraceHandoff::DrainEphemeralCore,
                 ))
             }
             Err(err) => Err(err),
@@ -73163,18 +73222,19 @@ impl V8Lane {
         if let Some(authority) = self.timer_effect_authority.clone() {
             core.set_timer_effect_authority(authority);
         }
-        match core.execute(module) {
+        match core.execute_ephemeral(module) {
             Ok(result) => Ok(result),
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result(
+                Ok(core.take_execution_result_with_trace_handoff(
                     LabeledReturn {
                         value: Value::Undefined,
                         label: Label::Public,
                     },
                     Some(requested_hook_action),
+                    TraceHandoff::DrainEphemeralCore,
                 ))
             }
             Err(err) => Err(err),
@@ -95036,8 +95096,14 @@ mod async_runtime_tests_current {
                 !force_fallback,
                 "the empty prototype forces the generic path without changing the depth-0 hit"
             );
-            core.execute(&module)
+            let result = core
+                .execute(&module)
                 .expect("ordinary own-property read should execute");
+            assert_eq!(
+                core.nondeterminism_trace_ref(),
+                &result.nondeterminism_trace,
+                "public direct-core execution must retain the finalised trace after handoff"
+            );
 
             (
                 core.read_reg(2).expect("destination value should exist"),
@@ -95057,6 +95123,69 @@ mod async_runtime_tests_current {
             fast, fallback,
             "fast and generic paths must preserve the read outcome, IFC label, trace, and instruction count"
         );
+    }
+
+    #[test]
+    fn ephemeral_trace_handoff_moves_the_finalised_trace_without_byte_drift() {
+        let run = |trace_handoff, halt| {
+            let mut instructions = vec![Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
+            }];
+            instructions.push(if halt {
+                Ir3Instruction::Halt
+            } else {
+                Ir3Instruction::Return { value: 2 }
+            });
+            let module = test_module_with_functions(instructions, vec![]);
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_properties(&[("data", Value::Int(41))])
+                .expect("ordinary object should allocate");
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Object(object);
+                registers[1] = Value::str("data");
+                registers[2] = Value::Undefined;
+            });
+
+            let result = core
+                .execute_with_trace_handoff(&module, trace_handoff)
+                .expect("ordinary own-property read should execute");
+            (result, core.nondeterminism_trace_ref().clone())
+        };
+
+        for (termination, halt) in [("return", false), ("halt", true)] {
+            let (retained_result, retained_core_trace) = run(TraceHandoff::RetainInCore, halt);
+            let (drained_result, drained_core_trace) = run(TraceHandoff::DrainEphemeralCore, halt);
+
+            assert_eq!(
+                retained_result.nondeterminism_trace, drained_result.nondeterminism_trace,
+                "moving the ephemeral trace must preserve every replay-visible field for {termination}"
+            );
+            assert_eq!(
+                serde_json::to_vec(&retained_result.nondeterminism_trace)
+                    .expect("retained trace should serialize"),
+                serde_json::to_vec(&drained_result.nondeterminism_trace)
+                    .expect("drained trace should serialize"),
+                "moving the ephemeral trace must preserve serialized replay bytes for {termination}"
+            );
+            assert_eq!(
+                retained_core_trace, retained_result.nondeterminism_trace,
+                "the public retention policy must leave the complete trace in the core for {termination}"
+            );
+            assert!(
+                !drained_result.nondeterminism_trace.events.is_empty(),
+                "the property read must produce a nonempty trace for {termination}"
+            );
+            drained_result
+                .nondeterminism_trace
+                .validate_for_replay()
+                .expect("the moved trace must remain finalised and replay-valid");
+            assert!(drained_core_trace.events.is_empty());
+            assert!(!drained_core_trace.is_finalised());
+            assert!(drained_core_trace.session_id.is_empty());
+        }
     }
 
     #[test]
@@ -105248,6 +105377,10 @@ mod tests {
             }
         );
         assert_eq!(hook.records().len(), 1);
+        assert!(
+            !core.nondeterminism_trace_ref().is_finalised(),
+            "an ordinary direct-core error must retain its partial, unfinalised trace"
+        );
     }
 
     #[test]
@@ -105272,6 +105405,11 @@ mod tests {
         );
         assert_eq!(result.value, Value::Undefined);
         assert_eq!(result.instructions_executed, 2); // NewObject + empty Writable checkpoint scan
+        assert!(result.nondeterminism_trace.is_finalised());
+        result
+            .nondeterminism_trace
+            .validate_for_replay()
+            .expect("lane containment trace must remain replay-valid after ownership handoff");
     }
 
     #[test]

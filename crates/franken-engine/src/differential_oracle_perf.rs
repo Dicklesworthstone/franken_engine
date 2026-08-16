@@ -46,13 +46,13 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{EngineKind, HybridRouter, RouteReason};
 use crate::differential_oracle::{
     DifferentialBackend, DifferentialComparisonMode, DifferentialComparisonVerdict,
     DifferentialHostFacts, DifferentialOracleInput, ExternalRuntimeSpec, VersionProbe,
     capture_external_version, capture_host_facts, current_unix_ns, run_command_with_timeout,
     run_differential_oracle, sha256_hex,
 };
+use crate::{EngineKind, HybridRouter, RouteReason};
 
 pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v2";
 
@@ -939,10 +939,8 @@ fn run_engine_perf_case(source: &str, config: &PerfArmConfig) -> PerfBackendCase
     };
     let mut warmup_ns = Vec::with_capacity(config.warmup_iterations as usize);
     let mut measured_ns = Vec::with_capacity(config.measured_iterations as usize);
-    let mut warmup_observation_sha256 =
-        Vec::with_capacity(config.warmup_iterations as usize);
-    let mut measured_observation_sha256 =
-        Vec::with_capacity(config.measured_iterations as usize);
+    let mut warmup_observation_sha256 = Vec::with_capacity(config.warmup_iterations as usize);
+    let mut measured_observation_sha256 = Vec::with_capacity(config.measured_iterations as usize);
     let mut observations_complete = true;
     let mut engine_kind = None;
     let mut route_reason = None;
@@ -1063,10 +1061,7 @@ fn measured_lifecycle_equivalence(
     node: &PerfBackendCaseResult,
     bun: &PerfBackendCaseResult,
 ) -> (bool, String) {
-    fn stable_observation(
-        label: &str,
-        result: &PerfBackendCaseResult,
-    ) -> Result<String, String> {
+    fn stable_observation(label: &str, result: &PerfBackendCaseResult) -> Result<String, String> {
         if result.status != PerfMeasurementStatus::Measured {
             return Err(format!("{label} lifecycle was not measured"));
         }
@@ -1105,8 +1100,7 @@ fn measured_lifecycle_equivalence(
     if engine_observation != node_observation || engine_observation != bun_observation {
         return (
             false,
-            "engine/node/bun observable digests differ in the exact measured lifecycle"
-                .to_string(),
+            "engine/node/bun observable digests differ in the exact measured lifecycle".to_string(),
         );
     }
     (
@@ -1532,6 +1526,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_harness_output_rejects_timing_observation_length_mismatch() {
+        let stdout = format!(
+            "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[1],\"measured_ns\":[2],\"warmup_observations\":[],\"measured_observations\":[\"2\\u0000\"]}}"
+        );
+        let error = parse_perf_harness_output(&stdout).unwrap_err();
+        assert!(error.contains("lengths differ"));
+    }
+
+    #[test]
     fn parse_harness_output_uses_last_sentinel_line() {
         let stdout = format!(
             "{PERF_HARNESS_SENTINEL}{{\"preparation_ns\":1,\"warmup_ns\":[1],\"measured_ns\":[1],\"warmup_observations\":[\"1\\u0000\"],\"measured_observations\":[\"1\\u0000\"],\"sink\":0}}\n\
@@ -1556,6 +1559,27 @@ mod tests {
         assert_eq!(stats.cv_millionths, 0);
         assert_eq!(stats.ci95_lower_ns, 1_000);
         assert_eq!(stats.ci95_upper_ns, 1_000);
+    }
+
+    #[test]
+    fn measured_lifecycle_equivalence_requires_stable_cross_runtime_observations() {
+        let engine = measured_result(DifferentialBackend::FrankenEngine, &[10, 11]);
+        let node = measured_result(DifferentialBackend::NodeLts, &[5, 6]);
+        let bun = measured_result(DifferentialBackend::BunStable, &[4, 5]);
+        let (equivalent, detail) = measured_lifecycle_equivalence(&engine, &node, &bun);
+        assert!(equivalent, "{detail}");
+
+        let mut changing_node = node.clone();
+        changing_node.measured_observation_sha256[1] = "changed".to_string();
+        let (equivalent, detail) = measured_lifecycle_equivalence(&engine, &changing_node, &bun);
+        assert!(!equivalent);
+        assert!(detail.contains("changed between"));
+
+        let mut missing_bun = bun;
+        missing_bun.observations_complete = false;
+        let (equivalent, detail) = measured_lifecycle_equivalence(&engine, &node, &missing_bun);
+        assert!(!equivalent);
+        assert!(detail.contains("without a captured console effect"));
     }
 
     #[test]

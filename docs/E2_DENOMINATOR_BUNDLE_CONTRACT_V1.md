@@ -6,17 +6,20 @@ Owning bead: **bd-fqlfw.2.6** · Claim: **FE-CLAIM-010** (Node/Bun denominator t
 ## What this is
 
 The `differential-oracle perf` arm measures warm steady-state throughput of every
-corpus case under Node, Bun, and the native engine, and produces a denominator
-(`report.json`). This contract wraps that measured denominator in a
-content-addressed reproducibility bundle so the number can back — or honestly
-fail to back — FE-CLAIM-010, instead of living as a gitignored local artifact.
+corpus case under Node, Bun, and the native engine, and produces a report
+(`report.json`). The v3 report records its fresh-engine/shared-realm lifecycle
+asymmetry and therefore keeps both denominators degraded; its raw samples and
+per-case ratios are diagnostic evidence, not a publishable comparison. This
+contract wraps that report in a content-addressed reproducibility bundle so its
+evidence can support — or honestly defer — FE-CLAIM-010, instead of living as a
+gitignored local artifact.
 
 The committed bundle lives at [`docs/perf/e2_denominator_bundle_v1/`](./perf/e2_denominator_bundle_v1/):
 
 | File | Schema | Role |
 |---|---|---|
 | `denominator.json` | `franken-engine.e2-denominator-bundle.v1` | Distilled measured denominator + per-case correctness verdicts. |
-| `env.json` | `franken-engine.env.v1` | Host / toolchain / runtime facts with **pinned node + bun versions**. |
+| `env.json` | `franken-engine.env.v1` | Host / toolchain facts plus recorded resolved Node/Bun versions and paths; nominal manifest pins are not enforced. |
 | `repro.lock` | `franken-engine.repro-lock.v1` | Locked replay recipe; expected output is the correctness-verdict hash. |
 | `manifest.json` | `franken-engine.manifest.v1` | Content-addressed index referencing the other three by sha256. |
 | `degraded_receipt.json` | `franken-engine.e2-denominator-degraded-receipt.v1` | Present **iff** the denominator is degraded/unavailable. |
@@ -25,12 +28,16 @@ The committed bundle lives at [`docs/perf/e2_denominator_bundle_v1/`](./perf/e2_
 
 Wall-clock timing is inherently non-deterministic, so a perf bundle can never be
 byte-identical run-to-run. The reproducibility assertion is therefore scoped to
-the **correctness verdicts**: for each corpus case, whether Node/Bun/engine landed
-in the same structured-value equivalence group, plus the corpus content hash.
-That projection is captured as `correctness_verdict_hash` in `denominator.json`
-and locked into `repro.lock.expected_outputs[0].sha256`. A re-run on the same
-host reproduces that hash exactly (bd-fqlfw.2.6 acceptance: *"re-running on the
-same host reproduces byte-identical correctness verdicts"*).
+the **correctness verdicts**: the sorted per-case projection of `case_id`,
+`source_sha256`, `behavior_equivalent`, and `equivalence_group`. The corpus
+content digest is a separate locked input; it is not part of that projection.
+The projection is captured as `correctness_verdict_hash` in `denominator.json`
+and locked into `repro.lock.expected_outputs[0].sha256`. The current v3 builder
+excludes timing/CV-dependent admission from this hash and retains admission only
+under `measurement_evidence`. The committed historical bundle predates that
+fix: its verdict vector includes `admitted`, so its hash is not strictly
+timing-independent and must not be cited as byte-identical replay proof. A fresh
+v3-generated degraded bundle is required to exercise the corrected contract.
 
 ## Freshness gate (stale denominators are rejected)
 
@@ -75,13 +82,15 @@ FE-CLAIM-010 at `target` and surfaces the reason rather than emitting a number.
 
 ## FE-CLAIM-010 linkage
 
-The measured denominator does **not** meet the `>= 3x` throughput floor: the
-native baseline interpreter is materially slower than Node's V8 and Bun's JSC
-JIT on the corpus. `meets_3x_floor` is therefore `false` for both baselines, and
-FE-CLAIM-010 stays **TARGET** — now backed by real, fairness-compliant numbers
-rather than absence of data. The bundle is wired into the claim matrix by
+The committed historical bundle records a materially slower native baseline,
+but its lifecycle, source-state, runtime-pin, aggregation, and reproducibility
+limitations prevent it from certifying the `>= 3x` throughput floor. A v3
+report is deliberately **not evaluable** as a publishable denominator while
+the engine uses a fresh core per iteration and Node/Bun reuse a realm and JIT
+state. `meets_3x_floor` is therefore null in a newly generated degraded bundle,
+and FE-CLAIM-010 stays **TARGET**. The bundle is wired into the claim matrix by
 bd-fqlfw.2.7; the matrix gate sees the `repro.lock` partner under the bundle
-root.
+root, but that structural linkage is not performance certification.
 
 ## Version pinning caveat
 

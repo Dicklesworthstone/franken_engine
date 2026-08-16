@@ -164,9 +164,9 @@
       "reason": "docs/test262_compatibility_pass_rate_v1.json (the project's own machine-readable posture) sets proof_state=checked_in_vectors_provisional and full_suite_claim_allowed=false with a small checked-in denominator. CEI-D.1 reframes the README wording from 'Test262 conformance (real, not fake fixtures)' to a bounded provisional-subset statement so the claim does not exceed the posture.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 545,
+        "end_line": 525,
         "must_contain": "full-suite conformance is TARGETED",
-        "start_line": 545
+        "start_line": 525
       },
       "verification_command": "cargo test -p frankenengine-engine --test test262_release_gate"
     },
@@ -208,9 +208,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2423,
+        "end_line": 2403,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2423
+        "start_line": 2403
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -499,9 +499,9 @@
       "reason": "Complete lockstep oracle pipeline implemented (I.1-I.4) with Node/Bun runtime integration, divergence classification taxonomy, RGC gate script, replay wrapper, and operator documentation.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1408,
+        "end_line": 1388,
         "must_contain": "Cross-runtime lockstep oracle",
-        "start_line": 1408
+        "start_line": 1388
       },
       "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
     },
@@ -519,9 +519,9 @@
       "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2, SwiftSquirrel): the identical-hash claim spans Linux/macOS/Windows \u00d7 x64/arm64, but a single host can only produce the Linux\u00d7x64 manifest. The committed receipt was backfill/pending (never a live multi-platform pass) and evaluate_matrix requires per-target manifests from a real 6-platform CI matrix. The gate logic is correct (run_mode recursion fixed in 24d79417) and would pass in CI, but OBSERVED cannot be honestly backed single-host. Precedent: FE-CLAIM-012.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1768,
+        "end_line": 1748,
         "must_contain": "Cross-platform matrix",
-        "start_line": 1768
+        "start_line": 1748
       },
       "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     },
@@ -540,9 +540,9 @@
       "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at docs/evidence/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2117,
+        "end_line": 2097,
         "must_contain": "Sibling Repositories (Binding Reuse Contract)",
-        "start_line": 2117
+        "start_line": 2097
       },
       "verification_command": "./scripts/test_standalone_build.sh full-integration"
     },
@@ -562,9 +562,9 @@
       "reason": "CEI H.2: the claim-evidence integrity capstone (scripts/run_claim_evidence_integrity_capstone.sh) composes the A.1/A.3 bidirectional lattice, the H.1 Merkle-committed Claim-Evidence Ledger, the claim-to-proof wording gate, and the D.3 Test262 posture gate. FE-CLAIM-025's own row is committed in that ledger, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill (scripts/e2e/claim_evidence_integrity_capstone_drift.sh) demonstrates the capstone goes red on any injected over-promotion and green only when all sub-gates hold. H.4 (bd-sde5e.8.4) additionally machine-checks in Lean 4 the meta-soundness lemma the whole gate rests on: proofs/lean4/ClaimEvidenceSoundness.lean proves that the asserted state never exceeds the evidence ceiling under the gate's corrective transition (gate_transition_sound), that ceiling is monotone in the evidence tier (ceiling_monotone), that soundness can only strengthen with committed evidence (sound_monotone_in_tier, tier_monotone), and that this is exactly the H.3 Biba integrity verdict (flow_legal_iff_sound) -- re-checked sorryAx-free by scripts/run_cei_soundness_lean_proof.sh ci.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2492,
+        "end_line": 2472,
         "must_contain": "Reflexive claim-evidence integrity",
-        "start_line": 2492
+        "start_line": 2472
       },
       "verification_command": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
     },

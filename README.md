@@ -36,7 +36,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 This is research-grade infrastructure, not a packaged product.
 
 - **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); the bash installer falls back to a source build on other platforms. The standalone source/release build now resolves only workspace and registry sources and requires no `/dp` sibling checkout (`bd-gw4cg`); see *Standalone Mode*. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
-- **Every README claim is gated.** Any wording change runs through [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected.
+- **README claim wording has an invoked gate.** When run, [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) checks this file against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected. Continuous CI enforcement and automatic re-execution of every producer are not established.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
 ### Status Legend
@@ -45,7 +45,7 @@ Three qualifiers recur throughout this document. They carry binding meaning unde
 
 | Qualifier | Meaning | What it means for you |
 |---|---|---|
-| **OBSERVED** | Current artifacts and a verification command are linked. The strongest permitted wording. | Safe to rely on under the stated environment and inputs. |
+| **OBSERVED** | Revision-bound artifacts and a verification command are linked. The strongest permitted wording, subject to the truth ledger's freshness state. | Rely only within the artifact's stated revision, environment, inputs, and recertification scope. |
 | **TARGETED** | A design goal or SLO is documented, but observed proof is not linked yet. | Treat as a roadmap commitment, not a current guarantee. Plan accordingly. |
 | **HYPOTHESIS** | Projected or optional behaviour that must not be read as shipped proof. | Do not build dependencies on this surface until it promotes. |
 
@@ -219,46 +219,26 @@ This README is long because it serves several audiences. Below is a recommended 
 
 ## Architecture
 
-The core execution pipeline runs from source through a four-stage lowering into the baseline interpreter and orchestrator, then materializes IR4/WitnessIR artifacts from the evidence stream. The evidence ledger collects trace, decision, and audit records at every stage.
+The core execution pipeline runs from source through four lowering stages into the baseline interpreter. There are two entry paths over that substrate: public `HybridRouter` evaluation routes a prepared IR3 handle to the interpreter, while extension execution enters through `execution_orchestrator.rs`, which owns its own parse/lower, policy, budget, and witness lifecycle before invoking the same interpreter core. The orchestrator is not a downstream tier reached after baseline execution.
 
 ```
-┌──────────┐   ┌──────────┐   ┌──────────┐
-│  Source  │──▶│  Parser  │──▶│   AST    │
-│  JS/TS   │   │parser.rs │   │  ast.rs  │
-└──────────┘   └──────────┘   └─────┬────┘
-                                    │
-                                    ▼
-┌───────────────────────────────────────────────────────────┐
-│              Lowering Pipeline (lowering_pipeline.rs)     │
-├──────────┬──────────┬──────────┬──────────────────────────┤
-│   IR0    │   IR1    │   IR2    │           IR3            │
-│ raw AST  │ scoped + │ control- │  register-allocated      │
-│          │ symbols  │ flow SSA │  executable instructions │
-└──────────┴──────────┴──────────┴────────────┬─────────────┘
-                                              │
-                                              ▼
-       ┌────────────────────────────┐  ┌────────────────────────────┐
-       │  Baseline Interpreter      │  │  Execution Orchestrator    │
-       │  baseline_interpreter.rs   │─▶│  execution_orchestrator.rs │
-       │  dispatch + GC + excpt.    │  │  epochs + budgets + caps   │
-       └────────────────────────────┘  └─────────────┬──────────────┘
-                                                     │
-                                                     ▼
-                                  ┌──────────────────────────────┐
-                                  │      Evidence Ledger         │
-                                  │      evidence_ledger.rs      │
-                                  │  traces · decisions · audit  │
-                                  └──────────────┬───────────────┘
-                                                 │
-                                                 ▼
-                                  ┌──────────────────────────────┐
-                                  │       IR4 / WitnessIR        │
-                                  │      ir_contract.rs          │
-                                  │ replay · audit · proof links │
-                                  └──────────────────────────────┘
+Public Hybrid evaluation
+
+  Source ─▶ parser + IR0 → IR1 → IR2 → IR3 ─▶ HybridRouter
+                                                    │
+                                                    ▼
+                                         Baseline Interpreter ─▶ EvalOutcome
+
+Orchestrated extension execution
+
+  Source + manifest + policy ─▶ Execution Orchestrator
+                                      │
+                                      ├─▶ parser + IR0 → IR1 → IR2 → IR3
+                                      ├─▶ Baseline Interpreter
+                                      └─▶ evidence ledger ─▶ IR4 / WitnessIR
 ```
 
-A governance overlay (capability framework, security epochs, gate modules, fleet convergence) wraps every stage. Full diagram and component-by-component reference live in [`docs/ARCHITECTURE_OVERVIEW.md`](./docs/ARCHITECTURE_OVERVIEW.md); the generated module/gate/binary inventory is in [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md).
+The orchestrated extension path composes capability, security-epoch, evidence, and containment controls. Repository gate and fleet modules govern narrower declared surfaces; they do not wrap every public evaluation stage. Full diagram and component-by-component reference live in [`docs/ARCHITECTURE_OVERVIEW.md`](./docs/ARCHITECTURE_OVERVIEW.md); the generated module/gate/binary inventory is in [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md).
 
 ### Code Surface At A Glance
 
@@ -1048,7 +1028,7 @@ Two named gates that complete the conformance picture.
 
 The compiler-policy module is the place where compile-time decisions become evidence-emitting events. Every IR lowering decision that has a security or determinism implication routes through the policy:
 
-- IR2 instruction synthesis (the SSA-ish basic-block form) checks the compiler policy before emitting.
+- IR2 control-flow instruction synthesis (not SSA) checks the compiler policy before emitting.
 - IR3 instruction emission re-checks the policy with the final register allocation in scope.
 - Tagged-template and async-await lowering both consult the policy for their IFC-label-propagation rules.
 
@@ -2303,7 +2283,7 @@ Project-specific jargon, defined once.
 | **HYPOTHESIS** | A matrix state meaning the claim is projected/optional, not validated. Required wording: includes the literal qualifier so the gate accepts the prose. |
 | **IDEA-WIZARD-N** | A named multi-stage initiative tracked as `bd-<id>` with children `.A` – `.F`. The tracker contains series II through XIII (12 waves total); X / XI / XII / XIII landed primarily in May 2026 and are the ones the current README cites. |
 | **IFC** | Information-flow control. Finite lattice `Public < Internal < Confidential < Secret < TopSecret` plus custom labels via `Label::level()`. |
-| **IR0 / IR1 / IR2 / IR3 / IR4** | The five-level IR contract: four lowering/execution stages (raw AST, scope-normalized, simplified control-flow / SSA-ish, register-allocated executable) plus IR4/WitnessIR post-execution evidence artifacts. |
+| **IR0 / IR1 / IR2 / IR3 / IR4** | The five-level IR contract: four lowering/execution stages (raw AST, scope-normalized, simplified control flow without SSA, register-allocated executable) plus IR4/WitnessIR post-execution evidence artifacts. |
 | **Lockstep oracle** | `frx_lockstep_oracle.rs`, the differential execution oracle that compares FrankenEngine output against Node and Bun on the same input. OBSERVED with divergence classification taxonomy. |
 | **Lowering gap inventory** | Catalogue of syntactic constructs and their lowering status. Bound by the `LOWERING_GAP_TRUTH_INVARIANT_V1` contract. |
 | **Metamorphic relations** | Equivalence properties that should be preserved by a transformation (whitespace invariance, AST roundtrip, semantic equivalence under refactor). In `crates/franken-metamorphic/`, enabled parser, IR, and execution relations route through the real engine; historical ExecOptions-only relations are disabled/fail-closed until mapped or retired. |

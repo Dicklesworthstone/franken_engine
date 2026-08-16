@@ -12219,9 +12219,9 @@ fn differential_oracle_perf_usage() -> String {
         "behavior:",
         "  measures warm steady-state throughput of every corpus case under Node, Bun, and the",
         "  native engine; cases enter the denominator only when the correctness arm reports",
-        "  structured-value consensus. per-iteration timings stream to --events so the ratio can",
-        "  be re-derived from raw data. fairness violations (e.g. `node` resolving to Bun's shim)",
-        "  degrade the receipt instead of publishing a number.",
+        "  structured-value consensus. per-iteration timings stream to --events so diagnostic",
+        "  ratios can be re-derived from raw data. v3 always records the fresh-engine/shared-realm",
+        "  lifecycle asymmetry as a fairness violation and degrades rather than publishing a number.",
     ]
     .join("\n")
 }

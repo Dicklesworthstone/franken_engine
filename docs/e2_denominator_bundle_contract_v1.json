@@ -3,7 +3,7 @@
   "contract_id": "E2-DENOMINATOR-BUNDLE-V1",
   "owning_bead": "bd-fqlfw.2.6",
   "claim_id": "FE-CLAIM-010",
-  "purpose": "Content-addressed reproducibility bundle for the measured Node/Bun differential-oracle throughput denominator, with pinned node/bun versions, a freshness window, and a fail-closed degraded receipt when the denominator is unavailable.",
+  "purpose": "Content-addressed reproducibility bundle for the Node/Bun differential-oracle throughput report, with recorded resolved runtime versions and paths, a freshness window, and a fail-closed degraded receipt when the denominator is unavailable.",
   "bundle_root": "docs/perf/e2_denominator_bundle_v1",
   "required_files": [
     {
@@ -14,7 +14,7 @@
     {
       "path": "env.json",
       "schema_version": "franken-engine.env.v1",
-      "role": "host / toolchain / runtime facts with pinned node+bun versions (reproducibility-contract env)"
+      "role": "host / toolchain facts plus recorded resolved Node/Bun versions and paths; nominal manifest pins are not enforced"
     },
     {
       "path": "repro.lock",
@@ -37,7 +37,7 @@
   "reproducibility_scope": {
     "byte_identical_field": "denominator.json#correctness_verdicts",
     "anchor_hash": "denominator.json#correctness_verdict_hash",
-    "rationale": "wall-clock timing is inherently non-deterministic; the byte-identical assertion is scoped to the per-case behaviour-equivalence verdicts (behavior_equivalent + equivalence_group + corpus_sha256), which reproduce exactly on a re-run.",
+    "rationale": "wall-clock timing is inherently non-deterministic; the byte-identical assertion is scoped to the sorted per-case projection (case_id + source_sha256 + behavior_equivalent + equivalence_group). The corpus content digest is locked separately and is not part of correctness_verdict_hash.",
     "locked_in": "repro.lock.expected_outputs[0].sha256"
   },
   "freshness": {
@@ -74,6 +74,6 @@
     "claim_id": "FE-CLAIM-010",
     "matrix": "docs/claim_to_proof_matrix_v1.json",
     "allowed_state": "target",
-    "honest_finding": "the measured denominator does not meet the >=3x floor (engine baseline interpreter is materially slower than V8/JSC JIT); the claim stays target, now backed by real numbers instead of absence of data."
+    "honest_finding": "the preserved historical ratios are diagnostic because their source state, runtime pins, aggregation, lifecycle, and timing-replay contracts are non-certifying; v3 remains degraded and does not evaluate the >=3x floor, so the claim stays target."
   }
 }

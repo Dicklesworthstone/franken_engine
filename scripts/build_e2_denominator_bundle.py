@@ -11,11 +11,12 @@ bundle contract (`docs/REPRODUCIBILITY_CONTRACT.md`):
   - manifest.json     (content-addressed index referencing the other three by sha256)
 
 Reproducibility note (bd-fqlfw.2.6 ACCEPTANCE): wall-clock timing is inherently
-non-deterministic, so the byte-identical assertion is scoped to the *correctness
-verdicts* (per-case behavior-equivalence groups + corpus hash), captured as
-`correctness_verdict_hash` and locked in `repro.lock.expected_outputs`. A
-re-run on the same host must reproduce that hash exactly even though raw timings
-differ.
+non-deterministic, so the byte-identical assertion is scoped to the sorted
+four-field *correctness verdict* projection (`case_id`, `source_sha256`,
+`behavior_equivalent`, and `equivalence_group`), captured as
+`correctness_verdict_hash` and locked in `repro.lock.expected_outputs`. The
+corpus content digest is a separate locked input. A re-run against the same
+corpus must reproduce the verdict hash exactly even though raw timings differ.
 
 When the perf report's denominators are degraded (e.g. Node/Bun unavailable, or
 no case satisfied the admission preconditions), the builder writes a documented

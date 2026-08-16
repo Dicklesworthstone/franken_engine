@@ -137,15 +137,15 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 | Probabilistic guardplane (Bayesian + e-process boundaries) | OBSERVED | Backed by live decision artifacts; demonstrated in `examples/live_guardplane_decision_example.rs`. |
 | Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + fixed-input CLI determinism proof (`compile` byte-identical; `run` identical modulo per-invocation signing authority). |
 | Cryptographic decision receipts with transparency-log + MMR proofs (signing OBSERVED; TEE attestation is HYPOTHESIS — simulated by default) | OBSERVED (signing + transparency log) · HYPOTHESIS (TEE) | Receipt-only proof handle (`bd-cixqu.1.1`) and transparency log + MMR inclusion/consistency proofs (`bd-cixqu.1.2`) are live, cross-referenced and content-addressed by `scripts/run_rgc_signed_decision_receipt.sh` + replay wrapper (`bd-cixqu.1.4`). TEE attestation policy (`bd-cixqu.1.3`) is simulated-by-default — no hardware root of trust, the `tee-real-sdk` SDK path is unwired (`tee_live_quote.rs`) — so it stays HYPOTHESIS (`FE-CLAIM-004-TEE`). |
-| Fleet immune system / quarantine propagation convergence SLO | OBSERVED | Fleet convergence harness with N-node testing (`bd-cixqu.2.1`), bounded SLO declaration and gate (`bd-cixqu.2.2`), quarantine de-escalation primitive (`bd-cixqu.2.3`), and partition fault profiles (`bd-cixqu.2.4`) provide live convergence evidence. |
+| Fleet immune system / quarantine propagation convergence SLO | TARGETED | The N-node harness, bounded SLO declaration, de-escalation primitive, and partition profiles exist, but the published CI gate validates contract shape and source references without executing the harness or preserving measured percentiles. |
 | Capability-typed ambient-authority rejection on selected hostcall/import edges (the end-to-end TS-to-IR contract is TARGETED) | OBSERVED (selected edges) · TARGETED (end-to-end) | Effect-set IR2 annotation (`bd-cixqu.3.1`), lowering-side rejection of ambient-authority calls on the shipped hostcall/import edges (`bd-cixqu.3.2`), 17-scenario red-team negative corpus (`bd-cixqu.3.3`), and `scripts/run_rgc_capability_typed_compile_time.sh` + replay wrapper (`bd-cixqu.3.4`). The end-to-end compile-time TS-to-IR contract over *all* ambient constructs remains TARGETED (`FE-CLAIM-006`; see *Threat Model* and *Module System & Compatibility Matrix*). |
 | Information-flow control with signed declassification receipts | OBSERVED | Live IFC example in `examples/live_ifc_declassification_example.rs` (`bd-dpfvh`). |
-| Red-team compromise-rate comparison | OBSERVED | Real attacker harness (`bd-28otw`), not hardcoded baselines. |
+| Red-team compromise-rate comparison | TARGETED | Live FrankenEngine adversarial probes exist, but the published gate hardcodes the Node/Bun baseline outcomes instead of executing comparable reference-runtime scenarios. |
 | Signal-to-action latency for containment | TARGETED | Operational target at or below 250ms median under declared workload conditions; measured-latency artifacts pending (no production measurement committed). |
-| Cross-runtime Node/Bun denominator throughput | TARGETED | Hot-path workloads are real; Node/Bun denominator artifacts are still needed. `MockCertificate` / `hot_paths_simulation` artifacts are rejected by the gate. |
+| Cross-runtime Node/Bun denominator throughput | TARGETED | A historical dirty-worktree bundle records unweighted admitted-case ratios of `0.000920x` Node and `0.000791x` Bun under asymmetric lifecycles; its lock reproduces correctness, not timing, so it is not the weighted denominator contract. |
 | Proof-carrying compilation, formal policy semantics, theorem-backed compiler (`FE-CLAIM-016`–`FE-CLAIM-021`) | HYPOTHESIS | STAY_HYPOTHESIS per the G.10 reality-check (`docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md`). The policy and optimization lanes now contain real Z3 and bounded fail-closed verification machinery, but the live promotion gate finds zero of six qualifying proof bundles. The default Lean build omits capability-algebra targets that fail when checked directly, the translation-witness helper is not yet driven by a non-fixture product producer, and no current end-to-end theorem-backed-compiler bundle closes 018–021. `scripts/run_fe_claim_016_021_promotion_gate.sh ci` fails closed on any observed over-claim; promotion remains deferred to `bd-cixqu.7.17`. |
-| Universal artifact-publication enforcement ("No artifact, no claim.") | OBSERVED | `scripts/run_claim_to_proof_matrix_gate.sh` refuses any OBSERVED row whose artifact lacks a `repro.lock` partner (`bd-cixqu.4.3`); all currently-OBSERVED rows have reproducibility bundles per `docs/REPRODUCIBILITY_CONTRACT.md` (`bd-cixqu.4.4`). |
-| At-least-three production features impossible by default in Node/Bun | OBSERVED | `scripts/run_rgc_production_feature_catalog.sh` validates the F.5 unified catalog of three named feature bundles (signed IFC declassification, deterministic replay coverage, red-team compromise-rate reduction) with per-feature sha256 manifest hashes (`bd-cixqu.6.5`, `bd-cixqu.6.6`). |
+| Invoked artifact-publication enforcement ("No artifact, no claim.") | OBSERVED | When invoked, `scripts/run_claim_to_proof_matrix_gate.sh` refuses an OBSERVED row whose artifact lacks a `repro.lock` partner. Continuous CI enforcement and re-execution of every evidence producer are not established. |
+| At-least-three production features impossible by default in Node/Bun | TARGETED | The catalog validates three named bundle shapes and hashes, but its third entry is the unsupported Node/Bun compromise-rate comparison; two independently observed features do not satisfy the three-feature floor. |
 
 ---
 
@@ -262,16 +262,16 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 
 ### Code Surface At A Glance
 
-| Surface | Count / size (tracked HEAD, verified 2026-08-14) |
+| Surface | Count / size (tracked HEAD, verified 2026-08-16) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.0 MB / 120,038 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
+| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.0 MB / 121,148 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
 | Integration tests in `crates/franken-engine/tests/` | 1,653 top-level files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | 4,510 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
+| Tracked beads in `.beads/issues.jsonl` | 4,511 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -285,7 +285,7 @@ franken_engine/
 ├── crates/
 │   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 615 modules
 │   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 61 internal operator binaries)
-│   │   ├── src/baseline_interpreter.rs   # Core VM (120,038 LoC)
+│   │   ├── src/baseline_interpreter.rs   # Core VM (121,148 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
 │   │   └── tests/                   # 1,653 integration tests (41 RGC gate tests)
 │   ├── franken-extension-host/      # Ed25519-signed extension manifests + capability model
@@ -358,7 +358,7 @@ Tracing one invocation end-to-end is the fastest way to see how every subsystem 
                                 ▼
                  ┌──────────────────────────────────────────┐
                  │ 7.  Evidence ledger records each step    │
-                 │     · TraceEntry, DecisionRecord, audit  │
+                 │     · TraceEvent, EvidenceEntry, receipts │
                  │     · length-prefixed canonical hashing  │
                  │     · chained content hashes             │
                  │     · IR4 / WitnessIR artifact assembly  │
@@ -382,9 +382,9 @@ The IR contract has five levels. IR0 through IR3 are the lowering and executable
 
 | Stage | What it carries | Key invariants enforced here |
 |---|---|---|
-| **IR0 — raw AST** | Lossless syntax tree (`Ir0Node`) with source spans, comments, JSX/TSX surfaces. | Parse goal (`script` vs `module`), source-position fidelity, donor-extraction allowlist compliance. |
-| **IR1 — normalized** | Scope/symbol tables resolved, declarations hoisted, identifiers bound. `Ir1Instruction` set includes the iterator-protocol opcodes (`ForInInit`, `ForInNext`, `ForOfInit`, `ForOfNext`, `IteratorClose`). | Static-semantics rules, TDZ correctness, declaration-before-use, named-export-clause validity. |
-| **IR2 — simplified** | Control-flow lowered into basic blocks with SSA-ish form (`Ir2Block`). Tagged-template expressions desugar to `Call` with a template-literal argument; exception lowering inserts `BeginTry` / `EnterCatch` / `EnterFinally` / `EndFinally`. | IFC join on derived data, exception unwinder shape, lowering-gap truth invariant (status fields cannot disagree). |
+| **IR0 — syntax** | `Ir0Module` wraps the parser's `SyntaxTree` with a canonical header and source identity. | Parse goal (`script` vs `module`), source spans, parser/static-semantics acceptance, and canonical artifact identity. |
+| **IR1 — normalized** | `Ir1Module` carries the scope tree and a flattened `Ir1Op` sequence. Iterator-protocol operations include `ForInInit`, `ForInNext`, `ForOfInit`, `ForOfNext`, and `IteratorClose`. | Scope/binding resolution, declaration rules, iterator-control shape, and diagnostic span provenance. |
+| **IR2 — annotated** | `Ir2Module` carries capability-annotated, IFC-labeled `Ir2Op` records plus the aggregate required-capability set; it is not a basic-block SSA representation. | Capability requirements, IFC metadata, source spans, effect classification, and lowering-gap truth consistency. |
 | **IR3 — executable** | Register-allocated dispatch (`Ir3Instruction`) ready for the baseline interpreter. Includes the 19 expansion variants added in Wave 2 (`Mod`, `Exp`, `Lt`/`Lte`/`Gt`/`Gte`, `Eq`/`StrictEq`/`NotEq`/`StrictNotEq`, `BitAnd`/`BitOr`/`BitXor`, `Shl`/`Shr`/`Ushr`, `InstanceOf`, `InOp`, `Construct`) and TemplateLiteral emission. | Stack/register frame integrity, mnemonic completeness in `execution_orchestrator.rs`, baseline-interpreter match-arm exhaustiveness. |
 | **IR4 — WitnessIR** | Post-execution witness module (`Ir4Module`) carrying the executed IR3 hash, outcome, witness event trace, hostcall decisions, logical ticks, and active specialization IDs. | IR3 linkage, replay identity, monotonic witness-event ordering, proof/specialization consumption audit. |
 
@@ -825,7 +825,7 @@ The runtime is attacked in CI, not only defended in production. The adversarial 
 | Component | Module / runner | Role |
 |---|---|---|
 | **Red-team attacker harness** | `tests/red_team_execution_harness.rs` + `tests/red_team_scenarios/` (`bd-28otw`, commit `39ded447`) | Drives real adversarial workloads instead of hardcoded baseline assumptions. The harness loads scenarios from the corpus directory and dispatches them through the engine. |
-| **Compromise-rate metric gate** | `red_team_compromise_rate_metric_gate.rs` + `compromise_rate_disruptive_floor_metric_gate.rs` (`bd-1vwza`) | Compares compromise rate against a baseline runtime under the same attack distribution; OBSERVED via `FE-CLAIM-011`. |
+| **Compromise-rate metric gate** | `red_team_compromise_rate_metric_gate.rs` + `compromise_rate_disruptive_floor_metric_gate.rs` (`bd-1vwza`) | TARGETED via `FE-CLAIM-011`: FrankenEngine probes execute, but the published runner hardcodes Node/Bun outcomes and does not produce comparable reference-runtime receipts. |
 | **Red/Blue coevolution** | `adversarial_coevolution_harness.rs`, demo `examples/19_red_blue_coevolution` | Co-evolves attack and defense populations; the live demo records how often the defender outpaces the attacker. |
 | **Adversarial campaign** | `adversarial_campaign.rs` (~208 KB) | Long-running campaigns against the runtime under controlled fault-injection. |
 | **Adversarial supremacy synthesis** | `adversarial_supremacy_synthesis.rs` | Generates the worst-case witness inputs the rest of the harness will replay. |
@@ -1097,7 +1097,7 @@ The 615 source modules in `crates/franken-engine/src/` are unrelated alphabetica
 |---|---|
 | **Parser / Lexer** | `parser.rs`, `parser_arena.rs`, `parser_error_recovery.rs`, `parser_evidence_indexer.rs`, `parser_oracle.rs`, `parser_frontier_evidence.rs`, `simd_lexer.rs`, `parallel_parser.rs`, `jsx_tsx_parser.rs` |
 | **AST + Lowering** | `ast.rs` (~182 KB), `lowering_pipeline.rs`, `lowering_gap_inventory.rs`, `lowering_parity_evidence.rs`, `ir_contract.rs`, `static_semantics.rs`, `semantic_canonical_basis.rs` |
-| **Interpreter / VM** | `baseline_interpreter.rs` (~5.0 MB / 120,038 LoC), `bytecode_vm.rs`, `execution_cell.rs`, `execution_orchestrator.rs`, `aot_entrygraph_compiler.rs`, `array_fast_lane.rs` |
+| **Interpreter / VM** | `baseline_interpreter.rs` (~5.0 MB / 121,148 LoC), `bytecode_vm.rs`, `execution_cell.rs`, `execution_orchestrator.rs`, `aot_entrygraph_compiler.rs`, `array_fast_lane.rs` |
 | **Execution Profiles** | `runtime_decision_core.rs` and `regret_bounded_router.rs` (these own the `RuntimeProfile` routing; the `baseline_deterministic_profile` / `baseline_throughput_profile` / `adaptive_profile_router` identifiers are profile labels declared in `baseline_interpreter.rs`, not standalone modules), `js_runtime_lane.rs`, `wasm_runtime_lane.rs`, `hybrid_lane_router.rs` |
 | **Iterator / Generator / Async** | `iterator_protocol.rs`, `promise_model.rs`, `module_async_evaluation.rs` |
 | **Capability / Authority** | `capability.rs`, `capability_witness.rs`, `ambient_authority.rs`, `extension_lifecycle_manager.rs`, `extension_host_authority_guard.rs`, `native_addon_membrane.rs` |
@@ -1402,11 +1402,11 @@ Honest comparison across six JavaScript / WebAssembly runtimes targeting differe
 | Deterministic replay for high-severity decisions | Built into the runtime for the declared allow/deny/escalate inventory; fixed-input `frankenctl compile` artifacts are byte-identical and `run` artifacts identical modulo per-invocation signing authority in the shipped CLI integration test | External tooling only | External tooling only | External tooling only | Trace replay via runtime tooling (workerd); not a high-severity-inventory contract | Deterministic execution by spec, but no high-severity decision inventory or evidence-bundle contract |
 | Probabilistic containment policy | Built-in guardplane (Bayesian + e-process) | Not default runtime behavior | Not default runtime behavior | Permission prompts; not probabilistic | Per-request isolate boundaries; not probabilistic | N/A (host-defined) |
 | Cryptographic decision receipts | Signed receipts + transparency-log/MMR proofs OBSERVED; TEE attestation HYPOTHESIS (`FE-CLAIM-004-TEE`) | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive |
-| Fleet quarantine convergence model | OBSERVED (fleet convergence SLO with bounded timeouts; de-escalation via signed re-admission decisions) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
+| Fleet quarantine convergence model | TARGETED (harness, SLO contract, and fault profiles exist; live measured percentiles are not preserved by the published CI gate) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract is not shipped | Not native to runtime | Not native to runtime | Permission flags at process scope (`--allow-net`, etc.); not capability-typed at IR level | Bindings-mediated capabilities; not IR-typed | WASI capability surface; bound to imports, not source-level types |
 | Information-flow control with signed declassification receipts | OBSERVED (finite IFC lattice + signed declassification receipts) | Not in core | Not in core | Not in core | Not in core | Not in core |
 | Cross-runtime lockstep oracle | OBSERVED (differential Node/Bun harness with divergence classification) | N/A | N/A | N/A | N/A | N/A |
-| Unsafe in the implementation language | Forbidden in repository code (`#![forbid(unsafe_code)]`) | V8 is C++ (extensive unsafe by design) | JavaScriptCore is C++, Zig wrapper | V8 is C++; Deno's Rust core uses `unsafe` selectively | V8 C++ + workerd C++/Rust mix | Rust with controlled `unsafe` (audited) |
+| Unsafe in the implementation language | Forbidden in production crate source (`#![forbid(unsafe_code)]`); selected integration/adversarial tests use `unsafe` | V8 is C++ (extensive unsafe by design) | JavaScriptCore is C++, Zig wrapper | V8 is C++; Deno's Rust core uses `unsafe` selectively | V8 C++ + workerd C++/Rust mix | Rust with controlled `unsafe` (audited) |
 | Primary intended workload | Adversarial extension hosting with auditable forensics | General-purpose server-side JS | High-throughput server-side JS + tooling | Server-side JS with permission-system UX | Edge-deployed isolated workers | WebAssembly host embedding |
 
 The five other runtimes are excellent at the workloads they were built for; FrankenEngine targets a narrower envelope (auditable adversarial-extension execution) where the constitutional rules pay for themselves.
@@ -1660,11 +1660,11 @@ The reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`)
 
 ## Gate Scripts and Evidence Workflow
 
-Every claim that backs a release ships behind an explicit gate. The 292 `scripts/run_*.sh` runners are grouped into families; 83 of them have an exact `scripts/e2e/<gate>_replay.sh` partner for preserved-bundle replay, and the remaining replay surface (186 wrappers total) covers composite-gate replays and sub-gate vectors.
+Every claim that backs a release ships behind an explicit gate. The 293 `scripts/run_*.sh` runners are grouped into families; 106 of them have an exact `scripts/e2e/<gate>_replay.sh` partner for preserved-bundle replay, and the remaining replay surface (186 wrappers total) covers composite-gate replays and sub-gate vectors.
 
 | Family | Count | What it covers |
 |---|---|---|
-| `run_rgc_*` | 56 | Runtime Governance Compliance: cross-platform matrix, security enforcement, runtime/exception semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, fault-injection/chaos verification pack, certified-optimization harness, FrankenNode handoff bundle, etc. |
+| `run_rgc_*` | 76 | Runtime Governance Compliance: cross-platform matrix, security enforcement, runtime/exception semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, fault-injection/chaos verification pack, certified-optimization harness, FrankenNode handoff bundle, etc. |
 | `run_parser_*` | 36 | Parser oracle, phase0 artifact, performance promotion, frontier harness, operator runbook, gap inventory, missing-artifact contract. |
 | `run_frx_*` | 34 | FrankenReact/FRX: canonical React corpus, SSR/hydration/RSC, local semantic atlas, Track D WASM lane, Track E verification/fuzz, online regret + change-point demotion controller. |
 | Claim/evidence top-level | several | `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_suite.sh`, `run_metamorphic_suite.sh`, `run_scientific_contribution_targets.sh`, `run_cross_repo_integration_suite.sh`, `run_deterministic_e2e_harness.sh`. |
@@ -1753,10 +1753,10 @@ The project ships a layered test stack; each layer answers a different question.
 
 | Layer | Where it lives | What it proves |
 |---|---|---|
-| **Lib unit tests** | `crates/franken-engine/src/**/*.rs` `#[cfg(test)]` modules | Per-module invariants. Every source module ships ≥20 unit tests by project convention; the running journal in `memory/enrichment_sessions.md` records 35,000+ landed by 2026-03-19. |
-| **Integration tests** | `crates/franken-engine/tests/*.rs` (1,653 files) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
+| **Lib unit tests** | `crates/franken-engine/src/**/*.rs` `#[cfg(test)]` modules | Per-module invariants where present. Test density varies materially by module; the running journal in `memory/enrichment_sessions.md` records 35,000+ landed by 2026-03-19. |
+| **Integration tests** | `crates/franken-engine/tests/*.rs` (1,641 Rust files; 1,653 top-level files total) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
 | **Control-plane integration tests** | `crates/franken-engine-control-plane-integration-tests/` | Tests that need `frankenengine-test-support` mock adapters, held in a sibling crate so the engine lib-test target doesn't drag them in. |
-| **RGC gate tests** | `crates/franken-engine/tests/rgc_*.rs` (37 files) | Each major RGC gate has a matching `cargo test` target plus a `scripts/run_*.sh` operator runner. |
+| **RGC gate tests** | `crates/franken-engine/tests/rgc_*.rs` (41 files) | Each major RGC gate has a matching `cargo test` target plus a `scripts/run_*.sh` operator runner. |
 | **Test262 conformance** | `frankenctl test test262`, `crates/franken-engine/tests/test262_*` | Real Test262 conformance (since April 2026, when `21b485a0` replaced the hardcoded fake test data with real JS execution). |
 | **Golden artifacts** | `crates/franken-engine/tests/**/*_golden*.rs`, `tests/**/goldens/*.json` | Byte-equality tests against committed canonical outputs. `669b6319 feat(ast-parser): Add comprehensive golden test infrastructure` is the load-bearing commit. |
 | **Metamorphic relations** | `crates/franken-metamorphic/` | Engine-backed parser, IR, and execution equivalence checks for whitespace invariance, source/AST roundtrip, and semantic-preserving refactors. Enabled relations run through `EngineEvalAdapter` into the real parser/lowering/interpreter; historical ExecOptions-only relations are disabled/fail-closed. Run via `cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite`. |
@@ -1843,7 +1843,7 @@ Three additional discipline layers:
 - **Performance Regression Gate** (`scripts/run_rgc_performance_regression_gate.sh ci`) ranks culprit deltas, applies statistical significance and waiver policy, and emits a replayable `regression_report.json`.
 - **Benchmark Freshness Gate** (`scripts/run_*.sh` family, see `feature_parity_tracker.rs`) immediately downgrades stale claims and enforces sample floors.
 
-Today, hot-path workloads are real (`scripts/run_real_hot_path_proof.sh smoke` emits genuine `real_runtime_hot_paths` artifacts under rch). `FE-CLAIM-010` (Node/Bun denominator throughput) remains **TARGETED** until live Node and Bun denominator artifacts replace placeholders; that is the published, gated state and the matrix explicitly does not let anyone promote it via simulation.
+Today, hot-path workloads are real (`scripts/run_real_hot_path_proof.sh smoke` emits genuine `real_runtime_hot_paths` artifacts under rch). `FE-CLAIM-010` remains **TARGETED**: the preserved June bundle is a dirty-worktree, unweighted, asymmetric-lifecycle historical observation whose lock reproduces correctness rather than timings; it is not the plan's weighted denominator proof.
 
 The benchmark surface is split across three categories:
 
@@ -2016,7 +2016,7 @@ The README's troubleshooting table captures the practical operator hits. For the
 
 ## Beads Workflow & Project Memory
 
-The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,510 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
+The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,511 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
 
 ### Why in-tree
 
@@ -2043,11 +2043,11 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 
 | Surface | Command / path | What it shows |
 |---|---|---|
-| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 12 of 28 claims that are not yet OBSERVED (5 TARGETED, 7 HYPOTHESIS; 16 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
+| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 15 of 28 claims that are not yet OBSERVED (8 TARGETED, 7 HYPOTHESIS; 13 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
-The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,510 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
+The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,511 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
 
 ### Project-memory files (`memory/`)
 
@@ -2171,7 +2171,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 | ❌ | TEE-backed production guarantees for cryptographic decision receipts. `FE-CLAIM-004-TEE` remains HYPOTHESIS (quotes are simulated by default); receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`). |
 | ❌ | Compile-time TS-to-IR rejection of ambient-authority constructs as an end-to-end contract. The end-to-end TS-to-IR contract is TARGETED; `FE-CLAIM-006` ambient-authority rejection is OBSERVED only on the shipped hostcall/import edges, not all ambient constructs. |
 | ❌ | Node/Bun denominator throughput claims for *unmeasured* workloads. Only workloads in `real_runtime_hot_paths` are gated; `MockCertificate` / `hot_paths_simulation` artifacts are rejected by the gate. |
-| ✅ | Bounded fleet-quarantine convergence SLOs as a current guarantee. `FE-CLAIM-005` is now OBSERVED with live convergence evidence and partition fault profile testing. |
+| ❌ | Bounded fleet-quarantine convergence SLOs as a current guarantee. `FE-CLAIM-005` is TARGETED: the harness and fault profiles exist, but the published CI gate does not execute them or preserve measured percentiles. |
 | ❌ | Arbitrary npm native add-ons through the membrane. The runtime intentionally refuses to silently bridge them into the trust boundary. |
 | ❌ | Side-channel defence at the CPU level (Spectre / Meltdown / RowHammer variants). Out of scope by design; see *Threat Model*. |
 
@@ -2194,7 +2194,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 - Capability-typed TS-to-IR extension onboarding is not shipped as an end-to-end contract; current capability checks cover selected runtime hostcall/import boundaries.
 - Fleet quarantine supports reversible de-escalation via signed re-admission decisions; automatic re-admission without operator approval remains unimplemented.
 - Cryptographic decision receipts: receipt signing + transparency-log/MMR proofs are OBSERVED (`FE-CLAIM-004`); TEE attestation remains HYPOTHESIS (`FE-CLAIM-004-TEE`) until a real TEE SDK and live-quote proof artifacts ship.
-- Node/Bun denominator performance comparisons remain TARGETED until live denominator artifacts replace placeholders; the gate explicitly rejects `MockCertificate` and `hot_paths_simulation` fixtures.
+- Node/Bun denominator performance remains TARGETED; the historical bundle is non-normative, unweighted, dirty-worktree evidence and its lock does not reproduce timing, while the gate still rejects `MockCertificate` and `hot_paths_simulation` fixtures.
 - Deterministic replay and evidence retention increase storage footprint.
 - Full Node ecosystem compatibility is an active target; edge behavior differences can still appear in low-level module or process APIs. `package.json type=module` extensionless relative imports are fail-closed in `native` / `node_compat` modes; only the explicit `bun_compat` bridge enables extension probing.
 - Fleet-level immune features assume stable cryptographic identity and time synchronization across participating nodes.
@@ -2271,7 +2271,7 @@ Project-specific jargon, defined once.
 | **Allowed state** | The claim-to-proof matrix's permitted wording state for a specific README/PLAN line range (`observed`, `target`, or `hypothesis`). Stronger wording is rejected by the gate. |
 | **Artifact bundle** | The timestamped directory a gate emits under `artifacts/<gate>/<timestamp>/`. The replay-shaped, self-describing record of what a gate run produced. |
 | **Authenticity hash** | A keyed-HMAC hash (`AuthenticityHash::compute_keyed`) used where content binding alone is insufficient (for example, binding a decision receipt to the originating runtime's persistent identity). |
-| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.0 MB, 120,038 LoC). The runtime's load-bearing VM. |
+| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.0 MB, 121,148 LoC). The runtime's load-bearing VM. |
 | **Bead** | A unit of work in `br` (the Rust beads tracker). Identified as `bd-<base36>` with `.N` children for sub-tasks. Stored in `.beads/issues.jsonl`. |
 | **`br`** | `beads_rust` CLI; the in-tree task tracker. Closes via `br close <id> --reason "..."`. |
 | **Charter** | `docs/RUNTIME_CHARTER.md`, the non-negotiable governance contract for this repo. |
@@ -2311,14 +2311,14 @@ Project-specific jargon, defined once.
 | **OCAP** | Object-capability security model. Authority is held in unforgeable references; FrankenEngine's `CapabilityProfile` algebra implements the canonical OCAP discipline. |
 | **`PearlTower`** | Project-internal codename for the agent persona that owns this engine's bead queue. Mentioned in `memory/MEMORY.md`. |
 | **PLAS** | The execution track named in `ADR-0004` (`docs/adr/ADR-0004-frankensqlite-reuse-scope.md`), currently "Accepted with PLAS in scope". |
-| **Production feature catalog** | `production_feature_catalog` gate; names the three production features whose proof bundles back the OBSERVED `FE-CLAIM-014` (the F.5 catalog gate validates all three with per-feature sha256 manifest hashes). |
+| **Production feature catalog** | `production_feature_catalog` gate; validates three named bundle shapes and hashes. `FE-CLAIM-014` remains TARGETED because the third entry depends on the unexecuted Node/Bun compromise-rate comparison. |
 | **Promotion controller** | The closed-loop system that promotes/demotes adaptive optimizations under signed evidence (IDEA-WIZARD-XI). |
 | **Proof-artifact manifest** | `franken-engine.proof-artifact-manifest.v1`, the schema shared by every gate's `run_manifest.json`. |
 | **Quarantine mesh** | The distributed quarantine substrate (`quarantine_mesh_gate`, `examples/07_quarantine_mesh`). Live proof wrapper exists (`bd-ly6hp.3`); bounded convergence SLO is TARGETED. |
 | **`rch`** | Remote compilation hook, the project-internal queue/worker layer that mediates large Cargo invocations. |
 | **Receipt verifier pipeline** | `receipt_verifier_pipeline.rs`: the verifier that consumes a receipt bundle and a target `receipt-id`, then returns a structured verdict. Surfaced via `frankenctl verify receipt`. |
 | **Reproducibility bundle** | `env.json` + `manifest.json` + `repro.lock`. Defined by `docs/REPRODUCIBILITY_CONTRACT.md`; templates in `docs/templates/`. |
-| **RGC** | Runtime Governance Compliance: the gate family covering replay coverage, security enforcement, runtime semantics, performance regression, cross-platform matrix, etc. 56 `run_rgc_*.sh` runners. |
+| **RGC** | Runtime Governance Compliance: the gate family covering replay coverage, security enforcement, runtime semantics, performance regression, cross-platform matrix, etc. 76 `run_rgc_*.sh` runners. |
 | **Safe-mode fallback** | The deterministic baseline lane the runtime falls back to when an adaptive component is demoted or fails. Required by the Charter; replay receipts in `bd-or2e1`. |
 | **`SchemaId`** | Stable identifier for an in-tree serde schema (`SchemaId::from_definition(&[u8])`, `SchemaId::from_bytes([u8; 32])`). Used to detect schema drift between recorded and replayed artifacts. |
 | **SecurityEpoch** | A monotonic time-of-policy primitive. Replay artifacts are anchored to a specific epoch; `from_raw(u64)` / `as_u64()` are the entry points. |
@@ -2515,7 +2515,7 @@ A bundle directory carries `manifest.json` (sha256-indexed artifacts + `bundle_i
 
 **Reproducing a result.** `repro.lock` pins the *semantic verdict* over canonical structured values and exception classes — not wall-clock timing (so `allow_wall_clock=true`). Re-run the recorded command and confirm `frankenctl oracle report` reports the same verdict.
 
-**Node/Bun denominator (`FE-CLAIM-010`, TARGETED).** The cross-runtime throughput goal is **TARGETED**, not observed. A measured, fairness-compliant Node/Bun denominator is linked at [`docs/perf/e2_denominator_bundle_v1`](./docs/perf/e2_denominator_bundle_v1) (with a `repro.lock` partner and an environment manifest). On that corpus the native baseline interpreter is currently slower than both Node and Bun, so the throughput target is not met and the claim stays TARGETED — backed by a measured denominator rather than absence of data. The oracle will not fabricate a denominator: a single-lane run reports `insufficient_data` (exit `4`), and the matrix gate rejects simulated (`hot_paths_simulation`) or mock (`MockCertificate`) evidence.
+**Node/Bun denominator (`FE-CLAIM-010`, TARGETED).** The cross-runtime throughput goal is **TARGETED**, not observed. The preserved June 2026 bundle records a dirty-worktree, unweighted geometric mean of `0.000920x` Node over 16 admitted cases and `0.000791x` Bun over 13; it links a 31-case manifest but contains 28 results, uses asymmetric compile/execute lifecycles, and its `repro.lock` reproduces the correctness verdict rather than timings. It is a non-normative historical baseline, not the plan's weighted denominator contract. The oracle will not fabricate a denominator: a single-lane run reports `insufficient_data` (exit `4`), and the matrix gate rejects simulated (`hot_paths_simulation`) or mock (`MockCertificate`) evidence.
 
 The capstone gate is `./scripts/run_dw_differential_oracle.sh ci` (replay: `./scripts/e2e/dw_differential_oracle_replay.sh bundle`); a runnable demo is [`examples/23_differential_oracle/demo.sh`](./examples/23_differential_oracle/demo.sh).
 

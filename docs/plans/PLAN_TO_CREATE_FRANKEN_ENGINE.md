@@ -1459,13 +1459,13 @@ new gates below prove those properties.
 
 Current measured anchors:
 
-- The committed E2 denominator reports FrankenEngine about `1,087x` slower
-  than Node and `1,264x` slower than Bun by weighted geometric mean. Individual
-  admitted cases range from roughly `86x` to `3,605x` behind.
-- That denominator reparses, relowers, and executes through FrankenEngine on
-  every sample while Node/Bun receive compiled warmup, so it mixes startup,
-  compilation, and execution costs. The result is still a real end-to-end
-  failure, but it is insufficient for attributing the gap.
+- The committed June E2 bundle records unweighted admitted-case ratios of
+  `0.000920x` Node and `0.000791x` Bun from a dirty worktree. It links a 31-case
+  manifest but contains 28 results, and its lock reproduces correctness only.
+- That historical run reparses, relowers, and executes through FrankenEngine on
+  every sample while Node/Bun receive compile-once warm invocations, so it mixes
+  startup, compilation, and execution costs under asymmetric lifecycles. It is
+  a real end-to-end failure observation, not the normative weighted denominator.
 - The production path is parser -> IR0 -> IR1/IR2/IR3 lowering ->
   `baseline_interpreter`. Both advertised execution lane tags instantiate the
   same interpreter with different budgets. Profiling enablement in the lane

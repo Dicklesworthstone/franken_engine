@@ -43960,10 +43960,10 @@ impl InterpreterCore {
     /// proxy/prototype resolver and the special-object IFC carrier scans.
     ///
     /// This is deliberately a proof-by-exclusion fast path: every object kind
-    /// with native property behavior or side-table labels remains on the
-    /// generic path. The caller still runs the typed property hook, resolves
-    /// accessors, joins stored-property and destination labels, and emits the
-    /// same deterministic property-resolution event.
+    /// whose native own-read semantics or skipped IFC carrier can affect this
+    /// hit remains on the generic path. The caller still runs the typed
+    /// property hook, resolves accessors, joins stored-property and destination
+    /// labels, and emits the same deterministic property-resolution event.
     fn ordinary_own_property_read_fast_path_eligible(
         &self,
         object_id: ObjectId,
@@ -94925,10 +94925,10 @@ mod async_runtime_tests_current {
             let object = core
                 .alloc_object_with_properties(&[("data", Value::Int(41))])
                 .expect("ordinary object should allocate");
+            let empty_prototype = core
+                .alloc_object_with_prototype(None)
+                .expect("empty prototype should allocate");
             if force_fallback {
-                let empty_prototype = core
-                    .alloc_object_with_prototype(None)
-                    .expect("empty prototype should allocate");
                 let index = object.0 as usize;
                 core.mutate_heap(|heap| {
                     heap[index].prototype = Some(empty_prototype);
@@ -94974,7 +94974,7 @@ mod async_runtime_tests_current {
         assert_eq!(fast.1, Label::Secret);
         assert_eq!(
             fast, fallback,
-            "fast and generic paths must be artifact exact"
+            "fast and generic paths must preserve the read outcome, IFC label, trace, and instruction count"
         );
     }
 
@@ -94986,6 +94986,50 @@ mod async_runtime_tests_current {
             .expect("ordinary object should allocate");
         let data_key = RuntimePropertyKey::String(JsString::from("data"));
         assert!(core.ordinary_own_property_read_fast_path_eligible(object, &data_key));
+
+        let exact_key = JsString::from_code_units(&[0xD800]);
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(exact_key.clone()),
+            Value::Int(8),
+        )
+        .expect("exact string own property should fit");
+        assert!(core.ordinary_own_property_read_fast_path_eligible(
+            object,
+            &RuntimePropertyKey::String(exact_key),
+        ));
+
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("fast-path-symbol")))
+            .expect("symbol should allocate");
+        core.set_object_runtime_property(object, RuntimePropertyKey::Symbol(symbol), Value::Int(9))
+            .expect("symbol own property should fit");
+        assert!(core.ordinary_own_property_read_fast_path_eligible(
+            object,
+            &RuntimePropertyKey::Symbol(symbol),
+        ));
+
+        core.set_object_property(
+            object,
+            "accessor".to_string(),
+            Value::Accessor {
+                get: None,
+                set: None,
+            },
+        )
+        .expect("accessor own property should fit");
+        assert!(core.ordinary_own_property_read_fast_path_eligible(
+            object,
+            &RuntimePropertyKey::String(JsString::from("accessor")),
+        ));
+
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1)])
+            .expect("dense array should allocate");
+        assert!(core.ordinary_own_property_read_fast_path_eligible(
+            array,
+            &RuntimePropertyKey::String(JsString::from("0")),
+        ));
         assert!(!core.ordinary_own_property_read_fast_path_eligible(
             object,
             &RuntimePropertyKey::String(JsString::from("missing")),
@@ -95000,6 +95044,40 @@ mod async_runtime_tests_current {
         assert!(
             !core.ordinary_own_property_read_fast_path_eligible(object, &data_key),
             "even a malformed proxy-tagged object must fail closed to proxy validation"
+        );
+
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Object(object);
+            registers[1] = Value::str("data");
+            registers[2] = Value::Int(123);
+        });
+        core.set_register_label(2, Label::Secret)
+            .expect("destination label should be settable");
+        let trace_count_before = core.nondeterminism_event_count();
+        let error = core
+            .run_loop(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                vec![],
+            ))
+            .expect_err("malformed Proxy metadata must fail before the own property is read");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected == "well-formed Proxy target slot" && got == "missing"
+        ));
+        assert_eq!(core.read_reg(2).unwrap(), Value::Int(123));
+        assert_eq!(core.get_register_label(2).unwrap(), &Label::Secret);
+        assert_eq!(
+            core.nondeterminism_event_count(),
+            trace_count_before,
+            "a malformed Proxy must not emit an ordinary property-found trace"
         );
     }
 

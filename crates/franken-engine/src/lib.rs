@@ -2460,7 +2460,7 @@ mod tests {
 
     #[test]
     fn prepared_eval_preserves_frontend_refusals_and_memory_budget() {
-        for source in ["syntax error here (", "break;", "process.env.SECRET;"] {
+        for source in ["let", "break;", "process.env.SECRET;"] {
             let prepare_error = HybridRouter::prepare_eval(source)
                 .expect_err("frontend refusal must occur while preparing");
             let mut one_shot_router = HybridRouter::default();

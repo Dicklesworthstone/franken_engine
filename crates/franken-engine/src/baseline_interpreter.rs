@@ -28925,10 +28925,17 @@ impl InterpreterCore {
     }
 
     fn projected_generated_function_realm_registry_bytes() -> u64 {
+        // Every `ScopeBindingState` retains a public IFC label even when the
+        // label has no dynamic payload.  Keep this projection in lockstep with
+        // `estimate_scope_bindings_bytes`: omitting the fixed `Label` storage
+        // undercharged the twelve canonical bindings by 384 bytes on this
+        // target and made the debug recomputation assertion fail.
+        let binding_label_bytes = std::mem::size_of::<Label>() as u64;
         let object_entries = ["console", "performance", "Promise", "Math"];
         let object_bytes = Self::saturating_sum(object_entries.into_iter().map(|name| {
             MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                 .saturating_add(Self::estimate_string_bytes(name))
+                .saturating_add(binding_label_bytes)
         }));
         let empty_builtin_bytes = Self::estimate_string_bytes("");
         let builtin_bytes = Self::saturating_sum(
@@ -28938,6 +28945,7 @@ impl InterpreterCore {
                     MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                         .saturating_add(Self::estimate_string_bytes(name))
                         .saturating_add(empty_builtin_bytes)
+                        .saturating_add(binding_label_bytes)
                 }),
         );
         object_bytes.saturating_add(builtin_bytes)
@@ -99684,6 +99692,11 @@ mod function_prototype_call_apply_tests_current {
             );
         }
         assert_eq!(globals.len(), 12);
+        assert_eq!(
+            InterpreterCore::projected_generated_function_realm_registry_bytes(),
+            InterpreterCore::estimate_generated_function_realm_globals_bytes(globals),
+            "generated realm preflight must include every retained binding byte"
+        );
 
         let first_scope = probe
             .generated_function_realm_scope_frame()

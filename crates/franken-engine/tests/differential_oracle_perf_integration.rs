@@ -121,7 +121,10 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
             .len(),
         10
     );
-    assert_eq!(case["engine"]["observations_complete"].as_bool(), Some(true));
+    assert_eq!(
+        case["engine"]["observations_complete"].as_bool(),
+        Some(true)
+    );
 
     // The environment manifest must record the corpus and iteration protocol.
     let environment = &report["environment"];

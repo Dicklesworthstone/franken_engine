@@ -180,6 +180,10 @@ impl ProcessSpawnProvider for CommitBoundaryProcessSpawn {
             stderr: Vec::new(),
         })
     }
+
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+    }
 }
 
 fn process_package(source: &str) -> ExtensionPackage {

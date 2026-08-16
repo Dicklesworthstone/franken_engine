@@ -246,6 +246,7 @@ interpretation_lines = builder["interpretation_lines"]
 build_correctness_verdicts = builder["build_correctness_verdicts"]
 correctness_verdict_hash = builder["correctness_verdict_hash"]
 measurement_evidence_view = builder["measurement_evidence_view"]
+reproduction_perf_command = builder["reproduction_perf_command"]
 digest = "a" * 64
 
 def lane(name):
@@ -314,6 +315,14 @@ report = {
 }
 report["bun_denominator"]["baseline"] = "bun"
 assert validator(report) == [], validator(report)
+repro_command = reproduction_perf_command(
+    "benchmarks/runtime_comparison/manifest.json",
+    "release-perf",
+    report["environment"],
+    report["cases"],
+)
+assert repro_command.startswith("target/release-perf/frankenctl "), repro_command
+assert repro_command.endswith("--case fixture"), repro_command
 degraded_interpretation = " ".join(
     interpretation_lines(report["node_denominator"], report["bun_denominator"])
 )

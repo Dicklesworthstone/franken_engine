@@ -6,7 +6,7 @@ Transforms a `differential-oracle perf` report (`report.json`, schema
 bundle contract (`docs/REPRODUCIBILITY_CONTRACT.md`):
 
   - denominator.json  (the distilled, measured Node/Bun denominator + correctness verdicts)
-  - env.json          (host / toolchain / runtime facts, with pinned node/bun versions)
+  - env.json          (host / toolchain / runtime facts, with recorded node/bun versions)
   - repro.lock        (locked replay recipe; expected output is the *correctness verdict* hash)
   - manifest.json     (content-addressed index referencing the other three by sha256)
 
@@ -32,6 +32,7 @@ import hashlib
 import json
 import math
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,7 @@ FLOOR_MILLIONTHS = 3_000_000  # >= 3x throughput floor (DENOMINATOR_FLOOR_MILLIO
 
 _EQUIV_GROUP_RE = re.compile(r"group\s+([0-9a-f]{16,64})")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _MILLIONTHS = 1_000_000
 _U32_MAX = (1 << 32) - 1
 _U64_MAX = (1 << 64) - 1
@@ -245,6 +247,8 @@ def validate_v3_report(report: dict) -> list[str]:
     cases = report.get("cases")
     if not isinstance(cases, list):
         return errors + ["cases must be an array"]
+    if not cases:
+        errors.append("cases must contain at least one measured corpus case")
     if environment.get("corpus_case_count") != len(cases):
         errors.append("environment.corpus_case_count disagrees with cases")
 
@@ -525,6 +529,43 @@ def measurement_evidence_view(cases: list[dict]) -> list[dict]:
     return evidence
 
 
+def reproduction_perf_command(
+    corpus_path: str,
+    profile: str,
+    environment: dict,
+    cases: list[dict],
+) -> str:
+    """Reconstruct the exact corpus selection used by one v3 report."""
+    argv = [
+        f"target/{profile}/frankenctl",
+        "differential-oracle",
+        "perf",
+        "--manifest",
+        corpus_path,
+        "--out",
+        "report.json",
+        "--events",
+        "events.jsonl",
+        "--warmup",
+        str(environment.get("warmup_iterations", 3)),
+        "--samples",
+        str(environment.get("measured_iterations", 10)),
+        "--case-timeout-ms",
+        "120000",
+        "--engine-budget",
+        str(environment.get("engine_instruction_budget", 2_000_000_000)),
+        "--node-bin",
+        "<node>",
+        "--bun-bin",
+        "<bun>",
+    ]
+    for case in cases:
+        case_id = case.get("case_id")
+        if isinstance(case_id, str) and case_id:
+            argv.extend(["--case", case_id])
+    return shlex.join(argv)
+
+
 def write_canonical(path: Path, obj: Any) -> str:
     data = canonical_bytes(obj)
     path.write_bytes(data)
@@ -544,12 +585,21 @@ def main() -> int:
     ap.add_argument("--rustc", default="unknown", help="rustc --version string")
     ap.add_argument("--cargo", default="unknown", help="cargo --version string")
     ap.add_argument(
+        "--profile",
+        default="release",
+        help="Cargo profile used to build the measured frankenctl binary",
+    )
+    ap.add_argument(
         "--generated-at-utc",
         required=True,
         help="ISO-8601 UTC timestamp for provenance fields",
     )
     ap.add_argument("--dirty", default="false", help="dirty worktree flag (true/false)")
     args = ap.parse_args()
+
+    if not _PROFILE_RE.fullmatch(args.profile) or ".." in args.profile:
+        print(f"ERROR: invalid Cargo profile: {args.profile!r}", file=sys.stderr)
+        return 2
 
     report_path = Path(args.report)
     if not report_path.is_file():
@@ -626,6 +676,7 @@ def main() -> int:
             "case_count": env_in.get("corpus_case_count", len(cases)),
         },
         "measurement": {
+            "build_profile": args.profile,
             "warmup_iterations": env_in.get("warmup_iterations"),
             "measured_iterations": env_in.get("measured_iterations"),
             "max_cv_millionths": env_in.get("max_cv_millionths"),
@@ -696,7 +747,7 @@ def main() -> int:
             "cargo": args.cargo,
             "llvm": "bundled-with-rustc",
             "target_triple": "x86_64-unknown-linux-gnu",
-            "profile": "release",
+            "profile": args.profile,
         },
         "runtime": {
             "mode": "differential-oracle-perf",
@@ -726,19 +777,12 @@ def main() -> int:
     lock_id = "sha256:" + sha256_hex(
         (args.commit + "\x1f" + corpus_content_digest + "\x1f" + cv_hash).encode("utf-8")
     )
-    perf_command = (
-        "target/release/frankenctl differential-oracle perf "
-        f"--manifest {args.corpus} "
-        "--out report.json --events events.jsonl "
-        f"--warmup {env_in.get('warmup_iterations', 3)} "
-        f"--samples {env_in.get('measured_iterations', 10)} "
-        "--case-timeout-ms 120000 "
-        f"--engine-budget {env_in.get('engine_instruction_budget', 2000000000)} "
-        "--node-bin <node> --bun-bin <bun>"
-    )
+    perf_command = reproduction_perf_command(args.corpus, args.profile, env_in, cases)
     build_command = (
         "scripts/build_e2_denominator_bundle.py --report report.json "
-        f"--corpus {args.corpus} --out-dir docs/perf/e2_denominator_bundle_v1"
+        f"--corpus {shlex.quote(args.corpus)} "
+        "--out-dir docs/perf/e2_denominator_bundle_v1 "
+        f"--profile {shlex.quote(args.profile)}"
     )
     repro_required = [
         "schema_version",

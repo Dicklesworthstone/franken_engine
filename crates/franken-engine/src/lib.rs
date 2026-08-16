@@ -2411,6 +2411,87 @@ mod tests {
     }
 
     #[test]
+    fn prepared_eval_preserves_v8_route_and_generated_code_audit() {
+        for source in [
+            "await Promise.resolve('ready'); 73;",
+            r#"var f = new Function("a", "b", "return a + b;"); f(2, 3);"#,
+        ] {
+            let prepared = HybridRouter::prepare_eval(source).expect("prepare");
+            let mut one_shot_router = HybridRouter::default();
+            let one_shot = one_shot_router.eval(source).expect("one-shot eval");
+            let mut prepared_router = HybridRouter::default();
+            let reused = prepared_router
+                .eval_prepared(&prepared)
+                .expect("prepared eval");
+            assert_eq!(reused, one_shot);
+        }
+
+        let await_prepared = HybridRouter::prepare_eval(
+            "await Promise.resolve('ready'); 73;",
+        )
+        .expect("prepare await");
+        let mut await_router = HybridRouter::default();
+        let await_outcome = await_router
+            .eval_prepared(&await_prepared)
+            .expect("prepared await");
+        assert_eq!(await_outcome.route_reason, RouteReason::ContainsAwaitKeyword);
+        assert_eq!(await_outcome.engine, EngineKind::V8InspiredNative);
+
+        let generated_prepared = HybridRouter::prepare_eval(
+            r#"var f = new Function("a", "b", "return a + b;"); f(2, 3);"#,
+        )
+        .expect("prepare generated code");
+        let mut generated_router = HybridRouter::default();
+        let generated_outcome = generated_router
+            .eval_prepared(&generated_prepared)
+            .expect("prepared generated code");
+        assert_eq!(generated_outcome.value, "5");
+        assert_eq!(generated_outcome.generated_code_audit.len(), 2);
+    }
+
+    #[test]
+    fn prepared_eval_preserves_frontend_refusals_and_memory_budget() {
+        for source in ["syntax error here (", "break;", "process.env.SECRET;"] {
+            let prepare_error = HybridRouter::prepare_eval(source)
+                .expect_err("frontend refusal must occur while preparing");
+            let mut one_shot_router = HybridRouter::default();
+            let one_shot_error = one_shot_router
+                .eval(source)
+                .expect_err("one-shot frontend refusal");
+            assert_eq!(prepare_error, one_shot_error);
+        }
+
+        let source = "var n=0; var i=0; while(i<100){ var obj={a:i}; n=n+1; i=i+1; } n;";
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare object loop");
+        let tight_budget = EngineMemoryBudget {
+            max_heap_objects: 30,
+            max_total_memory_bytes: 512 * 1024 * 1024,
+        };
+        let mut one_shot_router = HybridRouter::default();
+        let one_shot_error = one_shot_router
+            .eval_with_budgets(source, None, Some(tight_budget))
+            .expect_err("one-shot memory budget must fail closed");
+        let mut prepared_router = HybridRouter::default();
+        let prepared_error = prepared_router
+            .eval_prepared_with_budgets(&prepared, None, Some(tight_budget))
+            .expect_err("prepared memory budget must fail closed");
+        assert_eq!(prepared_error, one_shot_error);
+
+        let mut retry_router = HybridRouter::default();
+        let retry = retry_router
+            .eval_prepared_with_budgets(
+                &prepared,
+                None,
+                Some(EngineMemoryBudget {
+                    max_heap_objects: 10_000,
+                    max_total_memory_bytes: 512 * 1024 * 1024,
+                }),
+            )
+            .expect("a later prepared execution may use a different memory budget");
+        assert_eq!(retry.value, "100");
+    }
+
+    #[test]
     fn hybrid_routes_import_to_v8() {
         let route_reason = route_reason_for_source("import x from 'y'");
         assert_eq!(route_reason, RouteReason::ContainsImportKeyword);

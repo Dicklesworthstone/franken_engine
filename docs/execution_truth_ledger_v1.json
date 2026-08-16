@@ -384,11 +384,11 @@
         "The available successful FE-CLAIM-016 Lean artifact is local and Git-untracked.",
         "No current artifacts/rgc_theorem_backed_compiler_inputs directory supplies fresh claim proofs in this checkout.",
         "Generated optimizer obligations still use unsupported prose shapes in important paths, so FE-CLAIM-019 and FE-CLAIM-020 correctly fail to emit semantic-equivalence evidence.",
-        "The checked-in claim rationale still describes the superseded verifier implementations."
+        "The current claim and promotion rationales recognize the verifier implementations but correctly refuse promotion without complete durable proof evidence."
       ],
       "downstream_decisions": [
         "Preserve the real verifier and emitter work as executable infrastructure rather than relabel it as a completed promotion.",
-        "Correct all FE-CLAIM-016 through FE-CLAIM-021 rationales together and require tracked, independently rechecked producer bundles before promotion."
+        "Keep all FE-CLAIM-016 through FE-CLAIM-021 rationales synchronized and require tracked, independently rechecked producer bundles before promotion."
       ],
       "proofs": [
         {
@@ -619,24 +619,24 @@
           "proof_id": "fe-claim-001.interpreter-lanes",
           "kind": "source",
           "path": "crates/franken-engine/src/baseline_interpreter.rs",
-          "start_line": 63724,
-          "end_line": 63947,
-          "range_sha256": "7496a44ead82b23dfd717eaae74363343bd2ac3f5f9e43ed1f28ee740083dc13",
+          "start_line": 72846,
+          "end_line": 73101,
+          "range_sha256": "69d2947c6324578a085e1454c2ad6379d2018a859a0580124e03769bf24a6f16",
           "must_contain": [
             "let mut core = InterpreterCore::new",
             "pub struct QuickJsLane",
             "pub struct V8Lane"
           ],
-          "caller": "LaneRouter::execute_with_hook",
+          "caller": "QuickJsLane::execute_with_hook and V8Lane::execute_with_hook",
           "interpretation": "Both named lanes construct the same native InterpreterCore with different configurations."
         },
         {
           "proof_id": "fe-claim-001.orchestrator-runtime",
           "kind": "source",
           "path": "crates/franken-engine/src/execution_orchestrator.rs",
-          "start_line": 1326,
-          "end_line": 1375,
-          "range_sha256": "a6f4f8d42c67f39297fae53e06379e73075afaa7d148673d4f7a6ceaa6367360",
+          "start_line": 2986,
+          "end_line": 3157,
+          "range_sha256": "ef154e039d15abbb77a7dd3442a5dc2bde151eb3ff7b3cc1d396ca961120974d",
           "must_contain": [
             "LaneRouter::with_configs",
             "lane_router.set_host_io",
@@ -674,7 +674,7 @@
     {
       "subject_id": "claim:FE-CLAIM-009",
       "kind": "claim",
-      "title": "Every published performance and security claim ships with reproducible artifact bundles.",
+      "title": "When invoked, the claim-matrix gate requires an artifact and repro.lock partner for published OBSERVED performance and security rows.",
       "current_state": "observed",
       "claim_posture": "observed",
       "classifications": [
@@ -682,7 +682,7 @@
         "observed",
         "test_only"
       ],
-      "runtime_reality": "The claim-matrix gate checks tracked repro.lock partners for observed rows and FE-CLAIM-009 has a tracked reproducibility lock, but the matrix gate is not invoked by any of the five current GitHub workflow files",
+      "runtime_reality": "When invoked, the claim-matrix gate checks tracked repro.lock partners for observed rows; it is absent from all five current GitHub workflows and does not re-execute every producer",
       "user_impact": "Users can inspect committed evidence contracts, but repository CI does not yet make the flagship claim matrix self-enforcing on every change",
       "limitations": [
         "The gate verifies recorded artifacts and wording; it does not re-execute every producer.",
@@ -789,10 +789,12 @@
         "observed",
         "test_only"
       ],
-      "runtime_reality": "A real 28-case denominator run reports 0.000920x Node and 0.000791x Bun geomean throughput for the admitted cases, so the three-times target fails by roughly three orders of magnitude",
-      "user_impact": "Users get an honest baseline and fairness record, but no current raw-throughput advantage",
+      "runtime_reality": "The June bundle records unweighted geometric means of 0.000920x Node over 16 admitted cases and 0.000791x Bun over 13 from a dirty worktree. It links 31 manifest cases but reports 28, uses asymmetric lifecycles, and locks correctness rather than timing",
+      "user_impact": "Users get a preserved historical end-to-end failure observation, but neither a normative weighted denominator nor any current raw-throughput advantage",
       "limitations": [
         "Only 16 Node and 13 Bun cases were admitted after behavior-equivalence filtering.",
+        "The implementation computes an unweighted mean despite the claim's weighted contract; the 31-case linked manifest and 28 reported results do not match.",
+        "Node/Bun are compile-once warm invocations while FrankenEngine reparses and relowers every sample; the dirty-worktree lock reproduces correctness, not timing.",
         "The engine instruction budget was raised to two billion because containment defaults could not run the corpus.",
         "The bundle measures the baseline interpreter, not a future native tier or extension-transaction suite."
       ],
@@ -831,7 +833,7 @@
           ],
           "expected_git_tracked": true,
           "caller": "scripts/run_e2_denominator_bundle_gate.sh",
-          "interpretation": "The tracked denominator proves the target currently fails."
+          "interpretation": "The tracked historical bundle proves the target was not met under that run; it does not satisfy the normative weighted denominator contract."
         }
       ],
       "revalidation": {
@@ -856,16 +858,16 @@
         "planning_provenance",
         "test_only"
       ],
-      "runtime_reality": "Genuine Lean sources, a fail-closed proof producer, and a local successful FE-CLAIM-016 proof observation now exist, advancing beyond the promotion note; the successful artifact remains ignored and the live lane can explicitly skip when the pinned toolchain or package cache is absent",
-      "user_impact": "Users have a real machine-checking path and honest Unavailable semantics, but no durable fresh-clone proof package yet supports observed public wording",
+      "runtime_reality": "Genuine Lean sources and a fail-closed proof producer exist, but the default lake build omits capability-algebra targets that fail when checked directly; the producer inventories declarations from the broader source tree, so the local Passed artifact does not soundly certify the full target set",
+      "user_impact": "Users have a real machine-checking path and honest Unavailable semantics, but neither the local Passed observation nor a clean checkout supplies sound complete proof for the advertised target set",
       "limitations": [
-        "The successful July proof artifact is Git-untracked and therefore not independently reproducible from a clean checkout by artifact inspection alone.",
+        "The July Passed artifact is Git-untracked and its theorem inventory is not bound to the exact successfully checked target set.",
         "The live E2E records a skip rather than a pass when lake, lean, or the mathlib cache is absent.",
-        "The claim is broad while the current Lean corpus proves specific IFC and capability-algebra properties."
+        "The capability-algebra targets are outside the default lake build and fail when checked directly."
       ],
       "downstream_decisions": [
-        "Keep FE-CLAIM-016 at hypothesis until a tracked proof bundle, pinned toolchain result, scope statement, and independent recheck are available.",
-        "Update the stale promotion rationale to acknowledge the real producer and local successful run without overstating portability."
+        "Keep FE-CLAIM-016 at hypothesis until every claim-relevant target checks and the emitted inventory is bound to that exact successful target set.",
+        "Require a tracked bundle, pinned toolchain result, explicit scope statement, and independent recheck before promotion."
       ],
       "proofs": [
         {
@@ -901,22 +903,22 @@
           ],
           "expected_git_tracked": false,
           "caller": "franken_lean_proof_producer over proofs/lean4",
-          "interpretation": "The local artifact records a real Passed checker result but is explicitly non-portable evidence."
+          "interpretation": "The local artifact records a real Passed checker result, but it is non-portable and does not repair the target-closure defect."
         },
         {
-          "proof_id": "fe-claim-016.stale-promotion-note",
+          "proof_id": "fe-claim-016.target-closure-boundary",
           "kind": "artifact",
           "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
-          "start_line": 59,
-          "end_line": 66,
-          "range_sha256": "780356c15b7ba63c210903a6f6d27c6ef3f842d64989c67d99890bf1742fd11a",
+          "start_line": 52,
+          "end_line": 67,
+          "range_sha256": "eb04a8df479c5d39b5e4013094222864c18e725461c18642d03854294b07081e",
           "must_contain": [
-            "no `lake`/`lean` toolchain",
-            "nothing emits a `.proof.json`",
-            "emitter and a CI lane"
+            "does not include the capability-algebra",
+            "enumerates theorem declarations",
+            "successful target set"
           ],
           "caller": "FE-CLAIM-016..021 promotion decision",
-          "interpretation": "The governance note predates the producer and local successful proof run."
+          "interpretation": "The current promotion decision records the unsound target-closure boundary and keeps the broad claim at hypothesis."
         }
       ],
       "revalidation": {
@@ -956,12 +958,13 @@
           "proof_id": "fe-claim-017.promotion-record",
           "kind": "artifact",
           "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
-          "start_line": 68,
-          "end_line": 90,
-          "range_sha256": "b6d7a89c411e51f7c7fc38ee748af823f7f3d293eee3b1bf30744b9754fdd35e",
+          "start_line": 69,
+          "end_line": 77,
+          "range_sha256": "e9db8d4fa55ee9ff9c550b1716a9384674a6196080ed87b4dfb532506ed6f0d7",
           "must_contain": [
-            "real differential validation, no proof emission",
-            "emit no `.proof.json`"
+            "validators and an emitter helper, no live producer",
+            "No product/operator producer",
+            "qualifying witness"
           ],
           "caller": "FE-CLAIM-016..021 promotion gate",
           "interpretation": "The checked-in promotion decision preserves the missing-witness boundary."
@@ -988,15 +991,15 @@
         "planning_provenance",
         "test_only"
       ],
-      "runtime_reality": "PolicyTheoremEngine now defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; the claim matrix and promotion decision still describe the removed string-only implementation",
-      "user_impact": "Users receive materially stronger theorem checking and counterexample behavior than governance prose reports, while the broad formal-semantics claim remains conservatively unpromoted",
+      "runtime_reality": "PolicyTheoremEngine defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; no qualifying current bundle is present",
+      "user_impact": "Users receive real fail-closed theorem checking and counterexample behavior, while the broad formal-semantics claim remains conservatively unpromoted without a durable proof bundle",
       "limitations": [
         "No fresh FE-CLAIM-018 proof artifact exists in the promotion gate input directory in this checkout.",
         "The engine-grounded default axioms establish a specific modeled domain, not every policy language or merge operator implied by the broad claim.",
         "Explicit Internal, CVC5, and Yices selections use structural fallback and cannot contribute a proof bundle."
       ],
       "downstream_decisions": [
-        "Correct the implementation rationale but keep FE-CLAIM-018 at hypothesis.",
+        "Keep FE-CLAIM-018 at hypothesis until a qualifying current proof bundle is independently rechecked.",
         "Require an explicit theorem domain, tracked Z3 proof bundle, producer version, and independent replay before promotion."
       ],
       "proofs": [
@@ -1016,19 +1019,19 @@
           "interpretation": "The current default path invokes Z3 and separates structural fallback from real proof evidence."
         },
         {
-          "proof_id": "fe-claim-018.stale-promotion-note",
+          "proof_id": "fe-claim-018.promotion-boundary",
           "kind": "artifact",
           "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
-          "start_line": 77,
-          "end_line": 83,
-          "range_sha256": "da6a53d8c3b96dcf809a3434f449bc91007c71bf1541fc7cd406a6d1ac996f70",
+          "start_line": 79,
+          "end_line": 85,
+          "range_sha256": "5ceb4ccea473e35094a1d13f81d225ec62db44d09f92d7cc355f507e1093fb86",
           "must_contain": [
-            "For now, simulate SMT verification",
-            "No Z3/CVC5/Yices",
-            "SmtSolver::Internal"
+            "real Z3 path, no qualifying live bundle",
+            "SmtSolver::Z3",
+            "No such current bundle"
           ],
           "caller": "FE-CLAIM-016..021 promotion decision",
-          "interpretation": "The checked-in rationale describes the superseded pre-Z3 implementation."
+          "interpretation": "The current decision recognizes the real Z3 path but refuses promotion without a qualifying live bundle."
         }
       ],
       "revalidation": {
@@ -1052,15 +1055,15 @@
         "planning_provenance",
         "test_only"
       ],
-      "runtime_reality": "The current optimizer proof router is no longer the unconditional-Verified stub described by the claim matrix and promotion note: it invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no fresh FE-CLAIM-019 proof bundle justifies promotion",
-      "user_impact": "Users receive stronger fail-closed optimizer validation than the matrix reason reports, while public wording remains conservatively at hypothesis",
+      "runtime_reality": "The optimizer proof router invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no qualifying non-fixture full-optimization proof bundle justifies promotion",
+      "user_impact": "Users receive fail-closed optimizer validation, while bounded checks and absent durable proof evidence keep public equivalence wording at hypothesis",
       "limitations": [
-        "The claim matrix and promotion decision contain stale implementation rationale.",
+        "The current promotion decision records implementation machinery without a qualifying proof artifact.",
         "Bounded samples do not establish general mathematical equivalence.",
         "No fresh non-fixture claim proof and independent recheck bundle exists."
       ],
       "downstream_decisions": [
-        "Correct stale rationale under BRIDGE-00.2 without promoting the claim.",
+        "Keep FE-CLAIM-019 at hypothesis until a qualifying non-fixture proof bundle is independently rechecked.",
         "Require explicit proof scope, samples or theorem domain, proof emission, and independent recheck before observed wording."
       ],
       "proofs": [
@@ -1077,22 +1080,22 @@
             "verify_with_sample_differential_runner"
           ],
           "caller": "OptimizationProofCarrier::verify_single_proof",
-          "interpretation": "The current implementation has advanced beyond the rationale recorded in the matrix."
+          "interpretation": "The current implementation provides fail-closed verification machinery, while the matrix correctly withholds the broader equivalence claim without a qualifying bundle."
         },
         {
-          "proof_id": "fe-claim-019.stale-promotion-note",
+          "proof_id": "fe-claim-019.promotion-boundary",
           "kind": "artifact",
           "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
-          "start_line": 68,
-          "end_line": 90,
-          "range_sha256": "b6d7a89c411e51f7c7fc38ee748af823f7f3d293eee3b1bf30744b9754fdd35e",
+          "start_line": 87,
+          "end_line": 93,
+          "range_sha256": "64421bc428736af735406b0ee63afee8041a0051b45787f3b30417b238fd1ef7",
           "must_contain": [
-            "returns",
-            "ProofResult::Verified",
-            "unconditionally"
+            "fail-closed verification paths",
+            "bounded deterministic sample runners",
+            "No current non-fixture"
           ],
           "caller": "FE-CLAIM-016..021 promotion decision",
-          "interpretation": "The governance note still describes the superseded unconditional verifier."
+          "interpretation": "The current decision records the fail-closed verification paths and the missing qualifying full-optimization bundle."
         }
       ],
       "revalidation": {
@@ -1124,7 +1127,7 @@
         "No fresh FE-CLAIM-020 proof artifact is present for independent promotion recheck."
       ],
       "downstream_decisions": [
-        "Keep FE-CLAIM-020 at hypothesis and correct the obsolete simulated-by-composition rationale.",
+        "Keep FE-CLAIM-020 at hypothesis until a qualifying bundle composes the prerequisite proof lanes end to end.",
         "Treat obligation-generator support and complete optimization coverage as promotion prerequisites, not just verifier availability."
       ],
       "proofs": [
@@ -1159,19 +1162,19 @@
           "interpretation": "The regression test explicitly proves unsupported generated obligations fail closed instead of yielding claim evidence."
         },
         {
-          "proof_id": "fe-claim-020.stale-promotion-note",
+          "proof_id": "fe-claim-020.promotion-boundary",
           "kind": "artifact",
           "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
-          "start_line": 91,
-          "end_line": 98,
-          "range_sha256": "4777a901e51a9bdb83e8a888a86af0691e81eea001d4d8ca9b9ac5ebcdff568f",
+          "start_line": 95,
+          "end_line": 103,
+          "range_sha256": "1967ade1bd21856482ce8a1bd69cfe36ab7d45185b9f2788d2e531cd917c8e2d",
           "must_contain": [
-            "simulated by composition",
-            "inherits their simulated",
+            "no end-to-end composition proof",
+            "There is no current bundle",
             "claims correctly remain at `hypothesis`"
           ],
           "caller": "FE-CLAIM-016..021 promotion decision",
-          "interpretation": "The posture remains conservative, but its implementation rationale predates the fail-closed verifier and emitter."
+          "interpretation": "The current decision records that no bundle composes the prerequisite lanes into an end-to-end compiler proof."
         }
       ],
       "revalidation": {
@@ -1195,7 +1198,7 @@
         "planning_provenance",
         "test_only"
       ],
-      "runtime_reality": "The theorem engine now drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; the checked-in rationale still says no solver is invoked",
+      "runtime_reality": "The theorem engine drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; no qualifying current FE-CLAIM-021 bundle is present",
       "user_impact": "Users gain a real fail-closed monotonicity, non-interference, and attenuation verification substrate, but cannot yet rely on a tracked, broadly scoped theorem package as a released runtime guarantee",
       "limitations": [
         "No fresh FE-CLAIM-021 promotion artifact is present in the expected input directory.",
@@ -1203,7 +1206,7 @@
         "Solver availability and exact version remain environmental unless captured in a durable proof bundle."
       ],
       "downstream_decisions": [
-        "Keep FE-CLAIM-021 at hypothesis while correcting the stale no-solver rationale.",
+        "Keep FE-CLAIM-021 at hypothesis until a qualifying current proof bundle is independently rechecked.",
         "Require tracked solver provenance, theorem inventory, axiom scope, counterexample behavior, and independent replay before promotion."
       ],
       "proofs": [
@@ -1224,19 +1227,19 @@
           "interpretation": "Only real Z3-proven cache entries can reach claim proof emission."
         },
         {
-          "proof_id": "fe-claim-021.stale-promotion-note",
+          "proof_id": "fe-claim-021.promotion-boundary",
           "kind": "artifact",
           "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
-          "start_line": 77,
-          "end_line": 83,
-          "range_sha256": "da6a53d8c3b96dcf809a3434f449bc91007c71bf1541fc7cd406a6d1ac996f70",
+          "start_line": 79,
+          "end_line": 85,
+          "range_sha256": "5ceb4ccea473e35094a1d13f81d225ec62db44d09f92d7cc355f507e1093fb86",
           "must_contain": [
-            "For now, simulate SMT verification",
-            "No Z3/CVC5/Yices",
-            "SmtSolver::Internal"
+            "real Z3 path, no qualifying live bundle",
+            "SmtSolver::Z3",
+            "No such current bundle"
           ],
           "caller": "FE-CLAIM-016..021 promotion decision",
-          "interpretation": "The governance note still describes the removed string-only default."
+          "interpretation": "The current decision recognizes the real Z3 path and refuses promotion without a qualifying live bundle."
         }
       ],
       "revalidation": {
@@ -1323,7 +1326,7 @@
           "proof_id": "fe-claim-025.manifest",
           "kind": "artifact",
           "path": "docs/evidence/FE-CLAIM-025/manifest.json",
-          "file_sha256": "b101e38a203681635c989c4bb3bdc7e04665408cda7d898fa60727b6c46a3af7",
+          "file_sha256": "75791a98e00dd758f84baf2d7bd663d60521727c2d4d0941a93bca9aa88749dd",
           "json_assertions": [
             {
               "pointer": "/claim/id",
@@ -1588,10 +1591,10 @@
       "finding_id": "TRUTH-005",
       "severity": "major",
       "status": "open",
-      "summary": "The closed Track-G replacement bead delivered real Lean, Z3, bounded-sample, and proof-emitter paths, so the FE-CLAIM-016 through FE-CLAIM-021 matrix and promotion rationales are stale; the claims should remain hypotheses because tracked complete proof bundles, supported generator coverage, and independent rechecks are still missing.",
+      "summary": "The closed Track-G replacement bead delivered real Lean, Z3, bounded-sample, and proof-emitter paths, and the matrix now records those paths accurately; FE-CLAIM-016 through FE-CLAIM-021 must remain hypotheses because complete target coverage, supported generator coverage, tracked proof bundles, and independent rechecks are still missing.",
       "opportunity_score": 65,
       "relevance_score": 75,
-      "score_rationale": "This has high claim-integrity value but is less immediate than the execution-tier and conformance blockers.",
+      "score_rationale": "Completing and independently rechecking the missing proof bundles has high claim-integrity value but is less immediate than the execution-tier and conformance blockers.",
       "implementation_budget": "L: tracked complete proof bundles, supported generator coverage, promotion rules, and independent replay",
       "subject_ids": [
         "bead:bd-cixqu.7.17",
@@ -1602,7 +1605,7 @@
         "claim:FE-CLAIM-020",
         "claim:FE-CLAIM-021"
       ],
-      "correction_owner": "claim-language",
+      "correction_owner": "claim-integrity-evidence",
       "successor_bead": "bd-performance-conformance-bridge-tu32j.1.2"
     },
     {

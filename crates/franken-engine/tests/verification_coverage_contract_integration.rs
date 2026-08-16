@@ -12,20 +12,20 @@ use frankenengine_engine::verification_coverage_contract::{
     ERROR_ARTIFACT_CONTRACT, ERROR_BOUNDS, ERROR_BRANCH_PROOF, ERROR_CLOCK_AUTHORITY,
     ERROR_EVENT_SCHEMA, ERROR_GENERATION_DRIFT, ERROR_HASH_DRIFT, ERROR_HISTORICAL_PROOF, ERROR_IO,
     ERROR_ORDER_OR_DUPLICATE, ERROR_OUTCOME_MISMATCH, ERROR_OWNER, ERROR_PROVENANCE,
-    ERROR_REPRODUCTION, ERROR_RETRY_MASKING, ERROR_SECRET_LEAK, ERROR_SILENT_FALLBACK,
-    ERROR_SUBJECT_DRIFT, ERROR_TIER_R_TRUTH, ERROR_UNSAFE_PATH, EVENT_SCHEMA_VERSION,
-    EnvironmentManifest, EvidenceState, FailureReference, HarnessExecutionClass, MinimizedSeed,
-    OWNING_BEAD, ProvenanceEdge, ProvenanceGraph, ProvenanceNode, REPORT_SCHEMA_VERSION,
-    RUN_MANIFEST_SCHEMA_VERSION, ReproLock, ReproductionRecord, ResourceDelta, RunManifest,
-    RunOutcome, SampleArtifact, SampleArtifactKind, SubjectKind, TIER_R_BRANCH_SIGNALS,
-    TIER_R_IMPLEMENTATION_TRUTH, TIER_R_PROBE_CASES, TIER_R_PROBE_SCHEMA_VERSION,
-    TierRBuildEnvironment, TierRDenialProbe, TierRInvocationRecord, TierRProbeReport,
-    TierRProbeScenario, TierRSourceFile, TierRSourceManifest, TierRStageEvent, ValidationContext,
-    ValidationFinding, ValidationOutput, VerificationCoverageContract, VerificationEvent,
-    VerificationSample, canonical_json_bytes, generate_contract, minimized_seed_identity,
-    render_markdown, tier_r_expected_semantic_digest, validate_bundle, validate_contract_file,
-    validate_event_stream, validate_tier_r_build_environment, validate_tier_r_probe,
-    write_artifact_manifest, write_bytes_no_replace, write_events_jsonl,
+    ERROR_REPRODUCTION, ERROR_RETRY_MASKING, ERROR_SCHEMA, ERROR_SECRET_LEAK,
+    ERROR_SILENT_FALLBACK, ERROR_SUBJECT_DRIFT, ERROR_TIER_R_TRUTH, ERROR_UNSAFE_PATH,
+    EVENT_SCHEMA_VERSION, EnvironmentManifest, EvidenceState, FailureReference,
+    HarnessExecutionClass, MinimizedSeed, OWNING_BEAD, ProvenanceEdge, ProvenanceGraph,
+    ProvenanceNode, REPORT_SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION, ReproLock,
+    ReproductionRecord, ResourceDelta, RunManifest, RunOutcome, SampleArtifact, SampleArtifactKind,
+    SubjectKind, TIER_R_BRANCH_SIGNALS, TIER_R_IMPLEMENTATION_TRUTH, TIER_R_PROBE_CASES,
+    TIER_R_PROBE_SCHEMA_VERSION, TierRBuildEnvironment, TierRDenialProbe, TierRInvocationRecord,
+    TierRProbeReport, TierRProbeScenario, TierRSourceFile, TierRSourceManifest, TierRStageEvent,
+    ValidationContext, ValidationFinding, ValidationOutput, VerificationCoverageContract,
+    VerificationEvent, VerificationSample, canonical_json_bytes, generate_contract,
+    minimized_seed_identity, render_markdown, tier_r_expected_semantic_digest, validate_bundle,
+    validate_contract_file, validate_event_stream, validate_tier_r_build_environment,
+    validate_tier_r_probe, write_artifact_manifest, write_bytes_no_replace, write_events_jsonl,
 };
 use proptest::prelude::*;
 use proptest::test_runner::RngSeed;
@@ -473,6 +473,21 @@ fn canonical_contract_counts_and_subjects_derive_from_live_authorities() {
         "validator events must satisfy their own schema: {:?}",
         event_report.findings
     );
+    let published_validation_artifacts = BTreeSet::from([
+        "contract.json".to_string(),
+        "generated_contract.json".to_string(),
+    ]);
+    for event in &output.events {
+        assert!(
+            event
+                .artifact_hashes
+                .keys()
+                .all(|path| published_validation_artifacts.contains(path)),
+            "event {} misclassifies source inventory or a logical comparison value as a published artifact: {:?}",
+            event.sequence,
+            event.artifact_hashes.keys().collect::<Vec<_>>()
+        );
+    }
 }
 
 #[test]
@@ -503,6 +518,25 @@ fn generation_and_rendering_are_byte_deterministic_in_a_hermetic_snapshot() {
     assert_eq!(
         render_markdown(&first),
         fs::read_to_string(root.join(MARKDOWN_RELATIVE_PATH)).expect("read markdown")
+    );
+}
+
+#[test]
+fn claim_matrix_freshness_policy_is_typed_and_fail_closed() {
+    let fixture = clone_authority_fixture(&["docs/claim_to_proof_matrix_v1.json"]);
+    let matrix_path = fixture.path().join("docs/claim_to_proof_matrix_v1.json");
+    let mut matrix: Value = read_json(&matrix_path);
+    matrix["max_authored_freshness_days"] = Value::from(179_u64);
+    fs::write(
+        &matrix_path,
+        serde_json::to_vec_pretty(&matrix).expect("serialize malformed freshness policy"),
+    )
+    .expect("write malformed freshness policy");
+
+    let error = generate_contract(fixture.path()).expect_err("invalid tier ceiling must fail");
+    assert!(
+        error.contains(ERROR_SCHEMA) && error.contains("max_authored_freshness_days"),
+        "unexpected error: {error}"
     );
 }
 

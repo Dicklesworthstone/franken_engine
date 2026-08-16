@@ -27,7 +27,7 @@
     "taxonomy_trust_boundary": "Taxonomy v2 derives specialized classes only from private typed in-process runner signals. Values, group samples, stdout, stderr, serialized diagnostics, and structural group shape are evidence-only. Intentional-security classification requires an opaque live candidate plus an explicit in-memory authority record bound to source bytes, typed base class, mode, ignored lanes, and exact hash-to-backend membership topology; the default runner never synthesizes waiver authority.",
     "engine_core_free_oracle": "The engine<->franken-core internal twin reports every classified divergence as a defect carrying a minimized reproducer that independently re-classifies to the same divergence signature (the minimizer never over-minimizes).",
     "degraded_path": "A requested reference runtime that is unavailable, times out, crashes, exits without a recognized JavaScript exception, or suffers an infrastructure launch/I/O degradation yields a manifest-addressed, semantically cross-checked degraded_receipt.json (FE-REPRO-0007) and a non-zero exit (4) - never a silent pass. A recognized executed JavaScript exception is failed, remains comparable in an all-failed cohort, and is not automatically degraded. Legacy degraded bundle-v1 manifests that omit this artifact are intentionally rejected as incomplete.",
-    "claim": "FE-CLAIM-010 (Node/Bun denominator throughput) is the honest, repro.lock-backed `target` state - a measured denominator below the >= 3x floor - and the oracle refuses to fabricate a denominator from a single lane (insufficient_data, exit 4). Simulated/mock evidence (hot_paths_simulation / MockCertificate) is absent from the linked artifact."
+    "claim": "FE-CLAIM-010 stays `target`. The preserved June bundle is a dirty-worktree, unweighted, lifecycle-asymmetric historical observation whose repro.lock reproduces correctness rather than timing; it is not the normative weighted denominator. The oracle refuses to fabricate a denominator from a single lane (insufficient_data, exit 4)."
   },
   "canonicalization": {
     "schema_version": "franken-engine.differential-oracle.canonicalization.v2",
@@ -74,7 +74,7 @@
     "repro_lock_partner": "docs/perf/e2_denominator_bundle_v1/repro.lock",
     "measured_geomean_speedup_millionths": {"node": 920, "bun": 791},
     "meets_3x_floor": false,
-    "note": "A fairness-compliant Node/Bun denominator is linked (bd-fqlfw.2.6/2.7); the native baseline interpreter does NOT meet the >= 3x floor, so the claim stays target - backed by a measured, repro.lock-addressed denominator rather than absence of data. Separately gated by scripts/run_e2_denominator_bundle_gate.sh."
+    "note": "The linked historical bundle records unweighted ratios of 920 millionths of Node and 791 millionths of Bun from a dirty worktree, links 31 manifest cases but reports 28, uses asymmetric lifecycles, and locks correctness rather than timing. The normative weighted >= 3x claim remains target."
   },
   "verification_commands": [
     "./scripts/run_dw_differential_oracle.sh ci",

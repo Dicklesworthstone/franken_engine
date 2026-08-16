@@ -32,14 +32,14 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
 | `bead:bd-o4cbn` | `open` / `not_applicable` | `executable`, `observed`, `planning_provenance`, `test_only` | A real eight-benchmark Criterion/perf/samply pass produced actionable hotspot measurements and some child optimizations have landed, but the root wave remains open and its 69-file pass1 artifact tree is ignored rather than Git-tracked | `bd-performance-conformance-bridge-tu32j.3.1` |
 | `bead:bd-w2dov` | `closed` / `not_applicable` | `observed`, `planning_provenance` | The audit finding was correct and its documentation correction remains present: the AOT module now identifies its outputs as provenance/planning records and its artifact hash as an identity of inputs | `bd-performance-conformance-bridge-tu32j.1.2` |
 | `claim:FE-CLAIM-001` | `observed` / `observed` | `executable`, `observed`, `production_wired` | The shipped orchestrator parses and lowers extension source, configures two native execution profiles, and runs either through the same InterpreterCore implementation with capability and host-effect plumbing | `bd-performance-conformance-bridge-tu32j.2.1` |
-| `claim:FE-CLAIM-009` | `observed` / `observed` | `executable`, `observed`, `test_only` | The claim-matrix gate checks tracked repro.lock partners for observed rows and FE-CLAIM-009 has a tracked reproducibility lock, but the matrix gate is not invoked by any of the five current GitHub workflow files | `bd-performance-conformance-bridge-tu32j.1.2` |
-| `claim:FE-CLAIM-010` | `target` / `target` | `executable`, `observed`, `test_only` | A real 28-case denominator run reports 0.000920x Node and 0.000791x Bun geomean throughput for the admitted cases, so the three-times target fails by roughly three orders of magnitude | `bd-performance-conformance-bridge-tu32j.3.1` |
-| `claim:FE-CLAIM-016` | `hypothesis` / `hypothesis` | `executable`, `observed`, `planning_provenance`, `test_only` | Genuine Lean sources, a fail-closed proof producer, and a local successful FE-CLAIM-016 proof observation now exist, advancing beyond the promotion note; the successful artifact remains ignored and the live lane can explicitly skip when the pinned toolchain or package cache is absent | `bd-performance-conformance-bridge-tu32j.1.2` |
+| `claim:FE-CLAIM-009` | `observed` / `observed` | `executable`, `observed`, `test_only` | When invoked, the claim-matrix gate checks tracked repro.lock partners for observed rows; it is absent from all five current GitHub workflows and does not re-execute every producer | `bd-performance-conformance-bridge-tu32j.1.2` |
+| `claim:FE-CLAIM-010` | `target` / `target` | `executable`, `observed`, `test_only` | The June bundle records unweighted geometric means of 0.000920x Node over 16 admitted cases and 0.000791x Bun over 13 from a dirty worktree. It links 31 manifest cases but reports 28, uses asymmetric lifecycles, and locks correctness rather than timing | `bd-performance-conformance-bridge-tu32j.3.1` |
+| `claim:FE-CLAIM-016` | `hypothesis` / `hypothesis` | `executable`, `observed`, `planning_provenance`, `test_only` | Genuine Lean sources and a fail-closed proof producer exist, but the default lake build omits capability-algebra targets that fail when checked directly; the producer inventories declarations from the broader source tree, so the local Passed artifact does not soundly certify the full target set | `bd-performance-conformance-bridge-tu32j.1.2` |
 | `claim:FE-CLAIM-017` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | Real differential translation validators reject semantic drift, but they do not emit the claim-scoped proof.json witness consumed by the theorem-backed compiler promotion gate | `bd-performance-conformance-bridge-tu32j.1.2` |
-| `claim:FE-CLAIM-018` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | PolicyTheoremEngine now defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; the claim matrix and promotion decision still describe the removed string-only implementation | `bd-performance-conformance-bridge-tu32j.1.2` |
-| `claim:FE-CLAIM-019` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | The current optimizer proof router is no longer the unconditional-Verified stub described by the claim matrix and promotion note: it invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no fresh FE-CLAIM-019 proof bundle justifies promotion | `bd-performance-conformance-bridge-tu32j.1.2` |
+| `claim:FE-CLAIM-018` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | PolicyTheoremEngine defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; no qualifying current bundle is present | `bd-performance-conformance-bridge-tu32j.1.2` |
+| `claim:FE-CLAIM-019` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | The optimizer proof router invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no qualifying non-fixture full-optimization proof bundle justifies promotion | `bd-performance-conformance-bridge-tu32j.1.2` |
 | `claim:FE-CLAIM-020` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | A fail-closed FE-CLAIM-019 and FE-CLAIM-020 proof-bundle emitter now exists, but it emits only after a fully verified non-empty optimization proof set; the current generated prose-shaped obligations do not verify and intentionally produce no semantic-equivalence certificate | `bd-performance-conformance-bridge-tu32j.1.2` |
-| `claim:FE-CLAIM-021` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | The theorem engine now drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; the checked-in rationale still says no solver is invoked | `bd-performance-conformance-bridge-tu32j.1.2` |
+| `claim:FE-CLAIM-021` | `hypothesis` / `hypothesis` | `executable`, `planning_provenance`, `test_only` | The theorem engine drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; no qualifying current FE-CLAIM-021 bundle is present | `bd-performance-conformance-bridge-tu32j.1.2` |
 | `claim:FE-CLAIM-025` | `observed` / `observed` | `executable`, `observed`, `test_only` | A real capstone composes matrix wording, bidirectional evidence ceilings, a committed Merkle ledger, and Test262 posture checks, with tracked FE-CLAIM-025 evidence; however neither the capstone nor matrix gate runs in current GitHub workflows, and its own backfilled reproducibility metadata contains hard-coded schema-hash constants rather than derived schema digests | `bd-performance-conformance-bridge-tu32j.1.2` |
 | `claim:FE-CLAIM-026` | `target` / `target` | `executable`, `observed`, `test_only` | A tracked coverage bundle reports 6,201/47,514 executed cases, 13.0508 percent overall, with builtin as the 1.6664 percent floor; this measures error-free execution or correct rejection, not assertion conformance | `bd-performance-conformance-bridge-tu32j.13.1` |
 | `claim:FE-CLAIM-TEST262` | `target` / `target` | `executable`, `observed`, `production_wired`, `test_only` | Both a three-vector checked-in gate and a real 47,157-case native execution run exist; the latter passes 120 cases and explicitly disallows a full-suite claim because Test262 harness includes are not preloaded | `bd-performance-conformance-bridge-tu32j.13.1` |
@@ -142,10 +142,10 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
   - The available successful FE-CLAIM-016 Lean artifact is local and Git-untracked.
   - No current artifacts/rgc_theorem_backed_compiler_inputs directory supplies fresh claim proofs in this checkout.
   - Generated optimizer obligations still use unsupported prose shapes in important paths, so FE-CLAIM-019 and FE-CLAIM-020 correctly fail to emit semantic-equivalence evidence.
-  - The checked-in claim rationale still describes the superseded verifier implementations.
+  - The current claim and promotion rationales recognize the verifier implementations but correctly refuse promotion without complete durable proof evidence.
 - Downstream decisions:
   - Preserve the real verifier and emitter work as executable infrastructure rather than relabel it as a completed promotion.
-  - Correct all FE-CLAIM-016 through FE-CLAIM-021 rationales together and require tracked, independently rechecked producer bundles before promotion.
+  - Keep all FE-CLAIM-016 through FE-CLAIM-021 rationales synchronized and require tracked, independently rechecked producer bundles before promotion.
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
@@ -210,14 +210,14 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
-| `fe-claim-001.interpreter-lanes` | `required` | `crates/franken-engine/src/baseline_interpreter.rs:63724-63947` | LaneRouter::execute_with_hook | Both named lanes construct the same native InterpreterCore with different configurations. |
-| `fe-claim-001.orchestrator-runtime` | `required` | `crates/franken-engine/src/execution_orchestrator.rs:1326-1375` | ExecutionOrchestrator::phase_execute | Production orchestration reaches the native lane router and preserves host authority. |
+| `fe-claim-001.interpreter-lanes` | `required` | `crates/franken-engine/src/baseline_interpreter.rs:72846-73101` | QuickJsLane::execute_with_hook and V8Lane::execute_with_hook | Both named lanes construct the same native InterpreterCore with different configurations. |
+| `fe-claim-001.orchestrator-runtime` | `required` | `crates/franken-engine/src/execution_orchestrator.rs:2986-3157` | ExecutionOrchestrator::phase_execute | Production orchestration reaches the native lane router and preserves host authority. |
 | `fe-claim-001.profile-aliases` | `required` | `crates/franken-engine/src/runtime_decision_core.rs:86-125` | runtime decision and compatibility call sites | QuickJS/V8 labels canonicalize to native execution-profile labels. |
 
-### `claim:FE-CLAIM-009` — Every published performance and security claim ships with reproducible artifact bundles.
+### `claim:FE-CLAIM-009` — When invoked, the claim-matrix gate requires an artifact and repro.lock partner for published OBSERVED performance and security rows.
 
 - Current state: `observed`; claim posture: `observed`.
-- Runtime reality: The claim-matrix gate checks tracked repro.lock partners for observed rows and FE-CLAIM-009 has a tracked reproducibility lock, but the matrix gate is not invoked by any of the five current GitHub workflow files.
+- Runtime reality: When invoked, the claim-matrix gate checks tracked repro.lock partners for observed rows; it is absent from all five current GitHub workflows and does not re-execute every producer.
 - User impact: Users can inspect committed evidence contracts, but repository CI does not yet make the flagship claim matrix self-enforcing on every change.
 - Revalidation: owner `bd-performance-conformance-bridge-tu32j.1.2` (claim-integrity CI owner) runs `./scripts/run_execution_truth_ledger_gate.sh ci` when a workflow, the claim matrix, artifact publication, or repro.lock changes.
 - Fallback / kill / rollback: downgrade affected claims and retain artifacts as non-authoritative history / block observed publication when a required artifact or tracked lock is missing, stale, or tampered / restore the last green matrix and evidence locks; never delete the failed bundle.
@@ -242,12 +242,14 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
 ### `claim:FE-CLAIM-010` — >= 3x weighted-geometric-mean throughput versus Node and Bun under the benchmark denominator contract.
 
 - Current state: `target`; claim posture: `target`.
-- Runtime reality: A real 28-case denominator run reports 0.000920x Node and 0.000791x Bun geomean throughput for the admitted cases, so the three-times target fails by roughly three orders of magnitude.
-- User impact: Users get an honest baseline and fairness record, but no current raw-throughput advantage.
+- Runtime reality: The June bundle records unweighted geometric means of 0.000920x Node over 16 admitted cases and 0.000791x Bun over 13 from a dirty worktree. It links 31 manifest cases but reports 28, uses asymmetric lifecycles, and locks correctness rather than timing.
+- User impact: Users get a preserved historical end-to-end failure observation, but neither a normative weighted denominator nor any current raw-throughput advantage.
 - Revalidation: owner `bd-performance-conformance-bridge-tu32j.3.1` (benchmark denominator owner) runs `./scripts/run_execution_truth_ledger_gate.sh ci` when the corpus, baseline version, fairness policy, execution tier, hardware, or scoring changes.
 - Fallback / kill / rollback: retain the last valid denominator and label new results non-comparable / reject the 3x claim if either Node or Bun score is below 3000000 millionths or fairness fails / restore the prior corpus and scoring lock; preserve both result bundles.
 - Limitations:
   - Only 16 Node and 13 Bun cases were admitted after behavior-equivalence filtering.
+  - The implementation computes an unweighted mean despite the claim's weighted contract; the 31-case linked manifest and 28 reported results do not match.
+  - Node/Bun are compile-once warm invocations while FrankenEngine reparses and relowers every sample; the dirty-worktree lock reproduces correctness, not timing.
   - The engine instruction budget was raised to two billion because containment defaults could not run the corpus.
   - The bundle measures the baseline interpreter, not a future native tier or extension-transaction suite.
 - Downstream decisions:
@@ -257,28 +259,28 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
-| `fe-claim-010.denominator` | `required` | `docs/perf/e2_denominator_bundle_v1/denominator.json` | scripts/run_e2_denominator_bundle_gate.sh | The tracked denominator proves the target currently fails. |
+| `fe-claim-010.denominator` | `required` | `docs/perf/e2_denominator_bundle_v1/denominator.json` | scripts/run_e2_denominator_bundle_gate.sh | The tracked historical bundle proves the target was not met under that run; it does not satisfy the normative weighted denominator contract. |
 
 ### `claim:FE-CLAIM-016` — Mathematically explicit security decisions.
 
 - Current state: `hypothesis`; claim posture: `hypothesis`.
-- Runtime reality: Genuine Lean sources, a fail-closed proof producer, and a local successful FE-CLAIM-016 proof observation now exist, advancing beyond the promotion note; the successful artifact remains ignored and the live lane can explicitly skip when the pinned toolchain or package cache is absent.
-- User impact: Users have a real machine-checking path and honest Unavailable semantics, but no durable fresh-clone proof package yet supports observed public wording.
+- Runtime reality: Genuine Lean sources and a fail-closed proof producer exist, but the default lake build omits capability-algebra targets that fail when checked directly; the producer inventories declarations from the broader source tree, so the local Passed artifact does not soundly certify the full target set.
+- User impact: Users have a real machine-checking path and honest Unavailable semantics, but neither the local Passed observation nor a clean checkout supplies sound complete proof for the advertised target set.
 - Revalidation: owner `bd-performance-conformance-bridge-tu32j.1.2` (Lean proof-claim owner) runs `./scripts/run_execution_truth_ledger_gate.sh ci` when Lean sources, the producer schema, toolchain pin, proof artifact, CI lane, or claim scope change.
 - Fallback / kill / rollback: report the producer result as Unavailable and keep the claim at hypothesis / reject promotion on skipped toolchains, fixture-only artifacts, untracked results, scope mismatch, stale hashes, or failed independent replay / restore hypothesis rationale and retain both the last valid and failed proof bundles.
 - Limitations:
-  - The successful July proof artifact is Git-untracked and therefore not independently reproducible from a clean checkout by artifact inspection alone.
+  - The July Passed artifact is Git-untracked and its theorem inventory is not bound to the exact successfully checked target set.
   - The live E2E records a skip rather than a pass when lake, lean, or the mathlib cache is absent.
-  - The claim is broad while the current Lean corpus proves specific IFC and capability-algebra properties.
+  - The capability-algebra targets are outside the default lake build and fail when checked directly.
 - Downstream decisions:
-  - Keep FE-CLAIM-016 at hypothesis until a tracked proof bundle, pinned toolchain result, scope statement, and independent recheck are available.
-  - Update the stale promotion rationale to acknowledge the real producer and local successful run without overstating portability.
+  - Keep FE-CLAIM-016 at hypothesis until every claim-relevant target checks and the emitted inventory is bound to that exact successful target set.
+  - Require a tracked bundle, pinned toolchain result, explicit scope statement, and independent recheck before promotion.
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
 | `fe-claim-016.dw-live-contract` | `required` | `scripts/run_dw_proof_spine.sh:1-31` | scripts/run_dw_proof_spine.sh | The capstone distinguishes real-tool success, explicit unavailability, fixtures, and deferred claims. |
-| `fe-claim-016.local-proof` | `local_optional` | `artifacts/dw_proof_spine/20260710T090949Z/proof_spine_e2e/FE-CLAIM-016.proof.json` | franken_lean_proof_producer over proofs/lean4 | The local artifact records a real Passed checker result but is explicitly non-portable evidence. |
-| `fe-claim-016.stale-promotion-note` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:59-66` | FE-CLAIM-016..021 promotion decision | The governance note predates the producer and local successful proof run. |
+| `fe-claim-016.local-proof` | `local_optional` | `artifacts/dw_proof_spine/20260710T090949Z/proof_spine_e2e/FE-CLAIM-016.proof.json` | franken_lean_proof_producer over proofs/lean4 | The local artifact records a real Passed checker result, but it is non-portable and does not repair the target-closure defect. |
+| `fe-claim-016.target-closure-boundary` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:52-67` | FE-CLAIM-016..021 promotion decision | The current promotion decision records the unsound target-closure boundary and keeps the broad claim at hypothesis. |
 
 ### `claim:FE-CLAIM-017` — Proof-carrying compilation contract with machine-checkable witness and isomorphism ledger.
 
@@ -297,13 +299,13 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
-| `fe-claim-017.promotion-record` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:68-90` | FE-CLAIM-016..021 promotion gate | The checked-in promotion decision preserves the missing-witness boundary. |
+| `fe-claim-017.promotion-record` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:69-77` | FE-CLAIM-016..021 promotion gate | The checked-in promotion decision preserves the missing-witness boundary. |
 
 ### `claim:FE-CLAIM-018` — Policy evaluation with formal semantics and mathematically explicit merge operators with proofs.
 
 - Current state: `hypothesis`; claim posture: `hypothesis`.
-- Runtime reality: PolicyTheoremEngine now defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; the claim matrix and promotion decision still describe the removed string-only implementation.
-- User impact: Users receive materially stronger theorem checking and counterexample behavior than governance prose reports, while the broad formal-semantics claim remains conservatively unpromoted.
+- Runtime reality: PolicyTheoremEngine defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; no qualifying current bundle is present.
+- User impact: Users receive real fail-closed theorem checking and counterexample behavior, while the broad formal-semantics claim remains conservatively unpromoted without a durable proof bundle.
 - Revalidation: owner `bd-performance-conformance-bridge-tu32j.1.2` (formal policy-semantics claim owner) runs `./scripts/run_execution_truth_ledger_gate.sh ci` when policy theorem formulas, default axioms, solver routing, proof emission, or the claim domain changes.
 - Fallback / kill / rollback: use structural checks only as diagnostics and keep the claim at hypothesis / reject promotion on absent Z3 provenance, unsupported backend, unknown or sat result, axiom-scope mismatch, or missing independent replay / restore the last fail-closed solver configuration and hypothesis wording; retain counterexamples.
 - Limitations:
@@ -311,33 +313,33 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
   - The engine-grounded default axioms establish a specific modeled domain, not every policy language or merge operator implied by the broad claim.
   - Explicit Internal, CVC5, and Yices selections use structural fallback and cannot contribute a proof bundle.
 - Downstream decisions:
-  - Correct the implementation rationale but keep FE-CLAIM-018 at hypothesis.
+  - Keep FE-CLAIM-018 at hypothesis until a qualifying current proof bundle is independently rechecked.
   - Require an explicit theorem domain, tracked Z3 proof bundle, producer version, and independent replay before promotion.
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
 | `fe-claim-018.current-z3` | `required` | `crates/franken-engine/src/policy_theorem_engine.rs:474-548` | PolicyTheoremEngine::verify_single_theorem | The current default path invokes Z3 and separates structural fallback from real proof evidence. |
-| `fe-claim-018.stale-promotion-note` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:77-83` | FE-CLAIM-016..021 promotion decision | The checked-in rationale describes the superseded pre-Z3 implementation. |
+| `fe-claim-018.promotion-boundary` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:79-85` | FE-CLAIM-016..021 promotion decision | The current decision recognizes the real Z3 path but refuses promotion without a qualifying live bundle. |
 
 ### `claim:FE-CLAIM-019` — Mathematically equivalent fast paths behind isomorphism proof notes.
 
 - Current state: `hypothesis`; claim posture: `hypothesis`.
-- Runtime reality: The current optimizer proof router is no longer the unconditional-Verified stub described by the claim matrix and promotion note: it invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no fresh FE-CLAIM-019 proof bundle justifies promotion.
-- User impact: Users receive stronger fail-closed optimizer validation than the matrix reason reports, while public wording remains conservatively at hypothesis.
+- Runtime reality: The optimizer proof router invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no qualifying non-fixture full-optimization proof bundle justifies promotion.
+- User impact: Users receive fail-closed optimizer validation, while bounded checks and absent durable proof evidence keep public equivalence wording at hypothesis.
 - Revalidation: owner `bd-performance-conformance-bridge-tu32j.1.2` (optimization proof-claim owner) runs `./scripts/run_execution_truth_ledger_gate.sh ci` when the optimizer verifier, Z3 integration, proof bundle, or matrix rationale changes.
 - Fallback / kill / rollback: disable the fast path or use the spec-exact baseline path / reject promotion or fast-path activation on missing domain proof, unsupported syntax, sample absence, or verifier failure / restore hypothesis wording and baseline execution while preserving failed proof artifacts.
 - Limitations:
-  - The claim matrix and promotion decision contain stale implementation rationale.
+  - The current promotion decision records implementation machinery without a qualifying proof artifact.
   - Bounded samples do not establish general mathematical equivalence.
   - No fresh non-fixture claim proof and independent recheck bundle exists.
 - Downstream decisions:
-  - Correct stale rationale under BRIDGE-00.2 without promoting the claim.
+  - Keep FE-CLAIM-019 at hypothesis until a qualifying non-fixture proof bundle is independently rechecked.
   - Require explicit proof scope, samples or theorem domain, proof emission, and independent recheck before observed wording.
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
-| `fe-claim-019.current-verifier` | `required` | `crates/franken-engine/src/optimization_proof_carriers.rs:619-669` | OptimizationProofCarrier::verify_single_proof | The current implementation has advanced beyond the rationale recorded in the matrix. |
-| `fe-claim-019.stale-promotion-note` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:68-90` | FE-CLAIM-016..021 promotion decision | The governance note still describes the superseded unconditional verifier. |
+| `fe-claim-019.current-verifier` | `required` | `crates/franken-engine/src/optimization_proof_carriers.rs:619-669` | OptimizationProofCarrier::verify_single_proof | The current implementation provides fail-closed verification machinery, while the matrix correctly withholds the broader equivalence claim without a qualifying bundle. |
+| `fe-claim-019.promotion-boundary` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:87-93` | FE-CLAIM-016..021 promotion decision | The current decision records the fail-closed verification paths and the missing qualifying full-optimization bundle. |
 
 ### `claim:FE-CLAIM-020` — Theorem-backed compiler for high-assurance policy governance.
 
@@ -351,19 +353,19 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
   - Current generated optimization obligations remain outside the bounded executable or SMT-LIB domain in important paths.
   - No fresh FE-CLAIM-020 proof artifact is present for independent promotion recheck.
 - Downstream decisions:
-  - Keep FE-CLAIM-020 at hypothesis and correct the obsolete simulated-by-composition rationale.
+  - Keep FE-CLAIM-020 at hypothesis until a qualifying bundle composes the prerequisite proof lanes end to end.
   - Treat obligation-generator support and complete optimization coverage as promotion prerequisites, not just verifier availability.
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
 | `fe-claim-020.current-emitter` | `required` | `crates/franken-engine/src/optimization_proof_carriers.rs:783-838` | OptimizationProofCarrier::emit_fe_claim_019_020_proof_bundles | The proof emitter refuses empty or not-fully-verified optimization evidence. |
 | `fe-claim-020.generated-gap` | `required` | `crates/franken-engine/src/optimization_proof_carriers.rs:1862-1939` | optimization_proof_carriers::tests::proof_certificate_generation | The regression test explicitly proves unsupported generated obligations fail closed instead of yielding claim evidence. |
-| `fe-claim-020.stale-promotion-note` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:91-98` | FE-CLAIM-016..021 promotion decision | The posture remains conservative, but its implementation rationale predates the fail-closed verifier and emitter. |
+| `fe-claim-020.promotion-boundary` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:95-103` | FE-CLAIM-016..021 promotion decision | The current decision records that no bundle composes the prerequisite lanes into an end-to-end compiler proof. |
 
 ### `claim:FE-CLAIM-021` — Policy Theorem Engine with theorem checks for monotonic safety constraints.
 
 - Current state: `hypothesis`; claim posture: `hypothesis`.
-- Runtime reality: The theorem engine now drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; the checked-in rationale still says no solver is invoked.
+- Runtime reality: The theorem engine drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; no qualifying current FE-CLAIM-021 bundle is present.
 - User impact: Users gain a real fail-closed monotonicity, non-interference, and attenuation verification substrate, but cannot yet rely on a tracked, broadly scoped theorem package as a released runtime guarantee.
 - Revalidation: owner `bd-performance-conformance-bridge-tu32j.1.2` (policy theorem-engine claim owner) runs `./scripts/run_execution_truth_ledger_gate.sh ci` when the theorem inventory, axioms, solver routing, cache provenance, proof emission, or public scope changes.
 - Fallback / kill / rollback: return Unknown or retain structural diagnostics without emitting a proof bundle / reject promotion on missing solver provenance, sat or unknown results, theorem or axiom scope drift, stale artifacts, or failed replay / restore hypothesis wording and the last fail-closed theorem configuration while retaining counterexamples.
@@ -372,13 +374,13 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
   - The modeled theorems and default axioms cover a bounded engine-specific domain.
   - Solver availability and exact version remain environmental unless captured in a durable proof bundle.
 - Downstream decisions:
-  - Keep FE-CLAIM-021 at hypothesis while correcting the stale no-solver rationale.
+  - Keep FE-CLAIM-021 at hypothesis until a qualifying current proof bundle is independently rechecked.
   - Require tracked solver provenance, theorem inventory, axiom scope, counterexample behavior, and independent replay before promotion.
 
 | Proof | Availability | Location | Caller | Interpretation |
 |---|---|---|---|---|
 | `fe-claim-021.current-z3-emission` | `required` | `crates/franken-engine/src/policy_theorem_engine.rs:611-731` | PolicyTheoremEngine::verify_with_z3 and emit_proof_bundles | Only real Z3-proven cache entries can reach claim proof emission. |
-| `fe-claim-021.stale-promotion-note` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:77-83` | FE-CLAIM-016..021 promotion decision | The governance note still describes the removed string-only default. |
+| `fe-claim-021.promotion-boundary` | `required` | `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md:79-85` | FE-CLAIM-016..021 promotion decision | The current decision recognizes the real Z3 path and refuses promotion without a qualifying live bundle. |
 
 ### `claim:FE-CLAIM-025` — Reflexive claim-evidence integrity: the integrity gate is itself a gated claim, its verdict is committed in a Merkle ledger, and a no-mock drill demonstrates it cannot be satisfied by fixtures.
 
@@ -451,7 +453,7 @@ The evidence classes are facets, not a maturity ladder. A surface can be executa
 | `TRUTH-002` | `critical` | `open` | `95` / `100` | XL: image format, lowering, loader, content-addressed cache, invalidation, and safe fallback | `bead:bd-1lsy.7.10`, `bead:bd-w2dov` | `native-capsule-architecture` via `bd-performance-conformance-bridge-tu32j.6.1` | The closed AOT lane emits input identities and synthetic timing, not executable image bytes. Score rationale: A real executable image and loader are required for cold-start specialization and for any AOT wording to be defensible. |
 | `TRUTH-003` | `critical` | `open` | `95` / `100` | M: lossless metadata model, include preload, flag semantics, negative expectations, and async completion | `bead:bd-6a61n.1.8`, `claim:FE-CLAIM-TEST262` | `test262-metadata-model` via `bd-performance-conformance-bridge-tu32j.13.1` | Test262 includes and other normative metadata are parsed then discarded before native evaluation. Score rationale: Lossless metadata and harness preloads are the cheapest credible multiplier on the measured conformance pass rate. |
 | `TRUTH-004` | `major` | `open` | `70` / `95` | S: reconcile profile wording, regenerate the coverage bundle, and ratchet the contradiction check | `claim:FE-CLAIM-026`, `claim:FE-CLAIM-TEST262` | `claim-language` via `bd-performance-conformance-bridge-tu32j.1.2` | The coverage summary contradicts itself about whether the stricter harness preloads Test262 includes. Score rationale: The correction is small but prevents execution coverage from being mistaken for conformance and protects the campaign denominator. |
-| `TRUTH-005` | `major` | `open` | `65` / `75` | L: tracked complete proof bundles, supported generator coverage, promotion rules, and independent replay | `bead:bd-cixqu.7.17`, `claim:FE-CLAIM-016`, `claim:FE-CLAIM-017`, `claim:FE-CLAIM-018`, `claim:FE-CLAIM-019`, `claim:FE-CLAIM-020`, `claim:FE-CLAIM-021` | `claim-language` via `bd-performance-conformance-bridge-tu32j.1.2` | The closed Track-G replacement bead delivered real Lean, Z3, bounded-sample, and proof-emitter paths, so the FE-CLAIM-016 through FE-CLAIM-021 matrix and promotion rationales are stale; the claims should remain hypotheses because tracked complete proof bundles, supported generator coverage, and independent rechecks are still missing. Score rationale: This has high claim-integrity value but is less immediate than the execution-tier and conformance blockers. |
+| `TRUTH-005` | `major` | `open` | `65` / `75` | L: tracked complete proof bundles, supported generator coverage, promotion rules, and independent replay | `bead:bd-cixqu.7.17`, `claim:FE-CLAIM-016`, `claim:FE-CLAIM-017`, `claim:FE-CLAIM-018`, `claim:FE-CLAIM-019`, `claim:FE-CLAIM-020`, `claim:FE-CLAIM-021` | `claim-integrity-evidence` via `bd-performance-conformance-bridge-tu32j.1.2` | The closed Track-G replacement bead delivered real Lean, Z3, bounded-sample, and proof-emitter paths, and the matrix now records those paths accurately; FE-CLAIM-016 through FE-CLAIM-021 must remain hypotheses because complete target coverage, supported generator coverage, tracked proof bundles, and independent rechecks are still missing. Score rationale: Completing and independently rechecking the missing proof bundles has high claim-integrity value but is less immediate than the execution-tier and conformance blockers. |
 | `TRUTH-006` | `major` | `open` | `85` / `100` | M: tracked raw samples, pinned comparators, reproducible runner, and clean-clone verification | `bead:bd-o4cbn`, `claim:FE-CLAIM-009` | `performance-evidence` via `bd-performance-conformance-bridge-tu32j.3.1` | The May performance pass is a real local observation, but its artifact tree is ignored and unavailable to fresh-clone verifiers. Score rationale: Every optimization decision needs a durable, clean-clone baseline or apparent wins can be comparator and artifact drift. |
 | `TRUTH-007` | `major` | `open` | `80` / `95` | L: canonical-lane decision, compatibility alias retirement, parity gates, and module graduation | `bead:bd-1lsy.7.3`, `claim:FE-CLAIM-001` | `runtime-ownership` via `bd-performance-conformance-bridge-tu32j.2.1` | QuickJS and V8 lane names identify two configurations of one native interpreter, not distinct execution engines or optimized tiers. Score rationale: Canonical lane ownership removes misleading architecture signals and reduces the dual-lane tax on every semantic and performance fix. |
 | `TRUTH-008` | `major` | `open` | `90` / `100` | S: workflow wiring, branch-protection requirement, failure artifacts, and retention policy | `claim:FE-CLAIM-009`, `claim:FE-CLAIM-025` | `claim-integrity-ci` via `bd-performance-conformance-bridge-tu32j.1.2` | The claim-to-proof matrix gate and claim-evidence integrity capstone exist and check real tracked state but are absent from all current GitHub workflows. Score rationale: This is a small integration change with disproportionate leverage against silent claim and evidence regression. |

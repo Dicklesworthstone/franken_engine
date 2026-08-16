@@ -38,7 +38,7 @@ pub const OWNING_BEAD: &str = "bd-performance-conformance-bridge-tu32j.22.1.1";
 pub const BRIDGE_ROOT: &str = "bd-performance-conformance-bridge-tu32j";
 pub const CONTRACT_PATH: &str = "docs/verification_coverage_contract_v1.json";
 pub const RENDERED_MARKDOWN_PATH: &str = "docs/VERIFICATION_COVERAGE_CONTRACT_V1.md";
-pub const SOURCE_CUTOFF_UTC: &str = "2026-07-24T15:17:53Z";
+pub const SOURCE_CUTOFF_UTC: &str = "2026-08-16T08:59:15Z";
 pub const MAX_AGE_DAYS: u64 = 14;
 pub const TIER_R_IMPLEMENTATION_TRUTH: &str = "franken-core executes its own parser, lowering pipeline, and InterpreterCore as a real provisional reference lane; zero module families are formally graduated, so this evidence is parity-visible rather than certified Tier-R parity.";
 pub const TIER_R_PROBE_CASES: &[(&str, &str, &str)] = &[
@@ -663,7 +663,9 @@ struct ClaimMatrix {
     schema_version: String,
     claims: Vec<LiveClaim>,
     freshness_eprocess_policy: FreshnessEprocessPolicy,
+    freshness_tier_policy: FreshnessTierPolicy,
     generated_by: String,
+    max_authored_freshness_days: u64,
     max_observed_freshness_days: u64,
     owning_bead: String,
     performance_evidence_policy: PerformanceEvidencePolicy,
@@ -679,6 +681,22 @@ struct FreshnessEprocessPolicy {
     method: String,
     note: String,
     owning_bead: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FreshnessTierPolicy {
+    adr: String,
+    note: String,
+    owning_bead: String,
+    tiers: BTreeMap<String, FreshnessTier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FreshnessTier {
+    applies_to: String,
+    days: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -977,10 +995,54 @@ fn load_claim_matrix(repo_root: &Path) -> Result<ClaimMatrix, String> {
     let bytes = read_bounded_regular_file(&path, MAX_CONTRACT_BYTES)?;
     let mut matrix: ClaimMatrix = serde_json::from_slice(&bytes)
         .map_err(|error| format!("{ERROR_JSON}: parse {}: {error}", path.display()))?;
+    validate_claim_matrix_freshness_policy(&matrix)?;
     matrix
         .claims
         .sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
     Ok(matrix)
+}
+
+fn validate_claim_matrix_freshness_policy(matrix: &ClaimMatrix) -> Result<(), String> {
+    let policy = &matrix.freshness_tier_policy;
+    if matrix.max_observed_freshness_days == 0
+        || matrix.max_authored_freshness_days == 0
+        || matrix.max_observed_freshness_days > matrix.max_authored_freshness_days
+    {
+        return Err(format!(
+            "{ERROR_SCHEMA}: claim-matrix freshness bounds must be positive and ordered: observed={} authored={}",
+            matrix.max_observed_freshness_days, matrix.max_authored_freshness_days
+        ));
+    }
+    if policy.adr.trim().is_empty()
+        || policy.note.trim().is_empty()
+        || policy.owning_bead.trim().is_empty()
+        || policy.tiers.is_empty()
+    {
+        return Err(format!(
+            "{ERROR_SCHEMA}: claim-matrix freshness tier policy requires an ADR, note, owner, and at least one tier"
+        ));
+    }
+
+    let mut largest_tier_days = 0;
+    for (tier_name, tier) in &policy.tiers {
+        if tier_name.trim().is_empty()
+            || tier.applies_to.trim().is_empty()
+            || tier.days == 0
+            || tier.days > matrix.max_authored_freshness_days
+        {
+            return Err(format!(
+                "{ERROR_SCHEMA}: claim-matrix freshness tier `{tier_name}` must have a non-empty scope and a positive window no larger than max_authored_freshness_days"
+            ));
+        }
+        largest_tier_days = largest_tier_days.max(tier.days);
+    }
+    if largest_tier_days != matrix.max_authored_freshness_days {
+        return Err(format!(
+            "{ERROR_SCHEMA}: max_authored_freshness_days={} must equal the largest declared tier window={largest_tier_days}",
+            matrix.max_authored_freshness_days
+        ));
+    }
+    Ok(())
 }
 
 fn build_authority_sources(
@@ -3346,24 +3408,13 @@ fn validate_families(contract: &VerificationCoverageContract, validator: &mut Va
                 )
             })
         };
-        let hashes = family
-            .members
-            .iter()
-            .filter_map(|member| {
-                member
-                    .sha256
-                    .as_ref()
-                    .map(|hash| (member.path.clone(), hash.clone()))
-            })
-            .take(MAX_ARTIFACT_HASHES_PER_EVENT)
-            .collect();
         validator.check(
             "harness.family",
             None,
             Some(&family.family_id),
             outcome,
             started,
-            hashes,
+            BTreeMap::new(),
         );
     }
 }
@@ -4078,10 +4129,7 @@ fn validate_markdown(contract: &VerificationCoverageContract, validator: &mut Va
         None,
         outcome,
         started,
-        BTreeMap::from([(
-            "expected_markdown".to_string(),
-            sha256_hex(expected.as_bytes()),
-        )]),
+        BTreeMap::new(),
     );
 }
 

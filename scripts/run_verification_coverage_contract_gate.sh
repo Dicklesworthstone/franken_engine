@@ -178,6 +178,7 @@ phase_sequence=0
 first_failure_phase=""
 first_failure_code=""
 declare -a recorded_commands=()
+admitted_worker=""
 
 sha256_file() {
   sha256sum "$1" | awk '{print $1}'
@@ -377,9 +378,11 @@ record_command "$source_identity_command"
 run_rch() {
   local cargo_target_dir="$1"
   shift
+  [[ -n "$admitted_worker" ]] || return 84
   env -u CARGO_ENCODED_RUSTFLAGS -u RCH_MOCK_SSH -u RCH_TEST_MODE \
     RCH_REQUIRE_REMOTE=1 \
     RCH_NO_SELF_HEALING=1 \
+    RCH_WORKER="$admitted_worker" \
     RCH_BUILD_TIMEOUT_SEC="$rch_timeout_seconds" \
     RCH_TEST_TIMEOUT_SEC="$rch_timeout_seconds" \
     RUSTUP_TOOLCHAIN="$toolchain" \
@@ -387,7 +390,8 @@ run_rch() {
     CARGO_INCREMENTAL=0 \
     RUSTFLAGS="-C linker=cc -Clinker-features=-lld" \
     timeout "$rch_timeout_seconds" \
-    "$rch_bin" --no-self-healing exec -- "$@"
+    "$rch_bin" --no-self-healing exec -- \
+    env RUSTUP_TOOLCHAIN="$toolchain" RCH_WORKER_ID="$admitted_worker" "$@"
 }
 
 rch_command_text() {
@@ -397,6 +401,7 @@ rch_command_text() {
     env -u CARGO_ENCODED_RUSTFLAGS -u RCH_MOCK_SSH -u RCH_TEST_MODE \
     RCH_REQUIRE_REMOTE=1 \
     RCH_NO_SELF_HEALING=1 \
+    "RCH_WORKER=${admitted_worker}" \
     "RCH_BUILD_TIMEOUT_SEC=${rch_timeout_seconds}" \
     "RCH_TEST_TIMEOUT_SEC=${rch_timeout_seconds}" \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
@@ -404,7 +409,8 @@ rch_command_text() {
     CARGO_INCREMENTAL=0 \
     "RUSTFLAGS=-C linker=cc -Clinker-features=-lld" \
     timeout "$rch_timeout_seconds" \
-    "$rch_bin" --no-self-healing exec -- "$@"
+    "$rch_bin" --no-self-healing exec -- \
+    env "RUSTUP_TOOLCHAIN=${toolchain}" "RCH_WORKER_ID=${admitted_worker}" "$@"
 }
 
 rch_diagnose_command_text() {
@@ -476,6 +482,7 @@ run_rch_admission_phase() {
   fi
   selected_worker="$(jq -r '.data.worker_selection.worker.id' \
     "${run_dir}/${report_name}")"
+  admitted_worker="$selected_worker"
   append_phase "$phase" "pass" 0 "$duration_ms" \
     "RCH admission selected eligible worker ${selected_worker}; this is advisory admission evidence, not an execution-completion receipt" \
     "$report_name" "$stderr_name"
@@ -511,6 +518,10 @@ run_rch_phase() {
     "${run_dir}/${stdout_name}" "${run_dir}/${stderr_name}"; then
     status=87
   fi
+  if ! grep -Fq "Selected worker: ${admitted_worker} at " \
+    "${run_dir}/${stdout_name}" "${run_dir}/${stderr_name}"; then
+    status=88
+  fi
   if [[ "$status" -ne 0 ]]; then
     append_phase "$phase" "fail" "$status" "$duration_ms" \
       "RCH coordinator command exited ${status}; local fallback is forbidden" \
@@ -542,6 +553,8 @@ else
     "RCH did not admit the locked build to an eligible worker; inspect the retained typed diagnostic" \
     "$build_diagnose" "$build_diagnose_stderr"
 fi
+build_worker="$admitted_worker"
+build_worker_sha="$(printf '%s' "$build_worker" | sha256sum | awk '{print $1}')"
 if run_rch_phase "tool.build" "$build_stdout" "$build_stderr" \
   "$build_target_dir" "${build_argv[@]}"; then
   :
@@ -778,6 +791,14 @@ if ! cmp -s \
     | .events |= map(
         .duration_ns = 0
         | .resource_delta.wall_time_ns = 0
+        | if .phase == "contract.freshness"
+            and .reason_code == "FE-VCC-0000"
+          then .reason |= sub(
+            "^source cutoff is [0-9]+ seconds";
+            "source cutoff is <normalized> seconds"
+          )
+          else .
+          end
       )
   ' "${run_dir}/reproduction.stdout.log") \
   <(jq -S '
@@ -785,6 +806,14 @@ if ! cmp -s \
     | .events |= map(
         .duration_ns = 0
         | .resource_delta.wall_time_ns = 0
+        | if .phase == "contract.freshness"
+            and .reason_code == "FE-VCC-0000"
+          then .reason |= sub(
+            "^source cutoff is [0-9]+ seconds";
+            "source cutoff is <normalized> seconds"
+          )
+          else .
+          end
       )
   ' "${run_dir}/replay.stdout.log"); then
   fail_gate "contract.replay.drift" 95 \
@@ -792,7 +821,7 @@ if ! cmp -s \
     "replay.stdout.log" "replay.stderr.log"
 fi
 append_phase "contract.replay.drift" "pass" 0 0 \
-  "independent replay matched after normalizing only clock and measured duration fields"
+  "independent replay matched after normalizing witnessed clock-derived age and measured duration fields"
 
 tier_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 tier_argv=(
@@ -867,19 +896,24 @@ jq -se --arg digest "$probe_executable_sha" \
 if ! jq -e \
   --arg source_manifest_sha "$tier_source_manifest_sha" \
   --arg target "$target" \
+  --arg requested_toolchain "$toolchain" \
+  --arg builder_identity_sha "$build_worker_sha" \
   '
     .schema_version == "franken-engine.tier-r-build-environment.v1"
     and .source_manifest_sha256 == $source_manifest_sha
     and .target == $target
     and .profile == "release"
     and .opt_level == "3"
+    and (
+      .requested_toolchain == $requested_toolchain
+      or (.requested_toolchain | startswith($requested_toolchain + "-"))
+    )
     and (.active_features | index("CARGO_FEATURE_TIER_R_PROBE") != null)
-    and (.builder_identity_source
-      | IN("RCH_WORKER_ID", "RCH_WORKER", "HOSTNAME"))
-    and (.builder_identity_sha256 | type == "string" and length == 64)
+    and .builder_identity_source == "RCH_WORKER_ID"
+    and .builder_identity_sha256 == $builder_identity_sha
   ' "${run_dir}/tier_r_build_environment.json" >/dev/null; then
   fail_gate "tier_r.build_environment" 97 \
-    "Tier-R build environment does not bind the source closure, target, release profile, feature, or builder identity"
+    "Tier-R build environment does not bind the source closure, target, release profile, toolchain, feature, or admitted builder identity"
 fi
 append_phase "tier_r.executable_binding" "pass" 0 0 \
   "probe output binds the retained executable, canonical source manifest, embedded build environment, and a real capability denial"

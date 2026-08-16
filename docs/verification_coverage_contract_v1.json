@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.verification-coverage-contract.v1",
   "contract_id": "franken-engine-performance-conformance-bridge-verification-v1",
   "owning_bead": "bd-performance-conformance-bridge-tu32j.22.1.1",
-  "source_cutoff_utc": "2026-07-24T15:17:53Z",
+  "source_cutoff_utc": "2026-08-16T08:59:15Z",
   "max_age_days": 14,
   "rendered_markdown_path": "docs/VERIFICATION_COVERAGE_CONTRACT_V1.md",
   "purpose": "Map every bridge task and public claim to exact verification obligations without treating a filename, wildcard command, mock, historical closure, or target statement as current production proof.",
@@ -11,22 +11,22 @@
     {
       "authority_id": "bridge-requirement-identity",
       "path": ".beads/issues.jsonl",
-      "selector": "all 433 bridge issue id/title/type/description/acceptance/label/dependency requirements; mutable status and assignee are validated separately",
-      "projection_sha256": "6fcae889765b046fd117d337e90787dd2a64ac46c999429e86d11db7cb3aa685",
+      "selector": "all 466 bridge issue id/title/type/description/acceptance/label/dependency requirements; mutable status and assignee are validated separately",
+      "projection_sha256": "f838a1eac7972b2908334b5f47ad6f38ae5d7a98cfc37cd6bf58857a692b9962",
       "purpose": "Exact bridge scope and closure contract; wildcard selectors and title-only authority are forbidden."
     },
     {
       "authority_id": "claim-matrix",
       "path": "docs/claim_to_proof_matrix_v1.json",
       "selector": "complete typed claim matrix, with claim rows sorted by claim_id",
-      "projection_sha256": "e3dc27d99f6dc234ce26360342ba527c279593d47d791f409643958c5b5c0f1b",
+      "projection_sha256": "6584b36482cdaec6e73c6df07853bf53d4a40df96d8e97db69ed27b133c12cf3",
       "purpose": "Exact public claim scope, current posture, state ordering, freshness policy, and performance-evidence policy."
     },
     {
       "authority_id": "bridge-plan-section-18",
       "path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "selector": "Section 18 through the next level-2 heading or EOF",
-      "projection_sha256": "8ac0bb3fc75a51fb9e8c22e47d70dca37b2bc9f76d9a17963da2ebbd729d64d0",
+      "projection_sha256": "bd98aca761b12acadef96ecdcc2c2ae9a7aa77eda2fdc6eac2ddac9835756540",
       "purpose": "Normative performance, conformance, Tier-R, security, evidence, and verification obligations."
     },
     {
@@ -181,8 +181,13 @@
         },
         {
           "path": ".github/workflows/dist.yml",
-          "sha256": "ee464a86710aab888190e034fd7d7d030de5932c5f041105a9be1347910ffff8",
-          "bytes": 3634
+          "sha256": "231475924f9c437b8504ec668748d860f1a0d1cd26d279cf7340591e72ca14ff",
+          "bytes": 3629
+        },
+        {
+          "path": ".github/workflows/evidence_refresh.yml",
+          "sha256": "6759ece80f77c4b1856e386b1542f4fab018f7845079b6b79b17b096e5d16b03",
+          "bytes": 4431
         },
         {
           "path": ".github/workflows/perf_regression_gate.yml",
@@ -191,8 +196,8 @@
         },
         {
           "path": ".github/workflows/quality-gates.yml",
-          "sha256": "4ceb875feed5de8b0494a5b905e8f543a0a69ed74af8066d40e699fea60897b7",
-          "bytes": 1555
+          "sha256": "4a5916a01667401907b159e22eb170193ec6f69a71f5b3221e4786a597785362",
+          "bytes": 5664
         },
         {
           "path": ".github/workflows/version_matrix_conformance.yml",
@@ -200,7 +205,7 @@
           "bytes": 2450
         }
       ],
-      "inventory_sha256": "741c7d6b554174b4f035b552377b3c2aa428be3cd0a50a3d6b3f36c31cda8c6d",
+      "inventory_sha256": "6cce31cfbc9d55dd42512bad360b57524ea2aaac0b1818fef8bafcbd339f1fdb",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "Current workflows omit the claim-matrix and new verification-coverage gates.",
@@ -305,6 +310,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/fuzz/fuzz_targets/swar_scalar_boundary_differential.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-extension-host/fuzz/fuzz_targets/decision_signing_key_byte_import.rs",
           "sha256": null,
           "bytes": 0
@@ -325,7 +335,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "149c91b93d4e54697542e5d34f7de1333550d2183e1f04c55e029e0c1d9930e1",
+      "inventory_sha256": "1bcd2d34c6105de8fa6ed309dd55ca2973089befe8050fcce2ab54a5f4a1f731",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "The active script enumerates only a subset of discovered fuzz targets.",
@@ -356,16 +366,16 @@
       "members": [
         {
           "path": "docs/claim_to_proof_matrix_v1.json",
-          "sha256": "895200c4a7b8f52ca6f6f274b57db99665b3ea3cae9bde4d51d6622403dd153c",
-          "bytes": 38634
+          "sha256": "6cc2dec8461f1da3c03c732b3202f796e2cb59684b92597eb45963d7677ecc2a",
+          "bytes": 43044
         },
         {
           "path": "scripts/run_claim_to_proof_matrix_gate.sh",
-          "sha256": "65a3a8fec3245da733633f61bed5109a0ddd06b44caefe2d9f6a6dbaa5c53c96",
-          "bytes": 27856
+          "sha256": "b20841952108d7bd70d061c8f43d289f2837efb9f954b33d7fd7fa6f60e41fdd",
+          "bytes": 38675
         }
       ],
-      "inventory_sha256": "1954a6d5343d7cf592f4f143b15bb30caae767e528aba72b3b871a89f8531e67",
+      "inventory_sha256": "a1028b6bc3d960155981e9c79f2aaa5e9cefe72d40b3537c03577dc79066ce28",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "The gate is not wired into current CI workflows.",
@@ -423,7 +433,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "b6fee900f1fdc013505eccc7652c8deaabd17846236bfc3c6368e468714f4eea",
+      "inventory_sha256": "7bc6633ab4b7988d1b983df00652fcc2311241a2e4b12393295c6093b0790a1b",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "Criterion success does not establish benchmark fairness, equivalent Node/Bun work, production profiles, or a 30-process claim sample.",
@@ -692,6 +702,11 @@
         },
         {
           "path": "crates/franken-engine/src/bin/franken_execution_truth_ledger.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/src/bin/franken_intl_surface_contract.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -1827,6 +1842,11 @@
         },
         {
           "path": "crates/franken-engine/src/interleaving_explorer.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/src/intl_surface_contract.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -3576,7 +3596,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "e50837f9b7d43423743a427f025aed5d53e130b7c366bfe858ecf07329445739",
+      "inventory_sha256": "6dfed07228ed8e84fb5892beb60762770cc5f8d06b94806063ccf5bacaa6197d",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "A passing library suite does not prove a shipped CLI/runtime branch, required profile, or artifact contract.",
@@ -5429,6 +5449,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/delete_realm_global_bd_74yvt_regression.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/demo_claim_linkage_gate_enrichment_integration.rs",
           "sha256": null,
           "bytes": 0
@@ -5550,6 +5575,11 @@
         },
         {
           "path": "crates/franken-engine/tests/differential_oracle_perf_integration.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/differential_oracle_process_containment.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -7140,6 +7170,11 @@
         },
         {
           "path": "crates/franken-engine/tests/interleaving_explorer_integration.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/intl_surface_contract_integration.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -8935,6 +8970,11 @@
         },
         {
           "path": "crates/franken-engine/tests/promise_pending_state.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/promise_resolve_thenable_bd_iio0f_regression.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -11609,6 +11649,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/unsafe_code_prohibition_gate.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/update_expression_in_function_body_regression.rs",
           "sha256": null,
           "bytes": 0
@@ -11829,7 +11874,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "bbe01fd355c78c73ccf4d7561119580fb37a02faea71718c77c98f3f5f216475",
+      "inventory_sha256": "9e8aaabd57273f1ca3b92a055868e7068468250bd4e5255c8e0597a1ba7fb444",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "The directory includes disabled, scaffold, static-contract, and production-executing tests; filename presence is not branch proof.",
@@ -11886,11 +11931,11 @@
         },
         {
           "path": "scripts/run_execution_truth_ledger_gate.sh",
-          "sha256": "c729c1063bd51a692dd408f4c4063a10f03f9a338ef049faaa5c263cf5a9a0ab",
-          "bytes": 18346
+          "sha256": "2f511e03059df6c8095646c4dc9107746c69c90f12caed6648ea8ab97bdf06e0",
+          "bytes": 25657
         }
       ],
-      "inventory_sha256": "4e099a1c45d2b2c4f2b9dcc7270cf83d7c21bc5051437dc97b38b81843f3fdbe",
+      "inventory_sha256": "0b7f4c8096f81418cb7f747f14c3bf74b3ceb95cb2d74ac8711063b2f0a28b2d",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "Its v1 event schema predates the unified tier/profile/resource/fallback fields.",
@@ -11998,7 +12043,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "adf58412c358881850a386a45680d3857a0f02b469d733f66687180e69bbddcb",
+      "inventory_sha256": "f5296848c0cf11a28db982629fa29a4686bb2adae0e3cfe870982dfe695d7258",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "The family mixes real host authority with fault doubles and must be selected by named scenario rather than wholesale.",
@@ -12318,7 +12363,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "f3fcc5a656d023d0f3efa814e1354ed1677614615aa1641e72a620b36b465b7e",
+      "inventory_sha256": "ebc02e06d159601b652c4cd6fd234adfc11dc9a66a9f4818791f64e0b66eff08",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "Zero module families are formally graduated and semantic changes are still duplicated.",
@@ -12352,6 +12397,11 @@
         },
         {
           "path": "scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "scripts/e2e/architecture_inventory_gate_drift.sh",
           "sha256": null,
           "bytes": 0
         },
@@ -12527,6 +12577,16 @@
         },
         {
           "path": "scripts/e2e/ecosystem_capture_strategy_replay.sh",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "scripts/e2e/evidence_environment_drift_precision_drill.sh",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "scripts/e2e/evidence_refresh_failure_classification_smoke.sh",
           "sha256": null,
           "bytes": 0
         },
@@ -12931,6 +12991,11 @@
           "bytes": 0
         },
         {
+          "path": "scripts/e2e/isa_path_registration_drift.sh",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "scripts/e2e/jit_loop_counter_hot_path_smoke.sh",
           "sha256": null,
           "bytes": 0
@@ -12977,6 +13042,11 @@
         },
         {
           "path": "scripts/e2e/monitor_scheduler_voi_evidence_smoke.sh",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "scripts/e2e/native_code_capsule_adr_contract_smoke.sh",
           "sha256": null,
           "bytes": 0
         },
@@ -13207,6 +13277,11 @@
         },
         {
           "path": "scripts/e2e/parser_user_impact_regression_alarms_replay.sh",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "scripts/e2e/patch_version_consistency_drift.sh",
           "sha256": null,
           "bytes": 0
         },
@@ -15011,7 +15086,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "19855d47d0d10fe82e3b1b31e09c4f14507fe4dc7caf5409bb2e262f5449ca5a",
+      "inventory_sha256": "f3f4e21c7edb826e1d17da2e691114eeba1274021d073c51568d6de26eccb2f2",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "The inventory includes static scans, replays, fixtures, mock-only drills, no-mock drills, and real public workflows; a path or success exit alone is not proof.",
@@ -15057,11 +15132,11 @@
         },
         {
           "path": "scripts/run_rgc_lockstep_oracle_pipeline.sh",
-          "sha256": "1bca17e26fed46d38470e883245cefc408fbb8a4c12b0bbf204fe8ae74121d3c",
-          "bytes": 16389
+          "sha256": "93e33438ab2ba416d4b4477ff08e3b79231df1c62169be1e87d44a881e24b94f",
+          "bytes": 17301
         }
       ],
-      "inventory_sha256": "c4c85dcd4d1d8f93a9041e86850db7f04e6218b49524ccfb62adb6fd24685d7a",
+      "inventory_sha256": "f65f8ab820a6580f5a90f54dd55569f092abcc8415ebcd197bf195fcae992446",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "The current FrankenCore differential backend has historically used an engine-shaped shim; it is not credited as an independent Tier-R oracle.",
@@ -15619,13 +15694,13 @@
         },
         {
           "path": "crates/franken-engine/src/verification_coverage_contract.rs",
-          "sha256": "9711177f83b58dad270e41ff9be00b9d2361650012d9c4ff9bac710826cde888",
-          "bytes": 295594
+          "sha256": "a7e5b307e868e2db4d4f4dad2354d4290186588bdeb7a79baef57d8516aa1dec",
+          "bytes": 297406
         },
         {
           "path": "crates/franken-engine/tests/verification_coverage_contract_integration.rs",
-          "sha256": "192ff9959a5b06ec58c9516d6af31ab850553e91c2372f1a5e3b726a0e138436",
-          "bytes": 106251
+          "sha256": "7ee126b3b2aae4aad2785c1454c76b74470c769d24ec0d2904239f174223802e",
+          "bytes": 107618
         },
         {
           "path": "scripts/e2e/verification_coverage_contract_smoke.sh",
@@ -15634,8 +15709,8 @@
         },
         {
           "path": "scripts/run_verification_coverage_contract_gate.sh",
-          "sha256": "b20087593626294e4366574fe5f947d09178a15d57569d156d7eb12219aa5bf0",
-          "bytes": 54983
+          "sha256": "d33ea62ff479c0adc5f879284311fdd25cc39cbe47c511631f41bd8ed67b23d3",
+          "bytes": 56313
         },
         {
           "path": "tools/execution-truth-ledger/Cargo.lock",
@@ -15658,7 +15733,7 @@
           "bytes": 19864
         }
       ],
-      "inventory_sha256": "aa97e170b4fc7001a85abbe7b0509f1fff8c64d5a79bbdb2af7acea6a7d0f9ce",
+      "inventory_sha256": "021f62bf73d03f6035429e7b0cba1c7bbc1f1310676133b608ef1084dc818626",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "Current certification covers the verification contract itself, not completion of future bridge implementation rows.",
@@ -16188,8 +16263,8 @@
       "subject_id": "FE-CLAIM-005",
       "subject_kind": "claim",
       "title": "Fleet immune system with quarantine and revocation propagation plus bounded convergence SLOs.",
-      "authority_state": "observed",
-      "evidence_state": "historical_unrecertified",
+      "authority_state": "target",
+      "evidence_state": "target_unproven",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.31",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.15",
@@ -16227,13 +16302,13 @@
       "current_evidence": [
         "historical declared artifact: docs/evidence/FE-CLAIM-005"
       ],
-      "gap_reason": "The public matrix says OBSERVED, but this bridge treats the prior owner, command, and artifact as historical inputs until a current independent pack reaches the claimed branch."
+      "gap_reason": "The public matrix explicitly labels this claim TARGET; a runner or artifact cannot promote it without satisfying the independent pack and claim gate."
     },
     {
       "row_id": "claim:FE-CLAIM-006",
       "subject_id": "FE-CLAIM-006",
       "subject_kind": "claim",
-      "title": "Capability-typed compile-time ambient-authority rejection on the shipped hostcall/import edges (effect-set IR2 annotation + lowering-side rejection), exercised by the 16-scenario red-team corpus and the bd-cixqu.3.4 gate. The end-to-end TS-to-IR contract over all ambient constructs is TARGETED, not observed.",
+      "title": "Capability-typed compile-time ambient-authority rejection on the shipped hostcall/import edges (effect-set IR2 annotation + lowering-side rejection), exercised by the 17-scenario red-team corpus and the bd-cixqu.3.4 gate. The end-to-end TS-to-IR contract over all ambient constructs is TARGETED, not observed.",
       "authority_state": "observed",
       "evidence_state": "historical_unrecertified",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.15",
@@ -16372,7 +16447,7 @@
       "row_id": "claim:FE-CLAIM-009",
       "subject_id": "FE-CLAIM-009",
       "subject_kind": "claim",
-      "title": "Every published performance and security claim ships with reproducible artifact bundles.",
+      "title": "When invoked, the claim-matrix gate requires an artifact and repro.lock partner for published OBSERVED performance and security rows.",
       "authority_state": "observed",
       "evidence_state": "historical_unrecertified",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.6",
@@ -16398,10 +16473,7 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "tier-r"
@@ -16473,8 +16545,8 @@
       "subject_id": "FE-CLAIM-011",
       "subject_kind": "claim",
       "title": ">= 10x reduction in successful red-team host compromise rate versus Node/Bun defaults.",
-      "authority_state": "observed",
-      "evidence_state": "historical_unrecertified",
+      "authority_state": "target",
+      "evidence_state": "target_unproven",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.15",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.15",
@@ -16515,7 +16587,7 @@
       "current_evidence": [
         "historical declared artifact: docs/evidence/FE-CLAIM-011"
       ],
-      "gap_reason": "The public matrix says OBSERVED, but this bridge treats the prior owner, command, and artifact as historical inputs until a current independent pack reaches the claimed branch."
+      "gap_reason": "The public matrix explicitly labels this claim TARGET; a runner or artifact cannot promote it without satisfying the independent pack and claim gate."
     },
     {
       "row_id": "claim:FE-CLAIM-012",
@@ -16620,8 +16692,8 @@
       "subject_id": "FE-CLAIM-014",
       "subject_kind": "claim",
       "title": "At least three production features that are impossible by default in standard Node/Bun deployments: signed IFC declassification receipts (FE-CLAIM-015), deterministic replay coverage (FE-CLAIM-013), and red-team compromise-rate reduction (FE-CLAIM-011).",
-      "authority_state": "observed",
-      "evidence_state": "historical_unrecertified",
+      "authority_state": "target",
+      "evidence_state": "target_unproven",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.6",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.15",
@@ -16662,7 +16734,7 @@
       "current_evidence": [
         "historical declared artifact: docs/evidence/FE-CLAIM-014"
       ],
-      "gap_reason": "The public matrix says OBSERVED, but this bridge treats the prior owner, command, and artifact as historical inputs until a current independent pack reaches the claimed branch."
+      "gap_reason": "The public matrix explicitly labels this claim TARGET; a runner or artifact cannot promote it without satisfying the independent pack and claim gate."
     },
     {
       "row_id": "claim:FE-CLAIM-015",
@@ -17325,6 +17397,91 @@
       "gap_reason": "The task is closed in historical tracker state, but the owning independent BRIDGE-21 pack has not recertified it under this contract."
     },
     {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.1.10",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.1.10",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-00] Recertify FE-CLAIM-016/017 from current E6 proof artifacts",
+      "authority_state": "in_progress",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.6",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.6"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_00_truth_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "full-containment",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.1.11",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.1.11",
+      "subject_kind": "bridge_task",
+      "title": "[FRESH-REALITY][DOCS] Regenerate architecture inventory after uniform lib.rs line drift",
+      "authority_state": "in_progress",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.6",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.6"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_00_truth_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "full-containment",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.1.2",
       "subject_id": "bd-performance-conformance-bridge-tu32j.1.2",
       "subject_kind": "bridge_task",
@@ -17609,6 +17766,54 @@
         "generic-macos-aarch64",
         "portable-no-jit",
         "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.1.8",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.1.8",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-00.8] Correct README structural-inventory drift, three nonexistent module references, and repo hygiene",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.6",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.6"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_00_truth_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "conformance_oracle",
+        "cross_platform",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "tier-r"
@@ -18129,10 +18334,8 @@
         "cross_platform",
         "cross_tier_deopt",
         "fault_recovery",
-        "fuzz_metamorphic",
         "golden",
         "mutation",
-        "performance_statistics",
         "production_branch_signal",
         "property",
         "public_e2e",
@@ -18146,8 +18349,6 @@
         "apple-m4-aarch64",
         "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -18363,6 +18564,110 @@
         "generic-linux-x86_64",
         "generic-macos-aarch64",
         "portable-no-jit",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "compiled-tier",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.11.6",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.11.6",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-10.6] Audit and prove memory-ordering correctness on AArch64: x86-TSO has been hiding our lock-free bugs",
+      "authority_state": "in_progress",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.16",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.16"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_10_apple_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "amd-zen5-x86_64",
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "high-core-numa-linux-x86_64",
+        "multi-process-local",
+        "two-physical-host-two-fault-domain"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.11.7",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.11.7",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-10.7] Make page size a runtime property: 16 KiB Apple pages invalidate x86-tuned allocator and code-cache granularity",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.16",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.16"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_10_apple_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -22719,6 +23024,62 @@
       "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
     },
     {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.19.10",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.19.10",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-18.10] Cross-ISA bit-identity gate for every architecture-specific path (bd-2noh9 class defects)",
+      "authority_state": "in_progress",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.24",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.24"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_18_joint_verification_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "conformance_oracle",
+        "cross_platform",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "amd-zen5-x86_64",
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "high-core-numa-linux-x86_64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-b",
+        "tier-o",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.19.2",
       "subject_id": "bd-performance-conformance-bridge-tu32j.19.2",
       "subject_kind": "bridge_task",
@@ -24207,6 +24568,8 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -24277,6 +24640,53 @@
       "current_runner_family_ids": [],
       "current_evidence": [],
       "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.20.18",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.20.18",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-19.18] Schedule evidence refresh and decide the freshness model: all 16 OBSERVED claims are currently provisional",
+      "authority_state": "closed",
+      "evidence_state": "historical_unrecertified",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.25",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.25"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_19_release_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "amd-zen5-x86_64",
+        "generic-linux-x86_64",
+        "high-core-numa-linux-x86_64",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task is closed in historical tracker state, but the owning independent BRIDGE-21 pack has not recertified it under this contract."
     },
     {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.20.2",
@@ -24765,7 +25175,6 @@
         "fuzz_metamorphic",
         "golden",
         "mutation",
-        "performance_statistics",
         "production_branch_signal",
         "property",
         "public_e2e",
@@ -24777,13 +25186,16 @@
         "unit"
       ],
       "required_platforms": [
+        "amd-zen5-x86_64",
         "generic-linux-x86_64",
         "generic-macos-aarch64",
+        "high-core-numa-linux-x86_64",
         "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
-        "compiled-tier",
+        "tier-b",
+        "tier-i",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -25084,7 +25496,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -25132,7 +25547,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -25360,7 +25778,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -25439,11 +25860,12 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.30"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/run_bridge_21_independent_review_e2e.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
         "conformance_oracle",
+        "cross_platform",
         "cross_tier_deopt",
         "fault_recovery",
         "fuzz_metamorphic",
@@ -25460,14 +25882,13 @@
         "unit"
       ],
       "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
-        "compiled-tier",
-        "tier-i",
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -27148,6 +27569,7 @@
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
+        "cross_platform",
         "cross_tier_deopt",
         "fault_recovery",
         "golden",
@@ -27163,13 +27585,15 @@
         "unit"
       ],
       "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
         "generic-macos-aarch64",
         "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
-        "tier-i",
+        "tier-o",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -28070,7 +28494,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28114,7 +28541,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28159,7 +28589,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28204,8 +28637,11 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
         "multi-process-local",
-        "two-physical-host-two-fault-domain"
+        "portable-no-jit",
+        "two-physical-host-two-fault-domain",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28301,7 +28737,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28393,7 +28832,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28484,7 +28926,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28576,7 +29021,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -28964,7 +29412,10 @@
       "required_platforms": [
         "amd-zen5-x86_64",
         "generic-linux-x86_64",
-        "high-core-numa-linux-x86_64"
+        "generic-macos-aarch64",
+        "high-core-numa-linux-x86_64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -29009,8 +29460,11 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
         "multi-process-local",
-        "two-physical-host-two-fault-domain"
+        "portable-no-jit",
+        "two-physical-host-two-fault-domain",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -29148,12 +29602,18 @@
         "public_e2e",
         "redaction",
         "replay",
+        "research_reproduction",
         "security_profiles",
         "tier_r_differential",
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "tier-r"
@@ -29852,7 +30312,7 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.23.10",
       "subject_id": "bd-performance-conformance-bridge-tu32j.23.10",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-22.10] Protect source, frontend cache, and compiler-worker confidentiality across tenants",
+      "title": "[BRIDGE-22.10] Protect source, compiler/native caches, workers, and fault artifacts across tenants",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.28",
@@ -29864,6 +30324,7 @@
         "artifact_integrity",
         "canonical_integration",
         "cross_platform",
+        "cross_tier_deopt",
         "fault_recovery",
         "golden",
         "mutation",
@@ -29879,9 +30340,7 @@
       "required_platforms": [
         "amd-zen5-x86_64",
         "generic-linux-x86_64",
-        "high-core-numa-linux-x86_64",
-        "multi-process-local",
-        "two-physical-host-two-fault-domain"
+        "high-core-numa-linux-x86_64"
       ],
       "required_tiers": [
         "tier-r"
@@ -31812,7 +32271,7 @@
       "subject_id": "bd-performance-conformance-bridge-tu32j.27.1",
       "subject_kind": "bridge_task",
       "title": "[BRIDGE-26.1] Freeze the exposed Intl and locale-sensitive compatibility surface",
-      "authority_state": "open",
+      "authority_state": "in_progress",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.27",
       "required_verification_packs": [
@@ -31850,7 +32309,7 @@
       ],
       "current_runner_family_ids": [],
       "current_evidence": [],
-      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
     },
     {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.27.2",
@@ -33278,6 +33737,56 @@
       "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
     },
     {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.4.21",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.4.21",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-03.21] Ecosystem Scan Rule: adopt-or-justify MMTk, Immix, LXR, snmalloc and mimalloc before hand-rolling collector and allocator",
+      "authority_state": "in_progress",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.9",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.9"
+      ],
+      "required_public_entrypoint": "scripts/bridge/run_bridge_03_representation_e2e.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "research_reproduction",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.4.3",
       "subject_id": "bd-performance-conformance-bridge-tu32j.4.3",
       "subject_kind": "bridge_task",
@@ -33798,6 +34307,7 @@
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
+        "cross_tier_deopt",
         "fault_recovery",
         "fuzz_metamorphic",
         "golden",
@@ -33819,6 +34329,7 @@
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
+        "tier-i",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -33989,13 +34500,13 @@
       "subject_id": "bd-performance-conformance-bridge-tu32j.6.1",
       "subject_kind": "bridge_task",
       "title": "[BRIDGE-05.1] Approve the native-code capsule ADR and repository split contract",
-      "authority_state": "open",
+      "authority_state": "in_progress",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34021,13 +34532,13 @@
         "apple-m4-aarch64",
         "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
-        "generic-macos-aarch64",
         "high-core-numa-linux-x86_64",
-        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
+        "compiled-tier",
         "tier-a",
+        "tier-i",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -34039,7 +34550,7 @@
       ],
       "current_runner_family_ids": [],
       "current_evidence": [],
-      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+      "gap_reason": "The task remains in_progress; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
     },
     {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.6.10",
@@ -34052,7 +34563,7 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34103,7 +34614,7 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34112,31 +34623,24 @@
         "fuzz_metamorphic",
         "golden",
         "mutation",
-        "performance_statistics",
         "production_branch_signal",
         "property",
         "public_e2e",
         "redaction",
         "replay",
-        "security_profiles",
         "tier_r_differential",
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "compiled-tier",
         "tier-b",
-        "tier-o",
         "tier-r"
       ],
       "required_security_profiles": [
-        "evidence-on",
         "full-containment",
-        "guardplane-on",
-        "ifc-on",
         "security-off"
       ],
       "current_runner_family_ids": [],
@@ -34154,7 +34658,7 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34169,16 +34673,15 @@
         "public_e2e",
         "redaction",
         "replay",
-        "security_profiles",
         "tier_r_differential",
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -34203,7 +34706,7 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34212,7 +34715,6 @@
         "fuzz_metamorphic",
         "golden",
         "mutation",
-        "performance_statistics",
         "production_branch_signal",
         "property",
         "public_e2e",
@@ -34223,11 +34725,11 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-b",
         "tier-i",
         "tier-r"
       ],
@@ -34253,7 +34755,7 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34262,7 +34764,6 @@
         "fuzz_metamorphic",
         "golden",
         "mutation",
-        "performance_statistics",
         "production_branch_signal",
         "property",
         "public_e2e",
@@ -34273,11 +34774,11 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-o",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -34302,7 +34803,56 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "conformance_oracle",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "compiled-tier",
+        "tier-a",
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.16",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.16",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.16] Bootstrap the audited capsule sibling, safe API, and supply-chain boundary",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34321,11 +34871,150 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.17",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.17",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.17] Freeze Native Region Protocol, RegionCodeObject, and receipt wire schemas",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "conformance_oracle",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.18",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.18",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.18] Implement Linux x86-64 executable-memory and raw-call adapter",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "amd-zen5-x86_64",
+        "generic-linux-x86_64",
+        "high-core-numa-linux-x86_64"
+      ],
+      "required_tiers": [
         "compiled-tier",
-        "tier-a",
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "full-containment",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.19",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.19",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.19] Implement Linux AArch64 executable-memory and raw-call adapter",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "compiled-tier",
         "tier-i",
         "tier-r"
       ],
@@ -34351,61 +35040,7 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
-      "required_layers": [
-        "artifact_integrity",
-        "canonical_integration",
-        "cross_tier_deopt",
-        "fault_recovery",
-        "fuzz_metamorphic",
-        "golden",
-        "mutation",
-        "performance_statistics",
-        "production_branch_signal",
-        "property",
-        "public_e2e",
-        "redaction",
-        "replay",
-        "security_profiles",
-        "tier_r_differential",
-        "unit"
-      ],
-      "required_platforms": [
-        "amd-zen5-x86_64",
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "high-core-numa-linux-x86_64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
-      ],
-      "required_tiers": [
-        "compiled-tier",
-        "tier-i",
-        "tier-r"
-      ],
-      "required_security_profiles": [
-        "evidence-on",
-        "full-containment",
-        "guardplane-on",
-        "ifc-on",
-        "security-off"
-      ],
-      "current_runner_family_ids": [],
-      "current_evidence": [],
-      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
-    },
-    {
-      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.3",
-      "subject_id": "bd-performance-conformance-bridge-tu32j.6.3",
-      "subject_kind": "bridge_task",
-      "title": "[BRIDGE-05.3] Implement W^X executable memory, relocation, and activation validation",
-      "authority_state": "open",
-      "evidence_state": "required_future",
-      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
-      "required_verification_packs": [
-        "bd-performance-conformance-bridge-tu32j.22.11"
-      ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34427,8 +35062,6 @@
       ],
       "required_platforms": [
         "amd-zen5-x86_64",
-        "apple-m4-aarch64",
-        "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
         "generic-macos-aarch64",
         "high-core-numa-linux-x86_64",
@@ -34452,17 +35085,490 @@
       "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
     },
     {
-      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.4",
-      "subject_id": "bd-performance-conformance-bridge-tu32j.6.4",
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.20",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.20",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-05.4] Implement stack maps, safepoints, OSR, deopt, and exception status ABI",
+      "title": "[BRIDGE-05.20] Implement whole-cell supervisor, authenticated IPC, and hard watchdog contract",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.21",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.21",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.21] Enforce Linux execution-cell sandbox and descendant containment",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.22",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.22",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.22] Enforce Apple execution-cell XPC sandbox and authority boundary",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "compiled-tier",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.23",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.23",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.23] Enforce Windows execution-cell token, AppContainer, and Job boundary",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.24",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.24",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.24] Implement authority-free compiler-worker core and Linux reference deployment",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "compiled-tier",
+        "tier-b",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.25",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.25",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.25] Define durable recovery classes, checkpoints, and commit-unknown semantics",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.26",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.26",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.26] Implement the out-of-cell effect/evidence broker and recovery executor",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.27",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.27",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.27] Implement out-of-cell key custody and two-phase native authorization",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.28",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.28",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.28] Implement transactional activation, publication, retirement, and receipts",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.29",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.29",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.29] Ship native operator modes, quarantine, and upgrade negotiation",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64",
+        "multi-process-local",
+        "two-physical-host-two-fault-domain",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.3",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.3",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.3] Implement platform-neutral RCO validation and executable-image lifecycle",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34482,6 +35588,258 @@
         "unit"
       ],
       "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "compiled-tier",
+        "tier-b",
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.30",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.30",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.30] Optimize broker IPC with authenticated bounded fast paths",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "amd-zen5-x86_64",
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "high-core-numa-linux-x86_64",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.31",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.31",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.31] Build pristine pre-native cell pools and one-shot tenant lifecycle",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.32",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.32",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.32] Define and verify the high-assurance side-channel profile",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "amd-zen5-x86_64",
+        "generic-linux-x86_64",
+        "high-core-numa-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.33",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.33",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.33] Research lower-overhead native containment without weakening claims",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "research_reproduction",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.34",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.34",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.34] Prove pinned Cranelift object extraction and metadata completeness",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "research_reproduction",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
         "generic-linux-x86_64",
         "generic-macos-aarch64",
         "portable-no-jit",
@@ -34489,6 +35847,200 @@
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-b",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "full-containment",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.35",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.35",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.35] Enforce resource accounting on the first real fixed-RCO compiler path",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-b",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.36",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.36",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.36] Preserve IFC and user-visible effect semantics across native cells",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "conformance_oracle",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "tier-b",
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.37",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.37",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.37] Verify the native-code capsule beyond fuzzing: Miri, loom, sanitizers, and a model-checked RCO validator",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "generic-linux-x86_64"
+      ],
+      "required_tiers": [
+        "compiled-tier",
+        "tier-i",
+        "tier-r"
+      ],
+      "required_security_profiles": [
+        "evidence-on",
+        "full-containment",
+        "guardplane-on",
+        "ifc-on",
+        "security-off"
+      ],
+      "current_runner_family_ids": [],
+      "current_evidence": [],
+      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+    },
+    {
+      "row_id": "task:bd-performance-conformance-bridge-tu32j.6.4",
+      "subject_id": "bd-performance-conformance-bridge-tu32j.6.4",
+      "subject_kind": "bridge_task",
+      "title": "[BRIDGE-05.4] Integrate common native maps, transitions, and status ABI on fixed probes",
+      "authority_state": "open",
+      "evidence_state": "required_future",
+      "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
+      "required_verification_packs": [
+        "bd-performance-conformance-bridge-tu32j.22.11"
+      ],
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
+      "required_layers": [
+        "artifact_integrity",
+        "canonical_integration",
+        "cross_platform",
+        "cross_tier_deopt",
+        "fault_recovery",
+        "fuzz_metamorphic",
+        "golden",
+        "mutation",
+        "performance_statistics",
+        "production_branch_signal",
+        "property",
+        "public_e2e",
+        "redaction",
+        "replay",
+        "security_profiles",
+        "tier_r_differential",
+        "unit"
+      ],
+      "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
+        "generic-linux-x86_64",
+        "windows-x86_64-msvc"
+      ],
+      "required_tiers": [
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -34513,10 +36065,11 @@
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
+        "conformance_oracle",
         "cross_tier_deopt",
         "fault_recovery",
         "fuzz_metamorphic",
@@ -34533,10 +36086,7 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "tier-r"
@@ -34556,14 +36106,14 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.6.6",
       "subject_id": "bd-performance-conformance-bridge-tu32j.6.6",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-05.6] Native capsule adversarial fuzz and executable proof capstone",
+      "title": "[BRIDGE-05.6] Capsule adversarial fuzz and fixed-RCO executable proof capstone",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
@@ -34583,12 +36133,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -34606,18 +36154,17 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.6.7",
       "subject_id": "bd-performance-conformance-bridge-tu32j.6.7",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-05.7] Prove platform and franken_node integration of the safe codegen boundary",
+      "title": "[BRIDGE-05.7] Certify cross-platform capsule and franken_node product integration",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
-        "conformance_oracle",
         "cross_platform",
         "cross_tier_deopt",
         "fault_recovery",
@@ -34635,18 +36182,16 @@
         "unit"
       ],
       "required_platforms": [
-        "amd-zen5-x86_64",
         "apple-m4-aarch64",
         "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
         "generic-macos-aarch64",
-        "high-core-numa-linux-x86_64",
         "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "compiled-tier",
-        "tier-a",
+        "tier-b",
         "tier-i",
         "tier-r"
       ],
@@ -34665,20 +36210,20 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.6.8",
       "subject_id": "bd-performance-conformance-bridge-tu32j.6.8",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-05.8] Emit JIT debug metadata, source maps, perf maps, and symbolic failures",
+      "title": "[BRIDGE-05.8] Emit cross-platform native debug metadata and privacy-safe fault diagnostics",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
+        "cross_platform",
         "cross_tier_deopt",
         "fault_recovery",
-        "fuzz_metamorphic",
         "golden",
         "mutation",
         "performance_statistics",
@@ -34687,11 +36232,12 @@
         "public_e2e",
         "redaction",
         "replay",
-        "security_profiles",
         "tier_r_differential",
         "unit"
       ],
       "required_platforms": [
+        "apple-m4-aarch64",
+        "apple-m5-aarch64-when-available",
         "generic-linux-x86_64",
         "generic-macos-aarch64",
         "portable-no-jit",
@@ -34716,20 +36262,19 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.6.9",
       "subject_id": "bd-performance-conformance-bridge-tu32j.6.9",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-05.9] Meter compilation, transient memory, and code cache as runtime resources",
+      "title": "[BRIDGE-05.9] Define deterministic native compilation and residency accounting ABI",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.11",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.11"
       ],
-      "required_public_entrypoint": "scripts/bridge/run_bridge_05_native_capsule_e2e.sh",
+      "required_public_entrypoint": "scripts/bridge/bd_performance_conformance_bridge_tu32j_22_11.sh",
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
         "cross_tier_deopt",
         "fault_recovery",
-        "fuzz_metamorphic",
         "golden",
         "mutation",
         "performance_statistics",
@@ -34743,15 +36288,13 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "compiled-tier",
         "tier-a",
-        "tier-o",
+        "tier-b",
+        "tier-i",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -35334,7 +36877,7 @@
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
-        "cross_platform",
+        "cross_tier_deopt",
         "fault_recovery",
         "fuzz_metamorphic",
         "golden",
@@ -35345,6 +36888,7 @@
         "public_e2e",
         "redaction",
         "replay",
+        "research_reproduction",
         "security_profiles",
         "tier_r_differential",
         "unit"
@@ -35356,6 +36900,7 @@
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -35395,20 +36940,20 @@
         "public_e2e",
         "redaction",
         "replay",
+        "research_reproduction",
         "security_profiles",
         "tier_r_differential",
         "unit"
       ],
       "required_platforms": [
-        "amd-zen5-x86_64",
         "generic-linux-x86_64",
         "generic-macos-aarch64",
-        "high-core-numa-linux-x86_64",
         "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -35437,6 +36982,7 @@
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
+        "cross_tier_deopt",
         "fault_recovery",
         "fuzz_metamorphic",
         "golden",
@@ -35459,6 +37005,7 @@
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -35531,7 +37078,7 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.7.6",
       "subject_id": "bd-performance-conformance-bridge-tu32j.7.6",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-06.6] Implement selected baseline JIT across eligible bytecodes",
+      "title": "[BRIDGE-06.6] Integrate Tier-B opcode families through the selected backend",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.12",
@@ -35558,13 +37105,12 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-b",
+        "tier-i",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -35616,6 +37162,8 @@
       ],
       "required_tiers": [
         "compiled-tier",
+        "tier-b",
+        "tier-i",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -35633,7 +37181,7 @@
       "row_id": "task:bd-performance-conformance-bridge-tu32j.7.8",
       "subject_id": "bd-performance-conformance-bridge-tu32j.7.8",
       "subject_kind": "bridge_task",
-      "title": "[BRIDGE-06.8] Complete baseline OSR, GC, exceptions, interrupts, and deopt",
+      "title": "[BRIDGE-06.8] Integrate Tier-B OSR, GC, status, deopt, and code-lifecycle components",
       "authority_state": "open",
       "evidence_state": "required_future",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.12",
@@ -35644,6 +37192,7 @@
       "required_layers": [
         "artifact_integrity",
         "canonical_integration",
+        "cross_tier_deopt",
         "fault_recovery",
         "fuzz_metamorphic",
         "golden",
@@ -35659,13 +37208,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64",
-        "generic-macos-aarch64",
-        "portable-no-jit",
-        "windows-x86_64-msvc"
+        "generic-linux-x86_64"
       ],
       "required_tiers": [
-        "tier-i",
+        "tier-b",
         "tier-r"
       ],
       "required_security_profiles": [
@@ -36407,6 +37953,8 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -36456,7 +38004,10 @@
         "unit"
       ],
       "required_platforms": [
-        "generic-linux-x86_64"
+        "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
+        "windows-x86_64-msvc"
       ],
       "required_tiers": [
         "compiled-tier",
@@ -36507,6 +38058,8 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -36556,6 +38109,8 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -36605,6 +38160,8 @@
       ],
       "required_platforms": [
         "generic-linux-x86_64",
+        "generic-macos-aarch64",
+        "portable-no-jit",
         "windows-x86_64-msvc"
       ],
       "required_tiers": [
@@ -38257,6 +39814,36 @@
       "to": "franken-engine.verification-run-manifest.v2"
     },
     {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.10",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.10",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.6"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.10",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.11",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.11",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.6"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.11",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
       "from": "task:bd-performance-conformance-bridge-tu32j.1.2",
       "relation": "emits",
       "to": "franken-engine.verification-event.v1"
@@ -38343,6 +39930,21 @@
     },
     {
       "from": "task:bd-performance-conformance-bridge-tu32j.1.7",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.8",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.8",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.6"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.1.8",
       "relation": "retains",
       "to": "franken-engine.verification-run-manifest.v2"
     },
@@ -38568,6 +40170,36 @@
     },
     {
       "from": "task:bd-performance-conformance-bridge-tu32j.11.5",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.11.6",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.11.6",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.16"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.11.6",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.11.7",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.11.7",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.16"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.11.7",
       "relation": "retains",
       "to": "franken-engine.verification-run-manifest.v2"
     },
@@ -39877,6 +41509,21 @@
       "to": "franken-engine.verification-run-manifest.v2"
     },
     {
+      "from": "task:bd-performance-conformance-bridge-tu32j.19.10",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.19.10",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.24"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.19.10",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
       "from": "task:bd-performance-conformance-bridge-tu32j.19.2",
       "relation": "emits",
       "to": "franken-engine.verification-event.v1"
@@ -40338,6 +41985,21 @@
     },
     {
       "from": "task:bd-performance-conformance-bridge-tu32j.20.17",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.20.18",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.20.18",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.25"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.20.18",
       "relation": "retains",
       "to": "franken-engine.verification-run-manifest.v2"
     },
@@ -43057,6 +44719,21 @@
       "to": "franken-engine.verification-run-manifest.v2"
     },
     {
+      "from": "task:bd-performance-conformance-bridge-tu32j.4.21",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.4.21",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.9"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.4.21",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
       "from": "task:bd-performance-conformance-bridge-tu32j.4.3",
       "relation": "emits",
       "to": "franken-engine.verification-event.v1"
@@ -43372,6 +45049,66 @@
       "to": "franken-engine.verification-run-manifest.v2"
     },
     {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.16",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.16",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.16",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.17",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.17",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.17",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.18",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.18",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.18",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.19",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.19",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.19",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
       "from": "task:bd-performance-conformance-bridge-tu32j.6.2",
       "relation": "emits",
       "to": "franken-engine.verification-event.v1"
@@ -43387,6 +45124,156 @@
       "to": "franken-engine.verification-run-manifest.v2"
     },
     {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.20",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.20",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.20",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.21",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.21",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.21",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.22",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.22",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.22",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.23",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.23",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.23",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.24",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.24",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.24",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.25",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.25",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.25",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.26",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.26",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.26",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.27",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.27",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.27",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.28",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.28",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.28",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.29",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.29",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.29",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
       "from": "task:bd-performance-conformance-bridge-tu32j.6.3",
       "relation": "emits",
       "to": "franken-engine.verification-event.v1"
@@ -43398,6 +45285,126 @@
     },
     {
       "from": "task:bd-performance-conformance-bridge-tu32j.6.3",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.30",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.30",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.30",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.31",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.31",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.31",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.32",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.32",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.32",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.33",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.33",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.33",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.34",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.34",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.34",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.35",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.35",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.35",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.36",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.36",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.36",
+      "relation": "retains",
+      "to": "franken-engine.verification-run-manifest.v2"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.37",
+      "relation": "emits",
+      "to": "franken-engine.verification-event.v1"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.37",
+      "relation": "independently_verified_by",
+      "to": "bd-performance-conformance-bridge-tu32j.22.11"
+    },
+    {
+      "from": "task:bd-performance-conformance-bridge-tu32j.6.37",
       "relation": "retains",
       "to": "franken-engine.verification-run-manifest.v2"
     },

@@ -32,6 +32,9 @@ ledger_path="${EXECUTION_TRUTH_LEDGER_PATH:-docs/execution_truth_ledger_v1.json}
 markdown_path="docs/EXECUTION_TRUTH_LEDGER_V1.md"
 tool_manifest="tools/execution-truth-ledger/Cargo.toml"
 tool_lock="tools/execution-truth-ledger/Cargo.lock"
+tool_bin_source="crates/franken-engine/src/bin/franken_execution_truth_ledger.rs"
+tool_lib_source="crates/franken-engine/src/execution_truth_ledger.rs"
+tool_binary="${target_dir}/debug/franken_execution_truth_ledger"
 run_id="run-execution-truth-ledger-${timestamp}-$$"
 trace_id="trace-execution-truth-ledger-${timestamp}-$$"
 scenario_id="canonical-${mode}"
@@ -55,6 +58,8 @@ legal_path="${run_dir}/LEGAL.md"
 rollback_path="${run_dir}/ROLLBACK.md"
 manifest_path="${run_dir}/run_manifest.json"
 logs_dir="${run_dir}/logs"
+validation_stderr_log="${logs_dir}/validate.stderr.log"
+render_stderr_log="${logs_dir}/render.stderr.log"
 
 mkdir -p "$(dirname "$run_dir")"
 if [[ -e "$run_dir" ]]; then
@@ -115,7 +120,8 @@ append_event() {
 
 run_rch() {
   timeout "$rch_timeout_seconds" \
-    "$rch_bin" exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+    env RCH_REQUIRE_REMOTE=1 \
+    "$rch_bin" --no-color exec -- env -u CARGO_ENCODED_RUSTFLAGS \
       "RUSTUP_TOOLCHAIN=${toolchain}" \
       "CARGO_TARGET_DIR=${target_dir}" \
       "CARGO_INCREMENTAL=0" \
@@ -124,13 +130,19 @@ run_rch() {
 }
 
 record_rch_command() {
-  printf 'timeout %q %q exec -- env -u CARGO_ENCODED_RUSTFLAGS ' \
+  printf 'timeout %q env RCH_REQUIRE_REMOTE=1 %q --no-color exec -- env -u CARGO_ENCODED_RUSTFLAGS ' \
     "$rch_timeout_seconds" "$rch_bin" >>"$commands_path"
   printf '%q ' \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_INCREMENTAL=0" \
     "RUSTFLAGS=-C linker=cc -Clinker-features=-lld" >>"$commands_path"
+  printf '%q ' "$@" >>"$commands_path"
+  printf '\n' >>"$commands_path"
+}
+
+record_local_command() {
+  printf 'timeout %q ' "$rch_timeout_seconds" >>"$commands_path"
   printf '%q ' "$@" >>"$commands_path"
   printf '\n' >>"$commands_path"
 }
@@ -164,15 +176,31 @@ fi
 if [[ -z "$preflight_error" && ! -f "$tool_lock" ]]; then
   preflight_error="missing independently locked validator lockfile: ${tool_lock}"
 fi
+if [[ -z "$preflight_error" && ! -f "$tool_bin_source" ]]; then
+  preflight_error="missing validator binary source: ${tool_bin_source}"
+fi
+if [[ -z "$preflight_error" && ! -f "$tool_lib_source" ]]; then
+  preflight_error="missing validator library source: ${tool_lib_source}"
+fi
+if [[ -z "$preflight_error" && ( -e "$tool_binary" || -L "$tool_binary" ) ]]; then
+  preflight_error="refusing pre-existing validator binary: ${tool_binary}"
+fi
 
 test_exit=0
+tool_build_exit=0
+validate_process_exit=0
 validate_exit=0
+render_process_exit=0
 render_exit=0
 diff_exit=0
+input_ledger_sha="$(proof_contract_sha256_file "$ledger_path")"
 
 if [[ -n "$preflight_error" ]]; then
   append_event "gate.preflight" "fail" "$preflight_error" "FE-TRUTH-GATE-1001"
+  tool_build_exit=2
   validate_exit=2
+  render_exit=2
+  diff_exit=2
 else
   append_event "gate.preflight" "pass" "required tools and canonical inputs present"
 
@@ -192,84 +220,193 @@ else
     fi
   fi
 
-  record_rch_command cargo run --locked --manifest-path "$tool_manifest" -q \
-    --bin franken_execution_truth_ledger -- \
-    validate \
-    --repo-root "$root_dir" \
-    --ledger "$ledger_path" \
-    --events "$validator_events_path" \
-    --run-id "$run_id" \
-    --trace-id "$trace_id" \
-    --scenario-id "$scenario_id" \
-    --seed "$seed" \
-    --attempt "$attempt"
+  record_rch_command cargo build --locked --manifest-path "$tool_manifest" \
+    --bin franken_execution_truth_ledger
   start_ns="$(date +%s%N)"
   set +e
-  run_rch cargo run --locked --manifest-path "$tool_manifest" -q \
-    --bin franken_execution_truth_ledger -- \
-    validate \
-    --repo-root "$root_dir" \
-    --ledger "$ledger_path" \
-    --events "$validator_events_path" \
-    --run-id "$run_id" \
-    --trace-id "$trace_id" \
-    --scenario-id "$scenario_id" \
-    --seed "$seed" \
-    --attempt "$attempt" \
-    >"$validation_report_path" 2>"${logs_dir}/validate.stderr.log"
-  validate_exit="$?"
+  run_rch cargo build --locked --manifest-path "$tool_manifest" \
+    --bin franken_execution_truth_ledger \
+    >"${logs_dir}/tool_build.log" 2>&1
+  tool_build_exit="$?"
   set -e
+  tool_build_error=""
+  if [[ "$tool_build_exit" -ne 0 ]]; then
+    tool_build_error="remote validator build exited ${tool_build_exit}"
+  elif [[ ! -f "$tool_binary" || ! -x "$tool_binary" || -L "$tool_binary" ]]; then
+    tool_build_error="remote build did not retrieve one regular executable validator"
+    tool_build_exit=2
+  fi
   duration_us=$((($(date +%s%N) - start_ns) / 1000))
-  if [[ "$validate_exit" -eq 0 ]]; then
-    append_event "gate.validate" "pass" "live ledger validation passed" "" "$duration_us"
+  if [[ "$tool_build_exit" -eq 0 ]]; then
+    append_event "gate.tool_build" "pass" "strict RCH build retrieved the validator executable" "" "$duration_us"
   else
-    append_event "gate.validate" "fail" "live ledger validation exited ${validate_exit}" "FE-TRUTH-GATE-1003" "$duration_us"
+    append_event "gate.tool_build" "fail" "$tool_build_error" "FE-TRUTH-GATE-1006" "$duration_us"
   fi
 
-  record_rch_command cargo run --locked --manifest-path "$tool_manifest" -q \
-    --bin franken_execution_truth_ledger -- \
-    render \
-    --repo-root "$root_dir" \
-    --ledger "$ledger_path"
-  start_ns="$(date +%s%N)"
-  set +e
-  run_rch cargo run --locked --manifest-path "$tool_manifest" -q \
-    --bin franken_execution_truth_ledger -- \
-    render \
-    --repo-root "$root_dir" \
-    --ledger "$ledger_path" \
-    >"$generated_markdown_path" 2>"${logs_dir}/render.stderr.log"
-  render_exit="$?"
-  set -e
-  duration_us=$((($(date +%s%N) - start_ns) / 1000))
-  if [[ "$render_exit" -eq 0 ]]; then
-    append_event "gate.render" "pass" "deterministic Markdown rendered" "" "$duration_us"
+  if [[ "$tool_build_exit" -ne 0 ]]; then
+    validate_exit=2
+    render_exit=2
+    diff_exit=2
+    append_event "gate.validate" "fail" "validation skipped because the validator build was unavailable" "FE-TRUTH-GATE-1003"
+    append_event "gate.render" "fail" "render skipped because the validator build was unavailable" "FE-TRUTH-GATE-1004"
+    append_event "gate.render_drift" "fail" "render comparison skipped because no trustworthy generated document existed" "FE-TRUTH-GATE-1005"
   else
-    append_event "gate.render" "fail" "renderer exited ${render_exit}" "FE-TRUTH-GATE-1004" "$duration_us"
-  fi
+    record_local_command "$tool_binary" validate \
+      --repo-root "$root_dir" \
+      --ledger "$ledger_path" \
+      --events "$validator_events_path" \
+      --run-id "$run_id" \
+      --trace-id "$trace_id" \
+      --scenario-id "$scenario_id" \
+      --seed "$seed" \
+      --attempt "$attempt"
+    start_ns="$(date +%s%N)"
+    set +e
+    timeout "$rch_timeout_seconds" \
+      "$tool_binary" validate \
+      --repo-root "$root_dir" \
+      --ledger "$ledger_path" \
+      --events "$validator_events_path" \
+      --run-id "$run_id" \
+      --trace-id "$trace_id" \
+      --scenario-id "$scenario_id" \
+      --seed "$seed" \
+      --attempt "$attempt" \
+      >"$validation_report_path" 2>"$validation_stderr_log"
+    validate_process_exit="$?"
+    set -e
+    validation_contract_error=""
+    if ! jq -e --arg ledger_sha "$input_ledger_sha" '
+        .schema_version == "franken-engine.execution-truth-ledger.validation-report.v1"
+        and .ledger_sha256 == $ledger_sha
+        and (.status == "pass" or .status == "fail")
+        and (.subject_count | type == "number")
+        and (.proof_count | type == "number")
+        and (.checks_run | type == "number")
+        and (.error_count | type == "number")
+        and (.findings | type == "array")
+        and .error_count == (.findings | length)
+        and (
+          (.status == "pass" and .error_count == 0)
+          or (.status == "fail" and .error_count > 0)
+        )
+      ' "$validation_report_path" >/dev/null 2>&1; then
+      validation_contract_error="validation report is missing, malformed, or inconsistent"
+    elif ! jq -se \
+      --arg run_id "$run_id" \
+      --arg trace_id "$trace_id" \
+      --arg scenario_id "$scenario_id" \
+      --argjson seed "$seed" \
+      --argjson attempt "$attempt" '
+        length > 0
+        and all(.[];
+          .schema_version == "franken-engine.execution-truth-ledger.validation-event.v1"
+          and .run_id == $run_id
+          and .trace_id == $trace_id
+          and .scenario_id == $scenario_id
+          and .seed == $seed
+          and .attempt == $attempt
+        )
+        and ([.[].sequence] as $sequences
+          | $sequences == [range(1; ($sequences | length) + 1)])
+      ' "$validator_events_path" >/dev/null 2>&1; then
+      validation_contract_error="validation events are missing, malformed, or identity-inconsistent"
+    else
+      validation_report_status="$(jq -r '.status' "$validation_report_path")"
+      if [[ "$validate_process_exit" -eq 0 && "$validation_report_status" == "pass" ]]; then
+        validate_exit=0
+      elif [[ "$validate_process_exit" -eq 1 && "$validation_report_status" == "fail" ]]; then
+        validate_exit=1
+      else
+        validation_contract_error="validator exit/status mismatch: exit=${validate_process_exit} status=${validation_report_status}"
+      fi
+    fi
+    if [[ -n "$validation_contract_error" ]]; then
+      validate_exit=2
+    fi
+    duration_us=$((($(date +%s%N) - start_ns) / 1000))
+    if [[ "$validate_exit" -eq 0 ]]; then
+      append_event "gate.validate" "pass" "live ledger validation passed" "" "$duration_us"
+    else
+      validation_reason="live ledger validation exited ${validate_exit}"
+      if [[ -n "$validation_contract_error" ]]; then
+        validation_reason="${validation_reason}; ${validation_contract_error}"
+      fi
+      append_event "gate.validate" "fail" "$validation_reason" "FE-TRUTH-GATE-1003" "$duration_us"
+    fi
 
-  printf 'diff -u %q %q\n' "$markdown_path" "$generated_markdown_path" >>"$commands_path"
-  start_ns="$(date +%s%N)"
-  set +e
-  diff -u "$markdown_path" "$generated_markdown_path" >"$render_diff_path"
-  diff_exit="$?"
-  set -e
-  duration_us=$((($(date +%s%N) - start_ns) / 1000))
-  if [[ "$diff_exit" -eq 0 ]]; then
-    append_event "gate.render_drift" "pass" "committed Markdown matches generated output" "" "$duration_us"
-  else
-    append_event "gate.render_drift" "fail" "committed Markdown differs from renderer output" "FE-TRUTH-GATE-1005" "$duration_us"
+    record_local_command "$tool_binary" render \
+      --repo-root "$root_dir" \
+      --ledger "$ledger_path"
+    start_ns="$(date +%s%N)"
+    set +e
+    timeout "$rch_timeout_seconds" \
+      "$tool_binary" render \
+      --repo-root "$root_dir" \
+      --ledger "$ledger_path" \
+      >"$generated_markdown_path" 2>"$render_stderr_log"
+    render_process_exit="$?"
+    set -e
+    render_contract_error=""
+    if [[ "$render_process_exit" -ne 0 ]]; then
+      render_contract_error="renderer process exited ${render_process_exit}"
+    elif [[ ! -s "$generated_markdown_path" || -L "$generated_markdown_path" ]] \
+      || [[ "$(head -n 1 "$generated_markdown_path")" != "# Execution-vs-Scaffold Truth Ledger v1" ]]; then
+      render_contract_error="generated Markdown is empty, symlinked, or has the wrong heading"
+    fi
+    if [[ -n "$render_contract_error" ]]; then
+      render_exit=2
+    else
+      render_exit=0
+    fi
+    duration_us=$((($(date +%s%N) - start_ns) / 1000))
+    if [[ "$render_exit" -eq 0 ]]; then
+      append_event "gate.render" "pass" "deterministic Markdown rendered" "" "$duration_us"
+    else
+      append_event "gate.render" "fail" "$render_contract_error" "FE-TRUTH-GATE-1004" "$duration_us"
+    fi
+
+    if [[ "$render_exit" -eq 0 ]]; then
+      printf 'diff -u %q %q\n' "$markdown_path" "$generated_markdown_path" >>"$commands_path"
+      start_ns="$(date +%s%N)"
+      set +e
+      diff -u "$markdown_path" "$generated_markdown_path" >"$render_diff_path"
+      diff_exit="$?"
+      set -e
+      duration_us=$((($(date +%s%N) - start_ns) / 1000))
+      if [[ "$diff_exit" -eq 0 ]]; then
+        append_event "gate.render_drift" "pass" "committed Markdown matches generated output" "" "$duration_us"
+      else
+        append_event "gate.render_drift" "fail" "committed Markdown differs from renderer output" "FE-TRUTH-GATE-1005" "$duration_us"
+      fi
+    else
+      diff_exit=2
+      append_event "gate.render_drift" "fail" "render comparison skipped because no trustworthy generated document existed" "FE-TRUTH-GATE-1005"
+    fi
   fi
+fi
+
+final_ledger_sha="$(proof_contract_sha256_file "$ledger_path")"
+if [[ -z "$preflight_error" && "$final_ledger_sha" != "$input_ledger_sha" ]]; then
+  validate_exit=2
+  render_exit=2
+  diff_exit=2
+  append_event "gate.source_identity" "fail" "ledger bytes changed during validation" "FE-TRUTH-GATE-1007"
+else
+  append_event "gate.source_identity" "pass" "ledger bytes remained stable during validation"
 fi
 
 git_revision="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
 rustc_version="$(rustc --version 2>/dev/null || printf 'unavailable')"
-ledger_sha="$(proof_contract_sha256_file "$ledger_path")"
+ledger_sha="$final_ledger_sha"
 matrix_sha="$(proof_contract_sha256_file docs/claim_to_proof_matrix_v1.json)"
 tracker_sha="$(proof_contract_sha256_file .beads/issues.jsonl)"
 markdown_sha="$(proof_contract_sha256_file "$markdown_path")"
 tool_manifest_sha="$(proof_contract_sha256_file "$tool_manifest")"
 tool_lock_sha="$(proof_contract_sha256_file "$tool_lock")"
+tool_bin_source_sha="$(proof_contract_sha256_file "$tool_bin_source")"
+tool_lib_source_sha="$(proof_contract_sha256_file "$tool_lib_source")"
+tool_binary_sha="$(proof_contract_sha256_file "$tool_binary")"
 denominator_sha="$(proof_contract_sha256_file docs/perf/e2_denominator_bundle_v1/denominator.json)"
 test262_sha="$(proof_contract_sha256_file docs/test262_real_corpus_pass_rate_v1.json)"
 coverage_sha="$(proof_contract_sha256_file docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json)"
@@ -301,6 +438,10 @@ jq -n \
   --arg markdown_sha "$markdown_sha" \
   --arg tool_manifest_sha "$tool_manifest_sha" \
   --arg tool_lock_sha "$tool_lock_sha" \
+  --arg tool_bin_source_sha "$tool_bin_source_sha" \
+  --arg tool_lib_source_sha "$tool_lib_source_sha" \
+  --arg tool_binary_path "$tool_binary" \
+  --arg tool_binary_sha "$tool_binary_sha" \
   --arg denominator_sha "$denominator_sha" \
   --arg test262_sha "$test262_sha" \
   --arg coverage_sha "$coverage_sha" \
@@ -315,6 +456,9 @@ jq -n \
       {path:".beads/issues.jsonl", sha256:$tracker_sha, role:"tracker_authority"},
       {path:"tools/execution-truth-ledger/Cargo.toml", sha256:$tool_manifest_sha, role:"independent_validator_manifest"},
       {path:"tools/execution-truth-ledger/Cargo.lock", sha256:$tool_lock_sha, role:"independent_validator_lock"},
+      {path:"crates/franken-engine/src/bin/franken_execution_truth_ledger.rs", sha256:$tool_bin_source_sha, role:"validator_binary_source"},
+      {path:"crates/franken-engine/src/execution_truth_ledger.rs", sha256:$tool_lib_source_sha, role:"validator_library_source"},
+      {path:$tool_binary_path, sha256:$tool_binary_sha, role:"strict_rch_built_validator_binary"},
       {path:"docs/perf/e2_denominator_bundle_v1/denominator.json", sha256:$denominator_sha, role:"performance_observation"},
       {path:"docs/test262_real_corpus_pass_rate_v1.json", sha256:$test262_sha, role:"conformance_observation"},
       {path:"docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json", sha256:$coverage_sha, role:"coverage_observation"},
@@ -351,10 +495,11 @@ jq '{
 } >"$rollback_path"
 
 verdict="pass"
-if [[ "$test_exit" -ne 0 || "$validate_exit" -ne 0 || "$render_exit" -ne 0 || "$diff_exit" -ne 0 ]]; then
+if [[ "$test_exit" -ne 0 || "$tool_build_exit" -ne 0 || "$validate_exit" -ne 0 \
+  || "$render_exit" -ne 0 || "$diff_exit" -ne 0 ]]; then
   verdict="fail"
 fi
-append_event "gate.end" "$verdict" "test=${test_exit}; validate=${validate_exit}; render=${render_exit}; diff=${diff_exit}"
+append_event "gate.end" "$verdict" "test=${test_exit}; tool_build=${tool_build_exit}; validate_process=${validate_process_exit}; validate=${validate_exit}; render_process=${render_process_exit}; render=${render_exit}; diff=${diff_exit}"
 
 events_sha="$(proof_contract_sha256_file "$events_path")"
 validator_events_sha="$(proof_contract_sha256_file "$validator_events_path")"
@@ -375,7 +520,10 @@ jq -n \
   --argjson seed "$seed" \
   --argjson attempt "$attempt" \
   --argjson test_exit "$test_exit" \
+  --argjson tool_build_exit "$tool_build_exit" \
+  --argjson validate_process_exit "$validate_process_exit" \
   --argjson validate_exit "$validate_exit" \
+  --argjson render_process_exit "$render_process_exit" \
   --argjson render_exit "$render_exit" \
   --argjson diff_exit "$diff_exit" \
   --arg events_sha "$events_sha" \
@@ -383,6 +531,7 @@ jq -n \
   --arg validation_report_sha "$validation_report_sha" \
   --arg commands_sha "$commands_sha" \
   --arg generated_markdown_sha "$generated_markdown_sha" \
+  --arg tool_binary_sha "$tool_binary_sha" \
   '{
     schema_version:$schema_version,
     run_id:$run_id,
@@ -395,7 +544,15 @@ jq -n \
     source_cutoff:$source_cutoff,
     git_revision:$git_revision,
     cargo_target_dir:$target_dir,
-    exit_codes:{tests:$test_exit,validate:$validate_exit,render:$render_exit,diff:$diff_exit},
+    exit_codes:{
+      tests:$test_exit,
+      tool_build:$tool_build_exit,
+      validate_process:$validate_process_exit,
+      validate:$validate_exit,
+      render_process:$render_process_exit,
+      render:$render_exit,
+      diff:$diff_exit
+    },
     artifacts:{
       commands:"commands.txt",
       events:"events.jsonl",
@@ -417,7 +574,8 @@ jq -n \
       "events.jsonl":$events_sha,
       "validator_events.jsonl":$validator_events_sha,
       "validation_report.json":$validation_report_sha,
-      "EXECUTION_TRUTH_LEDGER_V1.generated.md":$generated_markdown_sha
+      "EXECUTION_TRUTH_LEDGER_V1.generated.md":$generated_markdown_sha,
+      "validator_binary":$tool_binary_sha
     },
     recovery:{atomicity:"unique-prefix; committed files are read-only",rollback:"ROLLBACK.md"},
     owning_bead:"bd-performance-conformance-bridge-tu32j.1.1"

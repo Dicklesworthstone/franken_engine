@@ -42,6 +42,16 @@ struct TierRBuildEnvironment {
 }
 
 fn main() {
+    for variable in [
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTFLAGS",
+        "RCH_WORKER_ID",
+        "RCH_WORKER",
+        "HOSTNAME",
+    ] {
+        println!("cargo:rerun-if-env-changed={variable}");
+    }
     let tool_root = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo supplies CARGO_MANIFEST_DIR"),
     );
@@ -112,6 +122,12 @@ fn main() {
         });
         println!("cargo:rerun-if-changed={}", canonical.display());
     }
+    // `PathBuf` ordering compares path components, which does not necessarily
+    // match the bytewise ordering of the canonical slash-separated paths in
+    // the published manifest (for example, `capability/trust_zone.rs` versus
+    // `capability.rs`).  The consumer validates the serialized path strings,
+    // so establish that exact order after canonicalization.
+    source_files.sort_by(|left, right| left.path.cmp(&right.path));
 
     let source_manifest = TierRSourceManifest {
         schema_version: "franken-engine.tier-r-source-manifest.v1",

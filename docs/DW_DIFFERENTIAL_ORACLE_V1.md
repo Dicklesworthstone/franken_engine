@@ -245,16 +245,15 @@ refuses to conflate them.
 ## Node/Bun denominator and FE-CLAIM-010
 
 The cross-runtime throughput claim (`FE-CLAIM-010`, ">= 3x weighted-geometric-mean
-throughput versus Node and Bun") is **TARGETED**, not observed. A measured,
-fairness-compliant denominator is linked at
-[`docs/perf/e2_denominator_bundle_v1`](./perf/e2_denominator_bundle_v1) (with a
-`repro.lock` partner). On that corpus the native baseline interpreter's geomean
-throughput is **920 millionths of Node and 791 millionths of Bun** (~1087× /
-~1264× slower) — `meets_3x_floor = false`. The claim therefore stays TARGETED,
-backed by a measured, repro.lock-addressed denominator rather than absence of
-data. Promotion to OBSERVED requires the engine to actually clear the 3× floor.
-The denominator is separately gated by
-`scripts/run_e2_denominator_bundle_gate.sh ci`.
+throughput versus Node and Bun") is **TARGETED**, not observed. The linked June
+artifact preserves a real historical run, but not the normative denominator
+contract. It records an unweighted geometric mean of **920 millionths of Node**
+over 16 admitted cases and **791 millionths of Bun** over 13, from a dirty
+worktree. It links a 31-case manifest but reports 28 cases, uses asymmetric
+engine/reference lifecycles, and its `repro.lock` reproduces correctness rather
+than timings. Promotion requires a clean, lifecycle-symmetric, weighted run
+with reproducible raw samples that actually clears the floor. The historical
+bundle is separately checked by `scripts/run_e2_denominator_bundle_gate.sh ci`.
 
 The oracle will not fabricate a denominator: a single-lane run cannot reach a
 cross-runtime verdict and reports `insufficient_data` (exit 4), and the

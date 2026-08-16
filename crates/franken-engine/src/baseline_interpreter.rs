@@ -119329,7 +119329,7 @@ mod lazy_seed_tests {
 
         assert_eq!(fast.registers.value, accounted.registers.value);
         assert_eq!(fast.register_labels, accounted.register_labels);
-        assert_eq!(fast.register_labels[0], Label::Internal);
+        assert_eq!(fast.register_labels[0], Label::Secret);
         assert_eq!(
             fast.estimated_memory_bytes,
             accounted.estimated_memory_bytes
@@ -119375,6 +119375,7 @@ mod lazy_seed_tests {
             .expect("reference accounted value-only write must succeed");
         assert_eq!(fast.registers.value, accounted.registers.value);
         assert_eq!(fast.register_labels, accounted.register_labels);
+        assert_eq!(fast.register_labels[0], Label::Internal);
         assert_eq!(
             fast.estimated_memory_bytes,
             accounted.estimated_memory_bytes

@@ -119293,7 +119293,7 @@ mod lazy_seed_tests {
 
     fn static_register_write_core() -> InterpreterCore {
         let mut core = test_core_with_registers(vec![Value::Int(1)]);
-        core.register_labels.push(Label::Internal);
+        core.register_labels[0] = Label::Internal;
         core.sync_estimated_memory_bytes()
             .expect("static register-write fixture must fit");
         core
@@ -119329,6 +119329,7 @@ mod lazy_seed_tests {
 
         assert_eq!(fast.registers.value, accounted.registers.value);
         assert_eq!(fast.register_labels, accounted.register_labels);
+        assert_eq!(fast.register_labels[0], Label::Internal);
         assert_eq!(
             fast.estimated_memory_bytes,
             accounted.estimated_memory_bytes
@@ -119380,6 +119381,11 @@ mod lazy_seed_tests {
         );
 
         assert!(!fast.static_register_write_eligible(0, &Value::str("dynamic"), &Label::Internal));
+        assert!(!fast.static_register_write_eligible(
+            0,
+            &Value::BigInt(Arc::from("12345678901234567890")),
+            &Label::Internal
+        ));
         assert!(!fast.static_register_write_eligible(
             0,
             &Value::Int(10),

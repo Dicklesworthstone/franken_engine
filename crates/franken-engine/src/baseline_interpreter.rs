@@ -4836,6 +4836,30 @@ fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
     SymbolId(symbol.0)
 }
 
+const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+fn decimal_u32_len(value: u32) -> usize {
+    if value == 0 {
+        1
+    } else {
+        value.ilog10() as usize + 1
+    }
+}
+
+fn append_decimal_u32(bytes: &mut Vec<u8>, mut value: u32) {
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    bytes.extend_from_slice(&digits[start..]);
+}
+
 impl RuntimePropertyKey {
     fn string(&self) -> Option<&JsString> {
         match self {
@@ -4882,6 +4906,69 @@ impl RuntimePropertyKey {
         }
         diagnostic
     }
+
+    fn diagnostic_byte_len(&self) -> usize {
+        match self {
+            Self::Symbol(symbol) => 6 + decimal_u32_len(symbol.0),
+            Self::String(string) => match self.as_str() {
+                Some(key) if key.starts_with("~pk~") => 6 + key.len().saturating_mul(2),
+                Some(key) => key.len(),
+                None => 6 + string.utf16_len().saturating_mul(4),
+            },
+        }
+    }
+
+    fn append_diagnostic_bytes(&self, bytes: &mut Vec<u8>) {
+        match self {
+            Self::Symbol(symbol) => {
+                bytes.extend_from_slice(b"~pk~s:");
+                append_decimal_u32(bytes, symbol.0);
+            }
+            Self::String(string) => {
+                if let Some(key) = self.as_str() {
+                    if !key.starts_with("~pk~") {
+                        bytes.extend_from_slice(key.as_bytes());
+                        return;
+                    }
+                    bytes.extend_from_slice(b"~pk~u:");
+                    for byte in key.as_bytes() {
+                        bytes.push(UPPER_HEX[usize::from(byte >> 4)]);
+                        bytes.push(UPPER_HEX[usize::from(byte & 0x0F)]);
+                    }
+                    return;
+                }
+                bytes.extend_from_slice(b"~pk~x:");
+                for unit in string.encode_utf16() {
+                    bytes.push(UPPER_HEX[usize::from((unit >> 12) & 0x0F)]);
+                    bytes.push(UPPER_HEX[usize::from((unit >> 8) & 0x0F)]);
+                    bytes.push(UPPER_HEX[usize::from((unit >> 4) & 0x0F)]);
+                    bytes.push(UPPER_HEX[usize::from(unit & 0x0F)]);
+                }
+            }
+        }
+    }
+}
+
+fn property_resolution_found_payload(
+    key: &RuntimePropertyKey,
+    object_id: ObjectId,
+    depth: u32,
+) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(
+        b"property_found:key=".len()
+            + key.diagnostic_byte_len()
+            + b",object_id=".len()
+            + decimal_u32_len(object_id.0)
+            + b",depth=".len()
+            + decimal_u32_len(depth),
+    );
+    payload.extend_from_slice(b"property_found:key=");
+    key.append_diagnostic_bytes(&mut payload);
+    payload.extend_from_slice(b",object_id=");
+    append_decimal_u32(&mut payload, object_id.0);
+    payload.extend_from_slice(b",depth=");
+    append_decimal_u32(&mut payload, depth);
+    payload
 }
 
 /// A heap-allocated object with string-keyed properties.
@@ -44012,13 +44099,7 @@ impl InterpreterCore {
     ) {
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
-            format!(
-                "property_found:key={},object_id={},depth={}",
-                key.diagnostic(),
-                object_id.0,
-                depth
-            )
-            .into_bytes(),
+            property_resolution_found_payload(key, object_id, depth),
             self.instructions_executed,
             "baseline_interpreter",
         );
@@ -108855,15 +108936,111 @@ mod tests {
 
     #[test]
     fn runtime_property_diagnostics_are_injective_bd_b12xs_5() {
+        let empty = RuntimePropertyKey::String(JsString::from(""));
         let ordinary = RuntimePropertyKey::String(JsString::from("answer"));
         let reserved_literal = RuntimePropertyKey::String(JsString::from("~pk~x:D800"));
+        let reserved_non_ascii = RuntimePropertyKey::String(JsString::from("~pk~☃"));
         let d800 = RuntimePropertyKey::String(JsString::from_code_units(&[0xD800]));
         let d801 = RuntimePropertyKey::String(JsString::from_code_units(&[0xD801]));
+        let dfff = RuntimePropertyKey::String(JsString::from_code_units(&[0xDFFF]));
 
+        assert_eq!(empty.diagnostic(), "");
         assert_eq!(ordinary.diagnostic(), "answer");
         assert_ne!(d800.diagnostic(), d801.diagnostic());
         assert_ne!(d800.diagnostic(), reserved_literal.diagnostic());
         assert!(reserved_literal.diagnostic().starts_with("~pk~u:"));
+        assert_eq!(reserved_non_ascii.diagnostic(), "~pk~u:7E706B7EE29883");
+        assert_eq!(dfff.diagnostic(), "~pk~x:DFFF");
+        assert_eq!(
+            property_resolution_found_payload(&empty, ObjectId(0), 0),
+            b"property_found:key=,object_id=0,depth=0"
+        );
+
+        for value in [
+            0,
+            9,
+            10,
+            99,
+            100,
+            999,
+            1_000,
+            9_999,
+            10_000,
+            99_999,
+            100_000,
+            999_999,
+            1_000_000,
+            9_999_999,
+            10_000_000,
+            99_999_999,
+            100_000_000,
+            999_999_999,
+            1_000_000_000,
+            u32::MAX,
+        ] {
+            let mut direct_decimal = Vec::with_capacity(decimal_u32_len(value));
+            append_decimal_u32(&mut direct_decimal, value);
+            assert_eq!(direct_decimal, value.to_string().into_bytes());
+            assert_eq!(direct_decimal.len(), decimal_u32_len(value));
+        }
+
+        let frozen_payload =
+            property_resolution_found_payload(&reserved_non_ascii, ObjectId(10), 100);
+        assert_eq!(
+            frozen_payload,
+            b"property_found:key=~pk~u:7E706B7EE29883,object_id=10,depth=100"
+        );
+        let frozen_event = crate::deterministic_replay::TraceEvent {
+            sequence: 0,
+            source: NondeterminismSource::PropertyResolution,
+            value: frozen_payload,
+            virtual_ts: 123,
+            component: "baseline_interpreter".to_string(),
+        };
+        assert_eq!(
+            frozen_event.derive_id().to_hex(),
+            "1120d46f214b198e37c26ae017ea9b73561917a7b9b6ed1784c4f3602126aa64"
+        );
+
+        let keys = [
+            empty,
+            ordinary,
+            RuntimePropertyKey::String(JsString::from("snowman-☃")),
+            reserved_literal,
+            reserved_non_ascii,
+            d800,
+            d801,
+            dfff,
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD800, 0x0041, 0xDFFF])),
+            RuntimePropertyKey::Symbol(SymbolId(0)),
+            RuntimePropertyKey::Symbol(SymbolId(u32::MAX)),
+        ];
+        for key in &keys {
+            let mut direct_diagnostic = Vec::with_capacity(key.diagnostic_byte_len());
+            key.append_diagnostic_bytes(&mut direct_diagnostic);
+            assert_eq!(
+                direct_diagnostic,
+                key.diagnostic().into_bytes(),
+                "direct diagnostic bytes must exactly match the frozen formatter for {key:?}"
+            );
+            assert_eq!(direct_diagnostic.len(), key.diagnostic_byte_len());
+
+            for object_id in [ObjectId(0), ObjectId(u32::MAX)] {
+                for depth in [0, u32::MAX] {
+                    assert_eq!(
+                        property_resolution_found_payload(key, object_id, depth),
+                        format!(
+                            "property_found:key={},object_id={},depth={}",
+                            key.diagnostic(),
+                            object_id.0,
+                            depth
+                        )
+                        .into_bytes(),
+                        "found-property payload bytes must remain exactly formatter-compatible"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

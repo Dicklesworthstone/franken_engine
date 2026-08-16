@@ -1527,10 +1527,7 @@ impl HybridRouter {
     /// collectors are recreated for every call; only the validated IR3 is
     /// reused.
     #[allow(clippy::result_large_err)]
-    pub fn eval_prepared(
-        &mut self,
-        prepared: &PreparedHybridEval,
-    ) -> EvalResult<EvalOutcome> {
+    pub fn eval_prepared(&mut self, prepared: &PreparedHybridEval) -> EvalResult<EvalOutcome> {
         self.eval_prepared_routed(prepared, EngineEvalBudgets::default())
     }
 
@@ -2426,15 +2423,16 @@ mod tests {
             assert_eq!(reused, one_shot);
         }
 
-        let await_prepared = HybridRouter::prepare_eval(
-            "await Promise.resolve('ready'); 73;",
-        )
-        .expect("prepare await");
+        let await_prepared = HybridRouter::prepare_eval("await Promise.resolve('ready'); 73;")
+            .expect("prepare await");
         let mut await_router = HybridRouter::default();
         let await_outcome = await_router
             .eval_prepared(&await_prepared)
             .expect("prepared await");
-        assert_eq!(await_outcome.route_reason, RouteReason::ContainsAwaitKeyword);
+        assert_eq!(
+            await_outcome.route_reason,
+            RouteReason::ContainsAwaitKeyword
+        );
         assert_eq!(await_outcome.engine, EngineKind::V8InspiredNative);
 
         let generated_prepared = HybridRouter::prepare_eval(

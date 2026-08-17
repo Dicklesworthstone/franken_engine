@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use bumpalo::collections::Vec as ArenaVec;
-use frankenengine_extension_host::host_io::FsOperation;
+use frankenengine_extension_host::host_io::{FsOperation, HostIoExceptionProvenance};
 
 use crate::lowering_arena::LoweringArena;
 
@@ -266,6 +266,11 @@ pub struct LoweringContext {
     /// older serialized contexts (no field) deserializing as deny-all.
     #[serde(default)]
     pub ambient_authority_grant: AmbientAuthorityGrant,
+    /// Authenticated provenance floor for guest-visible filesystem effect
+    /// errors. The default remains fail-high for lowering entrypoints that do
+    /// not bind every possible live or replay outcome source.
+    #[serde(default)]
+    pub host_io_exception_provenance: HostIoExceptionProvenance,
     /// Whether the caller has authenticated a CommonJS loader environment
     /// that will inject the canonical wrapper bindings before execution.
     /// Source labels alone never enable this; the resolved CJS loader must opt
@@ -285,6 +290,7 @@ impl LoweringContext {
             decision_id: decision_id.into(),
             policy_id: policy_id.into(),
             ambient_authority_grant: AmbientAuthorityGrant::DenyAll,
+            host_io_exception_provenance: HostIoExceptionProvenance::Unknown,
             authenticated_commonjs_runtime_bindings: false,
         }
     }
@@ -294,6 +300,16 @@ impl LoweringContext {
     /// profile; all other callers keep the deny-all default.
     pub fn with_ambient_authority_grant(mut self, grant: AmbientAuthorityGrant) -> Self {
         self.ambient_authority_grant = grant;
+        self
+    }
+
+    /// Bind lowering to the effective host-I/O source's authenticated
+    /// filesystem exception provenance contract.
+    pub fn with_host_io_exception_provenance(
+        mut self,
+        provenance: HostIoExceptionProvenance,
+    ) -> Self {
+        self.host_io_exception_provenance = provenance;
         self
     }
 
@@ -571,7 +587,10 @@ pub fn lower_ir0_to_ir3(
         }
     };
 
-    let ir2_result = match lower_ir1_to_ir2(&ir1_result.module) {
+    let ir2_result = match lower_ir1_to_ir2_with_host_io_exception_provenance(
+        &ir1_result.module,
+        context.host_io_exception_provenance,
+    ) {
         Ok(result) => {
             events.push(success_event(context, "ir1_to_ir2_lowered"));
             result
@@ -6160,6 +6179,13 @@ fn runtime_scope_binding_kind(kind: BindingKind) -> u8 {
 pub fn lower_ir1_to_ir2(
     ir1: &Ir1Module,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
+    lower_ir1_to_ir2_with_host_io_exception_provenance(ir1, HostIoExceptionProvenance::Unknown)
+}
+
+fn lower_ir1_to_ir2_with_host_io_exception_provenance(
+    ir1: &Ir1Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
@@ -6209,7 +6235,7 @@ pub fn lower_ir1_to_ir2(
         .into_iter()
         .map(CapabilityTag)
         .collect();
-    let flow_metrics = infer_ir2_flow_annotations(&mut ir2)?;
+    let flow_metrics = infer_ir2_flow_annotations(&mut ir2, host_io_exception_provenance)?;
 
     let source_hash_matches = ir2.header.source_hash.as_ref() == Some(&ir1_hash);
     let hostcall_effects_have_capability = ir2
@@ -24159,8 +24185,17 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
     Ok((starts, ends, labels))
 }
 
-fn hostcall_exception_is_operand_derived(capability: &str, inputs: &[FlowValue]) -> bool {
+fn hostcall_exception_is_operand_derived(
+    capability: &str,
+    inputs: &[FlowValue],
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> bool {
     let all_inputs_are_closed = || inputs.iter().all(|value| value.shape.is_closed());
+
+    if matches!(capability, "fs:read" | "fs:write") {
+        return host_io_exception_provenance == HostIoExceptionProvenance::ProviderInternal
+            && all_inputs_are_closed();
+    }
 
     if matches!(
         capability,
@@ -24334,6 +24369,7 @@ fn simulate_ir2_flow_labels(
     ir2: &Ir2Module,
     binding_labels: &mut BTreeMap<BindingId, Label>,
     catch_region_events: &CatchRegionEvents,
+    host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<(Vec<Label>, bool), LoweringPipelineError> {
     let mut value_stack = Vec::<FlowValue>::new();
     let mut next_identity = 0usize;
@@ -24856,8 +24892,11 @@ fn simulate_ir2_flow_labels(
                 arg_count,
             } => {
                 let inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
-                let hostcall_is_operand_derived =
-                    hostcall_exception_is_operand_derived(capability, &inputs);
+                let hostcall_is_operand_derived = hostcall_exception_is_operand_derived(
+                    capability,
+                    &inputs,
+                    host_io_exception_provenance,
+                );
                 operation_exception_is_operand_derived = hostcall_is_operand_derived;
                 if !hostcall_is_operand_derived {
                     // Dynamic/callback-capable hostcalls can observe or mutate
@@ -25030,6 +25069,7 @@ fn simulate_ir2_flow_labels(
 
 fn infer_ir2_flow_annotations(
     ir2: &mut Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<FlowInferenceMetrics, LoweringPipelineError> {
     const MAX_FLOW_INFERENCE_PASSES: usize = 16;
 
@@ -25041,8 +25081,12 @@ fn infer_ir2_flow_annotations(
     // source size. The strict pass budget bounds work to O(n) and fails closed
     // when exact propagation would require a dedicated dependency worklist.
     for _ in 0..MAX_FLOW_INFERENCE_PASSES {
-        let (_, changed) =
-            simulate_ir2_flow_labels(ir2, &mut binding_labels, &catch_region_events)?;
+        let (_, changed) = simulate_ir2_flow_labels(
+            ir2,
+            &mut binding_labels,
+            &catch_region_events,
+            host_io_exception_provenance,
+        )?;
         if !changed {
             converged = true;
             break;
@@ -25054,8 +25098,12 @@ fn infer_ir2_flow_annotations(
         });
     }
 
-    let (inferred_labels, changed_after_convergence) =
-        simulate_ir2_flow_labels(ir2, &mut binding_labels, &catch_region_events)?;
+    let (inferred_labels, changed_after_convergence) = simulate_ir2_flow_labels(
+        ir2,
+        &mut binding_labels,
+        &catch_region_events,
+        host_io_exception_provenance,
+    )?;
     if changed_after_convergence {
         return Err(LoweringPipelineError::InvariantViolation {
             detail: "IR2 flow-label binding fixed point changed after convergence",
@@ -26329,6 +26377,80 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn filesystem_catch_flow_uses_authenticated_provider_and_operand_provenance_bd_padqo() {
+        fn catch_console_flow(
+            name: &str,
+            source: &str,
+            provenance: HostIoExceptionProvenance,
+        ) -> (Label, bool) {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_padqo.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+            let ir2 = lower_ir1_to_ir2_with_host_io_exception_provenance(&ir1, provenance)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            let flow = ir2
+                .ops
+                .iter()
+                .rev()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .unwrap_or_else(|| panic!("catch console flow for {name}"));
+            (flow.data_label.clone(), flow.declassification_required)
+        }
+
+        let sync_public = "const fs = require('fs'); try { fs.readFileSync('missing', 'utf8'); } catch (error) { console.log(error); }";
+        assert_eq!(
+            catch_console_flow(
+                "unknown_provider",
+                sync_public,
+                HostIoExceptionProvenance::Unknown,
+            ),
+            (Label::TopSecret, true),
+            "an unauthenticated provider must retain the fail-high catch contract"
+        );
+        assert_eq!(
+            catch_console_flow(
+                "bounded_provider",
+                sync_public,
+                HostIoExceptionProvenance::ProviderInternal,
+            ),
+            (Label::Internal, false),
+            "the canonical provider may expose its bounded Internal error state"
+        );
+
+        let sync_secret = "const fs = require('fs'); try { fs.readFileSync('secret-token', 'utf8'); } catch (error) { console.log(error); }";
+        assert_eq!(
+            catch_console_flow(
+                "secret_path",
+                sync_secret,
+                HostIoExceptionProvenance::ProviderInternal,
+            ),
+            (Label::Secret, true),
+            "provider authentication must not erase the direct path operand label"
+        );
+
+        let callback = "const fs = require('fs'); try { fs.readFile('missing', () => {}); } catch (error) { console.log(error); }";
+        assert_eq!(
+            catch_console_flow(
+                "guest_callback",
+                callback,
+                HostIoExceptionProvenance::ProviderInternal,
+            ),
+            (Label::TopSecret, true),
+            "a guest callback remains fail-high even with the canonical provider"
+        );
     }
 
     #[test]

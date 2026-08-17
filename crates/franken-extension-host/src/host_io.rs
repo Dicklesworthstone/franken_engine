@@ -341,9 +341,46 @@ impl std::error::Error for HostIoError {}
 
 pub type HostIoOutcome = Result<HostIoResponse, HostIoError>;
 
+/// Provenance floor for guest-visible exceptions raised by a host-I/O effect
+/// source (the live provider or a replay source).
+///
+/// This is an authenticated host contract, not a label inferred from provider
+/// names. [`ProviderInternal`](Self::ProviderInternal) means filesystem errors
+/// depend only on the typed request and provider-internal sandbox state. The
+/// fail-closed default is [`Unknown`](Self::Unknown), which callers must treat
+/// as potentially carrying arbitrary secret state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostIoExceptionProvenance {
+    #[default]
+    Unknown,
+    ProviderInternal,
+}
+
+impl HostIoExceptionProvenance {
+    /// Combine every source that may supply a host-I/O outcome. A bounded live
+    /// provider is insufficient when an untrusted recorder or journal can
+    /// replace that outcome during replay, so any unknown source wins.
+    #[must_use]
+    pub const fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::ProviderInternal, Self::ProviderInternal) => Self::ProviderInternal,
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+        }
+    }
+}
+
 /// A sandboxed host I/O provider.
 pub trait HostIoProvider: core::fmt::Debug + Send + Sync {
     fn name(&self) -> &str;
+
+    /// Declare the provenance floor for guest-visible filesystem exceptions.
+    /// Decorators must delegate this method to their wrapped provider. Custom
+    /// providers remain fail-high unless they deliberately implement the same
+    /// bounded exception contract as [`SandboxedHostIo`].
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        HostIoExceptionProvenance::Unknown
+    }
 
     /// Perform `request` using only the capabilities explicitly granted.
     ///
@@ -2009,6 +2046,10 @@ impl HostIoProvider for SandboxedHostIo {
         "sandboxed-host-io"
     }
 
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        HostIoExceptionProvenance::ProviderInternal
+    }
+
     fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
         let required = request.required_capability();
         if !capability_granted(granted, required) {
@@ -2050,6 +2091,14 @@ pub enum HostIoReplayMode {
 
 /// Deterministic-replay recorder for host I/O.
 pub trait HostIoRecorder: core::fmt::Debug + Send + Sync {
+    /// Declare whether filesystem errors supplied by this recorder are bounded
+    /// to typed request plus internal state. The fail-closed default covers
+    /// custom replay sources. A transparent recording-only implementation may
+    /// return [`HostIoExceptionProvenance::ProviderInternal`].
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        HostIoExceptionProvenance::Unknown
+    }
+
     /// Begin one orchestrated execution before any host effect can run.
     ///
     /// Implementations use this boundary to reject unsupported lifecycle
@@ -2163,6 +2212,13 @@ impl InMemoryHostIoTranscript {
 }
 
 impl HostIoRecorder for InMemoryHostIoTranscript {
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        match self.mode {
+            HostIoReplayMode::Record => HostIoExceptionProvenance::ProviderInternal,
+            HostIoReplayMode::Replay => HostIoExceptionProvenance::Unknown,
+        }
+    }
+
     fn begin_execution(&self) -> Result<(), HostIoError> {
         let mut state = self
             .execution_state
@@ -2753,6 +2809,36 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn filesystem_exception_provenance_is_explicit_and_fail_closed_bd_padqo() {
+        assert_eq!(
+            DenyAllHostIo.filesystem_exception_provenance(),
+            HostIoExceptionProvenance::Unknown,
+            "the default provider must not imply a bounded exception source"
+        );
+
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("sandboxed provider");
+        assert_eq!(
+            provider.filesystem_exception_provenance(),
+            HostIoExceptionProvenance::ProviderInternal,
+            "the canonical sandbox authenticates its bounded provider-state contract"
+        );
+
+        let recording = InMemoryHostIoTranscript::recording();
+        assert_eq!(
+            recording.filesystem_exception_provenance(),
+            HostIoExceptionProvenance::ProviderInternal,
+            "recording cannot replace a live provider outcome"
+        );
+        let replaying = InMemoryHostIoTranscript::replaying(Vec::new());
+        assert_eq!(
+            replaying.filesystem_exception_provenance(),
+            HostIoExceptionProvenance::Unknown,
+            "replayed outcomes remain fail-high without separate authentication"
+        );
     }
 
     fn sandboxed_realpath(provider: &SandboxedHostIo, path: &str) -> Result<String, HostIoError> {

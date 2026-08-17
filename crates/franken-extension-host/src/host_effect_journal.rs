@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::host_io::{HostIoError, HostIoOutcome, HostIoRequest};
+use crate::host_io::{HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoRequest};
 use crate::process_spawn::{
     ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnRequest, process_spawn_request_digest,
 };
@@ -306,6 +306,19 @@ impl InMemoryHostEffectJournal {
     #[must_use]
     pub const fn mode(&self) -> HostEffectJournalMode {
         self.mode
+    }
+
+    /// Provenance floor for filesystem outcomes supplied by this journal.
+    /// Recording mode is transparent to the live provider. Replay entries are
+    /// caller-supplied evidence and therefore remain fail-high here; product
+    /// authentication of an enclosing receipt must not silently relabel guest
+    /// data inside the engine.
+    #[must_use]
+    pub const fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        match self.mode {
+            HostEffectJournalMode::Record => HostIoExceptionProvenance::ProviderInternal,
+            HostEffectJournalMode::Replay => HostIoExceptionProvenance::Unknown,
+        }
     }
 
     pub fn begin_execution(&self) -> Result<(), HostEffectJournalError> {
@@ -999,6 +1012,20 @@ mod tests {
             stdout: Vec::new(),
             stderr: Vec::new(),
         })
+    }
+
+    #[test]
+    fn replay_journal_exception_provenance_fails_high_bd_padqo() {
+        assert_eq!(
+            InMemoryHostEffectJournal::recording().filesystem_exception_provenance(),
+            HostIoExceptionProvenance::ProviderInternal,
+            "recording journals cannot replace live provider outcomes"
+        );
+        assert_eq!(
+            InMemoryHostEffectJournal::replaying(Vec::new()).filesystem_exception_provenance(),
+            HostIoExceptionProvenance::Unknown,
+            "caller-supplied replay outcomes require fail-high provenance"
+        );
     }
 
     #[test]

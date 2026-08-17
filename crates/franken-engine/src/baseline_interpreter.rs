@@ -71,7 +71,8 @@ use frankenengine_core::object_model::{
 };
 use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal;
 use frankenengine_extension_host::host_io::{
-    FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoProvider, HostIoRecorder,
+    FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoExceptionProvenance, HostIoProvider,
+    HostIoRecorder,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRequest,
@@ -11841,6 +11842,23 @@ impl InterpreterCore {
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
         };
+        let provider_exception_provenance = provider.filesystem_exception_provenance();
+        let effect_source_exception_provenance = self.host_effect_journal.as_ref().map_or_else(
+            || {
+                self.host_io_recorder
+                    .as_ref()
+                    .map_or(HostIoExceptionProvenance::ProviderInternal, |recorder| {
+                        recorder.filesystem_exception_provenance()
+                    })
+            },
+            |journal| journal.filesystem_exception_provenance(),
+        );
+        let filesystem_exception_label =
+            match provider_exception_provenance.combine(effect_source_exception_provenance) {
+                HostIoExceptionProvenance::ProviderInternal => Label::Internal,
+                HostIoExceptionProvenance::Unknown => Label::TopSecret,
+            }
+            .join(&self.join_arg_range_label(args)?);
         let mut raw_args = Vec::with_capacity(args.count as usize);
         for offset in 0..args.count {
             raw_args.push(self.read_reg(args.start + offset)?);
@@ -11956,9 +11974,14 @@ impl InterpreterCore {
                 let error = InterpreterError::HostFilesystem { code, message };
                 if let Some(closure_id) = callback_closure {
                     let thrown = self.native_error_to_thrown_value(&error)?;
-                    self.schedule_io_callback(closure_id, vec![thrown])?;
+                    self.schedule_io_callback_with_label(
+                        closure_id,
+                        vec![thrown],
+                        filesystem_exception_label,
+                    )?;
                     return Ok(Value::Undefined);
                 }
+                self.replace_pending_hostcall_result_label(Some(filesystem_exception_label))?;
                 return Err(error);
             }
             Err(err) => {
@@ -12200,9 +12223,10 @@ impl InterpreterCore {
     }
 
     /// Schedule an I/O-lane callback under the aggregate label of the data
-    /// delivered to it. Existing host-I/O callers use the public wrapper;
-    /// pure zlib callbacks pass their input/dictionary label so deferred
-    /// callback execution cannot launder classified Buffer backing storage.
+    /// delivered to it. Success-only host-I/O callers use the public wrapper;
+    /// filesystem errors pass provider plus request provenance, and pure zlib
+    /// callbacks pass their input/dictionary label, so deferred execution
+    /// cannot launder classified state.
     fn schedule_io_callback_with_label(
         &mut self,
         closure_id: u32,
@@ -38100,7 +38124,11 @@ impl InterpreterCore {
                             || self.nearest_async_call_depth().is_some()) =>
                 {
                     let thrown = self.native_error_to_thrown_value(&err)?;
-                    let thrown_label = self.clone_active_execution_context_label()?;
+                    let thrown_label = self.clone_active_execution_context_label()?.join(
+                        &self
+                            .take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public),
+                    );
                     self.pending_finally_entry = None;
                     self.suspend_current_abrupt_completion()?;
                     // A native fault is control-dependent on the active method
@@ -78092,6 +78120,7 @@ mod async_runtime_tests_current {
     use crate::ir_contract::{
         CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
     };
+    use frankenengine_extension_host::host_io::{HostIoError, HostIoOutcome, HostIoRequest};
 
     fn test_module_with_functions(
         instructions: Vec<Ir3Instruction>,
@@ -78119,6 +78148,48 @@ mod async_runtime_tests_current {
             RuntimeCapability::HeapAllocate,
         ]);
         InterpreterCore::new(config, "async-runtime-test")
+    }
+
+    #[derive(Debug)]
+    struct UnknownFsErrorProvider;
+
+    impl HostIoProvider for UnknownFsErrorProvider {
+        fn name(&self) -> &str {
+            "unknown-fs-error-provider"
+        }
+
+        fn perform(
+            &self,
+            _request: &frankenengine_extension_host::host_io::HostIoRequest,
+            _granted: &[frankenengine_extension_host::host_io::HostIoCapability],
+        ) -> frankenengine_extension_host::host_io::HostIoOutcome {
+            Err(frankenengine_extension_host::host_io::HostIoError::Fs {
+                code: "ENOENT".to_string(),
+                detail: "provider-owned missing path".to_string(),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnknownFsReplayRecorder;
+
+    impl HostIoRecorder for UnknownFsReplayRecorder {
+        fn begin_execution(&self) -> Result<(), HostIoError> {
+            Ok(())
+        }
+
+        fn replay(&self, _request: &HostIoRequest) -> Option<HostIoOutcome> {
+            Some(Err(HostIoError::Fs {
+                code: "ENOENT".to_string(),
+                detail: "replay-owned missing path".to_string(),
+            }))
+        }
+
+        fn record(&self, _request: &HostIoRequest, _outcome: &HostIoOutcome) {}
+
+        fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError> {
+            Ok(Vec::new())
+        }
     }
 
     fn calibrate_readable_memory_ceiling<T, F, O>(fixture: F, operation: O) -> u64
@@ -80076,6 +80147,123 @@ mod async_runtime_tests_current {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn filesystem_provider_error_label_reaches_sync_catch_binding_bd_padqo() {
+        use frankenengine_extension_host::host_io::SandboxedHostIo;
+
+        fn caught_label(
+            provider: Arc<dyn HostIoProvider>,
+            recorder: Option<Arc<dyn HostIoRecorder>>,
+            path_label: Label,
+        ) -> (Value, Label) {
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::BeginTry {
+                        catch_target: 2,
+                        finally_target: None,
+                    },
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("fs:read".to_string()),
+                        args: RegRange { start: 8, count: 1 },
+                        dst: 3,
+                    },
+                    Ir3Instruction::EnterCatch { dst: 1 },
+                    Ir3Instruction::Halt,
+                ],
+                vec![],
+            );
+            let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::FsRead);
+            core.set_host_io(provider, recorder);
+            core.write_reg_with_label(8, Value::str("missing"), path_label)
+                .expect("path register");
+            core.execute(&module)
+                .expect("provider filesystem error should reach the catch handler");
+            (
+                core.read_reg(1).expect("caught error value"),
+                core.get_register_label(1)
+                    .expect("caught error label")
+                    .clone(),
+            )
+        }
+
+        let scratch = tempfile::tempdir().expect("sandbox root");
+        let sandbox = Arc::new(
+            SandboxedHostIo::with_root(scratch.path()).expect("canonical sandbox provider"),
+        );
+        let (caught, label) = caught_label(sandbox.clone(), None, Label::Public);
+        assert!(
+            matches!(caught, Value::Object(_)),
+            "caught value is an Error object"
+        );
+        assert_eq!(
+            label,
+            Label::Internal,
+            "a public request joins with the canonical provider's Internal state"
+        );
+
+        let (_, label) = caught_label(sandbox.clone(), None, Label::Secret);
+        assert_eq!(
+            label,
+            Label::Secret,
+            "the direct path label must survive the provider error and catch edge"
+        );
+
+        let (_, label) = caught_label(Arc::new(UnknownFsErrorProvider), None, Label::Public);
+        assert_eq!(
+            label,
+            Label::TopSecret,
+            "a custom provider that does not authenticate provenance must fail high"
+        );
+
+        let (_, label) = caught_label(
+            sandbox,
+            Some(Arc::new(UnknownFsReplayRecorder)),
+            Label::Public,
+        );
+        assert_eq!(
+            label,
+            Label::TopSecret,
+            "a replay source that can replace the provider outcome must fail high"
+        );
+    }
+
+    #[test]
+    fn filesystem_provider_error_labels_deferred_callback_bd_padqo() {
+        use frankenengine_extension_host::host_io::SandboxedHostIo;
+
+        let scratch = tempfile::tempdir().expect("sandbox root");
+        let provider = Arc::new(
+            SandboxedHostIo::with_root(scratch.path()).expect("canonical sandbox provider"),
+        );
+        let mut core = test_interpreter();
+        core.set_host_io(provider, None);
+        core.write_reg_with_label(0, Value::str("secret-token"), Label::Secret)
+            .expect("secret path register");
+        core.write_reg_with_label(1, Value::Closure(77), Label::Public)
+            .expect("callback register");
+
+        let result = core
+            .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 })
+            .expect("callback-form provider error is delivered asynchronously");
+        assert_eq!(result, Value::Undefined);
+        assert!(
+            core.pending_hostcall_result_label.is_none(),
+            "callback delivery must not leave a synchronous error label behind"
+        );
+        assert_eq!(
+            core.event_loop
+                .turn()
+                .macrotask
+                .expect("filesystem error callback")
+                .label,
+            Label::Secret,
+            "the scheduled callback must inherit provider plus path provenance"
+        );
     }
 
     /// bd-656a2 (http leg): when a sandboxed host-I/O provider is installed, the

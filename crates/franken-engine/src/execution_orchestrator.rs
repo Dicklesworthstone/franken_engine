@@ -94,7 +94,8 @@ use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::host_io::{
-    HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
+    HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
+    HostIoRecorder, HostIoRequest,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnProvider, ProcessSpawnRequest,
@@ -177,6 +178,10 @@ impl CellAuthorizedHostIoProvider {
 impl HostIoProvider for CellAuthorizedHostIoProvider {
     fn name(&self) -> &str {
         self.provider.name()
+    }
+
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.provider.filesystem_exception_provenance()
     }
 
     fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
@@ -2207,7 +2212,12 @@ impl ExecutionOrchestrator {
         // attempt would have carried, instead of forcing product callers to
         // mint a substitute label for evidence they did not produce.
         self.last_failed_trace_id = Some(trace_id.clone());
-        let prepared = self.prepare_lowering_output(package, &trace_id, &decision_id)?;
+        let prepared = self.prepare_lowering_output_with_host_effect_journal(
+            package,
+            &trace_id,
+            &decision_id,
+            host_effect_journal.as_deref(),
+        )?;
         self.ensure_not_cancelled()?;
         let PreparedLoweringOutput {
             source_label,
@@ -2879,6 +2889,21 @@ impl ExecutionOrchestrator {
         trace_id: &str,
         decision_id: &str,
     ) -> Result<PreparedLoweringOutput, OrchestratorError> {
+        self.prepare_lowering_output_with_host_effect_journal(
+            package,
+            trace_id,
+            decision_id,
+            self.host_effect_journal.as_deref(),
+        )
+    }
+
+    fn prepare_lowering_output_with_host_effect_journal(
+        &self,
+        package: &ExtensionPackage,
+        trace_id: &str,
+        decision_id: &str,
+        host_effect_journal: Option<&InMemoryHostEffectJournal>,
+    ) -> Result<PreparedLoweringOutput, OrchestratorError> {
         let source_label = format!("ext:{}", package.extension_id);
         let effective_source_label = package.source_file.as_deref().unwrap_or(&source_label);
         let prepared = prepare_source_entry_for_public_entrypoints(
@@ -2905,8 +2930,26 @@ impl ExecutionOrchestrator {
             &source_label
         };
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
+        let host_io_exception_provenance =
+            self.host_io
+                .as_ref()
+                .map_or(HostIoExceptionProvenance::Unknown, |provider| {
+                    let provider_provenance = provider.filesystem_exception_provenance();
+                    let effect_source_provenance = host_effect_journal.map_or_else(
+                        || {
+                            self.host_io_recorder
+                                .as_ref()
+                                .map_or(HostIoExceptionProvenance::ProviderInternal, |recorder| {
+                                    recorder.filesystem_exception_provenance()
+                                })
+                        },
+                        InMemoryHostEffectJournal::filesystem_exception_provenance,
+                    );
+                    provider_provenance.combine(effect_source_provenance)
+                });
         let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id)
-            .with_ambient_authority_grant(self.ambient_authority_grant);
+            .with_ambient_authority_grant(self.ambient_authority_grant)
+            .with_host_io_exception_provenance(host_io_exception_provenance);
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         Ok(PreparedLoweringOutput {
             source_label,

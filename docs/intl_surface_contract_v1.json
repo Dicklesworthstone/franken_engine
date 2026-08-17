@@ -269,10 +269,11 @@
       "path": "crates/franken-node/src/ops/engine_dispatcher.rs",
       "start_anchor": "    fn run_engine_native_guarded(",
       "end_anchor": "    fn build_host_effect_ledger(",
-      "sha256": "dc6552c6bb0f56c31e1998fa0b32365745d86d501fed9ef59ba9d8e59854079d",
+      "sha256": "ca2d398a5575100a1be2fbb3f3cacf34dd1736d07e6308482c577d341b1739ee",
       "required_markers": [
         "frankenengine_extension_host",
-        "NativeEngineCancellation",
+        "orchestrator.set_cancellation_token(cancellation.token().clone())",
+        "CancellationGatedHostIo::new",
         "ExecutionOrchestrator::try_new_with_runtime_config_and_authority",
         "orchestrator.execute(&package)"
       ],

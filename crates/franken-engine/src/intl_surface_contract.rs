@@ -1612,7 +1612,8 @@ fn authority_specs() -> Vec<AuthoritySpec> {
             end_anchor: "    fn build_host_effect_ledger(",
             required_markers: &[
                 "frankenengine_extension_host",
-                "NativeEngineCancellation",
+                "orchestrator.set_cancellation_token(cancellation.token().clone())",
+                "CancellationGatedHostIo::new",
                 // Renamed in the schema-v2 Runtime/Lab evidence-authority
                 // split (dedd88284): the supervised native path now threads an
                 // explicit runtime evidence authority (bd-vpxgj).

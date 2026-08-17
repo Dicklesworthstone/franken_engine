@@ -661,17 +661,29 @@ impl FullCapsHandler {
     }
 }
 
-const fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
+/// Stable internal category used when a redacted provider error proves that
+/// the executable does not exist.  The raw provider code remains only in the
+/// typed journal; guest diagnostics must not recover it from `Display` text.
+pub(crate) const PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE: &str =
+    "PROCESS_SPAWN_EXECUTABLE_NOT_FOUND";
+
+fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
     match error {
         ProcessSpawnError::Denied { .. } => "PROCESS_SPAWN_DENIED",
         ProcessSpawnError::FlowPolicyBlocked => "PROCESS_SPAWN_FLOW_POLICY_BLOCKED",
         ProcessSpawnError::CapabilityMissing { .. } => "PROCESS_SPAWN_CAPABILITY_MISSING",
+        ProcessSpawnError::PolicyViolation { code, .. } if code == "executable_alias_denied" => {
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
+        }
         ProcessSpawnError::PolicyViolation { .. } => "PROCESS_SPAWN_POLICY_VIOLATION",
         ProcessSpawnError::LimitExceeded { .. } => "PROCESS_SPAWN_LIMIT_EXCEEDED",
         ProcessSpawnError::UnknownHandle { .. } => "PROCESS_SPAWN_UNKNOWN_HANDLE",
         ProcessSpawnError::InvalidState { .. } => "PROCESS_SPAWN_INVALID_STATE",
         ProcessSpawnError::NotImplemented { .. } => "PROCESS_SPAWN_NOT_IMPLEMENTED",
         ProcessSpawnError::TimedOut { .. } => "PROCESS_SPAWN_TIMED_OUT",
+        ProcessSpawnError::Io { operation, .. } if operation == "canonicalize executable" => {
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
+        }
         ProcessSpawnError::Io { .. } => "PROCESS_SPAWN_IO",
         ProcessSpawnError::ReplayDivergence { .. } => "PROCESS_SPAWN_REPLAY_DIVERGENCE",
     }
@@ -2202,6 +2214,36 @@ mod tests {
     }
 
     #[test]
+    fn process_spawn_error_code_classifies_only_allowlisted_not_found_causes_bd_x85a7_3() {
+        let alias_denial = ProcessSpawnError::PolicyViolation {
+            code: "executable_alias_denied".to_string(),
+            detail: "redacted by Display".to_string(),
+        };
+        assert_eq!(
+            process_spawn_error_code(&alias_denial),
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
+        );
+
+        let canonicalize_failure = ProcessSpawnError::Io {
+            operation: "canonicalize executable".to_string(),
+            detail: "redacted by Display".to_string(),
+        };
+        assert_eq!(
+            process_spawn_error_code(&canonicalize_failure),
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
+        );
+
+        let unrelated_policy = ProcessSpawnError::PolicyViolation {
+            code: "working_directory_denied".to_string(),
+            detail: "redacted by Display".to_string(),
+        };
+        assert_eq!(
+            process_spawn_error_code(&unrelated_policy),
+            "PROCESS_SPAWN_POLICY_VIOLATION"
+        );
+    }
+
+    #[test]
     fn process_provider_is_an_orthogonal_explicit_capability_witness_bd_x85a7() {
         let effect = create_process_spawn_effect(process_run_request());
         let mut ordinary_full = create_handler_stack_from_profile(&CapabilityProfile::full());
@@ -2499,7 +2541,7 @@ mod tests {
         assert!(matches!(
             error,
             EffectError::HandlerError { ref code, .. }
-                if code.as_deref() == Some("PROCESS_SPAWN_POLICY_VIOLATION")
+                if code.as_deref() == Some(PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE)
         ));
         assert_eq!(
             provider
@@ -2560,15 +2602,20 @@ mod tests {
         let error = stack
             .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
             .unwrap_err();
-        assert!(matches!(
-            error,
-            EffectError::HandlerError {
-                ref message,
-                ref code,
-                ..
-            } if code.as_deref() == Some("PROCESS_SPAWN_POLICY_VIOLATION")
-                && message.contains("executable_alias_denied")
-        ));
+        assert!(
+            matches!(
+                &error,
+                EffectError::HandlerError {
+                    message,
+                    code,
+                    ..
+                } if code.as_deref() == Some(PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE)
+                    && message.contains("redacted code (23 bytes)")
+                    && !message.contains("executable_alias_denied")
+                    && !message.contains("bare executable alias missing is not signed into policy")
+            ),
+            "unexpected redacted provider denial: {error:?}"
+        );
         assert!(matches!(
             journal.finish_execution().unwrap().as_slice(),
             [HostEffectJournalEntry::ProcessSpawn {

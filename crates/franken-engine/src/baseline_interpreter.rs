@@ -89,8 +89,9 @@ use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
-    InterpreterTimerOutcome, InterpreterTimerRequest, TimerEffectAuthority, TimerEffectPermit,
-    TimerOperation, create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
+    InterpreterTimerOutcome, InterpreterTimerRequest, PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
+    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_fs_effect,
+    create_handler_stack_from_profile_with_effect_providers,
     create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
     create_interpreter_timer_handler_stack, create_network_effect, create_process_spawn_effect,
 };
@@ -10772,19 +10773,14 @@ impl InterpreterCore {
                 code: Some(code),
                 ..
             } => {
-                let node_code = if message.contains("executable_alias_denied")
-                    || message.contains("canonicalize executable")
-                {
-                    "ENOENT"
-                } else {
-                    match code.as_str() {
-                        "PROCESS_SPAWN_TIMED_OUT" => "ETIMEDOUT",
-                        "PROCESS_SPAWN_LIMIT_EXCEEDED" => "ENOBUFS",
-                        "PROCESS_SPAWN_POLICY_VIOLATION"
-                        | "PROCESS_SPAWN_DENIED"
-                        | "PROCESS_SPAWN_CAPABILITY_MISSING" => "EACCES",
-                        _ => code.as_str(),
-                    }
+                let node_code = match code.as_str() {
+                    PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE => "ENOENT",
+                    "PROCESS_SPAWN_TIMED_OUT" => "ETIMEDOUT",
+                    "PROCESS_SPAWN_LIMIT_EXCEEDED" => "ENOBUFS",
+                    "PROCESS_SPAWN_POLICY_VIOLATION"
+                    | "PROCESS_SPAWN_DENIED"
+                    | "PROCESS_SPAWN_CAPABILITY_MISSING" => "EACCES",
+                    _ => code.as_str(),
                 };
                 InterpreterError::HostProcess {
                     code: node_code.to_string(),
@@ -95214,6 +95210,8 @@ mod async_runtime_tests_current {
         let seed = core
             .capture_execution_seed()
             .expect("test execution-seed capture must fit");
+        core.materialize_pending_lazy_seeds_with_current_state();
+        assert!(!seed.is_lazy());
         let baseline_heap_len = core.heap.len();
         let baseline_bytes = core.estimated_memory_bytes();
         let original_listener =
@@ -103842,6 +103840,32 @@ mod tests {
         assert_eq!(compact.iteration_traces, baseline.iteration_traces);
         assert_eq!(compact.nondeterminism_trace, baseline.nondeterminism_trace);
         assert_eq!(compact.generated_code_audit, baseline.generated_code_audit);
+    }
+
+    #[test]
+    fn process_effect_error_mapping_uses_structured_not_found_code_bd_x85a7_3() {
+        let redacted = "process policy violation: redacted code (23 bytes), detail (55 bytes)";
+        let not_found = InterpreterCore::process_error_from_effect(EffectError::HandlerError {
+            handler: "process_spawn_handler".to_string(),
+            message: redacted.to_string(),
+            code: Some(PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE.to_string()),
+        });
+        assert!(matches!(
+            not_found,
+            InterpreterError::HostProcess { code, message, .. }
+                if code == "ENOENT" && message == redacted
+        ));
+
+        let denied = InterpreterCore::process_error_from_effect(EffectError::HandlerError {
+            handler: "process_spawn_handler".to_string(),
+            message: redacted.to_string(),
+            code: Some("PROCESS_SPAWN_POLICY_VIOLATION".to_string()),
+        });
+        assert!(matches!(
+            denied,
+            InterpreterError::HostProcess { code, message, .. }
+                if code == "EACCES" && message == redacted
+        ));
     }
 
     fn execute_compact_and_baseline(

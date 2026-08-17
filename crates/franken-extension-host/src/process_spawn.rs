@@ -424,6 +424,50 @@ pub enum ProcessSpawnError {
     },
 }
 
+/// Stable `Io.operation` discriminator for an executable canonicalization
+/// failure whose original [`std::io::ErrorKind`] was [`std::io::ErrorKind::NotFound`].
+pub const PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION: &str =
+    "canonicalize executable:not_found";
+
+/// Stable `Io.operation` discriminator for every new executable
+/// canonicalization failure other than [`std::io::ErrorKind::NotFound`].
+pub const PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_OTHER_IO_OPERATION: &str =
+    "canonicalize executable:other_io";
+
+/// Pre-discriminator journals used this operation for every canonicalization
+/// error and projected it to guest `ENOENT`. New in-tree producers never emit
+/// it, but replay consumers retain the historical projection exactly.
+pub const PROCESS_SPAWN_LEGACY_CANONICALIZE_EXECUTABLE_OPERATION: &str = "canonicalize executable";
+
+/// Stable `Io.operation` discriminator when `Command::spawn` returns
+/// [`std::io::ErrorKind::NotFound`] after validation, including executable,
+/// script-interpreter, or working-directory races.
+pub const PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION: &str = "spawn:not_found";
+
+fn executable_canonicalize_error(error: std::io::Error) -> ProcessSpawnError {
+    let operation = if error.kind() == std::io::ErrorKind::NotFound {
+        PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION
+    } else {
+        PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_OTHER_IO_OPERATION
+    };
+    ProcessSpawnError::Io {
+        operation: operation.to_string(),
+        detail: error.to_string(),
+    }
+}
+
+fn executable_spawn_error(error: std::io::Error) -> ProcessSpawnError {
+    let operation = if error.kind() == std::io::ErrorKind::NotFound {
+        PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION
+    } else {
+        "spawn"
+    };
+    ProcessSpawnError::Io {
+        operation: operation.to_string(),
+        detail: error.to_string(),
+    }
+}
+
 impl fmt::Debug for ProcessSpawnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -692,10 +736,7 @@ impl ProcessSpawnPolicy {
         executable: impl AsRef<Path>,
     ) -> Result<String, ProcessSpawnError> {
         let canonical =
-            std::fs::canonicalize(executable.as_ref()).map_err(|error| ProcessSpawnError::Io {
-                operation: "canonicalize executable".to_string(),
-                detail: error.to_string(),
-            })?;
+            std::fs::canonicalize(executable.as_ref()).map_err(executable_canonicalize_error)?;
         if !canonical.is_file() {
             return Err(ProcessSpawnError::PolicyViolation {
                 code: "executable_not_file".to_string(),
@@ -978,10 +1019,7 @@ impl NativeProcessSpawn {
         enforce_limit("argv_bytes", argv_bytes, self.policy.limits.max_argv_bytes)?;
 
         let executable =
-            std::fs::canonicalize(&launch.executable).map_err(|error| ProcessSpawnError::Io {
-                operation: "canonicalize executable".to_string(),
-                detail: error.to_string(),
-            })?;
+            std::fs::canonicalize(&launch.executable).map_err(executable_canonicalize_error)?;
         let executable_string = path_string(&executable)?;
         if executable_string != launch.executable {
             return Err(policy_error(
@@ -1194,10 +1232,7 @@ impl NativeProcessSpawn {
             .stderr(to_stdio(launch.stdio.stderr));
         #[cfg(unix)]
         command.process_group(0);
-        let mut child = command.spawn().map_err(|error| ProcessSpawnError::Io {
-            operation: "spawn".to_string(),
-            detail: error.to_string(),
-        })?;
+        let mut child = command.spawn().map_err(executable_spawn_error)?;
         #[cfg(unix)]
         let process_group = rustix::process::Pid::from_child(&child);
 
@@ -2569,6 +2604,63 @@ mod tests {
             error,
             serde_json::from_str::<ProcessSpawnError>(&json).expect("deserialize error")
         );
+    }
+
+    #[test]
+    fn executable_canonicalization_preserves_only_not_found_as_a_stable_discriminator() {
+        let not_found = executable_canonicalize_error(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing executable",
+        ));
+        assert!(matches!(
+            &not_found,
+            ProcessSpawnError::Io { operation, detail }
+                if operation == PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION
+                    && detail == "missing executable"
+        ));
+        let encoded = serde_json::to_value(&not_found).expect("serialize not-found error");
+        assert_eq!(encoded["kind"], "io");
+        assert_eq!(
+            encoded["operation"],
+            PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION
+        );
+        assert_eq!(
+            serde_json::from_value::<ProcessSpawnError>(encoded)
+                .expect("deserialize not-found error"),
+            not_found
+        );
+
+        let permission_denied = executable_canonicalize_error(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        ));
+        assert!(matches!(
+            permission_denied,
+            ProcessSpawnError::Io { operation, detail }
+                if operation == PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_OTHER_IO_OPERATION
+                    && detail == "permission denied"
+        ));
+
+        let spawn_not_found = executable_spawn_error(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing script interpreter",
+        ));
+        assert!(matches!(
+            spawn_not_found,
+            ProcessSpawnError::Io { operation, detail }
+                if operation == PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION
+                    && detail == "missing script interpreter"
+        ));
+
+        let spawn_permission_denied = executable_spawn_error(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "spawn permission denied",
+        ));
+        assert!(matches!(
+            spawn_permission_denied,
+            ProcessSpawnError::Io { operation, detail }
+                if operation == "spawn" && detail == "spawn permission denied"
+        ));
     }
 
     #[test]

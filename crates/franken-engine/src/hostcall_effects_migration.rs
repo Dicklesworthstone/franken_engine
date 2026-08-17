@@ -28,8 +28,11 @@ use frankenengine_extension_host::host_io::{
     HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
 };
 use frankenengine_extension_host::process_spawn::{
-    ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRecorder,
-    ProcessSpawnRequest, ProcessSpawnResponse, perform_recorded,
+    PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION,
+    PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION,
+    PROCESS_SPAWN_LEGACY_CANONICALIZE_EXECUTABLE_OPERATION, ProcessSpawnCapability,
+    ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRecorder, ProcessSpawnRequest,
+    ProcessSpawnResponse, perform_recorded,
 };
 
 // ---------------------------------------------------------------------------
@@ -661,9 +664,10 @@ impl FullCapsHandler {
     }
 }
 
-/// Stable internal category used when a redacted provider error proves that
-/// the executable does not exist.  The raw provider code remains only in the
-/// typed journal; guest diagnostics must not recover it from `Display` text.
+/// Stable guest category for typed in-tree `NotFound` outcomes, the
+/// executable-alias privacy projection, and the legacy replay projection.
+/// Raw provider evidence remains only in the typed journal; guest diagnostics
+/// must not recover it from `Display` text.
 pub(crate) const PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE: &str =
     "PROCESS_SPAWN_EXECUTABLE_NOT_FOUND";
 
@@ -681,7 +685,11 @@ fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
         ProcessSpawnError::InvalidState { .. } => "PROCESS_SPAWN_INVALID_STATE",
         ProcessSpawnError::NotImplemented { .. } => "PROCESS_SPAWN_NOT_IMPLEMENTED",
         ProcessSpawnError::TimedOut { .. } => "PROCESS_SPAWN_TIMED_OUT",
-        ProcessSpawnError::Io { operation, .. } if operation == "canonicalize executable" => {
+        ProcessSpawnError::Io { operation, .. }
+            if operation == PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION
+                || operation == PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION
+                || operation == PROCESS_SPAWN_LEGACY_CANONICALIZE_EXECUTABLE_OPERATION =>
+        {
             PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
         }
         ProcessSpawnError::Io { .. } => "PROCESS_SPAWN_IO",
@@ -1627,8 +1635,8 @@ mod tests {
     };
     use frankenengine_extension_host::host_io::HostIoCapability;
     use frankenengine_extension_host::process_spawn::{
-        InMemoryProcessSpawnTranscript, ProcessExit, ProcessLaunch, ProcessSpawnOutcome,
-        ProcessStdio,
+        InMemoryProcessSpawnTranscript, PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_OTHER_IO_OPERATION,
+        ProcessExit, ProcessLaunch, ProcessSpawnOutcome, ProcessStdio,
     };
     use std::collections::BTreeMap;
 
@@ -2214,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn process_spawn_error_code_classifies_only_allowlisted_not_found_causes_bd_x85a7_3() {
+    fn process_spawn_error_code_classifies_only_allowlisted_not_found_projections_bd_x85a7_3() {
         let alias_denial = ProcessSpawnError::PolicyViolation {
             code: "executable_alias_denied".to_string(),
             detail: "redacted by Display".to_string(),
@@ -2225,11 +2233,38 @@ mod tests {
         );
 
         let canonicalize_failure = ProcessSpawnError::Io {
-            operation: "canonicalize executable".to_string(),
+            operation: PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION.to_string(),
             detail: "redacted by Display".to_string(),
         };
         assert_eq!(
             process_spawn_error_code(&canonicalize_failure),
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
+        );
+
+        let legacy_canonicalize_failure = ProcessSpawnError::Io {
+            operation: PROCESS_SPAWN_LEGACY_CANONICALIZE_EXECUTABLE_OPERATION.to_string(),
+            detail: "redacted by Display".to_string(),
+        };
+        assert_eq!(
+            process_spawn_error_code(&legacy_canonicalize_failure),
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
+        );
+
+        let other_canonicalize_failure = ProcessSpawnError::Io {
+            operation: PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_OTHER_IO_OPERATION.to_string(),
+            detail: "redacted by Display".to_string(),
+        };
+        assert_eq!(
+            process_spawn_error_code(&other_canonicalize_failure),
+            "PROCESS_SPAWN_IO"
+        );
+
+        let spawn_not_found = ProcessSpawnError::Io {
+            operation: PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION.to_string(),
+            detail: "redacted by Display".to_string(),
+        };
+        assert_eq!(
+            process_spawn_error_code(&spawn_not_found),
             PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE
         );
 
@@ -2241,6 +2276,70 @@ mod tests {
             process_spawn_error_code(&unrelated_policy),
             "PROCESS_SPAWN_POLICY_VIOLATION"
         );
+    }
+
+    #[test]
+    fn process_io_discriminators_replay_without_provider_perform_dispatch_bd_x85a7_3() {
+        for (operation, expected_code) in [
+            (
+                PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION,
+                PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
+            ),
+            (
+                PROCESS_SPAWN_LEGACY_CANONICALIZE_EXECUTABLE_OPERATION,
+                PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
+            ),
+            (
+                PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_OTHER_IO_OPERATION,
+                "PROCESS_SPAWN_IO",
+            ),
+            (
+                PROCESS_SPAWN_EXECUTABLE_SPAWN_NOT_FOUND_OPERATION,
+                PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
+            ),
+            ("spawn", "PROCESS_SPAWN_IO"),
+        ] {
+            let request = process_run_request();
+            let recorded_error = ProcessSpawnError::Io {
+                operation: operation.to_string(),
+                detail: "sensitive process I/O detail".to_string(),
+            };
+            let entry = HostEffectJournalEntry::ProcessSpawn {
+                request: request.clone(),
+                outcome: Err(recorded_error),
+            };
+            let encoded = serde_json::to_vec(&entry).expect("serialize process journal entry");
+            let decoded: HostEffectJournalEntry =
+                serde_json::from_slice(&encoded).expect("deserialize process journal entry");
+            assert_eq!(decoded, entry);
+            let journal = Arc::new(InMemoryHostEffectJournal::replaying(vec![entry.clone()]));
+            journal.begin_execution().expect("begin replay");
+            let provider = Arc::new(RecordingProcessSpawn::default());
+            let mut stack = create_handler_stack_from_profile_with_effect_providers(
+                &CapabilityProfile::compute_only(),
+                None,
+                None,
+                Some(provider.clone()),
+                None,
+                Some(journal.clone()),
+            );
+
+            let error = stack
+                .handle_effect(create_process_spawn_effect(request).as_ref())
+                .expect_err("recorded process I/O outcome must replay as an error");
+            assert!(matches!(
+                error,
+                EffectError::HandlerError { ref code, ref message, .. }
+                    if code.as_deref() == Some(expected_code)
+                        && message.contains("redacted operation")
+                        && !message.contains("sensitive process I/O detail")
+            ));
+            assert!(
+                provider.seen.lock().unwrap().is_empty(),
+                "replay must not dispatch the provider's perform side effect for {operation}"
+            );
+            assert_eq!(journal.finish_execution().unwrap(), vec![entry]);
+        }
     }
 
     #[test]

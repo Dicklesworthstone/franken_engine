@@ -6247,7 +6247,16 @@ pub fn lower_ir2_to_ir3(
     // (bd-fqlfw.2.11.1: "expected function, got boolean").
     let mut register_cursor: Reg = 1;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
-    let mut required_capabilities = BTreeSet::<String>::new();
+    // IR2 is the authoritative capability declaration boundary. Rebuilding
+    // this set from only IR3 HostCall instructions silently dropped declared
+    // non-HostCall effects such as `ImportModule` (`module.import`). Preserve
+    // the complete IR2 set, then union in any guards/capabilities synthesized
+    // while lowering deferred bodies.
+    let mut required_capabilities = ir2
+        .required_capabilities
+        .iter()
+        .map(|capability| capability.0.clone())
+        .collect::<BTreeSet<_>>();
     let mut value_stack: Vec<Reg> = Vec::new();
     let mut label_targets = BTreeMap::<u32, u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
@@ -13620,6 +13629,39 @@ mod tests {
             })
             .expect("dynamic hostcall");
         assert!(guard_index < invoke_index);
+    }
+
+    #[test]
+    fn import_module_capability_survives_ir2_to_ir3_bd_iyp3h() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"module-import-capability"),
+            "module_import_capability.js",
+        );
+        ir1.ops.push(Ir1Op::ImportModule {
+            specifier: "./dependency.js".into(),
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("ImportModule should lower to IR2")
+            .module;
+        assert_eq!(
+            ir2.required_capabilities,
+            vec![CapabilityTag("module.import".to_string())]
+        );
+
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("ImportModule should lower to IR3")
+            .module;
+        assert_eq!(
+            ir3.required_capabilities,
+            vec![CapabilityTag("module.import".to_string())]
+        );
+        assert!(
+            ir3.instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::ImportModule { .. }))
+        );
     }
 
     #[test]

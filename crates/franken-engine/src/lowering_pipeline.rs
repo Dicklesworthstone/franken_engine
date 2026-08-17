@@ -26441,6 +26441,17 @@ mod tests {
             "provider authentication must not erase the direct path operand label"
         );
 
+        let sync_secret_content = "const fs = require('fs'); try { fs.writeFileSync('missing-parent/output.txt', 'secret-token'); } catch (error) { console.log(error); }";
+        assert_eq!(
+            catch_console_flow(
+                "secret_content",
+                sync_secret_content,
+                HostIoExceptionProvenance::ProviderInternal,
+            ),
+            (Label::Secret, true),
+            "provider authentication must not erase the direct write-content label"
+        );
+
         let callback = "const fs = require('fs'); try { fs.readFile('missing', () => {}); } catch (error) { console.log(error); }";
         assert_eq!(
             catch_console_flow(

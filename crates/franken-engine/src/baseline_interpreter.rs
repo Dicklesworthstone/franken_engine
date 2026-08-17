@@ -80213,6 +80213,40 @@ mod async_runtime_tests_current {
             "the direct path label must survive the provider error and catch edge"
         );
 
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 2,
+                    finally_target: None,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("fs:write".to_string()),
+                    args: RegRange { start: 8, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::FsWrite);
+        core.set_host_io(sandbox.clone(), None);
+        core.write_reg_with_label(8, Value::str("missing-parent/output.txt"), Label::Public)
+            .expect("write path register");
+        core.write_reg_with_label(9, Value::str("payload"), Label::Secret)
+            .expect("write content register");
+        core.execute(&module)
+            .expect("provider write error should reach the catch handler");
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("caught write error label"),
+            &Label::Secret,
+            "the direct write-content label must survive the provider error and catch edge"
+        );
+
         let (_, label) = caught_label(Arc::new(UnknownFsErrorProvider), None, Label::Public);
         assert_eq!(
             label,

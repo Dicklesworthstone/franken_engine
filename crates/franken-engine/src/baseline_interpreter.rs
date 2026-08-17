@@ -25105,29 +25105,37 @@ impl InterpreterCore {
             return Ok(false);
         }
         let next_value = match &projected.source {
-            Value::Str(text) if projected.next_index == 0 => Some(Value::Str(text.clone())),
+            Value::Str(text) if projected.next_index == 0 => {
+                Some((Value::Str(text.clone()), Label::Public))
+            }
             Value::Str(_) => None,
             Value::Object(source_id) => {
                 let length = self.array_like_length(*source_id)?;
                 if projected.next_index < length {
-                    Some(
+                    let key = RuntimePropertyKey::String(JsString::from(
+                        projected.next_index.to_string(),
+                    ));
+                    Some((
                         self.array_index_value(*source_id, projected.next_index)?
                             .unwrap_or(Value::Undefined),
-                    )
+                        self.runtime_property_label(*source_id, &key),
+                    ))
                 } else {
                     None
                 }
             }
             _ => None,
         };
-        if let Some(value) = next_value {
+        if let Some((value, value_label)) = next_value {
+            let chunk_label = projected.lifecycle_label.join(&value_label);
+            projected.lifecycle_label = chunk_label.clone();
             projected
                 .buffer
                 .try_reserve(1)
                 .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
             projected.buffer.push_back(ReadableBufferedChunk {
                 value,
-                label: projected.lifecycle_label.clone(),
+                label: chunk_label,
                 units: 1,
             });
             projected.next_index = projected.next_index.saturating_add(1);
@@ -32291,9 +32299,29 @@ impl InterpreterCore {
                             .ok_or(InterpreterError::RegisterOutOfBounds {
                                 register: args.start,
                                 max: self.config.max_registers,
-                            })?;
+                    })?;
                     let element = self.read_reg(reg)?;
-                    self.set_object_property(arr_id, next_index.to_string(), element)?;
+                    let element_label = self.get_register_label(reg)?.clone();
+                    let element_key = RuntimePropertyKey::String(JsString::from(
+                        next_index.to_string(),
+                    ));
+                    let previous_label =
+                        self.own_stored_runtime_property_label(arr_id, &element_key);
+                    self.set_own_runtime_property_label(
+                        arr_id,
+                        &element_key,
+                        &element_label,
+                    )?;
+                    if let Err(error) =
+                        self.set_object_property(arr_id, next_index.to_string(), element)
+                    {
+                        self.set_own_runtime_property_label(
+                            arr_id,
+                            &element_key,
+                            &previous_label,
+                        )?;
+                        return Err(error);
+                    }
                     next_index = next_index.saturating_add(1);
                 }
                 let new_len = i64::try_from(next_index).unwrap_or(i64::MAX);
@@ -40106,19 +40134,11 @@ impl InterpreterCore {
                     // (dst, obj) to (obj, key) — dropping (dst) alone would let a
                     // Public property read lower a dst that already held Secret
                     // (bd-0zybl regression).
-                    // bd-ojvo1: a value read from an own string property (incl.
-                    // array-index keys) carries the IFC provenance it was
-                    // written with, not merely the owning object's label. Join
-                    // the stored own-property label (Public when absent) so a
-                    // Secret value written to a lower-labeled object does not
-                    // launder back out as the object's label. Own properties
-                    // only for now; prototype-chain inheritance is a documented
-                    // follow-up and is still bounded below by the object label,
-                    // so this never under-taints relative to prior behavior.
-                    if let Some(owner) = object_id
-                        && let Some(key_str) = property_key.as_str()
-                    {
-                        let stored_label = self.own_property_label(owner, key_str);
+                    // bd-ojvo1: join the value provenance recorded on the
+                    // resolved property owner. This covers own/inherited exact
+                    // string and Symbol keys while respecting shadowing.
+                    if let Some(owner) = object_id {
+                        let stored_label = self.runtime_property_label(owner, &property_key);
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
                     }
@@ -40190,42 +40210,71 @@ impl InterpreterCore {
                                         }
                                     });
                                 }
-                            } else if !self.proxy_aware_set_runtime_property(
-                                Some(module),
-                                oid,
-                                &property_key,
-                                set_val,
-                                Value::Object(oid),
-                                0,
-                            )? {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "successful Proxy set trap".to_string(),
-                                    got: "falsy set trap result".to_string(),
-                                });
-                            } else if let Some(index) = property_key
-                                .as_str()
-                                .and_then(Self::canonical_array_index_key)
-                            {
-                                // `arr[i] = x`: grow the ES array length and the
-                                // dense-length cache the `ArrayPush` fast path
-                                // trusts. A no-op for non-arrays / proxies (the
-                                // helper guards on `is_array`, and the proxy
-                                // object itself is not an array).
-                                self.maintain_array_index_assignment(oid, index)?;
-                            }
-                            // bd-ojvo1: record the written value's IFC label on
-                            // this own string property (incl. array-index keys)
-                            // so a later read recovers the value's provenance,
-                            // not merely the object's label. `__proto__` is a
-                            // prototype link (not a data property) and URL
-                            // properties commit through an authenticated side
-                            // table, so both are excluded.
-                            if !handled_url
-                                && let Some(key_str) = property_key.as_str()
-                                && key_str != "__proto__"
-                            {
+                            } else {
+                                // Precharge and stage the label before the value
+                                // write. The value mutation then sees the
+                                // combined retained size; failure restores the
+                                // old sparse label instead of committing an
+                                // unlabeled value under memory pressure.
                                 let value_label = self.get_register_label(val)?.clone();
-                                self.set_own_property_label(oid, key_str, &value_label);
+                                let label_owner = self
+                                    .proxy_set_receiver_object(&Value::Object(oid))?
+                                    .unwrap_or(oid);
+                                let previous_label = self
+                                    .own_stored_runtime_property_label(label_owner, &property_key);
+                                self.set_own_runtime_property_label(
+                                    label_owner,
+                                    &property_key,
+                                    &value_label,
+                                )?;
+                                let set_result = self.proxy_aware_set_runtime_property(
+                                    Some(module),
+                                    oid,
+                                    &property_key,
+                                    set_val,
+                                    Value::Object(oid),
+                                    0,
+                                );
+                                let committed = match set_result {
+                                    Ok(committed) => committed,
+                                    Err(error) => {
+                                        self.set_own_runtime_property_label(
+                                            label_owner,
+                                            &property_key,
+                                            &previous_label,
+                                        )?;
+                                        return Err(error);
+                                    }
+                                };
+                                if !committed {
+                                    self.set_own_runtime_property_label(
+                                        label_owner,
+                                        &property_key,
+                                        &previous_label,
+                                    )?;
+                                    return Err(InterpreterError::TypeError {
+                                        expected: "successful Proxy set trap".to_string(),
+                                        got: "falsy set trap result".to_string(),
+                                    });
+                                }
+                                let owns_property =
+                                    self.heap.get(label_owner.0 as usize).is_some_and(|object| {
+                                        object.contains_own_runtime_property(&property_key)
+                                    });
+                                if !owns_property {
+                                    // Prototype accessors and successful traps
+                                    // need not create an own data property.
+                                    self.set_own_runtime_property_label(
+                                        label_owner,
+                                        &property_key,
+                                        &previous_label,
+                                    )?;
+                                } else if let Some(index) = property_key
+                                    .as_str()
+                                    .and_then(Self::canonical_array_index_key)
+                                {
+                                    self.maintain_array_index_assignment(label_owner, index)?;
+                                }
                             }
                         }
                         Value::BuiltinFunction(builtin) => {
@@ -40242,18 +40291,52 @@ impl InterpreterCore {
                                 property_object,
                                 &property_key,
                             )?;
-                            if !self.proxy_aware_set_runtime_property(
+                            let value_label = self.get_register_label(val)?.clone();
+                            let previous_label = self
+                                .own_stored_runtime_property_label(property_object, &property_key);
+                            self.set_own_runtime_property_label(
+                                property_object,
+                                &property_key,
+                                &value_label,
+                            )?;
+                            let set_result = self.proxy_aware_set_runtime_property(
                                 Some(module),
                                 property_object,
                                 &property_key,
                                 set_val,
                                 Value::Object(property_object),
                                 0,
-                            )? {
+                            );
+                            let committed = match set_result {
+                                Ok(committed) => committed,
+                                Err(error) => {
+                                    self.set_own_runtime_property_label(
+                                        property_object,
+                                        &property_key,
+                                        &previous_label,
+                                    )?;
+                                    return Err(error);
+                                }
+                            };
+                            if !committed {
+                                self.set_own_runtime_property_label(
+                                    property_object,
+                                    &property_key,
+                                    &previous_label,
+                                )?;
                                 return Err(InterpreterError::TypeError {
                                     expected: "successful builtin property write".to_string(),
                                     got: "falsy set result".to_string(),
                                 });
+                            }
+                            if !self.heap[property_object.0 as usize]
+                                .contains_own_runtime_property(&property_key)
+                            {
+                                self.set_own_runtime_property_label(
+                                    property_object,
+                                    &property_key,
+                                    &previous_label,
+                                )?;
                             }
                         }
                         _ => {
@@ -40414,6 +40497,7 @@ impl InterpreterCore {
                     // Push a single element onto an array
                     let arr_val = self.read_reg(array)?;
                     let elem_val = self.read_reg(element)?;
+                    let element_label = self.get_register_label(element)?.clone();
                     if let Value::Object(arr_id) = arr_val {
                         let mutation_label = self
                             .get_register_label(array)?
@@ -40459,7 +40543,21 @@ impl InterpreterCore {
                             })
                             .unwrap_or(0);
                         let next_len = next_idx.saturating_add(1);
-                        self.set_object_property(arr_id, next_idx.to_string(), elem_val)?;
+                        let element_key =
+                            RuntimePropertyKey::String(JsString::from(next_idx.to_string()));
+                        let previous_label =
+                            self.own_stored_runtime_property_label(arr_id, &element_key);
+                        self.set_own_runtime_property_label(arr_id, &element_key, &element_label)?;
+                        if let Err(error) =
+                            self.set_object_property(arr_id, next_idx.to_string(), elem_val)
+                        {
+                            self.set_own_runtime_property_label(
+                                arr_id,
+                                &element_key,
+                                &previous_label,
+                            )?;
+                            return Err(error);
+                        }
                         self.set_object_property(
                             arr_id,
                             "length".to_string(),
@@ -70588,6 +70686,8 @@ impl InterpreterCore {
 
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let property_labels =
+            Self::estimate_execution_seed_ordered_label_map_bytes(&object.property_labels);
         let array_buffer_bytes = object
             .array_buffer
             .as_ref()
@@ -70608,6 +70708,7 @@ impl InterpreterCore {
             .unwrap_or(0);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
+            .saturating_add(property_labels)
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
             .saturating_add(data_view_bytes)
@@ -72212,33 +72313,130 @@ impl InterpreterCore {
         }
     }
 
-    /// Record the IFC label of a written own string property (bd-ojvo1). The
-    /// map is sparse: a `Public` label is stored as absence, so unlabeled
-    /// (Public) writes never grow the map and the common case is unchanged.
-    /// This is what stops a `Secret` value written to a lower-labeled object's
-    /// property from laundering back out as the object's label on later reads.
-    fn set_own_property_label(&mut self, object_id: ObjectId, key: &str, label: &Label) {
-        let idx = object_id.0 as usize;
-        let key = key.to_string();
-        let label = label.clone();
-        self.mutate_heap(move |heap| {
-            if let Some(object) = heap.get_mut(idx) {
-                if matches!(label, Label::Public) {
-                    object.property_labels.remove(key.as_str());
-                } else {
-                    object.property_labels.insert(key, label);
+    /// Record the IFC label of one own property under the same total-memory
+    /// budget as its value carrier (bd-ojvo1). The sparse map represents
+    /// `Public` as absence. Projection makes a rejected label allocation leave
+    /// both the heap and the accounting counter unchanged.
+    fn set_own_runtime_property_label(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let current = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let previous_bytes =
+            Self::estimate_execution_seed_ordered_label_map_bytes(&current.property_labels);
+        if matches!(label, Label::Public) {
+            let key = key.clone();
+            self.mutate_heap(|heap| match key {
+                RuntimePropertyKey::String(key) => {
+                    heap[heap_index].property_labels.remove_exact(&key);
                 }
+                RuntimePropertyKey::Symbol(symbol) => {
+                    heap[heap_index]
+                        .property_labels
+                        .remove_baseline_symbol_property(core_symbol_id(symbol));
+                }
+            });
+            let next_bytes = Self::estimate_execution_seed_ordered_label_map_bytes(
+                &self.heap[heap_index].property_labels,
+            );
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(next_bytes);
+            return Ok(());
+        }
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let mut projected = current.property_labels.clone();
+        match key {
+            RuntimePropertyKey::String(key) => {
+                projected.insert_exact(key.clone(), label.clone());
             }
-        });
+            RuntimePropertyKey::Symbol(symbol) => {
+                let symbol = core_symbol_id(*symbol);
+                projected.insert_baseline_symbol_property(
+                    symbol,
+                    BaselineSymbolProperty::Data(label.clone()),
+                );
+            }
+        }
+        let next_bytes = Self::estimate_execution_seed_ordered_label_map_bytes(&projected);
+        self.check_temporary_memory_budget(next_bytes)?;
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.mutate_heap(|heap| heap[heap_index].property_labels = projected);
+        Ok(())
     }
 
-    /// The stored IFC label of an own string property, or `Public` when the
-    /// property is absent, inherited, or carries no recorded provenance.
+    fn own_stored_runtime_property_label(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Label {
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return Label::Public;
+        };
+        match key {
+            RuntimePropertyKey::String(key) => object
+                .property_labels
+                .get_exact(key)
+                .cloned()
+                .unwrap_or(Label::Public),
+            RuntimePropertyKey::Symbol(symbol) => object
+                .property_labels
+                .baseline_symbol_property(core_symbol_id(*symbol))
+                .and_then(|property| match property {
+                    BaselineSymbolProperty::Data(label) => Some(label.clone()),
+                    BaselineSymbolProperty::Accessor { .. } => None,
+                })
+                .unwrap_or(Label::Public),
+        }
+    }
+
+    /// Resolve the stored value label from the first object that owns the
+    /// property. This mirrors value lookup, including exact strings, Symbols,
+    /// shadowing, bounded prototype traversal, and cycle refusal.
+    fn runtime_property_label(&self, object_id: ObjectId, key: &RuntimePropertyKey) -> Label {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                break;
+            };
+            if object.contains_own_runtime_property(key) {
+                return self.own_stored_runtime_property_label(id, key);
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+        Label::Public
+    }
+
+    #[cfg(test)]
+    fn set_own_property_label(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        self.set_own_runtime_property_label(
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            label,
+        )
+    }
+
+    #[cfg(test)]
     fn own_property_label(&self, object_id: ObjectId, key: &str) -> Label {
-        self.heap
-            .get(object_id.0 as usize)
-            .and_then(|object| object.property_labels.get(key).cloned())
-            .unwrap_or(Label::Public)
+        self.runtime_property_label(object_id, &RuntimePropertyKey::String(JsString::from(key)))
     }
 
     fn set_object_runtime_property(
@@ -72357,9 +72555,13 @@ impl InterpreterCore {
                 got: "frozen object".to_string(),
             });
         }
-        let released_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let released_bytes = Self::estimate_ordered_property_map_bytes(&object.properties)
+            .saturating_add(Self::estimate_execution_seed_ordered_label_map_bytes(
+                &object.property_labels,
+            ));
         self.mutate_heap(|heap| {
             heap[heap_index].properties = OrderedStringMap::new();
+            heap[heap_index].property_labels = OrderedStringMap::new();
         });
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
         self.gc_write_barrier(object_id);
@@ -72452,6 +72654,11 @@ impl InterpreterCore {
         });
         for deleted_key in &deleted_index_keys {
             self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
+            self.set_own_runtime_property_label(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(deleted_key.as_str())),
+                &Label::Public,
+            )?;
         }
         self.gc_write_barrier(object_id);
         Ok(())
@@ -72550,6 +72757,11 @@ impl InterpreterCore {
         self.estimated_memory_bytes = requested_bytes;
         for deleted_key in &deleted_index_keys {
             self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
+            self.set_own_runtime_property_label(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(deleted_key.as_str())),
+                &Label::Public,
+            )?;
         }
 
         // Trigger write barrier for GC correctness when setting object properties
@@ -72604,6 +72816,11 @@ impl InterpreterCore {
         });
         if removed.is_some() {
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
+            self.set_own_runtime_property_label(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(key)),
+                &Label::Public,
+            )?;
         }
         Ok(removed.is_some())
     }
@@ -72667,6 +72884,11 @@ impl InterpreterCore {
         let next_property_bytes =
             Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
         self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+        self.set_own_runtime_property_label(
+            object_id,
+            &RuntimePropertyKey::Symbol(symbol),
+            &Label::Public,
+        )?;
         Ok(true)
     }
 
@@ -72705,6 +72927,11 @@ impl InterpreterCore {
         let next_property_bytes =
             Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
         self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+        self.set_own_runtime_property_label(
+            object_id,
+            &RuntimePropertyKey::String(key.clone()),
+            &Label::Public,
+        )?;
         Ok(true)
     }
 
@@ -75394,6 +75621,34 @@ mod active_builtin_regressions {
         assert_eq!(object.properties.get("0"), Some(&Value::Int(40)));
         assert_eq!(object.properties.get("length"), Some(&Value::Int(1)));
         assert_eq!(object.cached_dense_length, Some(1));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn builtin_array_push_persists_argument_label_bd_ojvo1() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("array should allocate");
+        core.write_reg_with_label(0, Value::str("classified"), Label::Secret)
+            .expect("Secret argument should fit");
+        let result = core
+            .dispatch_builtin_function(
+                &halted_test_module(),
+                &BuiltinFunction::array_push(),
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(array)),
+                None,
+            )
+            .expect("Array.prototype.push should succeed");
+        assert_eq!(result, Value::Int(1));
+        assert_eq!(
+            core.runtime_property_label(array, &RuntimePropertyKey::String(JsString::from("0")),),
+            Label::Secret
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -93676,6 +93931,54 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn readable_from_carries_stored_element_label_into_lifecycle_bd_ojvo1() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_array_from_values(&[Value::str("classified")])
+            .expect("source array");
+        core.set_own_runtime_property_label(
+            source,
+            &RuntimePropertyKey::String(JsString::from("0")),
+            &Label::Secret,
+        )
+        .expect("element label should fit");
+        core.write_reg_with_label(0, Value::Object(source), Label::Public)
+            .expect("Public source register");
+        let Value::Object(readable) = core
+            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .expect("finite Readable")
+        else {
+            panic!("Readable.from must return an object");
+        };
+
+        assert!(core.readable_pull_source_chunk(readable).unwrap());
+        let state = &core.readable_from_streams[&readable];
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(state.buffer.front().unwrap().label, Label::Secret);
+
+        let Value::Promise(promise_id) = core
+            .readable_to_array(Value::Object(readable))
+            .expect("toArray")
+        else {
+            panic!("toArray must return a Promise");
+        };
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("end phase");
+        core.drive_readable_from_pump(readable, Some(&module))
+            .expect("close phase");
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(promise_id))
+            .expect("settled Promise");
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn readable_prefetched_to_array_peak_is_exact_atomic_and_labeled_bd_71jw4() {
         let fixture = || {
             let mut core = test_interpreter();
@@ -96196,7 +96499,8 @@ mod async_runtime_tests_current {
                     heap[index].prototype = Some(empty_prototype);
                 });
             }
-            core.set_own_property_label(object, "data", &Label::Secret);
+            core.set_own_property_label(object, "data", &Label::Secret)
+                .expect("property label should be settable");
             core.mutate_registers(|registers| {
                 registers[0] = Value::Object(object);
                 registers[1] = Value::str("data");
@@ -96243,6 +96547,124 @@ mod async_runtime_tests_current {
         assert_eq!(
             fast, fallback,
             "fast and generic paths must preserve the read outcome, IFC label, trace, and instruction count"
+        );
+    }
+
+    #[test]
+    fn array_push_persists_element_label_for_later_index_read_bd_ojvo1() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 2,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("0".into());
+
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("array should allocate");
+        core.write_reg_with_label(0, Value::Object(array), Label::Public)
+            .expect("array register should fit");
+        core.write_reg_with_label(1, Value::str("classified"), Label::Secret)
+            .expect("Secret element register should fit");
+
+        core.execute(&module).expect("ArrayPush followed by read");
+
+        assert_eq!(core.read_reg(3).unwrap(), Value::str("classified"));
+        assert_eq!(core.get_register_label(3).unwrap(), &Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn property_label_delete_serde_and_budget_are_accounted_bd_ojvo1() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7))])
+            .expect("object should allocate");
+        let key = RuntimePropertyKey::String(JsString::from("data"));
+        let before_label = core.estimated_memory_bytes();
+        core.set_own_runtime_property_label(object, &key, &Label::Secret)
+            .expect("Secret property label should fit");
+        assert!(core.estimated_memory_bytes() > before_label);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let wire = serde_json::to_vec(&core.heap[object.0 as usize])
+            .expect("labeled heap object should serialize");
+        let decoded: HeapObject =
+            serde_json::from_slice(&wire).expect("labeled heap object should deserialize");
+        assert_eq!(decoded.property_labels.get("data"), Some(&Label::Secret));
+
+        assert!(core.remove_object_property(object, "data").unwrap());
+        assert_eq!(
+            core.own_stored_runtime_property_label(object, &key),
+            Label::Public
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.set_object_property(object, "data".to_string(), Value::Int(8))
+            .expect("replacement property should fit");
+        let stable_heap = serde_json::to_vec(&core.heap[object.0 as usize]).unwrap();
+        let stable_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = stable_memory;
+        assert!(matches!(
+            core.set_own_runtime_property_label(object, &key, &Label::Secret),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            serde_json::to_vec(&core.heap[object.0 as usize]).unwrap(),
+            stable_heap
+        );
+        assert_eq!(core.estimated_memory_bytes(), stable_memory);
+    }
+
+    #[test]
+    fn inherited_string_and_symbol_labels_follow_the_value_owner_bd_ojvo1() {
+        let mut core = test_interpreter();
+        let prototype = core
+            .alloc_object_with_properties(&[("inherited", Value::Int(1))])
+            .expect("prototype should allocate");
+        let child = core
+            .alloc_object_with_prototype(Some(prototype))
+            .expect("child should allocate");
+        let string_key = RuntimePropertyKey::String(JsString::from("inherited"));
+        core.set_own_runtime_property_label(prototype, &string_key, &Label::Secret)
+            .expect("string label should fit");
+        assert_eq!(core.own_property_label(child, "inherited"), Label::Secret);
+
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("classified")))
+            .expect("private Symbol should allocate");
+        let symbol_key = RuntimePropertyKey::Symbol(symbol);
+        core.set_object_runtime_property(prototype, symbol_key.clone(), Value::Int(2))
+            .expect("Symbol property should fit");
+        core.set_own_runtime_property_label(prototype, &symbol_key, &Label::Confidential)
+            .expect("Symbol label should fit");
+        assert_eq!(
+            core.runtime_property_label(child, &symbol_key),
+            Label::Confidential
         );
     }
 

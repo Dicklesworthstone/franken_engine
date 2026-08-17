@@ -8663,15 +8663,7 @@ impl InterpreterCore {
                     // value written to a lower-labeled object nor a read off a
                     // Secret object launders back out as Public.
                     if let Value::Object(oid) = &obj_val {
-                        let prop_label = match &property_key {
-                            RuntimePropertyKey::String(js_key) => js_key
-                                .as_str()
-                                .map(|key_str| self.own_property_label(*oid, key_str))
-                                .unwrap_or(crate::ifc_artifacts::Label::Public),
-                            RuntimePropertyKey::Symbol(symbol) => {
-                                self.own_symbol_property_label(*oid, *symbol)
-                            }
-                        };
+                        let prop_label = self.runtime_property_label(*oid, &property_key);
                         let raise = prop_label
                             .join(&self.read_reg_label(obj)?)
                             .join(&self.read_reg_label(key)?);
@@ -8689,6 +8681,7 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
+                    let value_label = self.read_reg_label(val)?;
                     let property_key = Self::executable_property_key(&key_val);
                     self.validate_executable_property_key(&property_key)?;
 
@@ -8699,6 +8692,7 @@ impl InterpreterCore {
                             *oid,
                             property_key.clone(),
                             set_val,
+                            value_label.clone(),
                         )?,
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .set_function_like_property_or_call_accessor(
@@ -8706,6 +8700,7 @@ impl InterpreterCore {
                                 obj_val.clone(),
                                 &property_key,
                                 set_val,
+                                value_label,
                             )?,
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -8714,24 +8709,6 @@ impl InterpreterCore {
                             });
                         }
                     };
-                    // bd-ojvo1 (core parity): record the written value's IFC
-                    // label on the own property (string or Symbol key) so a
-                    // later read recovers the value's provenance, not merely the
-                    // object's label. Only a committed data-property write (no
-                    // accessor call).
-                    if !called_accessor && let Value::Object(oid) = &obj_val {
-                        let value_label = self.read_reg_label(val)?;
-                        match &property_key {
-                            RuntimePropertyKey::String(js_key) => {
-                                if let Some(key_str) = js_key.as_str() {
-                                    self.set_own_property_label(*oid, key_str, &value_label);
-                                }
-                            }
-                            RuntimePropertyKey::Symbol(symbol) => {
-                                self.set_own_symbol_property_label(*oid, *symbol, &value_label);
-                            }
-                        }
-                    }
                     if !called_accessor {
                         self.ip += 1;
                     }
@@ -8826,6 +8803,7 @@ impl InterpreterCore {
                     // Push a single element onto an array
                     let arr_val = self.read_reg(array)?;
                     let elem_val = self.read_reg(element)?;
+                    let element_label = self.read_reg_label(element)?;
                     if let Value::Object(arr_id) = arr_val {
                         let next_idx = self
                             .heap
@@ -8841,7 +8819,21 @@ impl InterpreterCore {
                                 })
                             })
                             .unwrap_or(0);
-                        self.set_object_property(arr_id, next_idx.to_string(), elem_val)?;
+                        let element_key =
+                            RuntimePropertyKey::String(JsString::from(next_idx.to_string()));
+                        let previous_label =
+                            self.own_stored_runtime_property_label(arr_id, &element_key);
+                        self.set_own_runtime_property_label(arr_id, &element_key, &element_label)?;
+                        if let Err(error) =
+                            self.set_object_property(arr_id, next_idx.to_string(), elem_val)
+                        {
+                            self.set_own_runtime_property_label(
+                                arr_id,
+                                &element_key,
+                                &previous_label,
+                            )?;
+                            return Err(error);
+                        }
                         self.set_object_property(
                             arr_id,
                             "length".to_string(),
@@ -11889,6 +11881,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: RuntimePropertyKey,
         value: Value,
+        value_label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
         if matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__")) {
@@ -11923,7 +11916,13 @@ impl InterpreterCore {
                 }
             }
             _ => {
-                self.set_object_runtime_property(object_id, key, value)?;
+                let previous_label = self.own_stored_runtime_property_label(object_id, &key);
+                self.set_own_runtime_property_label(object_id, &key, &value_label)?;
+                if let Err(error) = self.set_object_runtime_property(object_id, key.clone(), value)
+                {
+                    self.set_own_runtime_property_label(object_id, &key, &previous_label)?;
+                    return Err(error);
+                }
                 Ok(false)
             }
         }
@@ -11990,6 +11989,7 @@ impl InterpreterCore {
         receiver: Value,
         key: &RuntimePropertyKey,
         value: Value,
+        value_label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         if self.function_object_id(&receiver).is_none() {
             self.preflight_legacy_property_key_for_hook(key)?;
@@ -12006,6 +12006,7 @@ impl InterpreterCore {
             object_id,
             key.clone(),
             value.clone(),
+            value_label,
         )?;
         if !called
             && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
@@ -14012,7 +14013,26 @@ impl InterpreterCore {
                 for offset in 1..args.count {
                     let value = self.read_arg(args, offset)?;
                     let index = base_len.saturating_add(offset - 1);
-                    self.set_object_property(array_id, index.to_string(), value)?;
+                    let register = args.start.checked_add(offset).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
+                    let value_label = self.read_reg_label(register)?;
+                    let element_key = RuntimePropertyKey::String(JsString::from(index.to_string()));
+                    let previous_label =
+                        self.own_stored_runtime_property_label(array_id, &element_key);
+                    self.set_own_runtime_property_label(array_id, &element_key, &value_label)?;
+                    if let Err(error) = self.set_object_property(array_id, index.to_string(), value)
+                    {
+                        self.set_own_runtime_property_label(
+                            array_id,
+                            &element_key,
+                            &previous_label,
+                        )?;
+                        return Err(error);
+                    }
                 }
                 let new_len = base_len.saturating_add(args.count.saturating_sub(1));
                 self.set_object_property(
@@ -15375,49 +15395,89 @@ impl InterpreterCore {
             .unwrap_or(Value::Undefined))
     }
 
-    /// Record the IFC label of a written own string property (bd-ojvo1). Sparse:
-    /// a `Public` label is stored as absence, so unlabeled (Public) writes never
-    /// grow the map. This stops a `Secret` value written to a lower-labeled
-    /// object's property from laundering back out as the object's label on a
-    /// later read.
-    fn set_own_property_label(
+    /// Record one own property's IFC value label under the interpreter's
+    /// total-memory budget (bd-ojvo1). `Public` is represented as absence, and
+    /// projection makes rejection atomic for both the heap and accounting.
+    fn set_own_runtime_property_label(
         &mut self,
         object_id: ObjectId,
-        key: &str,
+        key: &RuntimePropertyKey,
         label: &crate::ifc_artifacts::Label,
-    ) {
-        if let Some(object) = self.heap.get_mut(object_id.0 as usize) {
-            if matches!(label, crate::ifc_artifacts::Label::Public) {
-                object.property_labels.remove(key);
-            } else {
-                object
-                    .property_labels
-                    .insert(key.to_string(), label.clone());
+    ) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let current = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let previous_bytes = Self::estimate_ordered_label_map_bytes(&current.property_labels);
+        if matches!(label, crate::ifc_artifacts::Label::Public) {
+            match key {
+                RuntimePropertyKey::String(key) => {
+                    self.heap[heap_index].property_labels.remove_exact(key);
+                }
+                RuntimePropertyKey::Symbol(symbol) => {
+                    self.heap[heap_index]
+                        .property_labels
+                        .remove_baseline_symbol_property(*symbol);
+                }
             }
+            let next_bytes =
+                Self::estimate_ordered_label_map_bytes(&self.heap[heap_index].property_labels);
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(next_bytes);
+            return Ok(());
         }
-    }
-
-    /// Record the IFC label of a written own Symbol-keyed property (bd-ojvo1),
-    /// using the property_labels map's parallel Symbol side. Sparse: a `Public`
-    /// label is stored as absence. Stops a Secret value written under a Symbol
-    /// key from laundering back out as the object's label on a later read.
-    fn set_own_symbol_property_label(
-        &mut self,
-        object_id: ObjectId,
-        symbol: SymbolId,
-        label: &crate::ifc_artifacts::Label,
-    ) {
-        if let Some(object) = self.heap.get_mut(object_id.0 as usize) {
-            if matches!(label, crate::ifc_artifacts::Label::Public) {
-                object
-                    .property_labels
-                    .remove_baseline_symbol_property(symbol);
-            } else {
-                object.property_labels.insert_baseline_symbol_property(
-                    symbol,
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let mut projected = current.property_labels.clone();
+        match key {
+            RuntimePropertyKey::String(key) => {
+                projected.insert_exact(key.clone(), label.clone());
+            }
+            RuntimePropertyKey::Symbol(symbol) => {
+                projected.insert_baseline_symbol_property(
+                    *symbol,
                     BaselineSymbolProperty::Data(label.clone()),
                 );
             }
+        }
+        let next_bytes = Self::estimate_ordered_label_map_bytes(&projected);
+        self.check_temporary_memory_budget(next_bytes)?;
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.heap[heap_index].property_labels = projected;
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
+    }
+
+    fn own_stored_runtime_property_label(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> crate::ifc_artifacts::Label {
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return crate::ifc_artifacts::Label::Public;
+        };
+        match key {
+            RuntimePropertyKey::String(key) => object
+                .property_labels
+                .get_exact(key)
+                .cloned()
+                .unwrap_or(crate::ifc_artifacts::Label::Public),
+            RuntimePropertyKey::Symbol(symbol) => object
+                .property_labels
+                .baseline_symbol_property(*symbol)
+                .and_then(|property| match property {
+                    BaselineSymbolProperty::Data(label) => Some(label.clone()),
+                    BaselineSymbolProperty::Accessor { .. } => None,
+                })
+                .unwrap_or(crate::ifc_artifacts::Label::Public),
         }
     }
 
@@ -15426,10 +15486,10 @@ impl InterpreterCore {
     /// The stored IFC label of a Symbol-keyed property resolved through the
     /// prototype chain (bd-ojvo1): the label on the FIRST object that owns the
     /// Symbol property (shadowing respected), or `Public` when absent/unlabeled.
-    fn own_symbol_property_label(
+    fn runtime_property_label(
         &self,
         object_id: ObjectId,
-        symbol: SymbolId,
+        key: &RuntimePropertyKey,
     ) -> crate::ifc_artifacts::Label {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -15441,15 +15501,8 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 break;
             };
-            if object.properties.baseline_symbol_property(symbol).is_some() {
-                return object
-                    .property_labels
-                    .baseline_symbol_property(symbol)
-                    .and_then(|property| match property {
-                        BaselineSymbolProperty::Data(label) => Some(label.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or(crate::ifc_artifacts::Label::Public);
+            if object.contains_own_runtime_property(key) {
+                return self.own_stored_runtime_property_label(id, key);
             }
             current = object.prototype;
             depth += 1;
@@ -15457,37 +15510,42 @@ impl InterpreterCore {
         crate::ifc_artifacts::Label::Public
     }
 
-    /// The stored IFC label of an own string property, or `Public` when the
-    /// property is absent, inherited, or carries no recorded provenance.
-    /// The stored IFC label of the string property `key` resolved through the
-    /// prototype chain (bd-ojvo1): the label recorded on the FIRST object in the
-    /// chain that owns `key` (so shadowing is respected — a receiver's own
-    /// property wins over an inherited one, matching value resolution), or
-    /// `Public` when absent or unlabeled. This attributes an inherited
-    /// property's provenance to the object that holds it, not merely the
-    /// receiver. Over-labels (never under-labels) in exotic accessor cases.
+    #[cfg(test)]
+    fn set_own_property_label(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        label: &crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        self.set_own_runtime_property_label(
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            label,
+        )
+    }
+
+    #[cfg(test)]
+    fn set_own_symbol_property_label(
+        &mut self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+        label: &crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        self.set_own_runtime_property_label(object_id, &RuntimePropertyKey::Symbol(symbol), label)
+    }
+
+    #[cfg(test)]
+    fn own_symbol_property_label(
+        &self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+    ) -> crate::ifc_artifacts::Label {
+        self.runtime_property_label(object_id, &RuntimePropertyKey::Symbol(symbol))
+    }
+
+    #[cfg(test)]
     fn own_property_label(&self, object_id: ObjectId, key: &str) -> crate::ifc_artifacts::Label {
-        let mut current = Some(object_id);
-        let mut depth = 0u32;
-        let mut visited = std::collections::BTreeSet::new();
-        while let Some(id) = current {
-            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
-                break;
-            }
-            let Some(object) = self.heap.get(id.0 as usize) else {
-                break;
-            };
-            if object.contains_own_property(key) {
-                return object
-                    .property_labels
-                    .get(key)
-                    .cloned()
-                    .unwrap_or(crate::ifc_artifacts::Label::Public);
-            }
-            current = object.prototype;
-            depth += 1;
-        }
-        crate::ifc_artifacts::Label::Public
+        self.runtime_property_label(object_id, &RuntimePropertyKey::String(JsString::from(key)))
     }
 
     fn read_reg_label(&self, reg: u32) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
@@ -15718,6 +15776,61 @@ impl InterpreterCore {
             )
     }
 
+    fn estimate_ordered_label_map_bytes(
+        labels: &OrderedStringMap<crate::ifc_artifacts::Label>,
+    ) -> u64 {
+        let exact_order_is_active = labels.exact_len() != labels.len();
+        labels
+            .well_formed_data_entries()
+            .map(|(key, label)| {
+                let owned_key_copies =
+                    if exact_order_is_active && canonical_array_index(key).is_none() {
+                        4
+                    } else {
+                        2
+                    };
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(
+                        Self::estimate_string_bytes(key).saturating_mul(owned_key_copies),
+                    )
+                    .saturating_add(Self::estimate_label_bytes(label))
+            })
+            .sum::<u64>()
+            .saturating_add(
+                labels
+                    .exact_only_data_entries()
+                    .map(|(key, label)| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(Self::estimate_js_string_bytes(key).saturating_mul(3))
+                            .saturating_add(Self::estimate_label_bytes(label))
+                    })
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                labels
+                    .baseline_symbol_properties()
+                    .map(|(_, property)| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(
+                                (std::mem::size_of::<SymbolId>() as u64).saturating_mul(2),
+                            )
+                            .saturating_add(match property {
+                                BaselineSymbolProperty::Data(label) => {
+                                    Self::estimate_label_bytes(label)
+                                }
+                                BaselineSymbolProperty::Accessor { get, set } => get
+                                    .as_ref()
+                                    .map(Self::estimate_label_bytes)
+                                    .unwrap_or(0)
+                                    .saturating_add(
+                                        set.as_ref().map(Self::estimate_label_bytes).unwrap_or(0),
+                                    ),
+                            })
+                    })
+                    .sum::<u64>(),
+            )
+    }
+
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = object
             .properties
@@ -15822,6 +15935,7 @@ impl InterpreterCore {
             .sum::<u64>();
         let symbol_order = (object.properties.baseline_symbol_key_order().len() as u64)
             .saturating_mul(std::mem::size_of::<SymbolId>() as u64);
+        let property_labels = Self::estimate_ordered_label_map_bytes(&object.property_labels);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(exact_data_order_well_formed_copies)
@@ -15829,6 +15943,7 @@ impl InterpreterCore {
             .saturating_add(own_string_key_order)
             .saturating_add(symbol_properties)
             .saturating_add(symbol_order)
+            .saturating_add(property_labels)
             .saturating_add(
                 object
                     .derived_constructor_parent
@@ -16629,16 +16744,10 @@ impl InterpreterCore {
         }
 
         let name = self.inferred_method_name(&key);
-        // bd-ojvo1: capture the method's own string key + its definition IFC
-        // label before both are moved, so the label can be recorded on the
-        // property below — define_method_property otherwise stores the label
-        // only in closure_method_metadata (keyed by closure_id), which the
-        // property-read path does not consult, leaking a Secret method's
-        // provenance on a later read.
-        let method_key = match &key {
-            RuntimePropertyKey::String(js) => js.as_str().map(str::to_string),
-            _ => None,
-        };
+        // Capture the exact string/Symbol key and definition label before the
+        // property write moves them, so the property carrier gets the same IFC
+        // provenance as closure_method_metadata.
+        let method_key = key.clone();
         let method_label = definition_label.clone();
         self.closure_method_metadata.insert(
             closure_id,
@@ -16648,15 +16757,20 @@ impl InterpreterCore {
                 definition_label,
             },
         );
+        let previous_label = self.own_stored_runtime_property_label(object_id, &method_key);
+        if let Err(error) =
+            self.set_own_runtime_property_label(object_id, &method_key, &method_label)
+        {
+            self.closure_method_metadata.remove(&closure_id);
+            return Err(error);
+        }
         if let Err(error) =
             self.set_object_runtime_property(object_id, key, Value::Closure(closure_id))
         {
+            self.set_own_runtime_property_label(object_id, &method_key, &previous_label)?;
             self.closure_method_metadata.remove(&closure_id);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(error);
-        }
-        if let Some(key_str) = method_key {
-            self.set_own_property_label(object_id, &key_str, &method_label);
         }
         Ok(())
     }
@@ -16890,13 +17004,22 @@ impl InterpreterCore {
                 let removed_accessor = object.remove_exact_accessor(key);
                 if removed.is_some() || removed_accessor.is_some() {
                     object.forget_property_order(key);
+                    object.property_labels.remove_exact(key);
                 }
                 removed.is_some() || removed_accessor.is_some()
             }
-            RuntimePropertyKey::Symbol(symbol) => object
-                .properties
-                .remove_baseline_symbol_property(*symbol)
-                .is_some(),
+            RuntimePropertyKey::Symbol(symbol) => {
+                let removed = object
+                    .properties
+                    .remove_baseline_symbol_property(*symbol)
+                    .is_some();
+                if removed {
+                    object
+                        .property_labels
+                        .remove_baseline_symbol_property(*symbol);
+                }
+                removed
+            }
         };
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(removed)
@@ -19001,9 +19124,8 @@ mod tests {
         let proto = core
             .alloc_object_with_properties(&[("inherited", Value::Int(7))])
             .expect("prototype allocation should succeed");
-        core.heap[proto.0 as usize]
-            .property_labels
-            .insert("inherited".to_string(), crate::ifc_artifacts::Label::Secret);
+        core.set_own_property_label(proto, "inherited", &crate::ifc_artifacts::Label::Secret)
+            .expect("prototype property label should fit");
         let child = core
             .alloc_object_with_properties(&[])
             .expect("child allocation should succeed");
@@ -19114,6 +19236,110 @@ mod tests {
         );
     }
 
+    #[test]
+    fn array_push_persists_element_label_for_later_index_read_bd_ojvo1() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 2,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("0".into());
+
+        let mut core = quickjs_test_core();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("array should allocate");
+        core.write_reg_with_label(0, Value::Object(array), crate::ifc_artifacts::Label::Public)
+            .expect("array register should fit");
+        core.write_reg_with_label(
+            1,
+            Value::str("classified"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("Secret element register should fit");
+
+        core.execute(&module).expect("ArrayPush followed by read");
+
+        assert_eq!(core.read_reg(3).unwrap(), Value::str("classified"));
+        assert_eq!(
+            core.read_reg_label(3).unwrap(),
+            crate::ifc_artifacts::Label::Secret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn property_label_delete_serde_and_budget_are_accounted_bd_ojvo1() {
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7))])
+            .expect("object should allocate");
+        let key = RuntimePropertyKey::String(JsString::from("data"));
+        let before_label = core.estimated_memory_bytes();
+        core.set_own_runtime_property_label(object, &key, &crate::ifc_artifacts::Label::Secret)
+            .expect("Secret property label should fit");
+        assert!(core.estimated_memory_bytes() > before_label);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let wire = serde_json::to_vec(&core.heap[object.0 as usize])
+            .expect("labeled heap object should serialize");
+        let decoded: HeapObject =
+            serde_json::from_slice(&wire).expect("labeled heap object should deserialize");
+        assert_eq!(
+            decoded.property_labels.get("data"),
+            Some(&crate::ifc_artifacts::Label::Secret)
+        );
+
+        assert!(core.remove_object_property(object, "data").unwrap());
+        assert_eq!(
+            core.own_stored_runtime_property_label(object, &key),
+            crate::ifc_artifacts::Label::Public
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.set_object_property(object, "data".to_string(), Value::Int(8))
+            .expect("replacement property should fit");
+        let stable_heap = serde_json::to_vec(&core.heap[object.0 as usize]).unwrap();
+        let stable_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = stable_memory;
+        assert!(matches!(
+            core.set_own_runtime_property_label(
+                object,
+                &key,
+                &crate::ifc_artifacts::Label::Secret,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            serde_json::to_vec(&core.heap[object.0 as usize]).unwrap(),
+            stable_heap
+        );
+        assert_eq!(core.estimated_memory_bytes(), stable_memory);
+    }
+
     /// bd-ojvo1: a concise method defined with a Secret definition label must
     /// record that label on its own property, so a later read recovers the
     /// method's provenance (define_method_property otherwise stored the label
@@ -19162,14 +19388,16 @@ mod tests {
             .properties
             .insert_baseline_symbol_property(symbol, BaselineSymbolProperty::Data(Value::Int(7)));
 
-        core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Secret);
+        core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Secret)
+            .expect("Secret Symbol label should fit");
         assert_eq!(
             core.own_symbol_property_label(obj, symbol),
             crate::ifc_artifacts::Label::Secret,
             "a Secret value under a Symbol key must record its label (bd-ojvo1)"
         );
 
-        core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Public);
+        core.set_own_symbol_property_label(obj, symbol, &crate::ifc_artifacts::Label::Public)
+            .expect("Public Symbol label removal should fit");
         assert_eq!(
             core.own_symbol_property_label(obj, symbol),
             crate::ifc_artifacts::Label::Public,
@@ -21569,6 +21797,7 @@ mod tests {
                 unhooked_object,
                 RuntimePropertyKey::String(d800.clone()),
                 Value::Int(8),
+                crate::ifc_artifacts::Label::Public,
             )
             .unwrap();
         assert_eq!(
@@ -21595,6 +21824,7 @@ mod tests {
                 object,
                 RuntimePropertyKey::String(d800.clone()),
                 Value::Int(8),
+                crate::ifc_artifacts::Label::Public,
             )
             .unwrap_err();
         assert!(matches!(error, InterpreterError::TypeError { .. }));
@@ -21631,6 +21861,7 @@ mod tests {
                 Value::Function(0),
                 &RuntimePropertyKey::String(d800),
                 Value::Int(9),
+                crate::ifc_artifacts::Label::Public,
             ),
             Err(InterpreterError::TypeError { .. })
         ));
@@ -21645,6 +21876,7 @@ mod tests {
             object,
             RuntimePropertyKey::String(JsString::from("\u{FFFD}")),
             Value::Int(0xFFFD),
+            crate::ifc_artifacts::Label::Public,
         )
         .unwrap();
         assert_eq!(hook.records().len(), 1);
@@ -26110,6 +26342,7 @@ mod tests {
         core.registers[0] = Value::Object(array_id);
         core.registers[1] = Value::Int(7);
         core.registers[2] = Value::str("x");
+        core.register_labels[1] = crate::ifc_artifacts::Label::Secret;
 
         let pushed = core
             .dispatch_builtin_hostcall(
@@ -26129,6 +26362,13 @@ mod tests {
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("length"),
             Some(&Value::Int(2))
+        );
+        assert_eq!(
+            core.runtime_property_label(
+                array_id,
+                &RuntimePropertyKey::String(JsString::from("0")),
+            ),
+            crate::ifc_artifacts::Label::Secret
         );
 
         let popped = core

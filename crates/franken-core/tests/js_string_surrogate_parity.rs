@@ -502,7 +502,7 @@ fn static_builtin_interception_supports_literal_computed_names_and_shadowing() {
         "(function () { return Math.abs(-7); let Math = {abs: function () { return 99; }}; })();",
     );
     assert!(
-        matches!(err, InterpreterError::TypeError { .. }),
+        matches!(err, InterpreterError::UninitializedBinding { .. }),
         "a later lexical Math declaration must shadow the synthetic global, got {err:?}"
     );
 

@@ -781,6 +781,17 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Canonical key used by the live gate, decision/witness evidence, and E9's
+/// pruned-dispatch table for module loading. The runtime accepts several
+/// historical spellings, but one logical authority must have one evidence
+/// identity or alias choice can fragment policy and replay records.
+pub(crate) fn capability_gate_key(tag: &str) -> &str {
+    match tag {
+        "module:require" | "module:import" | "module.import" | "module_load" => "module_load",
+        _ => tag,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Node `path` builtin semantics (bd-tu0c3)
 //
@@ -1595,6 +1606,7 @@ fn check_hostcall_capability_gate(
     capability_tag: &str,
     instruction_index: u32,
 ) -> Result<(), InterpreterError> {
+    let capability_tag = capability_gate_key(capability_tag);
     // E9.T4 (bd-fqlfw.9.4): consult the capability-pruned dispatch table
     // first when one is installed; any miss falls through to the live
     // classification (fail-closed per-call fallback). Only the allow/deny
@@ -31846,6 +31858,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
             BuiltinFunctionKind::Require => {
+                check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                 let previous_module_specifier = self.current_module_specifier.clone();
                 if !builtin.module_specifier.is_empty() {
                     self.current_module_specifier = Some(builtin.module_specifier.to_string());
@@ -31853,13 +31866,11 @@ impl InterpreterCore {
                 // First-class `require` values (`const req = require`) and
                 // `module.require(...)` arrive as ordinary Call/CallMethod
                 // instructions, so they do not pass through the IR3 HostCall
-                // arm's shared gate. Preserve that established product
-                // behavior while making the dispatch observable; unifying its
-                // authority declaration/profile grant with direct HostCall is
-                // tracked in bd-iyp3h.
+                // arm. Apply that same gate here before any module-state or
+                // resolver work, and emit the canonical module-load identity.
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
-                    Some("cap:module:require"),
+                    Some("cap:module_load"),
                 );
                 let result = self.dispatch_require_hostcall(args, Some(module));
                 self.current_module_specifier = previous_module_specifier;
@@ -39764,7 +39775,7 @@ impl InterpreterCore {
 
                     self.emit_witness(
                         WitnessEventKind::HostcallDispatched,
-                        Some(&format!("cap:{}", capability.0)),
+                        Some(&format!("cap:{}", capability_gate_key(&capability.0))),
                     );
 
                     // bd-n2mjy: capture the join of arg labels BEFORE dispatch so
@@ -39860,12 +39871,13 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
+                    check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                     self.emit_witness(
                         WitnessEventKind::HostcallDispatched,
-                        Some("cap:module:import"),
+                        Some("cap:module_load"),
                     );
                     let namespace = self.dispatch_import_hostcall(
-                        "module:import",
+                        "module_load",
                         RegRange {
                             start: specifier,
                             count: 1,
@@ -47589,11 +47601,9 @@ impl InterpreterCore {
     /// Dispatch an ESM import and emit exactly one module-load telemetry record
     /// for both success and failure.
     ///
-    /// `ImportModule` is currently an IR read effect rather than a HostCall and
-    /// IR2 -> IR3 does not preserve its `module.import` required capability.
-    /// Keep capture coverage here without silently introducing a live gate
-    /// that product profiles cannot satisfy; authority propagation is tracked
-    /// separately in bd-iyp3h.
+    /// `ImportModule` is an IR read effect rather than a HostCall, so its caller
+    /// applies the shared live gate explicitly before reaching this telemetry
+    /// and resolver boundary.
     fn dispatch_import_hostcall(
         &mut self,
         capability: &str,
@@ -75554,6 +75564,75 @@ mod active_builtin_regressions {
             Some(Value::Object(receiver)),
             None,
         )
+    }
+
+    #[test]
+    fn direct_import_denies_before_resolution_with_canonical_evidence_bd_iyp3h() {
+        let mut module = halted_test_module();
+        module.constant_pool = vec!["./missing.mjs".into()];
+        module.instructions = vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+        ];
+        let mut core = test_core();
+
+        let error = core
+            .execute(&module)
+            .expect_err("ImportModule must not reach resolution without ModuleLoad");
+        assert_eq!(
+            error,
+            InterpreterError::CapabilityDenied {
+                capability: "module_load".to_string(),
+            }
+        );
+        assert_eq!(core.hostcall_decisions.len(), 1);
+        assert_eq!(core.hostcall_decisions[0].capability.0, "module_load");
+        assert!(!core.hostcall_decisions[0].allowed);
+        assert!(core.witness_events.iter().any(|event| {
+            event.kind == WitnessEventKind::CapabilityChecked
+                && event.payload_hash == ContentHash::compute(b"denied:module_load")
+        }));
+        assert!(
+            core.hostcall_telemetry().is_empty(),
+            "authority denial must happen before module-resolution telemetry"
+        );
+    }
+
+    #[test]
+    fn first_class_require_uses_the_same_canonical_live_gate_bd_iyp3h() {
+        let mut core = test_core();
+        core.write_reg(0, Value::str("./missing.cjs"))
+            .expect("test argument should fit");
+
+        let error = core
+            .dispatch_builtin_function(
+                &halted_test_module(),
+                &BuiltinFunction::require("/tmp/main.cjs"),
+                RegRange { start: 0, count: 1 },
+                None,
+                None,
+            )
+            .expect_err("first-class require must not bypass ModuleLoad");
+        assert_eq!(
+            error,
+            InterpreterError::CapabilityDenied {
+                capability: "module_load".to_string(),
+            }
+        );
+        assert_eq!(core.hostcall_decisions.len(), 1);
+        assert_eq!(core.hostcall_decisions[0].capability.0, "module_load");
+        assert!(!core.hostcall_decisions[0].allowed);
+        assert_eq!(core.current_module_specifier, None);
+        assert!(core.witness_events.iter().any(|event| {
+            event.kind == WitnessEventKind::CapabilityChecked
+                && event.payload_hash == ContentHash::compute(b"denied:module_load")
+        }));
     }
 
     #[test]

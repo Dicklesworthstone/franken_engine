@@ -303,7 +303,7 @@ fn require_failure_emits_deterministic_module_load_record() {
 }
 
 #[test]
-fn import_module_without_module_grant_still_records_current_dispatch_contract() {
+fn import_module_without_module_grant_denies_before_resolution() {
     let root = temp_module_root("bd_juz83_import_without_grant");
     fs::create_dir_all(&root).expect("create module root");
     let module = Ir3Module {
@@ -329,27 +329,21 @@ fn import_module_without_module_grant_still_records_current_dispatch_contract() 
         required_capabilities: Vec::new(),
     };
 
-    // ImportModule is a ReadEffect whose required capability is currently lost
-    // between IR2 and IR3. Preserve that established execution contract while
-    // proving the dispatch is no longer invisible to telemetry.
     let mut config = interpreter_config(&[]);
     config.module_root = Some(root.display().to_string());
     let mut core = InterpreterCore::new(config, "trace-import-capture-bd-juz83");
     let error = core
         .execute(&module)
-        .expect_err("missing import should reach module resolution without a ModuleLoad grant");
+        .expect_err("ImportModule must not reach resolution without a ModuleLoad grant");
     assert!(matches!(
         error,
-        InterpreterError::ModuleResolutionFailed { .. }
+        InterpreterError::CapabilityDenied { capability }
+            if capability == "module_load"
     ));
-    let records = core.hostcall_telemetry().records();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].hostcall_type, HostcallType::ModuleLoad);
-    assert!(matches!(
-        records[0].result_status,
-        HostcallResult::Error { .. }
-    ));
-    assert!(records[0].verify_integrity());
+    assert!(
+        core.hostcall_telemetry().is_empty(),
+        "an authority denial must precede module-resolution telemetry"
+    );
 }
 
 #[test]
@@ -498,11 +492,10 @@ fn nested_module_require_product_path_captures_every_dispatch() {
             required_capabilities: Vec::new(),
         };
 
-        // ImportModule and first-class module.require do not yet carry a live
-        // ModuleLoad gate because IR/profile authority propagation is
-        // incomplete (bd-iyp3h). This product-path probe deliberately omits
-        // the grant so telemetry wiring cannot change established execution.
-        let mut config = interpreter_config(&[]);
+        // Both the outer ImportModule and the nested first-class
+        // module.require must consume the same explicit ModuleLoad grant and
+        // record one canonical decision apiece.
+        let mut config = interpreter_config(&[RuntimeCapability::ModuleLoad]);
         config.module_root = Some(root.display().to_string());
         let mut core = InterpreterCore::new(config, "trace-module-load-bd-juz83");
         let result = core
@@ -515,8 +508,8 @@ fn nested_module_require_product_path_captures_every_dispatch() {
             .collect::<Vec<_>>();
         assert_eq!(
             decisions,
-            Vec::<(&str, bool)>::new(),
-            "capture wiring must not silently add gates before bd-iyp3h aligns module authority"
+            vec![("module_load", true), ("module_load", true)],
+            "both module-load dispatch routes must use canonical allowed evidence"
         );
 
         assert_eq!(

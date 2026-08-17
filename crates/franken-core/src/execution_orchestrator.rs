@@ -1667,6 +1667,10 @@ impl ExecutionOrchestrator {
         ir3.required_capabilities
             .iter()
             .filter_map(|capability| RuntimeCapability::from_tag_str(&capability.0))
+            // `module_load` is executable package authority, not an internal
+            // implementation capability. Inferred demand must never turn
+            // itself into a grant; the package must declare it explicitly.
+            .filter(|capability| *capability != RuntimeCapability::ModuleLoad)
             .collect()
     }
 
@@ -6021,6 +6025,36 @@ mod tests {
         let result = orch.execute(&simple_package());
         // May succeed or fail depending on parser strictness, but should not panic.
         let _ = result;
+    }
+
+    #[test]
+    fn package_must_declare_module_load_before_resolution_bd_iyp3h() {
+        let cfg = OrchestratorConfig {
+            force_lane: Some(LaneChoice::QuickJs),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package();
+        package.extension_id = "module-authority-bd-iyp3h".to_string();
+        package.source = "import './authority-must-precede-resolution.mjs';".to_string();
+
+        let error = ExecutionOrchestrator::new(cfg.clone())
+            .execute(&package)
+            .expect_err("inferred module demand must not mint its own grant");
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                if capability == "module_load"
+        ));
+
+        package.capabilities.push("module_load".to_string());
+        let error = ExecutionOrchestrator::new(cfg)
+            .execute(&package)
+            .expect_err("an explicit grant should restore resolver error precedence");
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed { .. })
+        ));
     }
 
     // -- Enrichment: saga orchestrator accessor --

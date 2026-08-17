@@ -291,6 +291,57 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Canonical evidence and gate identity for the module-loading aliases still
+/// accepted at IR and package boundaries.
+fn capability_gate_key(tag: &str) -> &str {
+    match tag {
+        "module:require" | "module:import" | "module.import" | "module_load" => "module_load",
+        _ => tag,
+    }
+}
+
+fn check_module_load_capability_gate(
+    interpreter: &mut InterpreterCore,
+    instruction_index: u32,
+) -> Result<(), InterpreterError> {
+    const CAPABILITY_TAG: &str = "module_load";
+    if !interpreter
+        .config
+        .granted_capabilities
+        .contains(&RuntimeCapability::ModuleLoad)
+    {
+        interpreter.emit_witness(
+            WitnessEventKind::CapabilityChecked,
+            Some("denied:module_load"),
+        );
+        interpreter.hostcall_decisions.push(HostcallDecisionRecord {
+            seq: interpreter.hostcall_decisions.len() as u64,
+            capability: crate::ir_contract::CapabilityTag(CAPABILITY_TAG.to_string()),
+            allowed: false,
+            instruction_index,
+        });
+        return Err(InterpreterError::CapabilityDenied {
+            capability: CAPABILITY_TAG.to_string(),
+        });
+    }
+
+    interpreter.emit_witness(
+        WitnessEventKind::HostcallDispatched,
+        Some("cap:module_load"),
+    );
+    interpreter.emit_witness(
+        WitnessEventKind::CapabilityChecked,
+        Some("granted:module_load"),
+    );
+    interpreter.hostcall_decisions.push(HostcallDecisionRecord {
+        seq: interpreter.hostcall_decisions.len() as u64,
+        capability: crate::ir_contract::CapabilityTag(CAPABILITY_TAG.to_string()),
+        allowed: true,
+        instruction_index,
+    });
+    Ok(())
+}
+
 fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
     if KNOWN_INTERNAL_HOSTCALLS.contains(&tag) {
         HostcallCapabilityClass::InternalAllowed
@@ -4635,6 +4686,7 @@ impl InterpreterCore {
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let result = match builtin.kind {
             BuiltinFunctionKind::Require => {
+                check_module_load_capability_gate(self, self.ip as u32)?;
                 let spec_val = if args.count > 0 {
                     self.read_reg(args.start)?
                 } else {
@@ -8446,9 +8498,10 @@ impl InterpreterCore {
                         // Keep attacker-controlled evidence bounded while
                         // committing the complete pre-shortening tag. Dispatch
                         // below still uses the original capability string.
-                        let recordable_tag = recordable_capability_tag(&capability.0);
+                        let gate_key = capability_gate_key(&capability.0);
+                        let recordable_tag = recordable_capability_tag(gate_key);
 
-                        let allowed = match classify_hostcall_capability(&capability.0) {
+                        let allowed = match classify_hostcall_capability(gate_key) {
                             HostcallCapabilityClass::Runtime(required) => {
                                 self.config.granted_capabilities.contains(&required)
                             }
@@ -8543,6 +8596,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
+                    check_module_load_capability_gate(self, self.ip as u32)?;
                     let spec_val = self.read_reg(specifier)?;
                     let specifier = match spec_val {
                         Value::Str(s) => s,
@@ -22350,7 +22404,11 @@ mod tests {
                 Ir3Instruction::Halt,
             ]);
             module.constant_pool.push(exact);
-            let error = quickjs_execute(&module).unwrap_err();
+            let mut core = InterpreterCore::new(
+                test_quickjs_config_with([RuntimeCapability::ModuleLoad]),
+                "surrogate-module-boundary",
+            );
+            let error = core.execute(&module).unwrap_err();
             assert!(matches!(error, InterpreterError::TypeError { .. }));
         }
     }
@@ -27367,6 +27425,85 @@ mod tests {
                 .iter()
                 .any(|event| event.kind == WitnessEventKind::HostcallDispatched)
         );
+    }
+
+    #[test]
+    fn direct_import_denies_before_resolution_with_canonical_evidence_bd_iyp3h() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::ImportModule {
+                    specifier: 0,
+                    dst: 1,
+                },
+            ],
+            vec!["./missing.mjs".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let error = core
+            .execute(&module)
+            .expect_err("ImportModule must not resolve without ModuleLoad");
+        assert_eq!(
+            error,
+            InterpreterError::CapabilityDenied {
+                capability: "module_load".to_string(),
+            }
+        );
+        assert_eq!(core.hostcall_decisions.len(), 1);
+        assert_eq!(core.hostcall_decisions[0].capability.0, "module_load");
+        assert!(!core.hostcall_decisions[0].allowed);
+    }
+
+    #[test]
+    fn first_class_require_denies_before_argument_or_resolver_work_bd_iyp3h() {
+        let mut core = quickjs_test_core();
+        let module = test_module(Vec::new());
+
+        let error = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::require("/tmp/entry.cjs"),
+                None,
+                RegRange { start: 0, count: 0 },
+            )
+            .expect_err("first-class require must not bypass ModuleLoad");
+        assert_eq!(
+            error,
+            InterpreterError::CapabilityDenied {
+                capability: "module_load".to_string(),
+            }
+        );
+        assert_eq!(core.hostcall_decisions.len(), 1);
+        assert_eq!(core.hostcall_decisions[0].capability.0, "module_load");
+        assert!(!core.hostcall_decisions[0].allowed);
+        assert_eq!(core.current_module_specifier, None);
+    }
+
+    #[test]
+    fn module_hostcall_alias_uses_canonical_gate_evidence_bd_iyp3h() {
+        let module = test_module(vec![Ir3Instruction::HostCall {
+            capability: CapabilityTag("module:require".to_string()),
+            args: RegRange { start: 0, count: 0 },
+            dst: 0,
+        }]);
+        let mut core = quickjs_test_core();
+
+        let error = core
+            .execute(&module)
+            .expect_err("module HostCall alias must consume ModuleLoad");
+        assert_eq!(
+            error,
+            InterpreterError::CapabilityDenied {
+                capability: "module_load".to_string(),
+            }
+        );
+        assert_eq!(core.hostcall_decisions.len(), 1);
+        assert_eq!(core.hostcall_decisions[0].capability.0, "module_load");
+        assert!(!core.hostcall_decisions[0].allowed);
     }
 
     // -----------------------------------------------------------------------

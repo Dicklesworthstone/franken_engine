@@ -1164,7 +1164,7 @@ fn hostcall_module_require_denied_without_capability() {
     let err = qjs_run(&m).unwrap_err();
     match err {
         InterpreterError::CapabilityDenied { capability } => {
-            assert_eq!(capability, "module:require");
+            assert_eq!(capability, "module_load");
         }
         other => panic!("expected CapabilityDenied, got {other:?}"),
     }

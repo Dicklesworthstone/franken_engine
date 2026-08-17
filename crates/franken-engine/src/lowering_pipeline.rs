@@ -587,7 +587,7 @@ pub fn lower_ir0_to_ir3(
         }
     };
 
-    let ir2_result = match lower_ir1_to_ir2_with_host_io_exception_provenance(
+    let mut ir2_result = match lower_ir1_to_ir2_with_host_io_exception_provenance(
         &ir1_result.module,
         context.host_io_exception_provenance,
     ) {
@@ -604,6 +604,29 @@ pub fn lower_ir0_to_ir3(
             return Err(error);
         }
     };
+
+    // An authenticated CommonJS wrapper exposes `require` and
+    // `module.require` as first-class callable values rather than HostCall IR
+    // instructions. Their authority therefore cannot be recovered by the
+    // ordinary per-op classifier. Declare the wrapper's module-load authority
+    // explicitly so IR3 routing and E9 dispatch metadata see the same surface
+    // that the interpreter can execute.
+    if context.authenticated_commonjs_runtime_bindings
+        && !ir2_result
+            .module
+            .required_capabilities
+            .iter()
+            .any(|capability| capability.0 == "module_load")
+    {
+        ir2_result
+            .module
+            .required_capabilities
+            .push(CapabilityTag("module_load".to_string()));
+        ir2_result
+            .module
+            .required_capabilities
+            .sort_by(|left, right| left.0.cmp(&right.0));
+    }
 
     let ir2_flow_proof_artifact = match build_ir2_flow_proof_artifact(&ir2_result.module, context) {
         Ok(artifact) => {
@@ -38198,6 +38221,22 @@ mod tests {
                 Ir1Op::Call { .. } | Ir1Op::CallMethod { .. }
             )),
             "the aliased injected require must remain a real callable value"
+        );
+        assert!(
+            output
+                .ir2
+                .required_capabilities
+                .iter()
+                .any(|capability| capability.0 == "module_load"),
+            "the authenticated wrapper must declare its first-class require authority in IR2"
+        );
+        assert!(
+            output
+                .ir3
+                .required_capabilities
+                .iter()
+                .any(|capability| capability.0 == "module_load"),
+            "the authenticated wrapper must preserve first-class require authority in IR3"
         );
     }
 

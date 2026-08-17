@@ -1063,12 +1063,39 @@ fn source_file_basename_resolves_relative_imports_in_both_lanes_bd_fw7zd_4() {
         };
         let mut package = simple_package("ext-basename-import", &source);
         package.source_file = Some("entry.mjs".to_string());
+        package.capabilities.push("module_load".to_string());
 
         let result = ExecutionOrchestrator::new(config)
             .execute(&package)
             .unwrap_or_else(|error| panic!("{lane:?} relative import failed: {error}"));
         assert_eq!(result.lane, lane);
     }
+}
+
+#[test]
+fn orchestrator_package_must_declare_module_load_before_resolution_bd_iyp3h() {
+    let config = OrchestratorConfig {
+        force_lane: Some(LaneChoice::QuickJs),
+        parse_goal: ParseGoal::Module,
+        ..OrchestratorConfig::default()
+    };
+    let mut package = simple_package(
+        "ext-module-authority-denied",
+        "import './authority-must-precede-resolution.mjs';",
+    );
+    package.source_file = Some("entry.mjs".to_string());
+
+    let error = ExecutionOrchestrator::new(config)
+        .execute(&package)
+        .expect_err("an undeclared module load must fail before resolver details escape");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                if capability == "module_load"
+        ),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -1094,6 +1121,7 @@ fn source_file_basename_keeps_parent_import_outside_cached_root_bd_fw7zd_4() {
         };
         let mut package = simple_package("ext-basename-escape", "import '../../Cargo.toml';");
         package.source_file = Some("entry.mjs".to_string());
+        package.capabilities.push("module_load".to_string());
 
         let error = ExecutionOrchestrator::new(config)
             .execute(&package)
@@ -1152,6 +1180,7 @@ fn source_file_basename_rejects_in_root_symlink_escape_bd_fw7zd_4() {
         };
         let mut package = simple_package("ext-basename-symlink-escape", &source);
         package.source_file = Some("entry.mjs".to_string());
+        package.capabilities.push("module_load".to_string());
 
         let error = ExecutionOrchestrator::new(config)
             .execute(&package)
@@ -2275,6 +2304,7 @@ fn declared_module_root_allows_nested_entrypoint_parent_import_bd_8mgzb() {
         );
         package.source_file = Some(entry.display().to_string());
         package.module_root = Some(root.path().display().to_string());
+        package.capabilities.push("module_load".to_string());
 
         let result = ExecutionOrchestrator::new(config)
             .execute(&package)
@@ -2316,6 +2346,7 @@ fn default_module_root_still_refuses_parent_import_bd_8mgzb() {
             &std::fs::read_to_string(&entry).expect("read entry"),
         );
         package.source_file = Some(entry.display().to_string());
+        package.capabilities.push("module_load".to_string());
 
         let error = ExecutionOrchestrator::new(config)
             .execute(&package)
@@ -2373,6 +2404,7 @@ fn declared_module_root_still_refuses_escape_beyond_root_bd_8mgzb() {
         );
         package.source_file = Some(entry.display().to_string());
         package.module_root = Some(root.path().display().to_string());
+        package.capabilities.push("module_load".to_string());
 
         let error = ExecutionOrchestrator::new(config)
             .execute(&package)

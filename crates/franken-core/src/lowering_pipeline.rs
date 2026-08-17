@@ -6323,6 +6323,13 @@ pub fn lower_ir2_to_ir3(
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("cjs"))
         .unwrap_or(false);
+    if is_commonjs {
+        // CommonJS exposes `require` and `module.require` as first-class
+        // callable values rather than HostCall IR instructions. Declare that
+        // executable surface explicitly so policy cannot mistake the absence
+        // of a HostCall for the absence of module-load authority.
+        required_capabilities.insert("module_load".to_string());
+    }
     let mut scoped_binding_ids = BTreeSet::<BindingId>::new();
     if is_commonjs {
         if let Some(binding_id) = name_to_binding_id.get("require") {
@@ -13661,6 +13668,31 @@ mod tests {
             ir3.instructions
                 .iter()
                 .any(|instruction| matches!(instruction, Ir3Instruction::ImportModule { .. }))
+        );
+    }
+
+    #[test]
+    fn commonjs_first_class_require_declares_module_load_bd_iyp3h() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "const load = require; load('./dependency.cjs');",
+                ParseGoal::Script,
+            )
+            .expect("CommonJS source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "entry.cjs");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-iyp3h", "decision-bd-iyp3h", "policy-bd-iyp3h"),
+        )
+        .expect("CommonJS source should lower");
+
+        assert!(
+            output
+                .ir3
+                .required_capabilities
+                .iter()
+                .any(|capability| capability.0 == "module_load"),
+            "first-class CommonJS require must remain visible to policy even without HostCall IR"
         );
     }
 

@@ -2,11 +2,11 @@
 //! pruned hostcall dispatch metadata.
 //!
 //! The activated specialization is deliberately boring: a per-run
-//! precomputed table mapping each constant hostcall capability tag in the
+//! precomputed table mapping each constant capability-dispatch identity in the
 //! lowered IR3 program to its allow/deny decision, resolved once from the
 //! exact live decision path (`baseline_interpreter::live_hostcall_decision`,
 //! shared `pub(crate)` so builder and gate cannot drift). With the table
-//! installed, the interpreter's hostcall gate skips per-call string
+//! installed, the interpreter's shared capability gate skips per-call string
 //! classification and capability-set probing; any miss falls through to the
 //! live path. Witness and decision-record emission is untouched, so
 //! execution values, instruction counts, hostcall decision logs, and replay
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, PrunedHostcallDispatch,
-    live_hostcall_decision,
+    capability_gate_key, live_hostcall_decision,
 };
 use crate::capability::RuntimeCapability;
 use crate::deterministic_replay::{
@@ -115,8 +115,10 @@ pub struct PrunedDispatchBuild {
 /// Build the capability-pruned dispatch table for a lowered module under a
 /// fixed granted-capability set.
 ///
-/// Every constant `HostCall` tag in the instruction stream is resolved once
-/// through the SAME function the live gate uses, so the precomputed
+/// Every constant `HostCall` tag and direct `ImportModule` site in the
+/// instruction stream is resolved once through the SAME function the live
+/// gate uses. A declared first-class CommonJS `require` surface is included
+/// even when no HostCall instruction represents it, so the precomputed
 /// decision cannot drift from what the gate would decide.
 pub fn build_pruned_dispatch(
     module: &Ir3Module,
@@ -124,11 +126,27 @@ pub fn build_pruned_dispatch(
 ) -> PrunedDispatchBuild {
     let mut decisions: BTreeMap<String, bool> = BTreeMap::new();
     for instruction in &module.instructions {
-        if let Ir3Instruction::HostCall { capability, .. } = instruction {
-            let tag = capability.0.clone();
-            let allowed = live_hostcall_decision(&tag, granted);
-            decisions.insert(tag, allowed);
-        }
+        let tag = match instruction {
+            Ir3Instruction::HostCall { capability, .. } => capability_gate_key(&capability.0),
+            Ir3Instruction::ImportModule { .. } => "module_load",
+            _ => continue,
+        };
+        let allowed = live_hostcall_decision(tag, granted);
+        decisions.insert(tag.to_string(), allowed);
+    }
+    // Authenticated CommonJS wrappers expose first-class `require` callables,
+    // so there may be no HostCall instruction to discover. Their lowering
+    // contract declares canonical module-load authority in IR3; include that
+    // declared dispatch surface in the specialized table as well.
+    if module
+        .required_capabilities
+        .iter()
+        .any(|capability| capability_gate_key(&capability.0) == "module_load")
+    {
+        decisions.insert(
+            "module_load".to_string(),
+            live_hostcall_decision("module_load", granted),
+        );
     }
     let allowed_count = decisions.values().filter(|allowed| **allowed).count() as u64;
     let denied_count = decisions.len() as u64 - allowed_count;
@@ -643,6 +661,30 @@ mod tests {
                 "precomputed decision must equal the live decision for {tag}"
             );
         }
+    }
+
+    #[test]
+    fn builder_canonicalizes_import_and_declared_require_authority_bd_iyp3h() {
+        let mut import_module = lowered_module();
+        import_module.instructions = vec![Ir3Instruction::ImportModule {
+            specifier: 0,
+            dst: 1,
+        }];
+        import_module.required_capabilities = vec![crate::ir_contract::CapabilityTag(
+            "module.import".to_string(),
+        )];
+        let denied = build_pruned_dispatch(&import_module, &BTreeSet::new());
+        assert_eq!(denied.resolved_tags, vec!["module_load".to_string()]);
+        assert_eq!(denied.table.lookup("module_load"), Some(false));
+
+        let mut first_class_require_module = lowered_module();
+        first_class_require_module.instructions.clear();
+        first_class_require_module.required_capabilities =
+            vec![crate::ir_contract::CapabilityTag("module_load".to_string())];
+        let granted = BTreeSet::from([RuntimeCapability::ModuleLoad]);
+        let allowed = build_pruned_dispatch(&first_class_require_module, &granted);
+        assert_eq!(allowed.resolved_tags, vec!["module_load".to_string()]);
+        assert_eq!(allowed.table.lookup("module_load"), Some(true));
     }
 
     #[test]

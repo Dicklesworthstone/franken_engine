@@ -1340,6 +1340,39 @@ pub struct EvalOutcome {
     /// `generated_code_audit`.
     #[serde(default)]
     pub instructions_executed: u64,
+    /// Exact number of source IR3 instructions handled by compact Tier-I
+    /// dispatch. This is zero for fully Tier-R executions and remains distinct
+    /// from the total instruction budget counter.
+    #[serde(default)]
+    pub tier_i_instructions_executed: u64,
+    /// Exact subset of Tier-I instructions that used a guarded borrowed/scalar
+    /// specialization instead of the canonical rich helper path.
+    #[serde(default)]
+    pub tier_i_specialized_instructions_executed: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionTier {
+    /// Canonical rich interpreter handlers only.
+    #[default]
+    TierR,
+    /// At least one instruction ran through the compact Tier-I dispatch.
+    TierI,
+}
+
+impl EvalOutcome {
+    /// Fastest production dispatch tier that actually executed at least one
+    /// source instruction during this eval. The exact counter is the canonical
+    /// serialized fact so deserialization cannot produce a contradictory tier
+    /// label and counter.
+    pub fn execution_tier(&self) -> ExecutionTier {
+        if self.tier_i_instructions_executed == 0 {
+            ExecutionTier::TierR
+        } else {
+            ExecutionTier::TierI
+        }
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -1910,6 +1943,7 @@ struct PreparedEvalSource {
 #[derive(Debug)]
 pub struct PreparedHybridEval {
     ir3: Ir3Module,
+    compact_tier1: Option<baseline_interpreter::CompactTier1Program>,
     route_reason: RouteReason,
     source_ingestion: SourceIngestionSummary,
     trace_id: String,
@@ -1976,6 +2010,8 @@ fn eval_prepared_with_lane(
         source_ingestion: prepared.source_ingestion.clone(),
         generated_code_audit: output.generated_code_audit,
         instructions_executed: output.instructions_executed,
+        tier_i_instructions_executed: output.tier_i_instructions_executed,
+        tier_i_specialized_instructions_executed: output.tier_i_specialized_instructions_executed,
     })
 }
 
@@ -1994,6 +2030,8 @@ struct NativeEvalOutput {
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
     generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
     instructions_executed: u64,
+    tier_i_instructions_executed: u64,
+    tier_i_specialized_instructions_executed: u64,
 }
 
 #[allow(clippy::result_large_err)]
@@ -2083,9 +2121,11 @@ fn compile_prepared_eval_source(
     // up in register 0 where the interpreter will read it.
     let mut ir3 = lowering_output.ir3;
     patch_eval_completion_value(&mut ir3);
+    let compact_tier1 = baseline_interpreter::CompactTier1Program::compile(&ir3);
 
     Ok(PreparedHybridEval {
         ir3,
+        compact_tier1,
         route_reason,
         source_ingestion: prepared.source_ingestion,
         trace_id: prepared.trace_id,
@@ -2101,17 +2141,27 @@ fn execute_prepared_eval(
     budgets: EngineEvalBudgets,
 ) -> EvalResult<NativeEvalOutput> {
     let lane_router = eval_lane_router_for_ir3(&prepared.ir3, budgets);
-    let routed = lane_router
-        .execute(&prepared.ir3, prepared.trace_id.as_str(), Some(lane))
-        .map_err(map_interpreter_error)
-        .map_err(|error| {
-            attach_eval_correlation(
-                error,
+    let routed = match prepared.compact_tier1.as_ref() {
+        Some(compact_tier1) => {
+            debug_assert!(compact_tier1.compact_instruction_count() > 0);
+            lane_router.execute_with_compact_tier1(
+                &prepared.ir3,
+                compact_tier1,
                 prepared.trace_id.as_str(),
-                prepared.decision_id.as_str(),
-                prepared.policy_id.as_str(),
+                Some(lane),
             )
-        })?;
+        }
+        None => lane_router.execute(&prepared.ir3, prepared.trace_id.as_str(), Some(lane)),
+    }
+    .map_err(map_interpreter_error)
+    .map_err(|error| {
+        attach_eval_correlation(
+            error,
+            prepared.trace_id.as_str(),
+            prepared.decision_id.as_str(),
+            prepared.policy_id.as_str(),
+        )
+    })?;
 
     // A lone-surrogate string completion value cannot survive the Display
     // projection below; carry its exact code units alongside (bd-2vzgi).
@@ -2128,6 +2178,10 @@ fn execute_prepared_eval(
         console_output: routed.result.console_output,
         generated_code_audit: routed.result.generated_code_audit,
         instructions_executed: routed.result.instructions_executed,
+        tier_i_instructions_executed: routed.result.tier_i_instructions_executed,
+        tier_i_specialized_instructions_executed: routed
+            .result
+            .tier_i_specialized_instructions_executed,
     })
 }
 
@@ -2368,6 +2422,9 @@ mod tests {
         let mut router = HybridRouter::default();
         let out = router.eval("1 + 1;").expect("eval should succeed");
         assert_eq!(out.value, "2");
+        assert_eq!(out.execution_tier(), ExecutionTier::TierI);
+        assert!(out.tier_i_instructions_executed > 0);
+        assert!(out.tier_i_specialized_instructions_executed > 0);
     }
 
     #[test]
@@ -2416,6 +2473,58 @@ mod tests {
             .eval_prepared_with_instruction_budget(&prepared, 1_000_000)
             .expect("a refused execution must not poison the immutable handle");
         assert_eq!(retry.value, "100");
+        assert_eq!(retry.execution_tier(), ExecutionTier::TierI);
+        assert!(retry.tier_i_instructions_executed > 100);
+        assert!(retry.tier_i_specialized_instructions_executed > 100);
+    }
+
+    #[test]
+    fn prepared_tier_i_is_identical_across_both_profile_lanes() {
+        let source = "var i = 0; var sum = 0; while (i < 100) { sum = sum + i; i = i + 1; } sum;";
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare scalar loop");
+        let plan = prepared
+            .compact_tier1
+            .as_ref()
+            .expect("scalar loop must produce a compact plan");
+        assert!(plan.compact_instruction_count() > 0);
+
+        let quickjs = eval_prepared_with_lane(
+            &prepared,
+            LaneChoice::QuickJs,
+            EngineEvalBudgets {
+                instruction_budget: Some(1_000_000),
+                memory_budget: None,
+            },
+        )
+        .expect("QuickJS-profile Tier-I execution");
+        let v8 = eval_prepared_with_lane(
+            &prepared,
+            LaneChoice::V8,
+            EngineEvalBudgets {
+                instruction_budget: Some(1_000_000),
+                memory_budget: None,
+            },
+        )
+        .expect("V8-profile Tier-I execution");
+
+        assert_eq!(quickjs.value, "4950");
+        assert_eq!(v8.value, quickjs.value);
+        assert_eq!(v8.completion_type, quickjs.completion_type);
+        assert_eq!(v8.completion_label, quickjs.completion_label);
+        assert_eq!(v8.console_output, quickjs.console_output);
+        assert_eq!(v8.instructions_executed, quickjs.instructions_executed);
+        assert_eq!(
+            v8.tier_i_instructions_executed,
+            quickjs.tier_i_instructions_executed
+        );
+        assert_eq!(
+            v8.tier_i_specialized_instructions_executed,
+            quickjs.tier_i_specialized_instructions_executed
+        );
+        assert_eq!(quickjs.execution_tier(), ExecutionTier::TierI);
+        assert_eq!(v8.execution_tier(), ExecutionTier::TierI);
+        assert_eq!(quickjs.engine, EngineKind::QuickJsInspiredNative);
+        assert_eq!(v8.engine, EngineKind::V8InspiredNative);
     }
 
     #[test]
@@ -2982,6 +3091,8 @@ mod tests {
             source_ingestion: SourceIngestionSummary::default(),
             generated_code_audit: Vec::new(),
             instructions_executed: 7,
+            tier_i_instructions_executed: 6,
+            tier_i_specialized_instructions_executed: 4,
         };
         let json = serde_json::to_string(&outcome).expect("eval outcome should serialize to JSON");
         let decoded: EvalOutcome =

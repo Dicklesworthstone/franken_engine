@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig, InterpreterError,
-    InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
+    CompactTier1Program, ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig,
+    InterpreterError, InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
 };
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
@@ -887,6 +887,11 @@ pub struct OrchestratorResult {
     pub completion_label: crate::ifc_artifacts::Label,
     pub console_output: Vec<ConsoleEntry>,
     pub instructions_executed: u64,
+    /// Exact number of source IR3 instructions dispatched through compact
+    /// Tier-I handlers. Zero means the execution stayed entirely on Tier R.
+    pub tier_i_instructions_executed: u64,
+    /// Exact subset that used guarded borrowed/scalar specialization.
+    pub tier_i_specialized_instructions_executed: u64,
     /// Replay-checkable policy decision that selected the profile which ran.
     pub adaptive_routing_decision: AdaptiveRoutingDecision,
     pub adaptive_router_summary: Option<RouterSummary>,
@@ -2465,6 +2470,9 @@ impl ExecutionOrchestrator {
             let completion_label = exec_result.completion_label.clone();
             let console_output = exec_result.console_output.clone();
             let instructions_executed = exec_result.instructions_executed;
+            let tier_i_instructions_executed = exec_result.tier_i_instructions_executed;
+            let tier_i_specialized_instructions_executed =
+                exec_result.tier_i_specialized_instructions_executed;
             let (staged_router, adaptive_router_summary, adaptive_router_update_status) = self
                 .stage_adaptive_router_update(lane, &exec_result, adaptive_routing_decision.reason);
             pending_adaptive_router = staged_router;
@@ -2588,6 +2596,8 @@ impl ExecutionOrchestrator {
                 completion_label,
                 console_output,
                 instructions_executed,
+                tier_i_instructions_executed,
+                tier_i_specialized_instructions_executed,
                 adaptive_routing_decision,
                 adaptive_router_summary,
                 adaptive_router_update_status,
@@ -3139,12 +3149,14 @@ impl ExecutionOrchestrator {
             lane_router.set_process_spawn(provider, journal);
         }
         lane_router.set_timer_effect_authority(timer_effect_authority);
+        let compact_tier1 = CompactTier1Program::compile(ir3);
         let routed = lane_router
-            .execute_with_hook(
+            .execute_with_hook_and_compact_tier1(
                 ir3,
                 trace_id,
                 adaptive_routing_decision.execution_force_lane(),
                 hook,
+                compact_tier1.as_ref(),
             )
             .map_err(OrchestratorError::Interpreter)?;
         let report = guardplane_adapter
@@ -6120,6 +6132,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -8602,6 +8616,10 @@ mod tests {
                 !result.evidence_entries.is_empty(),
                 "{preset:?} no evidence"
             );
+            assert!(
+                result.tier_i_instructions_executed > 0,
+                "{preset:?} must route admitted scalar IR through production Tier-I"
+            );
         }
     }
 
@@ -8868,6 +8886,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9275,6 +9295,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 10,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9307,6 +9329,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9352,6 +9376,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9407,6 +9433,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 1,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9594,6 +9622,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9638,6 +9668,8 @@ mod tests {
                 },
             ],
             instructions_executed: 0, // no instruction penalty
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9669,6 +9701,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: many_hostcalls,
             instructions_executed: 0,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
@@ -9833,6 +9867,8 @@ mod tests {
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),

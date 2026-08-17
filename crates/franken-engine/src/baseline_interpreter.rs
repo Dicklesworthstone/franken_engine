@@ -7551,6 +7551,14 @@ pub struct ExecutionResult {
     pub completion_label: Label,
     /// Number of instructions executed.
     pub instructions_executed: u64,
+    /// Number of source IR3 instructions dispatched through the compact
+    /// production Tier-I representation. This is an execution fact, not an
+    /// eligibility prediction: zero means the exact run stayed entirely on
+    /// the canonical Tier-R handlers.
+    pub tier_i_instructions_executed: u64,
+    /// Tier-I instructions that additionally took a guarded borrowed/scalar
+    /// specialization rather than delegating to the rich Tier-R helper path.
+    pub tier_i_specialized_instructions_executed: u64,
     /// Optional containment action requested by an interpreter hook.
     pub requested_hook_action: Option<HookAction>,
     /// Witness events collected during execution.
@@ -7576,6 +7584,295 @@ pub struct ExecutionResult {
     /// generator, and async entries do not add rows. Empty when no dynamic code
     /// was generated.
     pub generated_code_audit: Vec<GeneratedCodeAuditEntry>,
+}
+
+/// Immutable compact dispatch plan compiled from canonical IR3.
+///
+/// The plan is deliberately private to the crate and non-serializable. It is
+/// carried only beside the immutable IR3 inside `PreparedHybridEval`, so no
+/// public caller can pair compact instructions with a different module. Each
+/// cell corresponds to exactly one source IR3 instruction; unsupported cells
+/// retain the baseline opcode and execute through Tier R at the same source IP.
+#[derive(Debug)]
+pub(crate) struct CompactTier1Program {
+    source_module_hash: ContentHash,
+    instructions: Box<[CompactTier1Instruction]>,
+    compact_instruction_count: usize,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactTier1Opcode {
+    Baseline,
+    LoadInt,
+    LoadFloat,
+    LoadBool,
+    LoadNull,
+    LoadUndefined,
+    Move,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Exp,
+    UnaryNeg,
+    UnaryPlus,
+    LogicalNot,
+    BitNot,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Eq,
+    StrictEq,
+    NotEq,
+    StrictNotEq,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    Ushr,
+    Jump,
+    JumpIf,
+    JumpIfNullish,
+    Halt,
+}
+
+/// Fixed-width Tier-I cell. The eight-byte scalar payload holds exact integer
+/// or floating-point bits; register operands stay compact and any register that
+/// does not fit `u16` is represented by a `Baseline` cell instead.
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompactTier1Instruction {
+    opcode: CompactTier1Opcode,
+    _reserved: u8,
+    dst: u16,
+    lhs: u16,
+    rhs: u16,
+    payload: u64,
+}
+
+impl CompactTier1Instruction {
+    const BASELINE: Self = Self {
+        opcode: CompactTier1Opcode::Baseline,
+        _reserved: 0,
+        dst: 0,
+        lhs: 0,
+        rhs: 0,
+        payload: 0,
+    };
+
+    fn new(opcode: CompactTier1Opcode, dst: u16, lhs: u16, rhs: u16, payload: u64) -> Self {
+        Self {
+            opcode,
+            _reserved: 0,
+            dst,
+            lhs,
+            rhs,
+            payload,
+        }
+    }
+
+    fn with_dst(opcode: CompactTier1Opcode, dst: u32, payload: u64) -> Option<Self> {
+        Some(Self::new(opcode, u16::try_from(dst).ok()?, 0, 0, payload))
+    }
+
+    fn with_unary(opcode: CompactTier1Opcode, dst: u32, src: u32) -> Option<Self> {
+        Some(Self::new(
+            opcode,
+            u16::try_from(dst).ok()?,
+            u16::try_from(src).ok()?,
+            0,
+            0,
+        ))
+    }
+
+    fn with_binary(opcode: CompactTier1Opcode, dst: u32, lhs: u32, rhs: u32) -> Option<Self> {
+        Some(Self::new(
+            opcode,
+            u16::try_from(dst).ok()?,
+            u16::try_from(lhs).ok()?,
+            u16::try_from(rhs).ok()?,
+            0,
+        ))
+    }
+}
+
+impl CompactTier1Program {
+    /// Compile a source-IP-preserving compact plan. Unsupported instructions
+    /// remain explicit baseline cells; compilation itself never changes module
+    /// admission or execution semantics.
+    pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
+        let mut compact_instruction_count = 0usize;
+        let mut compact_work_instruction_count = 0usize;
+        let instructions = module
+            .instructions
+            .iter()
+            .map(|instruction| {
+                let compact = Self::compile_instruction(instruction)
+                    .unwrap_or(CompactTier1Instruction::BASELINE);
+                if compact.opcode != CompactTier1Opcode::Baseline {
+                    compact_instruction_count = compact_instruction_count.saturating_add(1);
+                    if compact.opcode != CompactTier1Opcode::Halt {
+                        compact_work_instruction_count =
+                            compact_work_instruction_count.saturating_add(1);
+                    }
+                }
+                compact
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        (compact_work_instruction_count > 0).then_some(Self {
+            source_module_hash: module.content_hash(),
+            instructions,
+            compact_instruction_count,
+        })
+    }
+
+    fn compile_instruction(instruction: &Ir3Instruction) -> Option<CompactTier1Instruction> {
+        use CompactTier1Opcode as Op;
+        match instruction {
+            Ir3Instruction::LoadInt { dst, value } => {
+                CompactTier1Instruction::with_dst(Op::LoadInt, *dst, *value as u64)
+            }
+            Ir3Instruction::LoadFloat { dst, bits } => {
+                CompactTier1Instruction::with_dst(Op::LoadFloat, *dst, *bits)
+            }
+            Ir3Instruction::LoadBool { dst, value } => {
+                CompactTier1Instruction::with_dst(Op::LoadBool, *dst, u64::from(*value))
+            }
+            Ir3Instruction::LoadNull { dst } => {
+                CompactTier1Instruction::with_dst(Op::LoadNull, *dst, 0)
+            }
+            Ir3Instruction::LoadUndefined { dst } => {
+                CompactTier1Instruction::with_dst(Op::LoadUndefined, *dst, 0)
+            }
+            Ir3Instruction::Move { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::Move, *dst, *src)
+            }
+            Ir3Instruction::Add { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Add, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Sub { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Sub, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Mul { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Mul, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Div { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Div, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Mod { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Mod, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Exp { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Exp, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::UnaryNeg { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::UnaryNeg, *dst, *src)
+            }
+            Ir3Instruction::UnaryPlus { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::UnaryPlus, *dst, *src)
+            }
+            Ir3Instruction::LogicalNot { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::LogicalNot, *dst, *src)
+            }
+            Ir3Instruction::BitNot { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::BitNot, *dst, *src)
+            }
+            Ir3Instruction::Lt { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Lt, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Lte { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Lte, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Gt { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Gt, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Gte { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Gte, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Eq { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Eq, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::StrictEq { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::StrictEq, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::NotEq { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::NotEq, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::StrictNotEq { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::StrictNotEq, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::BitAnd { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::BitAnd, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::BitOr { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::BitOr, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::BitXor { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::BitXor, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Shl { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Shl, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Shr { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Shr, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Ushr { dst, lhs, rhs } => {
+                CompactTier1Instruction::with_binary(Op::Ushr, *dst, *lhs, *rhs)
+            }
+            Ir3Instruction::Jump { target } => Some(CompactTier1Instruction::new(
+                Op::Jump,
+                0,
+                0,
+                0,
+                u64::from(*target),
+            )),
+            Ir3Instruction::JumpIf { cond, target } => Some(CompactTier1Instruction::new(
+                Op::JumpIf,
+                0,
+                u16::try_from(*cond).ok()?,
+                0,
+                u64::from(*target),
+            )),
+            Ir3Instruction::JumpIfNullish { cond, target } => Some(CompactTier1Instruction::new(
+                Op::JumpIfNullish,
+                0,
+                u16::try_from(*cond).ok()?,
+                0,
+                u64::from(*target),
+            )),
+            Ir3Instruction::Halt => Some(CompactTier1Instruction::new(Op::Halt, 0, 0, 0, 0)),
+            _ => None,
+        }
+    }
+
+    fn validate_module(&self, module: &Ir3Module) -> Result<(), InterpreterError> {
+        let actual_hash = module.content_hash();
+        if self.source_module_hash != actual_hash {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "compact Tier-I plan/module identity mismatch: expected {}, got {}",
+                    self.source_module_hash, actual_hash
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn instruction_at(&self, ip: usize) -> Option<CompactTier1Instruction> {
+        self.instructions
+            .get(ip)
+            .copied()
+            .filter(|instruction| instruction.opcode != CompactTier1Opcode::Baseline)
+    }
+
+    pub(crate) fn compact_instruction_count(&self) -> usize {
+        self.compact_instruction_count
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9117,6 +9414,10 @@ pub struct InterpreterCore {
     ip: usize,
     /// Instructions executed counter.
     instructions_executed: u64,
+    /// Source instructions handled by the compact Tier-I dispatch in the
+    /// current execution.
+    tier_i_instructions_executed: u64,
+    tier_i_specialized_instructions_executed: u64,
     /// Witness events.
     witness_events: Vec<WitnessEvent>,
     /// Hostcall decisions.
@@ -9992,6 +10293,8 @@ impl InterpreterCore {
             ),
             ip: 0,
             instructions_executed: 0,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
             witness_events: Vec::new(),
             hostcall_decisions: Vec::new(),
             security_observability: RuntimeSecurityObservability::new(),
@@ -27783,6 +28086,8 @@ impl InterpreterCore {
             value: completion.value,
             completion_label: completion.label,
             instructions_executed: self.instructions_executed,
+            tier_i_instructions_executed: self.tier_i_instructions_executed,
+            tier_i_specialized_instructions_executed: self.tier_i_specialized_instructions_executed,
             requested_hook_action,
             witness_events: std::mem::take(&mut self.witness_events),
             hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
@@ -27796,21 +28101,37 @@ impl InterpreterCore {
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-        self.execute_with_trace_handoff(module, TraceHandoff::RetainInCore)
+        self.execute_with_trace_handoff(module, None, TraceHandoff::RetainInCore)
     }
 
     fn execute_ephemeral(
         &mut self,
         module: &Ir3Module,
     ) -> Result<ExecutionResult, InterpreterError> {
-        self.execute_with_trace_handoff(module, TraceHandoff::DrainEphemeralCore)
+        self.execute_with_trace_handoff(module, None, TraceHandoff::DrainEphemeralCore)
+    }
+
+    fn execute_ephemeral_with_compact_tier1(
+        &mut self,
+        module: &Ir3Module,
+        compact_tier1: &CompactTier1Program,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_trace_handoff(
+            module,
+            Some(compact_tier1),
+            TraceHandoff::DrainEphemeralCore,
+        )
     }
 
     fn execute_with_trace_handoff(
         &mut self,
         module: &Ir3Module,
+        compact_tier1: Option<&CompactTier1Program>,
         trace_handoff: TraceHandoff,
     ) -> Result<ExecutionResult, InterpreterError> {
+        if let Some(program) = compact_tier1 {
+            program.validate_module(module)?;
+        }
         crate::ir_contract::verify_ir3_specialization(module).map_err(|error| {
             InterpreterError::TypeError {
                 expected: "supported, structurally valid engine IR3 module".to_string(),
@@ -27819,7 +28140,7 @@ impl InterpreterCore {
         })?;
         self.ensure_vm_dispatch_capability()?;
         let entry_specifier = self.prepare_execution(module)?;
-        let result = self.run_top_level_execution(module);
+        let result = self.run_top_level_execution(module, compact_tier1);
         // Final capture opportunity: a request equal to the trace's final
         // event count observes end-of-execution state (bd-fqlfw.3.5.5).
         self.check_state_capture_boundary();
@@ -28196,6 +28517,8 @@ impl InterpreterCore {
         // A repeat run replays the previous run's budget and trace domain
         // from zero; both accumulate across `execute` calls otherwise.
         self.instructions_executed = 0;
+        self.tier_i_instructions_executed = 0;
+        self.tier_i_specialized_instructions_executed = 0;
         self.nondeterminism_trace = NondeterminismTrace::new(&self.trace_id);
 
         // Execution stores produced by the rolled-back run. The restored
@@ -28246,8 +28569,9 @@ impl InterpreterCore {
     fn run_top_level_execution(
         &mut self,
         module: &Ir3Module,
+        compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<LabeledReturn, InterpreterError> {
-        let result = self.run_loop_labeled(module);
+        let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
         let suspended_at_top_level_await = !self.top_level_await_resumption_contexts.is_empty();
 
         // Writable completion callbacks occupy Node's internal stream-tick
@@ -37760,8 +38084,16 @@ impl InterpreterCore {
     /// to state its completion provenance explicitly — a new exit path cannot
     /// silently default to `Public`.
     fn run_loop_labeled(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
+        self.run_loop_labeled_with_compact_tier1(module, None)
+    }
+
+    fn run_loop_labeled_with_compact_tier1(
+        &mut self,
+        module: &Ir3Module,
+        compact_tier1: Option<&CompactTier1Program>,
+    ) -> Result<LabeledReturn, InterpreterError> {
         loop {
-            match self.run_loop_dispatch(module) {
+            match self.run_loop_dispatch(module, compact_tier1) {
                 Err(err)
                     if Self::js_catchable_error_name(&err).is_some()
                         && (self.has_active_catch_frame()
@@ -37805,7 +38137,11 @@ impl InterpreterCore {
         }
     }
 
-    fn run_loop_dispatch(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
+    fn run_loop_dispatch(
+        &mut self,
+        module: &Ir3Module,
+        compact_tier1: Option<&CompactTier1Program>,
+    ) -> Result<LabeledReturn, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -37856,10 +38192,20 @@ impl InterpreterCore {
                     count: module.instructions.len(),
                 },
             )?;
-            if let Ir3Instruction::LoadBigInt { dst, value } = instr_ref {
+            // Profiling retains the canonical Tier-R handler so its existing
+            // per-opcode recorder observes the original IR3 instruction. The
+            // production lanes do not install this profiler today.
+            let compact_instruction = if self.profiling_data.is_none() {
+                compact_tier1.and_then(|program| program.instruction_at(self.ip))
+            } else {
+                None
+            };
+            if compact_instruction.is_none()
+                && let Ir3Instruction::LoadBigInt { dst, value } = instr_ref
+            {
                 self.preflight_bigint_literal_write(*dst, value)?;
             }
-            let instr = instr_ref.clone();
+            let instr = compact_instruction.is_none().then(|| instr_ref.clone());
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -37894,7 +38240,14 @@ impl InterpreterCore {
                 None
             };
 
-            match instr {
+            if let Some(compact_instruction) = compact_instruction {
+                self.tier_i_instructions_executed =
+                    self.tier_i_instructions_executed.saturating_add(1);
+                self.execute_compact_tier1_instruction(compact_instruction)?;
+                continue;
+            }
+
+            match instr.expect("Tier-R dispatch owns the cloned source instruction") {
                 Ir3Instruction::LoadInt { dst, value } => {
                     self.write_reg(dst, Value::Int(value))?;
                     self.ip += 1;
@@ -41546,6 +41899,359 @@ impl InterpreterCore {
                 profiler.record_instruction_time(instr_ref, profile_start.elapsed());
             }
         }
+    }
+
+    #[inline]
+    fn execute_compact_tier1_instruction(
+        &mut self,
+        instruction: CompactTier1Instruction,
+    ) -> Result<(), InterpreterError> {
+        use CompactTier1Opcode as Op;
+
+        let dst = u32::from(instruction.dst);
+        let lhs = u32::from(instruction.lhs);
+        let rhs = u32::from(instruction.rhs);
+        match instruction.opcode {
+            Op::Baseline => unreachable!("baseline cells never enter compact dispatch"),
+            Op::LoadInt => {
+                self.write_reg(dst, Value::Int(instruction.payload as i64))?;
+                self.ip += 1;
+            }
+            Op::LoadFloat => {
+                self.write_reg(
+                    dst,
+                    Value::Float(Float64::new(f64::from_bits(instruction.payload))),
+                )?;
+                self.ip += 1;
+            }
+            Op::LoadBool => {
+                self.write_reg(dst, Value::Bool(instruction.payload != 0))?;
+                self.ip += 1;
+            }
+            Op::LoadNull => {
+                self.write_reg(dst, Value::Null)?;
+                self.ip += 1;
+            }
+            Op::LoadUndefined => {
+                self.write_reg(dst, Value::Undefined)?;
+                self.ip += 1;
+            }
+            Op::Move => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let value = self.read_reg(lhs)?;
+                self.write_reg_with_label(dst, value, result_label)?;
+                self.ip += 1;
+            }
+            Op::Add => {
+                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                    self.write_reg_with_label(
+                        dst,
+                        Value::Int(left.wrapping_add(right)),
+                        Label::Public,
+                    )?;
+                    self.record_tier_i_specialization();
+                } else {
+                    let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    let result = self.eval_add(lhs, rhs)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                }
+                self.ip += 1;
+            }
+            Op::Sub => {
+                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                    self.write_reg_with_label(
+                        dst,
+                        Value::Int(left.wrapping_sub(right)),
+                        Label::Public,
+                    )?;
+                    self.record_tier_i_specialization();
+                } else {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    let result = self.eval_arith(lhs, rhs, "sub")?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                }
+                self.ip += 1;
+            }
+            Op::Mul => {
+                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                    self.write_reg_with_label(
+                        dst,
+                        Value::Int(left.wrapping_mul(right)),
+                        Label::Public,
+                    )?;
+                    self.record_tier_i_specialization();
+                } else {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    let result = self.eval_arith(lhs, rhs, "mul")?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                }
+                self.ip += 1;
+            }
+            Op::Div => {
+                let result_label = self.binary_operation_label(lhs, rhs)?;
+                let result = self.eval_div(lhs, rhs)?;
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::Mod => {
+                let result_label = self.binary_operation_label(lhs, rhs)?;
+                let result = self.eval_mod(lhs, rhs)?;
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::Exp => {
+                let result_label = self.binary_operation_label(lhs, rhs)?;
+                let result = self.eval_exp(lhs, rhs)?;
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::UnaryNeg => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let result = self.eval_unary_neg(lhs)?;
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::UnaryPlus => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let result = self.eval_unary_plus(lhs)?;
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::LogicalNot => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let value = self.read_reg(lhs)?;
+                self.write_reg_with_label(dst, Value::Bool(!value.is_truthy()), result_label)?;
+                self.ip += 1;
+            }
+            Op::BitNot => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let result = self.eval_bit_not(lhs)?;
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::Lt => {
+                self.execute_compact_relational(dst, lhs, rhs, "<")?;
+            }
+            Op::Lte => {
+                self.execute_compact_relational(dst, lhs, rhs, "<=")?;
+            }
+            Op::Gt => {
+                self.execute_compact_relational(dst, lhs, rhs, ">")?;
+            }
+            Op::Gte => {
+                self.execute_compact_relational(dst, lhs, rhs, ">=")?;
+            }
+            Op::Eq => {
+                self.execute_compact_equality(dst, lhs, rhs, false, false)?;
+            }
+            Op::StrictEq => {
+                self.execute_compact_equality(dst, lhs, rhs, true, false)?;
+            }
+            Op::NotEq => {
+                self.execute_compact_equality(dst, lhs, rhs, false, true)?;
+            }
+            Op::StrictNotEq => {
+                self.execute_compact_equality(dst, lhs, rhs, true, true)?;
+            }
+            Op::BitAnd => {
+                self.execute_compact_bitwise(dst, lhs, rhs, "&")?;
+            }
+            Op::BitOr => {
+                self.execute_compact_bitwise(dst, lhs, rhs, "|")?;
+            }
+            Op::BitXor => {
+                self.execute_compact_bitwise(dst, lhs, rhs, "^")?;
+            }
+            Op::Shl => {
+                self.execute_compact_bitwise(dst, lhs, rhs, "<<")?;
+            }
+            Op::Shr => {
+                self.execute_compact_bitwise(dst, lhs, rhs, ">>")?;
+            }
+            Op::Ushr => {
+                self.execute_compact_bitwise(dst, lhs, rhs, ">>>")?;
+            }
+            Op::Jump => {
+                self.compact_tier1_jump(instruction.payload as u32);
+            }
+            Op::JumpIf => {
+                let branch_taken = self
+                    .compact_borrowed_reg(lhs)?
+                    .is_some_and(Value::is_truthy);
+                self.record_tier_i_specialization();
+                if branch_taken {
+                    self.compact_tier1_jump(instruction.payload as u32);
+                } else {
+                    self.ip += 1;
+                }
+            }
+            Op::JumpIfNullish => {
+                let branch_taken = self
+                    .compact_borrowed_reg(lhs)?
+                    .is_none_or(Value::is_nullish);
+                self.record_tier_i_specialization();
+                if branch_taken {
+                    self.compact_tier1_jump(instruction.payload as u32);
+                } else {
+                    self.ip += 1;
+                }
+            }
+            Op::Halt => return Err(InterpreterError::Halted),
+        }
+        Ok(())
+    }
+
+    /// Borrow a register without cloning its value. A logically absent slot is
+    /// `undefined`, matching `read_reg`; the caller selects the corresponding
+    /// truth/nullish behavior. Register-bound errors retain the canonical
+    /// ordering by falling through this shared check.
+    #[inline(always)]
+    fn compact_borrowed_reg(&self, reg: u32) -> Result<Option<&Value>, InterpreterError> {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+        Ok(self.registers.get(self.register_base + reg as usize))
+    }
+
+    #[inline(always)]
+    fn record_tier_i_specialization(&mut self) {
+        self.tier_i_specialized_instructions_executed = self
+            .tier_i_specialized_instructions_executed
+            .saturating_add(1);
+    }
+
+    /// Return copied integer operands only when the entire label/write path is
+    /// statically equivalent to the generic Tier-R transaction. Any dynamic
+    /// value, non-Public input label, active execution context, call frame,
+    /// destination growth, dynamic destination ownership, or over-budget base
+    /// state falls back before mutation to the canonical helpers.
+    #[inline(always)]
+    fn compact_public_int_operands(&self, dst: u32, lhs: u32, rhs: u32) -> Option<(i64, i64)> {
+        if dst >= self.config.max_registers
+            || lhs >= self.config.max_registers
+            || rhs >= self.config.max_registers
+        {
+            return None;
+        }
+        let actual_dst = self.register_base.checked_add(dst as usize)?;
+        let actual_lhs = self.register_base.checked_add(lhs as usize)?;
+        let actual_rhs = self.register_base.checked_add(rhs as usize)?;
+        let (Value::Int(left), Value::Int(right)) = (
+            self.registers.get(actual_lhs)?,
+            self.registers.get(actual_rhs)?,
+        ) else {
+            return None;
+        };
+        if self.register_labels.get(actual_lhs) != Some(&Label::Public)
+            || self.register_labels.get(actual_rhs) != Some(&Label::Public)
+            || !self.static_register_write_eligible(actual_dst, &Value::Undefined, &Label::Public)
+        {
+            return None;
+        }
+        Some((*left, *right))
+    }
+
+    #[inline]
+    fn execute_compact_relational(
+        &mut self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+        operator: &str,
+    ) -> Result<(), InterpreterError> {
+        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+            // Preserve the canonical interpreter's current numeric comparison
+            // projection through f64, including its behavior above 2^53.
+            let left = left as f64;
+            let right = right as f64;
+            let result = match operator {
+                "<" => left < right,
+                "<=" => left <= right,
+                ">" => left > right,
+                ">=" => left >= right,
+                _ => unreachable!("compact relational opcode is statically validated"),
+            };
+            self.write_reg_with_label(dst, Value::Bool(result), Label::Public)?;
+            self.record_tier_i_specialization();
+        } else {
+            let result_label = self.binary_operation_label(lhs, rhs)?;
+            let result = self.eval_relational(lhs, rhs, operator)?;
+            self.write_reg_with_label(dst, result, result_label)?;
+        }
+        self.ip += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn execute_compact_equality(
+        &mut self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+        strict: bool,
+        negate: bool,
+    ) -> Result<(), InterpreterError> {
+        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+            let matches = left == right;
+            self.write_reg_with_label(
+                dst,
+                Value::Bool(if negate { !matches } else { matches }),
+                Label::Public,
+            )?;
+            self.record_tier_i_specialization();
+        } else {
+            let result_label = self.binary_operation_label(lhs, rhs)?;
+            let result = self.eval_equality(lhs, rhs, strict, negate)?;
+            self.write_reg_with_label(dst, result, result_label)?;
+        }
+        self.ip += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn execute_compact_bitwise(
+        &mut self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+        operator: &str,
+    ) -> Result<(), InterpreterError> {
+        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+            let left = left as i32;
+            let right = right as i32;
+            let shift = (right as u32) & 31;
+            let result = match operator {
+                "&" => (left & right) as i64,
+                "|" => (left | right) as i64,
+                "^" => (left ^ right) as i64,
+                "<<" => left.wrapping_shl(shift) as i64,
+                ">>" => left.wrapping_shr(shift) as i64,
+                ">>>" => (left as u32).wrapping_shr(shift) as i64,
+                _ => unreachable!("compact bitwise opcode is statically validated"),
+            };
+            self.write_reg_with_label(dst, Value::Int(result), Label::Public)?;
+            self.record_tier_i_specialization();
+        } else {
+            let result_label = self.binary_operation_label(lhs, rhs)?;
+            let result = self.eval_bitwise(lhs, rhs, operator)?;
+            self.write_reg_with_label(dst, result, result_label)?;
+        }
+        self.ip += 1;
+        Ok(())
+    }
+
+    #[inline]
+    fn compact_tier1_jump(&mut self, target: u32) {
+        let target_ip = target as usize;
+        if target_ip < self.ip && self.jit_record_loop_iteration(self.ip) {
+            let iteration_count = self.jit_get_loop_iteration_count(self.ip);
+            self.emit_tier_promotion_event(0, iteration_count);
+        }
+        self.ip = target_ip;
     }
 
     // -- Arithmetic helpers ------------------------------------------------
@@ -73181,6 +73887,26 @@ impl QuickJsLane {
         trace_id: &str,
         hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_hook_and_compact_tier1(module, trace_id, hook, None)
+    }
+
+    #[cfg(test)]
+    fn execute_with_compact_tier1(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        compact_tier1: &CompactTier1Program,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_hook_and_compact_tier1(module, trace_id, None, Some(compact_tier1))
+    }
+
+    fn execute_with_hook_and_compact_tier1(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+        compact_tier1: Option<&CompactTier1Program>,
+    ) -> Result<ExecutionResult, InterpreterError> {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
         if let Some(hook) = hook {
             core.set_hook(hook);
@@ -73196,7 +73922,11 @@ impl QuickJsLane {
         if let Some(authority) = self.timer_effect_authority.clone() {
             core.set_timer_effect_authority(authority);
         }
-        match core.execute_ephemeral(module) {
+        let execution = match compact_tier1 {
+            Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
+            None => core.execute_ephemeral(module),
+        };
+        match execution {
             Ok(result) => Ok(result),
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 let requested_hook_action =
@@ -73324,6 +74054,16 @@ impl V8Lane {
         trace_id: &str,
         hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_hook_and_compact_tier1(module, trace_id, hook, None)
+    }
+
+    fn execute_with_hook_and_compact_tier1(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+        compact_tier1: Option<&CompactTier1Program>,
+    ) -> Result<ExecutionResult, InterpreterError> {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
         if let Some(hook) = hook {
             core.set_hook(hook);
@@ -73339,7 +74079,11 @@ impl V8Lane {
         if let Some(authority) = self.timer_effect_authority.clone() {
             core.set_timer_effect_authority(authority);
         }
-        match core.execute_ephemeral(module) {
+        let execution = match compact_tier1 {
+            Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
+            None => core.execute_ephemeral(module),
+        };
+        match execution {
             Ok(result) => Ok(result),
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 let requested_hook_action =
@@ -73831,7 +74575,23 @@ impl LaneRouter {
         trace_id: &str,
         force_lane: Option<LaneChoice>,
     ) -> Result<RoutedResult, InterpreterError> {
-        self.execute_with_hook(module, trace_id, force_lane, None)
+        self.execute_with_hook_and_compact_tier1(module, trace_id, force_lane, None, None)
+    }
+
+    pub(crate) fn execute_with_compact_tier1(
+        &self,
+        module: &Ir3Module,
+        compact_tier1: &CompactTier1Program,
+        trace_id: &str,
+        force_lane: Option<LaneChoice>,
+    ) -> Result<RoutedResult, InterpreterError> {
+        self.execute_with_hook_and_compact_tier1(
+            module,
+            trace_id,
+            force_lane,
+            None,
+            Some(compact_tier1),
+        )
     }
 
     pub fn execute_with_hook(
@@ -73841,15 +74601,37 @@ impl LaneRouter {
         force_lane: Option<LaneChoice>,
         hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<RoutedResult, InterpreterError> {
+        self.execute_with_hook_and_compact_tier1(module, trace_id, force_lane, hook, None)
+    }
+
+    pub(crate) fn execute_with_hook_and_compact_tier1(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        force_lane: Option<LaneChoice>,
+        hook: Option<Arc<dyn InterpreterHook>>,
+        compact_tier1: Option<&CompactTier1Program>,
+    ) -> Result<RoutedResult, InterpreterError> {
         let (lane, reason) = if let Some(forced) = force_lane {
             (forced, LaneReason::PolicyDirective)
         } else {
             self.select_lane(module)
         };
 
-        let result = match lane {
-            LaneChoice::QuickJs => self.quickjs.execute_with_hook(module, trace_id, hook)?,
-            LaneChoice::V8 => self.v8.execute_with_hook(module, trace_id, hook)?,
+        let result = match (lane, compact_tier1) {
+            (LaneChoice::QuickJs, Some(program)) => self
+                .quickjs
+                .execute_with_hook_and_compact_tier1(module, trace_id, hook, Some(program))?,
+            (LaneChoice::V8, Some(program)) => self.v8.execute_with_hook_and_compact_tier1(
+                module,
+                trace_id,
+                hook,
+                Some(program),
+            )?,
+            (LaneChoice::QuickJs, None) => {
+                self.quickjs.execute_with_hook(module, trace_id, hook)?
+            }
+            (LaneChoice::V8, None) => self.v8.execute_with_hook(module, trace_id, hook)?,
         };
 
         Ok(RoutedResult {
@@ -95267,7 +96049,7 @@ mod async_runtime_tests_current {
             });
 
             let result = core
-                .execute_with_trace_handoff(&module, trace_handoff)
+                .execute_with_trace_handoff(&module, None, trace_handoff)
                 .expect("ordinary own-property read should execute");
             (result, core.nondeterminism_trace_ref().clone())
         };
@@ -98753,7 +99535,7 @@ mod function_prototype_call_apply_tests_current {
         core.ip = 1;
         core.config.instruction_budget = core.instructions_executed + 2;
         let error = core
-            .run_top_level_execution(&module)
+            .run_top_level_execution(&module, None)
             .expect_err("same-module resumption budget failure must escape");
         assert!(matches!(
             error,
@@ -102398,6 +103180,549 @@ mod tests {
         m
     }
 
+    fn assert_execution_semantics_equal(compact: &ExecutionResult, baseline: &ExecutionResult) {
+        assert_eq!(compact.value, baseline.value);
+        assert_eq!(compact.completion_label, baseline.completion_label);
+        assert_eq!(
+            compact.instructions_executed,
+            baseline.instructions_executed
+        );
+        assert_eq!(
+            compact.requested_hook_action,
+            baseline.requested_hook_action
+        );
+        assert_eq!(compact.witness_events, baseline.witness_events);
+        assert_eq!(compact.hostcall_decisions, baseline.hostcall_decisions);
+        assert_eq!(compact.events, baseline.events);
+        assert_eq!(compact.console_output, baseline.console_output);
+        assert_eq!(compact.iteration_traces, baseline.iteration_traces);
+        assert_eq!(compact.nondeterminism_trace, baseline.nondeterminism_trace);
+        assert_eq!(compact.generated_code_audit, baseline.generated_code_audit);
+    }
+
+    fn execute_compact_and_baseline(
+        module: &Ir3Module,
+        config: InterpreterConfig,
+    ) -> (ExecutionResult, ExecutionResult) {
+        let compact_plan = CompactTier1Program::compile(module).expect("compact plan");
+        let compact = QuickJsLane::with_config(config.clone())
+            .execute_with_compact_tier1(module, "tier-i-differential", &compact_plan)
+            .expect("compact execution");
+        let baseline = QuickJsLane::with_config(config)
+            .execute(module, "tier-i-differential")
+            .expect("baseline execution");
+        (compact, baseline)
+    }
+
+    #[test]
+    fn compact_tier1_cell_is_exactly_sixteen_bytes_bd_performance_bridge_5_1() {
+        assert_eq!(std::mem::size_of::<CompactTier1Instruction>(), 16);
+        assert_eq!(std::mem::align_of::<CompactTier1Instruction>(), 8);
+    }
+
+    #[test]
+    fn compact_tier1_termination_only_module_is_not_eligible_bd_performance_bridge_5_1() {
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        assert!(CompactTier1Program::compile(&module).is_none());
+    }
+
+    #[test]
+    fn compact_tier1_scalar_loop_is_artifact_exact_bd_performance_bridge_5_2() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 1 },
+            Ir3Instruction::LoadInt { dst: 2, value: 101 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Add {
+                dst: 1,
+                lhs: 1,
+                rhs: 3,
+            },
+            Ir3Instruction::Lt {
+                dst: 4,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::JumpIf { cond: 4, target: 3 },
+            Ir3Instruction::Halt,
+        ]);
+        let mut config = test_quickjs_config();
+        config.instruction_budget = 10_000;
+        let mut seeded_module = module;
+        seeded_module
+            .instructions
+            .insert(3, Ir3Instruction::LoadInt { dst: 3, value: 1 });
+
+        let (compact, baseline) = execute_compact_and_baseline(&seeded_module, config);
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(5050));
+        assert_eq!(baseline.tier_i_instructions_executed, 0);
+        assert_eq!(
+            compact.tier_i_instructions_executed,
+            compact.instructions_executed - 1,
+            "the empty Writable checkpoint remains Tier R and consumes one step"
+        );
+        assert!(
+            compact.tier_i_specialized_instructions_executed > 200,
+            "the hot scalar loop must use guarded borrowed/int specializations"
+        );
+    }
+
+    #[test]
+    fn compact_tier1_mixed_dispatch_preserves_unsupported_string_path_bd_performance_bridge_5_2() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 42 },
+                Ir3Instruction::Add {
+                    dst: 0,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["answer: ".to_string()],
+        );
+        let (compact, baseline) = execute_compact_and_baseline(&module, test_quickjs_config());
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::str("answer: 42"));
+        assert_eq!(compact.tier_i_instructions_executed, 3);
+        assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+        assert_eq!(baseline.tier_i_instructions_executed, 0);
+    }
+
+    #[test]
+    fn compact_tier1_register_encoding_falls_back_above_u16_bd_performance_bridge_5_1() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt {
+                dst: u32::from(u16::MAX),
+                value: 1,
+            },
+            Ir3Instruction::LoadInt {
+                dst: u32::from(u16::MAX) + 1,
+                value: 2,
+            },
+        ]);
+        let plan = CompactTier1Program::compile(&module).expect("one cell remains compact");
+        assert_eq!(plan.compact_instruction_count(), 1);
+        assert_eq!(plan.instructions[0].opcode, CompactTier1Opcode::LoadInt);
+        assert_eq!(plan.instructions[1].opcode, CompactTier1Opcode::Baseline);
+    }
+
+    #[test]
+    fn compact_tier1_plan_refuses_same_length_different_module_before_mutation_bd_performance_bridge_5_1()
+     {
+        let planned_module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 1 },
+            Ir3Instruction::Halt,
+        ]);
+        let executed_module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 2 },
+            Ir3Instruction::Halt,
+        ]);
+        let plan = CompactTier1Program::compile(&planned_module).expect("compact plan");
+        let mut core = quickjs_test_core();
+        let seed_epoch_before = core.seed_epoch;
+
+        let error = core
+            .execute_with_trace_handoff(&executed_module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("a compact plan must be bound to its exact IR3 module");
+
+        assert_eq!(
+            error,
+            InterpreterError::InternalError {
+                details: format!(
+                    "compact Tier-I plan/module identity mismatch: expected {}, got {}",
+                    planned_module.content_hash(),
+                    executed_module.content_hash()
+                ),
+            }
+        );
+        assert_eq!(core.instructions_executed, 0);
+        assert_eq!(core.tier_i_instructions_executed, 0);
+        assert_eq!(core.seed_epoch, seed_epoch_before);
+    }
+
+    #[test]
+    fn compact_tier1_budget_refusal_matches_tier_r_bd_performance_bridge_5_2() {
+        let module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
+        let plan = CompactTier1Program::compile(&module).expect("compact jump plan");
+        let mut config = test_quickjs_config();
+        config.instruction_budget = 5;
+        let compact_error = QuickJsLane::with_config(config.clone())
+            .execute_with_compact_tier1(&module, "tier-i-budget", &plan)
+            .expect_err("compact loop must exhaust its exact budget");
+        let baseline_error = QuickJsLane::with_config(config)
+            .execute(&module, "tier-i-budget")
+            .expect_err("baseline loop must exhaust its exact budget");
+        assert_eq!(compact_error, baseline_error);
+        assert_eq!(
+            compact_error,
+            InterpreterError::BudgetExhausted {
+                executed: 5,
+                budget: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn compact_tier1_cancellation_density_matches_tier_r_bd_performance_bridge_5_2() {
+        let module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
+        let plan = CompactTier1Program::compile(&module).expect("compact jump plan");
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut config = test_quickjs_config();
+        config.instruction_budget = 100;
+        config.checkpoint_density = 3;
+        config.cancellation_token = Some(token);
+        let checkpoint_density = config.checkpoint_density;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-cancel");
+        let compact_error = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("compact loop must observe cancellation");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-cancel");
+        let baseline_error = baseline_core
+            .execute(&module)
+            .expect_err("baseline loop must observe cancellation");
+        assert_eq!(compact_error, baseline_error);
+        assert_eq!(compact_error, InterpreterError::Cancelled);
+        assert_eq!(
+            compact_core.instructions_executed, baseline_core.instructions_executed,
+            "Tier-I and Tier-R must observe cancellation at the same instruction boundary"
+        );
+        assert!(compact_core.instructions_executed >= checkpoint_density);
+    }
+
+    #[test]
+    fn compact_tier1_binary_ifc_join_matches_tier_r_bd_performance_bridge_5_2() {
+        let module = test_module(vec![
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let plan = CompactTier1Program::compile(&module).expect("compact add plan");
+        let mut compact_core = quickjs_test_core();
+        compact_core.set_reg(1, Value::Int(20));
+        compact_core.set_reg(2, Value::Int(22));
+        compact_core
+            .set_register_label(1, Label::Confidential)
+            .expect("lhs label");
+        compact_core
+            .set_register_label(2, Label::Secret)
+            .expect("rhs label");
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact labeled add");
+
+        let mut baseline_core = quickjs_test_core();
+        baseline_core.set_reg(1, Value::Int(20));
+        baseline_core.set_reg(2, Value::Int(22));
+        baseline_core
+            .set_register_label(1, Label::Confidential)
+            .expect("lhs label");
+        baseline_core
+            .set_register_label(2, Label::Secret)
+            .expect("rhs label");
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("baseline labeled add");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(42));
+        assert_eq!(compact.completion_label, Label::Secret);
+        assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+        assert_eq!(compact_core.get_register_label(0), Ok(&Label::Secret));
+        assert_eq!(baseline_core.get_register_label(0), Ok(&Label::Secret));
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            baseline_core.estimated_memory_bytes(),
+            baseline_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_integer_relational_specialization_preserves_f64_projection_bd_performance_bridge_5_2()
+     {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: 9_007_199_254_740_992,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 2,
+                value: 9_007_199_254_740_993,
+            },
+            Ir3Instruction::Lt {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let (compact, baseline) = execute_compact_and_baseline(&module, test_quickjs_config());
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Bool(false));
+        assert_eq!(compact.tier_i_specialized_instructions_executed, 1);
+    }
+
+    #[test]
+    fn compact_tier1_bigint_add_uses_exact_accounted_fallback_bd_performance_bridge_5_2() {
+        let module = test_module(vec![
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let plan = CompactTier1Program::compile(&module).expect("compact add plan");
+        let mut compact_core = quickjs_test_core();
+        compact_core.set_reg(1, Value::BigInt(Arc::from("9007199254740993")));
+        compact_core.set_reg(2, Value::BigInt(Arc::from("7")));
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact BigInt fallback");
+
+        let mut baseline_core = quickjs_test_core();
+        baseline_core.set_reg(1, Value::BigInt(Arc::from("9007199254740993")));
+        baseline_core.set_reg(2, Value::BigInt(Arc::from("7")));
+        let baseline = baseline_core.execute(&module).expect("baseline BigInt add");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::BigInt(Arc::from("9007199254741000")));
+        assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_nan_add_uses_generic_numeric_fallback_bd_performance_bridge_5_2() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadFloat {
+                dst: 1,
+                bits: f64::NAN.to_bits(),
+            },
+            Ir3Instruction::LoadInt { dst: 2, value: 1 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let (compact, baseline) = execute_compact_and_baseline(&module, test_quickjs_config());
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert!(matches!(compact.value, Value::Float(value) if value.is_nan()));
+        assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+    }
+
+    #[test]
+    fn compact_tier1_every_admitted_opcode_matches_tier_r_bd_performance_bridge_5_2() {
+        let binary = |instruction| {
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 9 },
+                Ir3Instruction::LoadInt { dst: 2, value: 2 },
+                instruction,
+                Ir3Instruction::Halt,
+            ]
+        };
+        let unary = |instruction| {
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 9 },
+                instruction,
+                Ir3Instruction::Halt,
+            ]
+        };
+        let cases = vec![
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: -7 },
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                Ir3Instruction::LoadFloat {
+                    dst: 0,
+                    bits: (-0.0f64).to_bits(),
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: true,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![Ir3Instruction::LoadNull { dst: 0 }, Ir3Instruction::Halt],
+            vec![
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 7 },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+            ],
+            binary(Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Sub {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Mul {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Div {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Mod {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Exp {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            unary(Ir3Instruction::UnaryNeg { dst: 0, src: 1 }),
+            unary(Ir3Instruction::UnaryPlus { dst: 0, src: 1 }),
+            unary(Ir3Instruction::LogicalNot { dst: 0, src: 1 }),
+            unary(Ir3Instruction::BitNot { dst: 0, src: 1 }),
+            binary(Ir3Instruction::Lt {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Lte {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Gt {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Gte {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Eq {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::StrictEq {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::NotEq {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::StrictNotEq {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::BitAnd {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::BitOr {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::BitXor {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Shl {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Shr {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            binary(Ir3Instruction::Ushr {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            }),
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Jump { target: 3 },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 1,
+                    value: true,
+                },
+                Ir3Instruction::JumpIf { cond: 1, target: 3 },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                Ir3Instruction::LoadNull { dst: 1 },
+                Ir3Instruction::JumpIfNullish { cond: 1, target: 3 },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::Halt,
+            ],
+        ];
+
+        for (index, instructions) in cases.into_iter().enumerate() {
+            let module = test_module(instructions);
+            let plan = CompactTier1Program::compile(&module).expect("compact plan");
+            assert_eq!(
+                plan.compact_instruction_count(),
+                module.instructions.len(),
+                "case {index} must compile every source cell through Tier-I"
+            );
+            let (compact, baseline) = execute_compact_and_baseline(&module, test_quickjs_config());
+            assert_execution_semantics_equal(&compact, &baseline);
+            assert!(
+                compact.tier_i_instructions_executed > 0,
+                "case {index} must exercise Tier-I"
+            );
+        }
+    }
+
     fn test_module_with_functions(
         instructions: Vec<Ir3Instruction>,
         functions: Vec<Ir3FunctionDesc>,
@@ -104936,6 +106261,49 @@ mod tests {
                 });
             self.import_action.clone()
         }
+    }
+
+    #[test]
+    fn compact_tier1_router_preserves_containment_hook_bd_performance_bridge_5_6() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::Halt,
+        ]);
+        let plan = CompactTier1Program::compile(&module).expect("mixed compact plan");
+        let compact_hook = Arc::new(RecordingHook::allow_all());
+        let config = test_quickjs_config();
+        let compact = LaneRouter::with_configs(config.clone(), config.clone())
+            .execute_with_hook_and_compact_tier1(
+                &module,
+                "tier-i-hook",
+                Some(LaneChoice::QuickJs),
+                Some(compact_hook.clone()),
+                Some(&plan),
+            )
+            .expect("compact execution with hook");
+
+        let baseline_hook = Arc::new(RecordingHook::allow_all());
+        let baseline = LaneRouter::with_configs(config.clone(), config)
+            .execute_with_hook(
+                &module,
+                "tier-i-hook",
+                Some(LaneChoice::QuickJs),
+                Some(baseline_hook.clone()),
+            )
+            .expect("baseline execution with hook");
+
+        assert_execution_semantics_equal(&compact.result, &baseline.result);
+        assert!(compact.result.tier_i_instructions_executed > 0);
+        assert_eq!(baseline.result.tier_i_instructions_executed, 0);
+        assert_eq!(compact_hook.records(), baseline_hook.records());
+        assert!(
+            compact_hook
+                .records()
+                .iter()
+                .any(|record| matches!(record, HookRecord::Allocation { .. })),
+            "the compact route must not discard the containment hook"
+        );
     }
 
     #[derive(Debug, Default)]

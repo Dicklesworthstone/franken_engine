@@ -60175,7 +60175,7 @@ impl InterpreterCore {
                     });
                 }
                 check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
-                let recordable_target = recordable_capability_tag(&target_cap);
+                let recordable_target = recordable_capability_tag(capability_gate_key(&target_cap));
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
                     Some(&format!("cap:{recordable_target}")),

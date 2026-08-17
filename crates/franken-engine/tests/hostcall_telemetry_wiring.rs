@@ -27,8 +27,8 @@ use frankenengine_engine::hostcall_telemetry::{
     HostcallResult, HostcallTelemetryRecord, HostcallType,
 };
 use frankenengine_engine::ir_contract::{
-    CapabilityTag, Ir0Module, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
-    RegRange,
+    CapabilityTag, ContentHash, Ir0Module, Ir3Instruction, Ir3Module, IrHeader, IrLevel,
+    IrSchemaVersion, RegRange, WitnessEventKind,
 };
 use frankenengine_engine::lowering_pipeline::{
     lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
@@ -435,8 +435,34 @@ fn apply_hostcall_module_load_aliases_record_inner_and_outer_without_drops() {
         let mut config = interpreter_config(&[RuntimeCapability::ModuleLoad]);
         config.module_root = Some(root.display().to_string());
         let mut core = InterpreterCore::new(config, format!("trace-apply-{suffix}-bd-juz83"));
-        core.execute(&module)
+        let result = core
+            .execute(&module)
             .expect("ApplyHostCall module-load target should execute");
+
+        let decisions = result
+            .hostcall_decisions
+            .iter()
+            .map(|decision| (decision.capability.0.as_str(), decision.allowed))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decisions,
+            vec![("builtin:ApplyHostCall", true), ("module_load", true)],
+            "target={target_capability}: delegated aliases must share canonical authority evidence"
+        );
+        assert!(result.witness_events.iter().any(|event| {
+            event.kind == WitnessEventKind::HostcallDispatched
+                && event.payload_hash == ContentHash::compute(b"cap:module_load")
+        }));
+        if target_capability != "module_load" {
+            let alias_payload = ContentHash::compute(format!("cap:{target_capability}").as_bytes());
+            assert!(
+                result.witness_events.iter().all(|event| {
+                    event.kind != WitnessEventKind::HostcallDispatched
+                        || event.payload_hash != alias_payload
+                }),
+                "target={target_capability}: witness evidence must not fragment by alias"
+            );
+        }
 
         assert_eq!(
             core.hostcall_telemetry().drop_counts(),

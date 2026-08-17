@@ -133,7 +133,7 @@
       "path": "crates/franken-engine/src/baseline_interpreter.rs",
       "start_anchor": "    fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {",
       "end_anchor": "    fn inject_runtime_global_binding(",
-      "sha256": "8906e3fff8c60af83f4cafa03b049d4f2bf748dbf7868c302f3eaa78efdec9c4",
+      "sha256": "baf3ff6a2272bb515cc2e86ea827cec5a320b7c9d6c76f2b823888faef558ea4",
       "required_markers": [
         "\"Promise\"",
         "\"Math\"",
@@ -202,7 +202,7 @@
       "path": "crates/franken-engine/src/bin/frankenctl.rs",
       "start_anchor": "fn execute_run(args: RunArgs) -> Result<i32, String> {",
       "end_anchor": "fn load_and_bind_data_contract(",
-      "sha256": "35c21169128f35e807d2039cc06387d2d71260e3e46eb874ffec98d4c63ad45f",
+      "sha256": "836b2ff3a307e461922b64093c4aa65f1ad8e94cfbab7586c38bb5eca4d6b0cb",
       "required_markers": [
         "ExecutionOrchestrator::try_new_with_runtime_authority",
         ".execute(&package)",

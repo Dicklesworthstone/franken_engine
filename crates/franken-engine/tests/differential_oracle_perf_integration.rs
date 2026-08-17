@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use frankenengine_engine::hash_tiers::ContentHash;
+
 fn temp_dir(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -241,6 +243,149 @@ fn perf_arm_emits_report_events_and_honest_denominators() {
 }
 
 #[test]
+fn tier_control_perf_arm_emits_same_binary_counter_evidence() {
+    let dir = temp_dir("tier_control_corpus");
+    let manifest = write_corpus(
+        &dir,
+        &[(
+            "tiny_sum",
+            "var sum = 0;\nfor (var i = 0; i < 100; i = i + 1) { sum = sum + i; }\nconsole.log(sum);\n",
+        )],
+    );
+    let report_path = dir.join("tier-control-report.json");
+    let events_path = dir.join("tier-control-events.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "differential-oracle",
+            "perf",
+            "--tier-control",
+            "--manifest",
+            manifest.to_str().expect("manifest path should be utf8"),
+            "--out",
+            report_path.to_str().expect("report path should be utf8"),
+            "--events",
+            events_path.to_str().expect("events path should be utf8"),
+            "--warmup",
+            "1",
+            "--samples",
+            "10",
+        ])
+        .output()
+        .expect("frankenctl tier-control perf should execute");
+    assert!(
+        output.status.success(),
+        "tier-control CLI should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).expect("report file should exist"))
+            .expect("tier-control report should parse");
+    let stdout_report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should contain the full v1 report");
+    assert_eq!(stdout_report, report);
+    assert_eq!(
+        report["schema_version"].as_str(),
+        Some("franken-engine.tier-control-perf.v1")
+    );
+    let case = &report["cases"][0];
+    assert_eq!(case["equivalent"].as_bool(), Some(true));
+    assert_eq!(
+        case["production"]["measured_ns"]
+            .as_array()
+            .expect("production timings")
+            .len(),
+        10
+    );
+    assert_eq!(
+        case["control"]["measured_ns"]
+            .as_array()
+            .expect("control timings")
+            .len(),
+        10
+    );
+    assert!(
+        case["production"]["measured_counters"]
+            .as_array()
+            .expect("production counters")
+            .iter()
+            .all(|counters| counters["tier_i_instructions_executed"]
+                .as_u64()
+                .is_some_and(|count| count > 0))
+    );
+    assert!(
+        case["control"]["measured_counters"]
+            .as_array()
+            .expect("control counters")
+            .iter()
+            .all(|counters| counters["tier_i_instructions_executed"].as_u64() == Some(0))
+    );
+    assert_eq!(
+        case["production"]["measured_execution_artifact_sha256"]
+            .as_array()
+            .expect("production artifact digests")
+            .len(),
+        10
+    );
+    assert_eq!(
+        case["production"]["measured_execution_artifact_sha256"],
+        case["control"]["measured_execution_artifact_sha256"]
+    );
+    assert_eq!(
+        report["summary"]["keep_floor_millionths"].as_u64(),
+        Some(1_050_000)
+    );
+    assert!(report["summary"]["meets_keep_floor"].is_null());
+    assert_eq!(
+        report["environment"]["decision_scope_complete"].as_bool(),
+        Some(false)
+    );
+    let expected_build_complete = report["environment"]["cargo_profile_class"].as_str()
+        == Some("release")
+        && report["environment"]["cargo_profile_directory"].as_str() == Some("release-perf")
+        && report["environment"]["cargo_opt_level"].as_str() == Some("3")
+        && report["environment"]["debug_assertions_enabled"].as_bool() == Some(false);
+    assert_eq!(
+        report["environment"]["decision_build_complete"].as_bool(),
+        Some(expected_build_complete)
+    );
+    assert_eq!(report["summary"]["decision"].as_str(), Some("degraded"));
+
+    let events = fs::read_to_string(&events_path).expect("events should exist");
+    assert_eq!(
+        report["iteration_event_count"].as_u64(),
+        Some(events.lines().count() as u64)
+    );
+    let events_sha256 = ContentHash::compute(events.as_bytes()).to_hex();
+    assert_eq!(
+        report["iteration_events_jsonl_sha256"].as_str(),
+        Some(events_sha256.as_str())
+    );
+    let parsed_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("event JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(parsed_events.len(), 22);
+    for sequence in 0..11_u64 {
+        let pair = parsed_events
+            .iter()
+            .filter(|event| event["pair_sequence"].as_u64() == Some(sequence))
+            .collect::<Vec<_>>();
+        assert_eq!(pair.len(), 2);
+        assert_eq!(pair[0]["order_in_pair"].as_u64(), Some(0));
+        assert_eq!(pair[1]["order_in_pair"].as_u64(), Some(1));
+        assert!(
+            pair.iter()
+                .any(|event| event["order_in_pair"].as_u64() == Some(0))
+        );
+        assert!(
+            pair.iter()
+                .any(|event| event["order_in_pair"].as_u64() == Some(1))
+        );
+    }
+}
+
+#[test]
 fn perf_arm_case_filter_rejects_unknown_ids() {
     let dir = temp_dir("diffperf_filter");
     let manifest = write_corpus(&dir, &[("tiny", "1 + 1;\n")]);
@@ -252,6 +397,8 @@ fn perf_arm_case_filter_rejects_unknown_ids() {
             "--manifest",
             manifest.to_str().expect("manifest path should be utf8"),
             "--case",
+            "tiny",
+            "--case",
             "no-such-case",
         ])
         .output()
@@ -261,7 +408,32 @@ fn perf_arm_case_filter_rejects_unknown_ids() {
         "unknown --case filter should fail closed"
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("matched no corpus case"),
+        String::from_utf8_lossy(&output.stderr)
+            .contains("does not exist in the benchmark manifest"),
         "stderr should explain the empty filter"
+    );
+}
+
+#[test]
+fn tier_control_rejects_unimplemented_wall_clock_timeout() {
+    let dir = temp_dir("tier_control_timeout");
+    let manifest = write_corpus(&dir, &[("tiny", "1 + 1;\n")]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "differential-oracle",
+            "perf",
+            "--tier-control",
+            "--manifest",
+            manifest.to_str().expect("manifest path should be utf8"),
+            "--case-timeout-ms",
+            "1",
+        ])
+        .output()
+        .expect("frankenctl should execute");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--case-timeout-ms is not supported by --tier-control")
     );
 }

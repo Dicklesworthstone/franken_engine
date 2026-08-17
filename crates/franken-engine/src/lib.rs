@@ -1428,6 +1428,21 @@ impl QuickJsInspiredNativeEngine {
     ) -> EvalResult<EvalOutcome> {
         eval_prepared_with_lane(prepared, LaneChoice::QuickJs, budgets)
     }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_compiled_with_budget_and_dispatch_policy(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        budgets: EngineEvalBudgets,
+        dispatch_policy: PreparedTierDispatchPolicy,
+    ) -> EvalResult<PreparedTierDispatchObservation> {
+        eval_prepared_with_lane_and_dispatch_policy_observation(
+            prepared,
+            LaneChoice::QuickJs,
+            budgets,
+            dispatch_policy,
+        )
+    }
 }
 
 impl V8InspiredNativeEngine {
@@ -1448,6 +1463,21 @@ impl V8InspiredNativeEngine {
         budgets: EngineEvalBudgets,
     ) -> EvalResult<EvalOutcome> {
         eval_prepared_with_lane(prepared, LaneChoice::V8, budgets)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_compiled_with_budget_and_dispatch_policy(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        budgets: EngineEvalBudgets,
+        dispatch_policy: PreparedTierDispatchPolicy,
+    ) -> EvalResult<PreparedTierDispatchObservation> {
+        eval_prepared_with_lane_and_dispatch_policy_observation(
+            prepared,
+            LaneChoice::V8,
+            budgets,
+            dispatch_policy,
+        )
     }
 }
 
@@ -1479,6 +1509,31 @@ pub struct EngineMemoryBudget {
 struct EngineEvalBudgets {
     instruction_budget: Option<u64>,
     memory_budget: Option<EngineMemoryBudget>,
+}
+
+/// Internal prepared-execution dispatch control used by the matched Tier-I
+/// performance experiment. Public eval surfaces always select `Production`;
+/// `ForceTierR` exists only so an in-process control can execute the exact same
+/// immutable IR3, lane, budgets, and fresh-core lifecycle without supplying the
+/// compact plan to the lane router.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreparedTierDispatchPolicy {
+    Production,
+    ForceTierR,
+}
+
+/// Crate-private detailed result for the matched Tier-I treatment/control arm.
+/// The public eval outcome remains unchanged; the additional digest binds the
+/// replay- and security-visible interpreter artifacts that the public outcome
+/// intentionally does not expose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedTierDispatchObservation {
+    pub outcome: EvalOutcome,
+    pub tier_neutral_execution_artifact_sha256: String,
+    /// Router/core execution elapsed time. Full artifact encoding and hashing
+    /// happen after this interval so evidence collection cannot dilute the
+    /// treatment effect or contaminate the public eval path.
+    pub execution_duration_ns: u64,
 }
 
 #[derive(Debug)]
@@ -1588,6 +1643,27 @@ impl HybridRouter {
         )
     }
 
+    /// Crate-private matched-control counterpart of
+    /// [`Self::eval_prepared_with_instruction_budget`]. This does not expose a
+    /// second product execution mode: it is consumed only by the Tier-I
+    /// diagnostic runner, and public callers always use production dispatch.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn eval_prepared_with_instruction_budget_and_dispatch_policy(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        instruction_budget: u64,
+        dispatch_policy: PreparedTierDispatchPolicy,
+    ) -> EvalResult<PreparedTierDispatchObservation> {
+        self.eval_prepared_routed_with_dispatch_policy(
+            prepared,
+            EngineEvalBudgets {
+                instruction_budget: Some(instruction_budget),
+                memory_budget: None,
+            },
+            dispatch_policy,
+        )
+    }
+
     /// Execute a prepared eval with per-execution instruction and/or memory
     /// budget overrides. This is the prepared-handle counterpart of
     /// [`Self::eval_with_budgets`]; no override becomes part of the immutable
@@ -1627,6 +1703,27 @@ impl HybridRouter {
             RouteReason::DefaultQuickJsPath => self
                 .quickjs_lineage
                 .eval_compiled_with_budget(prepared, budgets),
+            RouteReason::DirectEngineInvocation => Err(EvalError::new(
+                EvalErrorCode::InvariantViolation,
+                "router never emits direct route",
+            )),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared_routed_with_dispatch_policy(
+        &mut self,
+        prepared: &PreparedHybridEval,
+        budgets: EngineEvalBudgets,
+        dispatch_policy: PreparedTierDispatchPolicy,
+    ) -> EvalResult<PreparedTierDispatchObservation> {
+        match prepared.route_reason {
+            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => self
+                .v8_lineage
+                .eval_compiled_with_budget_and_dispatch_policy(prepared, budgets, dispatch_policy),
+            RouteReason::DefaultQuickJsPath => self
+                .quickjs_lineage
+                .eval_compiled_with_budget_and_dispatch_policy(prepared, budgets, dispatch_policy),
             RouteReason::DirectEngineInvocation => Err(EvalError::new(
                 EvalErrorCode::InvariantViolation,
                 "router never emits direct route",
@@ -1998,8 +2095,57 @@ fn eval_prepared_with_lane(
     lane: LaneChoice,
     budgets: EngineEvalBudgets,
 ) -> EvalResult<EvalOutcome> {
-    let output = execute_prepared_eval(prepared, lane, budgets)?;
-    Ok(EvalOutcome {
+    eval_prepared_with_lane_and_dispatch_policy(
+        prepared,
+        lane,
+        budgets,
+        PreparedTierDispatchPolicy::Production,
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn eval_prepared_with_lane_and_dispatch_policy(
+    prepared: &PreparedHybridEval,
+    lane: LaneChoice,
+    budgets: EngineEvalBudgets,
+    dispatch_policy: PreparedTierDispatchPolicy,
+) -> EvalResult<EvalOutcome> {
+    let output = execute_prepared_eval(prepared, lane, budgets, dispatch_policy, false)?;
+    Ok(eval_outcome_from_native_output(prepared, lane, output))
+}
+
+#[allow(clippy::result_large_err)]
+fn eval_prepared_with_lane_and_dispatch_policy_observation(
+    prepared: &PreparedHybridEval,
+    lane: LaneChoice,
+    budgets: EngineEvalBudgets,
+    dispatch_policy: PreparedTierDispatchPolicy,
+) -> EvalResult<PreparedTierDispatchObservation> {
+    let output = execute_prepared_eval(prepared, lane, budgets, dispatch_policy, true)?;
+    let tier_neutral_execution_artifact_sha256 = output
+        .tier_neutral_execution_artifact_sha256
+        .clone()
+        .ok_or_else(|| {
+            EvalError::invariant_violation(
+                "Tier-control execution did not capture its artifact digest",
+            )
+        })?;
+    let execution_duration_ns = output.execution_duration_ns.ok_or_else(|| {
+        EvalError::invariant_violation("Tier-control execution did not capture its duration")
+    })?;
+    Ok(PreparedTierDispatchObservation {
+        tier_neutral_execution_artifact_sha256,
+        execution_duration_ns,
+        outcome: eval_outcome_from_native_output(prepared, lane, output),
+    })
+}
+
+fn eval_outcome_from_native_output(
+    prepared: &PreparedHybridEval,
+    lane: LaneChoice,
+    output: NativeEvalOutput,
+) -> EvalOutcome {
+    EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
         completion_type: Some(output.completion_type),
@@ -2012,7 +2158,7 @@ fn eval_prepared_with_lane(
         instructions_executed: output.instructions_executed,
         tier_i_instructions_executed: output.tier_i_instructions_executed,
         tier_i_specialized_instructions_executed: output.tier_i_specialized_instructions_executed,
-    })
+    }
 }
 
 fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
@@ -2032,6 +2178,8 @@ struct NativeEvalOutput {
     instructions_executed: u64,
     tier_i_instructions_executed: u64,
     tier_i_specialized_instructions_executed: u64,
+    tier_neutral_execution_artifact_sha256: Option<String>,
+    execution_duration_ns: Option<u64>,
 }
 
 #[allow(clippy::result_large_err)]
@@ -2139,10 +2287,13 @@ fn execute_prepared_eval(
     prepared: &PreparedHybridEval,
     lane: LaneChoice,
     budgets: EngineEvalBudgets,
+    dispatch_policy: PreparedTierDispatchPolicy,
+    capture_tier_control_evidence: bool,
 ) -> EvalResult<NativeEvalOutput> {
+    let execution_started = capture_tier_control_evidence.then(std::time::Instant::now);
     let lane_router = eval_lane_router_for_ir3(&prepared.ir3, budgets);
-    let routed = match prepared.compact_tier1.as_ref() {
-        Some(compact_tier1) => {
+    let routed = match (dispatch_policy, prepared.compact_tier1.as_ref()) {
+        (PreparedTierDispatchPolicy::Production, Some(compact_tier1)) => {
             debug_assert!(compact_tier1.compact_instruction_count() > 0);
             lane_router.execute_with_compact_tier1(
                 &prepared.ir3,
@@ -2151,7 +2302,10 @@ fn execute_prepared_eval(
                 Some(lane),
             )
         }
-        None => lane_router.execute(&prepared.ir3, prepared.trace_id.as_str(), Some(lane)),
+        (PreparedTierDispatchPolicy::Production, None)
+        | (PreparedTierDispatchPolicy::ForceTierR, _) => {
+            lane_router.execute(&prepared.ir3, prepared.trace_id.as_str(), Some(lane))
+        }
     }
     .map_err(map_interpreter_error)
     .map_err(|error| {
@@ -2162,6 +2316,52 @@ fn execute_prepared_eval(
             prepared.policy_id.as_str(),
         )
     })?;
+    let execution_duration_ns = execution_started
+        .map(|started| u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX));
+
+    // Hash the complete replay/security projection before the public eval
+    // mapping intentionally discards those internal artifacts. Tier counters
+    // are omitted so treatment and control can be compared neutrally; every
+    // other ExecutionResult field participates in this positional projection.
+    let tier_neutral_execution_artifact_sha256 = if capture_tier_control_evidence {
+        let baseline_interpreter::ExecutionResult {
+            value,
+            completion_label,
+            instructions_executed,
+            tier_i_instructions_executed: _,
+            tier_i_specialized_instructions_executed: _,
+            requested_hook_action,
+            witness_events,
+            hostcall_decisions,
+            events,
+            console_output,
+            iteration_traces,
+            nondeterminism_trace,
+            generated_code_audit,
+        } = &routed.result;
+        let artifact_bytes = serde_json::to_vec(&(
+            value,
+            completion_label,
+            instructions_executed,
+            requested_hook_action,
+            witness_events,
+            hostcall_decisions,
+            events,
+            console_output,
+            iteration_traces,
+            nondeterminism_trace,
+            generated_code_audit,
+        ))
+        .map_err(|error| {
+            EvalError::new(
+                EvalErrorCode::InvariantViolation,
+                format!("failed to encode tier-neutral execution artifacts: {error}"),
+            )
+        })?;
+        Some(ContentHash::compute(&artifact_bytes).to_hex())
+    } else {
+        None
+    };
 
     // A lone-surrogate string completion value cannot survive the Display
     // projection below; carry its exact code units alongside (bd-2vzgi).
@@ -2182,6 +2382,8 @@ fn execute_prepared_eval(
         tier_i_specialized_instructions_executed: routed
             .result
             .tier_i_specialized_instructions_executed,
+        tier_neutral_execution_artifact_sha256,
+        execution_duration_ns,
     })
 }
 
@@ -2450,6 +2652,82 @@ mod tests {
         assert_eq!(second, one_shot);
         assert_eq!(first.value, "2");
         assert_eq!(first.console_output.len(), 1);
+    }
+
+    #[test]
+    fn prepared_tier_r_control_differs_only_in_tier_counters() {
+        let source = "var i = 0; var sum = 0; while (i < 100) { sum = sum + i; i = i + 1; } sum;";
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare");
+
+        let mut production_router = HybridRouter::default();
+        let production = production_router
+            .eval_prepared_with_instruction_budget_and_dispatch_policy(
+                &prepared,
+                1_000_000,
+                PreparedTierDispatchPolicy::Production,
+            )
+            .expect("production Tier-I execution");
+        let mut control_router = HybridRouter::default();
+        let control = control_router
+            .eval_prepared_with_instruction_budget_and_dispatch_policy(
+                &prepared,
+                1_000_000,
+                PreparedTierDispatchPolicy::ForceTierR,
+            )
+            .expect("forced Tier-R execution");
+
+        assert!(production.outcome.tier_i_instructions_executed > 0);
+        assert!(production.outcome.tier_i_specialized_instructions_executed > 0);
+        assert_eq!(control.outcome.tier_i_instructions_executed, 0);
+        assert_eq!(control.outcome.tier_i_specialized_instructions_executed, 0);
+        assert_eq!(
+            production.outcome.instructions_executed,
+            control.outcome.instructions_executed
+        );
+        assert_eq!(
+            production.tier_neutral_execution_artifact_sha256,
+            control.tier_neutral_execution_artifact_sha256
+        );
+
+        let mut production_semantics = production.outcome;
+        production_semantics.tier_i_instructions_executed = 0;
+        production_semantics.tier_i_specialized_instructions_executed = 0;
+        assert_eq!(production_semantics, control.outcome);
+    }
+
+    #[test]
+    fn forced_tier_r_control_preserves_budget_refusal_and_prepared_plan() {
+        let source = "var i = 0; while (i < 100) { i = i + 1; } i;";
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare");
+
+        let mut production_router = HybridRouter::default();
+        let production_error = production_router
+            .eval_prepared_with_instruction_budget_and_dispatch_policy(
+                &prepared,
+                5,
+                PreparedTierDispatchPolicy::Production,
+            )
+            .expect_err("production budget must fail closed");
+        let mut control_router = HybridRouter::default();
+        let control_error = control_router
+            .eval_prepared_with_instruction_budget_and_dispatch_policy(
+                &prepared,
+                5,
+                PreparedTierDispatchPolicy::ForceTierR,
+            )
+            .expect_err("control budget must fail closed");
+        assert_eq!(production_error, control_error);
+
+        let mut retry_router = HybridRouter::default();
+        let retry = retry_router
+            .eval_prepared_with_instruction_budget_and_dispatch_policy(
+                &prepared,
+                1_000_000,
+                PreparedTierDispatchPolicy::Production,
+            )
+            .expect("control refusal must not poison the prepared compact plan");
+        assert_eq!(retry.outcome.value, "100");
+        assert!(retry.outcome.tier_i_instructions_executed > 0);
     }
 
     #[test]

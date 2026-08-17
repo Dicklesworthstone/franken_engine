@@ -2,6 +2,7 @@
 name = "frankenengine-engine"
 version = "0.2.0"
 edition = "2024"
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"

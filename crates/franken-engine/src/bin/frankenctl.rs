@@ -46,7 +46,8 @@ use frankenengine_engine::differential_oracle::{
     run_differential_oracle,
 };
 use frankenengine_engine::differential_oracle_perf::{
-    PerfArmConfig, load_runtime_comparison_corpus, run_differential_perf,
+    PerfArmConfig, TierControlConfig, load_runtime_comparison_corpus, run_differential_perf,
+    run_tier_control_perf,
 };
 use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
 use frankenengine_engine::evidence_ledger::{
@@ -558,10 +559,12 @@ struct DifferentialOraclePerfArgs {
     warmup: u32,
     samples: u32,
     case_timeout_ms: u64,
+    case_timeout_explicit: bool,
     engine_budget: Option<u64>,
     node_bin: Option<String>,
     bun_bin: Option<String>,
     case_filter: Vec<String>,
+    tier_control: bool,
 }
 
 /// User-facing wrapper over the differential oracle. Where `differential-oracle`
@@ -1866,7 +1869,7 @@ fn parse_differential_oracle_help_command(args: &[String]) -> Result<CommandSpec
             &args[1..],
         ),
         other => Err(format!(
-            "unknown differential-oracle help topic `{other}` (expected run)"
+            "unknown differential-oracle help topic `{other}` (expected run|perf)"
         )),
     }
 }
@@ -2958,10 +2961,12 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
     let mut warmup = 3_u32;
     let mut samples = 30_u32;
     let mut case_timeout_ms = 120_000_u64;
+    let mut case_timeout_explicit = false;
     let mut engine_budget: Option<u64> = None;
     let mut node_bin: Option<String> = None;
     let mut bun_bin: Option<String> = None;
     let mut case_filter: Vec<String> = Vec::new();
+    let mut tier_control = false;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2986,6 +2991,7 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
                 .map_err(|_| "--samples value does not fit in u32".to_string())?
             }
             "--case-timeout-ms" => {
+                case_timeout_explicit = true;
                 case_timeout_ms = parse_u64(
                     &next_arg(args, &mut index, "--case-timeout-ms")?,
                     "--case-timeout-ms",
@@ -3001,6 +3007,7 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
             "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
             "--bun-bin" => bun_bin = Some(next_arg(args, &mut index, "--bun-bin")?),
             "--case" => case_filter.push(next_arg(args, &mut index, "--case")?),
+            "--tier-control" => tier_control = true,
             flag => return Err(format!("unknown differential-oracle perf flag `{flag}`")),
         }
         index += 1;
@@ -3016,10 +3023,12 @@ fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec
             warmup,
             samples,
             case_timeout_ms,
+            case_timeout_explicit,
             engine_budget,
             node_bin,
             bun_bin,
             case_filter,
+            tier_control,
         }),
     }))
 }
@@ -8912,10 +8921,54 @@ fn execute_differential_oracle(args: DifferentialOracleArgs) -> Result<i32, Stri
 fn execute_differential_oracle_perf(args: DifferentialOraclePerfArgs) -> Result<i32, String> {
     let mut corpus = load_runtime_comparison_corpus(&args.manifest)?;
     if !args.case_filter.is_empty() {
-        corpus.retain(|case| args.case_filter.iter().any(|id| id == &case.case_id));
-        if corpus.is_empty() {
-            return Err("--case filters matched no corpus case".to_string());
+        for requested_case_id in &args.case_filter {
+            if !corpus.iter().any(|case| case.case_id == *requested_case_id) {
+                return Err(format!(
+                    "--case `{requested_case_id}` does not exist in the benchmark manifest"
+                ));
+            }
         }
+        corpus.retain(|case| args.case_filter.iter().any(|id| id == &case.case_id));
+    }
+
+    if args.tier_control {
+        if args.node_bin.is_some() || args.bun_bin.is_some() {
+            return Err(
+                "--node-bin/--bun-bin do not apply to the same-binary --tier-control experiment"
+                    .to_string(),
+            );
+        }
+        if args.case_timeout_explicit {
+            return Err(
+                "--case-timeout-ms is not supported by --tier-control; use the deterministic --engine-budget bound"
+                    .to_string(),
+            );
+        }
+        let mut config = TierControlConfig {
+            warmup_iterations: args.warmup,
+            measured_iterations: args.samples,
+            ..TierControlConfig::default()
+        };
+        if let Some(engine_budget) = args.engine_budget {
+            config.engine_instruction_budget = engine_budget;
+        }
+        let (report, iteration_events) = run_tier_control_perf(&corpus, &config);
+        if let Some(path) = &args.events {
+            let mut lines = String::new();
+            for event in &iteration_events {
+                let line = serde_json::to_string(event)
+                    .map_err(|error| format!("failed to serialize tier-control event: {error}"))?;
+                lines.push_str(&line);
+                lines.push('\n');
+            }
+            fs::write(path, lines)
+                .map_err(|error| format!("failed to write events `{}`: {error}", path.display()))?;
+        }
+        if let Some(path) = &args.out {
+            write_json_file(path, &report)?;
+        }
+        print_json(&report)?;
+        return Ok(0);
     }
 
     let mut config = PerfArmConfig {
@@ -11738,6 +11791,7 @@ fn usage() -> String {
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
         "  frankenctl differential-oracle perf --manifest <manifest.json>",
         "      [--out <report.json>] [--events <events.jsonl>] [--warmup <u32>] [--samples <u32>]",
+        "      [--tier-control]  # same-binary Tier-I vs Tier-R keep/kill/inconclusive arm",
         "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
         "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
         "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
@@ -12180,11 +12234,14 @@ fn differential_oracle_usage() -> String {
         "      [--out <report.json>] [--events <events.jsonl>]",
         "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
         "      [--engine-budget <u64>] [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
+        "      [--tier-control]",
         "",
         "behavior:",
         "  run: executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
         "  perf: measures steady-state throughput over a corpus and emits the Node/Bun denominator",
         "        with fairness enforcement (degraded receipt when rules are unmet).",
+        "  perf --tier-control: prepares each case once, alternates production Tier-I and forced",
+        "        Tier-R on fresh identical routers/cores, and emits a separate v1 matched-control report.",
         "  missing external runtimes produce unavailable backend receipts instead of failing the run.",
     ]
     .join("\n")
@@ -12215,6 +12272,7 @@ fn differential_oracle_perf_usage() -> String {
         "      [--out <report.json>] [--events <events.jsonl>]",
         "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
         "      [--engine-budget <u64>] [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
+        "      [--tier-control]",
         "",
         "behavior:",
         "  measures warm steady-state throughput of every corpus case under Node, Bun, and the",
@@ -12222,6 +12280,13 @@ fn differential_oracle_perf_usage() -> String {
         "  structured-value consensus. per-iteration timings stream to --events so diagnostic",
         "  ratios can be re-derived from raw data. v3 always records the fresh-engine/shared-realm",
         "  lifecycle asymmetry as a fairness violation and degrades rather than publishing a number.",
+        "  --tier-control does not execute Node/Bun or alter v3; it emits the separate",
+        "  franken-engine.tier-control-perf.v1 treatment/control report. A keep or kill verdict",
+        "  requires the exact ordered source corpus and 3/30 protocol, a release-perf binary,",
+        "  single-CPU Linux affinity, every case admitted, and a paired 95% interval wholly on",
+        "  one side of the 1.05x floor; an overlapping interval is explicitly inconclusive.",
+        "  Exit 0 means report generation succeeded; consumers must inspect summary.decision.",
+        "  --case-timeout-ms is rejected in this mode; --engine-budget is its deterministic bound.",
     ]
     .join("\n")
 }

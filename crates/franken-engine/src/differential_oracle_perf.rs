@@ -56,9 +56,10 @@ use crate::differential_oracle::{
     capture_external_version, capture_host_facts, current_unix_ns, run_command_with_timeout,
     run_differential_oracle, sha256_hex,
 };
-use crate::{EngineKind, HybridRouter, RouteReason};
+use crate::{EngineKind, EvalOutcome, HybridRouter, PreparedTierDispatchPolicy, RouteReason};
 
 pub const DIFFERENTIAL_PERF_SCHEMA_VERSION: &str = "franken-engine.differential-oracle-perf.v3";
+pub const TIER_CONTROL_PERF_SCHEMA_VERSION: &str = "franken-engine.tier-control-perf.v1";
 
 /// FE-CLAIM-010's requested ">= 3x throughput" floor in fixed-point
 /// millionths (1_000_000 == 1.0x). V3 cannot publish a verdict against it
@@ -76,7 +77,63 @@ pub const PERF_HARNESS_SENTINEL: &str = "__FE_PERF__";
 /// measurement-configuration fact.
 pub const DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET: u64 = 2_000_000_000;
 
+/// Predeclared minimum retained improvement for the compact Tier-I tranche.
+/// `1_050_000` means the forced Tier-R control took at least 5% longer than
+/// production Tier-I on the same prepared module and execution lifecycle.
+pub const TIER_CONTROL_KEEP_FLOOR_MILLIONTHS: u64 = 1_050_000;
+
+/// Predeclared mixed positive/negative denominator for the compact scalar
+/// dispatch keep/kill experiment. Both the identifier and exact source bytes
+/// are authoritative: a custom manifest cannot retain these names while
+/// substituting more favorable programs.
+pub const TIER_CONTROL_REQUIRED_CASE_SOURCES_SHA256: &[(&str, &str)] = &[
+    (
+        "micro-arithmetic-loop",
+        "8a139b47d84ab89b5979b8a69bb6d57add4e43e0f44949aea778377d5c734d58",
+    ),
+    (
+        "micro-function-calls",
+        "0cf202d0e18b9341724ad658714b06d30d65b68b8c78c3400f4cc9369056134a",
+    ),
+    (
+        "micro-object-property-access",
+        "afbef1aaf21a136e50b641a1055ea6064edafffdc1720b104af49550ef227cb0",
+    ),
+    (
+        "micro-array-indexing",
+        "d9ea70c2ab86a4432a5cf030549f3d0c71e27bdfbf9ff57e57993e190cc2eda6",
+    ),
+    (
+        "micro-bitwise-ops",
+        "fdad184b299e2bba1667ce92dc1387489f2f714a90fcf99fd6da606b12b7b900",
+    ),
+    (
+        "micro-modulo-ops",
+        "2bc9ac8e95af7ef1855cc0ee2bfa532afd4b8798cf15b75f5c278e83bc1d96ce",
+    ),
+    (
+        "micro-float-arithmetic",
+        "b66c76ad769e54e6f12c98634c26595889577c221812f60aa69874653a3dd697",
+    ),
+];
+
+/// Exact measurement policy for a decision-bearing Tier-I run. Runs with any
+/// other policy remain useful diagnostic evidence but cannot emit keep/kill.
+pub const TIER_CONTROL_DECISION_WARMUP_ITERATIONS: u32 = 3;
+pub const TIER_CONTROL_DECISION_MEASURED_ITERATIONS: u32 = 30;
+pub const TIER_CONTROL_DECISION_MAX_CV_MILLIONTHS: u32 = 150_000;
+
+/// Conservative two-sided 95% Student-t critical value used for paired
+/// log-ratio intervals. The diagnostic floor is ten measured pairs (9 degrees
+/// of freedom), whose critical value is 2.262; retaining that value for larger
+/// samples widens rather than overstates confidence.
+pub const TIER_CONTROL_CI95_T_CRITICAL_MILLIONTHS: u64 = 2_262_000;
+
 const MILLIONTHS: u64 = 1_000_000;
+const CARGO_BUILD_PROFILE_CLASS: &str = env!("FRANKENENGINE_CARGO_PROFILE_CLASS");
+const CARGO_BUILD_PROFILE_DIRECTORY: &str = env!("FRANKENENGINE_CARGO_PROFILE_DIRECTORY");
+const CARGO_BUILD_OPT_LEVEL: &str = env!("FRANKENENGINE_CARGO_OPT_LEVEL");
+const CARGO_BUILD_DEBUG_INFO: &str = env!("FRANKENENGINE_CARGO_DEBUG_INFO");
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -132,6 +189,29 @@ impl Default for PerfArmConfig {
     }
 }
 
+/// Same-binary Tier-I treatment/control measurement policy. This deliberately
+/// excludes Node and Bun: it answers only whether the current compact dispatch
+/// earns its keep relative to the canonical Tier-R path under identical native
+/// lifecycle and budget conditions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlConfig {
+    pub warmup_iterations: u32,
+    pub measured_iterations: u32,
+    pub max_cv_millionths: u32,
+    pub engine_instruction_budget: u64,
+}
+
+impl Default for TierControlConfig {
+    fn default() -> Self {
+        Self {
+            warmup_iterations: TIER_CONTROL_DECISION_WARMUP_ITERATIONS,
+            measured_iterations: TIER_CONTROL_DECISION_MEASURED_ITERATIONS,
+            max_cv_millionths: TIER_CONTROL_DECISION_MAX_CV_MILLIONTHS,
+            engine_instruction_budget: DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-iteration evidence
 // ---------------------------------------------------------------------------
@@ -153,6 +233,190 @@ pub struct PerfIterationEvent {
     pub phase: PerfPhase,
     pub index: u32,
     pub duration_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TierControlArm {
+    ProductionTierI,
+    ForcedTierR,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierExecutionCounters {
+    pub instructions_executed: u64,
+    pub tier_i_instructions_executed: u64,
+    pub tier_i_specialized_instructions_executed: u64,
+}
+
+impl From<&EvalOutcome> for TierExecutionCounters {
+    fn from(outcome: &EvalOutcome) -> Self {
+        Self {
+            instructions_executed: outcome.instructions_executed,
+            tier_i_instructions_executed: outcome.tier_i_instructions_executed,
+            tier_i_specialized_instructions_executed: outcome
+                .tier_i_specialized_instructions_executed,
+        }
+    }
+}
+
+/// Raw timing plus exact dispatch counters for one side of the matched native
+/// experiment. Counter vectors are index-aligned with timing and observation
+/// vectors; a mismatch excludes the case rather than being repaired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlArmResult {
+    pub arm: TierControlArm,
+    pub status: PerfMeasurementStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_kind: Option<EngineKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_reason: Option<RouteReason>,
+    pub warmup_ns: Vec<u64>,
+    pub measured_ns: Vec<u64>,
+    pub warmup_observation_sha256: Vec<String>,
+    pub measured_observation_sha256: Vec<String>,
+    pub warmup_execution_artifact_sha256: Vec<String>,
+    pub measured_execution_artifact_sha256: Vec<String>,
+    pub warmup_counters: Vec<TierExecutionCounters>,
+    pub measured_counters: Vec<TierExecutionCounters>,
+    pub observations_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<PerfSampleStats>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlIterationEvent {
+    pub event: String,
+    pub case_id: String,
+    pub arm: TierControlArm,
+    pub phase: PerfPhase,
+    pub index: u32,
+    /// Zero-based order across warm-up followed by measured pairs.
+    pub pair_sequence: u32,
+    /// Execution order within the pair: zero ran first, one ran second.
+    pub order_in_pair: u8,
+    pub duration_ns: u64,
+    pub counters: TierExecutionCounters,
+    pub execution_artifact_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlCaseResult {
+    pub case_id: String,
+    pub source_sha256: String,
+    pub preparation_ns: u64,
+    pub production: TierControlArmResult,
+    pub control: TierControlArmResult,
+    pub equivalent: bool,
+    pub equivalence_detail: String,
+    /// forced Tier-R mean / production Tier-I mean, in millionths. Values
+    /// above one million mean production Tier-I was faster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_i_speedup_over_tier_r_millionths: Option<u64>,
+    /// Paired log-ratio estimate and conservative 95% confidence interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired_speedup: Option<TierControlPairedSpeedup>,
+    pub admitted: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusion_reasons: Vec<String>,
+}
+
+/// One ordered identity in the predeclared Tier-I decision corpus.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TierControlCaseIdentity {
+    pub case_id: String,
+    pub source_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlPairedSpeedup {
+    pub pair_count: usize,
+    pub geomean_speedup_millionths: u64,
+    pub ci95_lower_speedup_millionths: u64,
+    pub ci95_upper_speedup_millionths: u64,
+    pub confidence_method: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TierControlDecision {
+    Keep,
+    Kill,
+    Inconclusive,
+    Degraded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlEnvironment {
+    pub host: DifferentialHostFacts,
+    /// Hash of the exact executable containing both treatment and control.
+    /// Missing only when the platform cannot resolve or read its current
+    /// executable; absence is retained rather than replaced by a claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable_sha256: Option<String>,
+    /// Kernel-reported CPU affinity for this process when `/proc` exposes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_affinity: Option<String>,
+    /// Kernel-reported NUMA-memory affinity for this process when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numa_memory_affinity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_1m_millionths: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_governor: Option<String>,
+    pub warmup_iterations: u32,
+    pub measured_iterations: u32,
+    pub max_cv_millionths: u32,
+    pub engine_instruction_budget: u64,
+    pub cargo_profile_class: String,
+    pub cargo_profile_directory: String,
+    pub cargo_opt_level: String,
+    pub cargo_debug_info: String,
+    pub debug_assertions_enabled: bool,
+    pub decision_corpus_complete: bool,
+    pub decision_policy_complete: bool,
+    pub decision_build_complete: bool,
+    pub decision_scope_complete: bool,
+    pub required_case_ids: Vec<String>,
+    pub selected_case_ids: Vec<String>,
+    pub required_case_identities: Vec<TierControlCaseIdentity>,
+    pub selected_case_identities: Vec<TierControlCaseIdentity>,
+    pub lifecycle: String,
+    pub pair_order: String,
+    pub execution_artifact_projection: String,
+    pub corpus_case_count: usize,
+    pub corpus_sha256: String,
+    pub generated_unix_ns: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlSummary {
+    pub admitted_cases: usize,
+    pub excluded_cases: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geomean_speedup_millionths: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meets_keep_floor: Option<bool>,
+    pub decision: TierControlDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired_speedup: Option<TierControlPairedSpeedup>,
+    pub keep_floor_millionths: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierControlPerfReport {
+    pub schema_version: String,
+    pub generated_unix_ns: u128,
+    pub environment: TierControlEnvironment,
+    pub cases: Vec<TierControlCaseResult>,
+    pub iteration_event_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iteration_events_jsonl_sha256: Option<String>,
+    pub summary: TierControlSummary,
 }
 
 // ---------------------------------------------------------------------------
@@ -582,8 +846,7 @@ pub fn compute_sample_stats(samples: &[u64]) -> Option<PerfSampleStats> {
     })
 }
 
-/// baseline_mean / engine_mean in millionths; `None` if either side is
-/// missing or the engine mean is zero.
+/// baseline_mean / engine_mean in millionths; `None` if the engine mean is zero.
 pub fn speedup_millionths(engine_mean_ns: u64, baseline_mean_ns: u64) -> Option<u64> {
     if engine_mean_ns == 0 {
         return None;
@@ -615,6 +878,76 @@ pub fn geometric_mean_millionths(ratios: &[u64]) -> Option<u64> {
         return None;
     }
     Some(scaled.round() as u64)
+}
+
+fn speedup_millionths_from_float(value: f64, round_up: bool) -> Option<u64> {
+    let scaled = value * MILLIONTHS as f64;
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return None;
+    }
+    const U64_UPPER_EXCLUSIVE_AS_F64: f64 = 18_446_744_073_709_551_616.0;
+    let rounded = if round_up {
+        scaled.ceil()
+    } else {
+        scaled.floor()
+    };
+    if rounded < 1.0 || rounded >= U64_UPPER_EXCLUSIVE_AS_F64 {
+        return None;
+    }
+    Some(rounded as u64)
+}
+
+fn paired_speedup_from_log_ratios(
+    log_ratios: &[f64],
+    confidence_method: &str,
+) -> Option<TierControlPairedSpeedup> {
+    if log_ratios.len() < 2 || log_ratios.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let count = log_ratios.len() as f64;
+    let mean = log_ratios.iter().sum::<f64>() / count;
+    let sample_variance = log_ratios
+        .iter()
+        .map(|value| {
+            let deviation = value - mean;
+            deviation * deviation
+        })
+        .sum::<f64>()
+        / (count - 1.0);
+    let standard_error = sample_variance.sqrt() / count.sqrt();
+    let critical = TIER_CONTROL_CI95_T_CRITICAL_MILLIONTHS as f64 / MILLIONTHS as f64;
+    let margin = critical * standard_error;
+    let center = speedup_millionths_from_float(mean.exp(), false)?;
+    let lower = speedup_millionths_from_float((mean - margin).exp(), false)?;
+    let upper = speedup_millionths_from_float((mean + margin).exp(), true)?;
+    Some(TierControlPairedSpeedup {
+        pair_count: log_ratios.len(),
+        geomean_speedup_millionths: center,
+        ci95_lower_speedup_millionths: lower,
+        ci95_upper_speedup_millionths: upper,
+        confidence_method: confidence_method.to_string(),
+    })
+}
+
+fn paired_speedup(
+    production_ns: &[u64],
+    control_ns: &[u64],
+    confidence_method: &str,
+) -> Option<TierControlPairedSpeedup> {
+    if production_ns.len() != control_ns.len()
+        || production_ns
+            .iter()
+            .chain(control_ns)
+            .any(|value| *value == 0)
+    {
+        return None;
+    }
+    let log_ratios = production_ns
+        .iter()
+        .zip(control_ns)
+        .map(|(production, control)| (*control as f64 / *production as f64).ln())
+        .collect::<Vec<_>>();
+    paired_speedup_from_log_ratios(&log_ratios, confidence_method)
 }
 
 /// Parses a decimal string like "12.34" into millionths (12_340_000) without
@@ -1346,6 +1679,749 @@ pub fn build_denominator(
         status,
         degraded_reasons,
     }
+}
+
+fn empty_tier_control_arm(arm: TierControlArm) -> TierControlArmResult {
+    TierControlArmResult {
+        arm,
+        status: PerfMeasurementStatus::Measured,
+        engine_kind: None,
+        route_reason: None,
+        warmup_ns: Vec::new(),
+        measured_ns: Vec::new(),
+        warmup_observation_sha256: Vec::new(),
+        measured_observation_sha256: Vec::new(),
+        warmup_execution_artifact_sha256: Vec::new(),
+        measured_execution_artifact_sha256: Vec::new(),
+        warmup_counters: Vec::new(),
+        measured_counters: Vec::new(),
+        observations_complete: true,
+        stats: None,
+        diagnostics: Vec::new(),
+    }
+}
+
+fn execute_tier_control_arm(
+    prepared: &crate::PreparedHybridEval,
+    instruction_budget: u64,
+    policy: PreparedTierDispatchPolicy,
+) -> (
+    u64,
+    crate::EvalResult<crate::PreparedTierDispatchObservation>,
+) {
+    let mut router = HybridRouter::default();
+    let started = Instant::now();
+    let outcome = router.eval_prepared_with_instruction_budget_and_dispatch_policy(
+        prepared,
+        instruction_budget,
+        policy,
+    );
+    let outer_elapsed = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let elapsed = outcome.as_ref().map_or(outer_elapsed, |observation| {
+        observation.execution_duration_ns
+    });
+    (elapsed, outcome)
+}
+
+fn tier_neutral_outcomes_equal(production: &EvalOutcome, control: &EvalOutcome) -> bool {
+    let mut production = production.clone();
+    let mut control = control.clone();
+    production.tier_i_instructions_executed = 0;
+    production.tier_i_specialized_instructions_executed = 0;
+    control.tier_i_instructions_executed = 0;
+    control.tier_i_specialized_instructions_executed = 0;
+    production == control
+}
+
+fn tier_control_observation_sha256(outcome: &EvalOutcome) -> (String, bool) {
+    let mut neutral = outcome.clone();
+    neutral.tier_i_instructions_executed = 0;
+    neutral.tier_i_specialized_instructions_executed = 0;
+    match serde_json::to_vec(&neutral) {
+        Ok(bytes) if !bytes.is_empty() => (sha256_hex(&bytes), true),
+        _ => (String::new(), false),
+    }
+}
+
+struct TierControlObservationRecord {
+    phase: PerfPhase,
+    duration_ns: u64,
+    observation_sha256: String,
+    execution_artifact_sha256: String,
+    observation_complete: bool,
+    counters: TierExecutionCounters,
+    engine_kind: EngineKind,
+    route_reason: RouteReason,
+}
+
+fn record_tier_control_observation(
+    result: &mut TierControlArmResult,
+    observation: TierControlObservationRecord,
+) {
+    let TierControlObservationRecord {
+        phase,
+        duration_ns,
+        observation_sha256,
+        execution_artifact_sha256,
+        observation_complete,
+        counters,
+        engine_kind,
+        route_reason,
+    } = observation;
+    if result
+        .engine_kind
+        .is_some_and(|existing| existing != engine_kind)
+    {
+        result
+            .diagnostics
+            .push("engine kind changed between matched invocations".to_string());
+        result.status = PerfMeasurementStatus::Failed;
+    }
+    if result
+        .route_reason
+        .is_some_and(|existing| existing != route_reason)
+    {
+        result
+            .diagnostics
+            .push("route reason changed between matched invocations".to_string());
+        result.status = PerfMeasurementStatus::Failed;
+    }
+    result.engine_kind.get_or_insert(engine_kind);
+    result.route_reason.get_or_insert(route_reason);
+    result.observations_complete &= observation_complete;
+    match phase {
+        PerfPhase::Warmup => {
+            result.warmup_ns.push(duration_ns);
+            result.warmup_observation_sha256.push(observation_sha256);
+            result
+                .warmup_execution_artifact_sha256
+                .push(execution_artifact_sha256);
+            result.warmup_counters.push(counters);
+        }
+        PerfPhase::Measured => {
+            result.measured_ns.push(duration_ns);
+            result.measured_observation_sha256.push(observation_sha256);
+            result
+                .measured_execution_artifact_sha256
+                .push(execution_artifact_sha256);
+            result.measured_counters.push(counters);
+        }
+        PerfPhase::Preparation => {}
+    }
+}
+
+fn tier_control_vectors_complete(
+    result: &TierControlArmResult,
+    config: &TierControlConfig,
+) -> bool {
+    let expected_warmup = config.warmup_iterations as usize;
+    let expected_measured = config.measured_iterations as usize;
+    result.warmup_ns.len() == expected_warmup
+        && result.warmup_observation_sha256.len() == expected_warmup
+        && result.warmup_execution_artifact_sha256.len() == expected_warmup
+        && result.warmup_counters.len() == expected_warmup
+        && result.measured_ns.len() == expected_measured
+        && result.measured_observation_sha256.len() == expected_measured
+        && result.measured_execution_artifact_sha256.len() == expected_measured
+        && result.measured_counters.len() == expected_measured
+}
+
+fn run_tier_control_case(
+    case: &PerfCorpusCase,
+    config: &TierControlConfig,
+) -> (TierControlCaseResult, Vec<TierControlIterationEvent>) {
+    let preparation_started = Instant::now();
+    let prepared = HybridRouter::prepare_eval(case.source.as_str());
+    let preparation_ns =
+        u64::try_from(preparation_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let mut production = empty_tier_control_arm(TierControlArm::ProductionTierI);
+    let mut control = empty_tier_control_arm(TierControlArm::ForcedTierR);
+    let mut equivalent = true;
+    let mut equivalence_details = Vec::new();
+
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let diagnostic = format!("engine preparation failed: {error}");
+            production.status = PerfMeasurementStatus::Failed;
+            control.status = PerfMeasurementStatus::Failed;
+            production.diagnostics.push(diagnostic.clone());
+            control.diagnostics.push(diagnostic.clone());
+            return (
+                TierControlCaseResult {
+                    case_id: case.case_id.clone(),
+                    source_sha256: sha256_hex(case.source.as_bytes()),
+                    preparation_ns,
+                    production,
+                    control,
+                    equivalent: false,
+                    equivalence_detail: diagnostic.clone(),
+                    tier_i_speedup_over_tier_r_millionths: None,
+                    paired_speedup: None,
+                    admitted: false,
+                    exclusion_reasons: vec![diagnostic],
+                },
+                Vec::new(),
+            );
+        }
+    };
+
+    let mut pair_sequence = 0usize;
+    let mut events = Vec::new();
+    'phases: for (phase, count) in [
+        (PerfPhase::Warmup, config.warmup_iterations),
+        (PerfPhase::Measured, config.measured_iterations),
+    ] {
+        for index in 0..count {
+            let current_pair_sequence = pair_sequence;
+            let production_first = current_pair_sequence.is_multiple_of(2);
+            pair_sequence = pair_sequence.saturating_add(1);
+            let run_production = || {
+                execute_tier_control_arm(
+                    &prepared,
+                    config.engine_instruction_budget,
+                    PreparedTierDispatchPolicy::Production,
+                )
+            };
+            let run_control = || {
+                execute_tier_control_arm(
+                    &prepared,
+                    config.engine_instruction_budget,
+                    PreparedTierDispatchPolicy::ForceTierR,
+                )
+            };
+            let (production_run, control_run) = if production_first {
+                (run_production(), run_control())
+            } else {
+                let control_run = run_control();
+                let production_run = run_production();
+                (production_run, control_run)
+            };
+            let (production_ns, production_observation) = production_run;
+            let (control_ns, control_observation) = control_run;
+            let (production_observation, control_observation) =
+                match (production_observation, control_observation) {
+                    (Ok(production_observation), Ok(control_observation)) => {
+                        (production_observation, control_observation)
+                    }
+                    (production_observation, control_observation) => {
+                        let detail = format!(
+                            "matched pair {phase:?}/{index} failed: production={:?}; control={:?}",
+                            production_observation.as_ref().err(),
+                            control_observation.as_ref().err()
+                        );
+                        production.status = PerfMeasurementStatus::Failed;
+                        control.status = PerfMeasurementStatus::Failed;
+                        production.diagnostics.push(detail.clone());
+                        control.diagnostics.push(detail.clone());
+                        equivalent = false;
+                        equivalence_details.push(detail);
+                        break 'phases;
+                    }
+                };
+
+            let production_artifact_sha256 =
+                production_observation.tier_neutral_execution_artifact_sha256;
+            let control_artifact_sha256 =
+                control_observation.tier_neutral_execution_artifact_sha256;
+            let production_outcome = production_observation.outcome;
+            let control_outcome = control_observation.outcome;
+
+            let production_counters = TierExecutionCounters::from(&production_outcome);
+            let control_counters = TierExecutionCounters::from(&control_outcome);
+            if production_counters.tier_i_specialized_instructions_executed
+                > production_counters.tier_i_instructions_executed
+                || production_counters.tier_i_instructions_executed
+                    > production_counters.instructions_executed
+                || production_counters.tier_i_instructions_executed == 0
+            {
+                equivalent = false;
+                equivalence_details.push(format!(
+                    "production pair {phase:?}/{index} did not execute valid Tier-I counters: {production_counters:?}"
+                ));
+            }
+            if control_counters.tier_i_instructions_executed != 0
+                || control_counters.tier_i_specialized_instructions_executed != 0
+            {
+                equivalent = false;
+                equivalence_details.push(format!(
+                    "forced Tier-R pair {phase:?}/{index} executed Tier-I counters: {control_counters:?}"
+                ));
+            }
+            if production_counters.instructions_executed != control_counters.instructions_executed {
+                equivalent = false;
+                equivalence_details.push(format!(
+                    "pair {phase:?}/{index} instruction totals differ: production={}, control={}",
+                    production_counters.instructions_executed,
+                    control_counters.instructions_executed
+                ));
+            }
+            if !tier_neutral_outcomes_equal(&production_outcome, &control_outcome) {
+                equivalent = false;
+                equivalence_details.push(format!(
+                    "pair {phase:?}/{index} outcomes differ after removing Tier-I counters"
+                ));
+            }
+            let (production_observation, production_observation_complete) =
+                tier_control_observation_sha256(&production_outcome);
+            let (control_observation, control_observation_complete) =
+                tier_control_observation_sha256(&control_outcome);
+            if production_observation != control_observation {
+                equivalent = false;
+                equivalence_details
+                    .push(format!("pair {phase:?}/{index} observation digests differ"));
+            }
+            if production_artifact_sha256 != control_artifact_sha256 {
+                equivalent = false;
+                equivalence_details.push(format!(
+                    "pair {phase:?}/{index} replay/security artifact digests differ"
+                ));
+            }
+
+            let event_index = index;
+            let pair_sequence_u32 = u32::try_from(current_pair_sequence).unwrap_or(u32::MAX);
+            let production_event = TierControlIterationEvent {
+                event: "tier-control.iteration".to_string(),
+                case_id: case.case_id.clone(),
+                arm: TierControlArm::ProductionTierI,
+                phase,
+                index: event_index,
+                pair_sequence: pair_sequence_u32,
+                order_in_pair: if production_first { 0 } else { 1 },
+                duration_ns: production_ns,
+                counters: production_counters,
+                execution_artifact_sha256: production_artifact_sha256.clone(),
+            };
+            let control_event = TierControlIterationEvent {
+                event: "tier-control.iteration".to_string(),
+                case_id: case.case_id.clone(),
+                arm: TierControlArm::ForcedTierR,
+                phase,
+                index: event_index,
+                pair_sequence: pair_sequence_u32,
+                order_in_pair: if production_first { 1 } else { 0 },
+                duration_ns: control_ns,
+                counters: control_counters,
+                execution_artifact_sha256: control_artifact_sha256.clone(),
+            };
+            if production_first {
+                events.extend([production_event, control_event]);
+            } else {
+                events.extend([control_event, production_event]);
+            }
+            record_tier_control_observation(
+                &mut production,
+                TierControlObservationRecord {
+                    phase,
+                    duration_ns: production_ns,
+                    observation_sha256: production_observation,
+                    execution_artifact_sha256: production_artifact_sha256,
+                    observation_complete: production_observation_complete,
+                    counters: production_counters,
+                    engine_kind: production_outcome.engine,
+                    route_reason: production_outcome.route_reason,
+                },
+            );
+            record_tier_control_observation(
+                &mut control,
+                TierControlObservationRecord {
+                    phase,
+                    duration_ns: control_ns,
+                    observation_sha256: control_observation,
+                    execution_artifact_sha256: control_artifact_sha256,
+                    observation_complete: control_observation_complete,
+                    counters: control_counters,
+                    engine_kind: control_outcome.engine,
+                    route_reason: control_outcome.route_reason,
+                },
+            );
+        }
+    }
+
+    production.stats = compute_sample_stats(&production.measured_ns);
+    control.stats = compute_sample_stats(&control.measured_ns);
+    let mut exclusion_reasons = equivalence_details.clone();
+    if config.warmup_iterations == 0 {
+        exclusion_reasons.push("warmup protocol requires at least one iteration".to_string());
+    }
+    if config.measured_iterations < 10 {
+        exclusion_reasons.push(format!(
+            "measured_iterations={} is below the minimum sample floor of 10",
+            config.measured_iterations
+        ));
+    }
+    for (label, result) in [("production", &production), ("control", &control)] {
+        if result.status != PerfMeasurementStatus::Measured {
+            exclusion_reasons.push(format!("{label} arm did not complete"));
+        }
+        if !tier_control_vectors_complete(result, config) {
+            exclusion_reasons.push(format!(
+                "{label} timing, observation, or counter vectors are incomplete"
+            ));
+        }
+        if !result.observations_complete {
+            exclusion_reasons.push(format!("{label} observations are incomplete"));
+        }
+        if result
+            .stats
+            .as_ref()
+            .is_none_or(|stats| stats.cv_millionths > config.max_cv_millionths)
+        {
+            exclusion_reasons.push(format!(
+                "{label} CV is unavailable or exceeds {} millionths",
+                config.max_cv_millionths
+            ));
+        }
+    }
+    if production.engine_kind != control.engine_kind
+        || production.route_reason != control.route_reason
+    {
+        exclusion_reasons.push("engine kind or route reason differs between arms".to_string());
+    }
+    let speedup = match (production.stats.as_ref(), control.stats.as_ref()) {
+        (Some(production_stats), Some(control_stats))
+            if production_stats.mean_ns > 0 && control_stats.mean_ns > 0 =>
+        {
+            speedup_millionths(production_stats.mean_ns, control_stats.mean_ns)
+        }
+        _ => None,
+    };
+    if speedup.is_none() {
+        exclusion_reasons.push("matched means did not yield a positive finite ratio".to_string());
+    }
+    let paired_stats = paired_speedup(
+        &production.measured_ns,
+        &control.measured_ns,
+        "per_case_paired_log_ratio_conservative_student_t_95pct_t_2_262",
+    );
+    if paired_stats.is_none() {
+        exclusion_reasons.push(
+            "matched samples did not yield a finite positive paired log-ratio interval".to_string(),
+        );
+    }
+    exclusion_reasons.sort();
+    exclusion_reasons.dedup();
+    let admitted = equivalent && exclusion_reasons.is_empty();
+    let equivalence_detail = if equivalence_details.is_empty() {
+        "every paired Tier-I/Tier-R outcome, replay/security artifact, instruction total, route, and observation matched".to_string()
+    } else {
+        equivalence_details.join("; ")
+    };
+
+    (
+        TierControlCaseResult {
+            case_id: case.case_id.clone(),
+            source_sha256: sha256_hex(case.source.as_bytes()),
+            preparation_ns,
+            production,
+            control,
+            equivalent,
+            equivalence_detail,
+            tier_i_speedup_over_tier_r_millionths: if admitted { speedup } else { None },
+            paired_speedup: if admitted { paired_stats } else { None },
+            admitted,
+            exclusion_reasons,
+        },
+        events,
+    )
+}
+
+fn current_executable_sha256() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    let bytes = fs::read("/proc/self/exe").ok()?;
+    #[cfg(not(target_os = "linux"))]
+    let bytes = {
+        let executable = std::env::current_exe().ok()?;
+        fs::read(executable).ok()?
+    };
+    Some(sha256_hex(&bytes))
+}
+
+fn linux_process_status_field(field: &str) -> Option<String> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix(field)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn affinity_is_exactly_one_cpu(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains(',')
+        && !value.contains('-')
+        && value.parse::<u32>().is_ok()
+}
+
+fn required_tier_control_case_identities() -> Vec<TierControlCaseIdentity> {
+    TIER_CONTROL_REQUIRED_CASE_SOURCES_SHA256
+        .iter()
+        .map(|(case_id, source_sha256)| TierControlCaseIdentity {
+            case_id: (*case_id).to_string(),
+            source_sha256: (*source_sha256).to_string(),
+        })
+        .collect()
+}
+
+fn tier_control_case_identities(corpus: &[PerfCorpusCase]) -> Vec<TierControlCaseIdentity> {
+    corpus
+        .iter()
+        .map(|case| TierControlCaseIdentity {
+            case_id: case.case_id.clone(),
+            source_sha256: sha256_hex(case.source.as_bytes()),
+        })
+        .collect()
+}
+
+fn tier_control_decision_policy_complete(config: &TierControlConfig) -> bool {
+    config.warmup_iterations == TIER_CONTROL_DECISION_WARMUP_ITERATIONS
+        && config.measured_iterations == TIER_CONTROL_DECISION_MEASURED_ITERATIONS
+        && config.max_cv_millionths == TIER_CONTROL_DECISION_MAX_CV_MILLIONTHS
+        && config.engine_instruction_budget == DEFAULT_PERF_ENGINE_INSTRUCTION_BUDGET
+}
+
+fn tier_control_decision_build_complete() -> bool {
+    CARGO_BUILD_PROFILE_CLASS == "release"
+        && CARGO_BUILD_PROFILE_DIRECTORY == "release-perf"
+        && CARGO_BUILD_OPT_LEVEL == "3"
+        && !cfg!(debug_assertions)
+}
+
+fn aggregate_tier_control_paired_speedup(
+    cases: &[TierControlCaseResult],
+) -> Option<TierControlPairedSpeedup> {
+    let pair_count = cases.first()?.paired_speedup.as_ref()?.pair_count;
+    if pair_count < 2
+        || cases.iter().any(|case| {
+            !case.admitted
+                || case
+                    .paired_speedup
+                    .as_ref()
+                    .is_none_or(|speedup| speedup.pair_count != pair_count)
+        })
+    {
+        return None;
+    }
+
+    let mut aggregate_log_ratios = Vec::with_capacity(pair_count);
+    for index in 0..pair_count {
+        let mut equal_case_log_sum = 0.0_f64;
+        for case in cases {
+            let production = *case.production.measured_ns.get(index)?;
+            let control = *case.control.measured_ns.get(index)?;
+            if production == 0 || control == 0 {
+                return None;
+            }
+            equal_case_log_sum += (control as f64 / production as f64).ln();
+        }
+        aggregate_log_ratios.push(equal_case_log_sum / cases.len() as f64);
+    }
+    paired_speedup_from_log_ratios(
+        &aggregate_log_ratios,
+        "equal_case_geomean_of_paired_log_ratios_conservative_student_t_95pct_t_2_262",
+    )
+}
+
+fn classify_tier_control_decision(
+    publishable: bool,
+    paired_speedup: Option<&TierControlPairedSpeedup>,
+) -> TierControlDecision {
+    if !publishable {
+        return TierControlDecision::Degraded;
+    }
+    let Some(paired_speedup) = paired_speedup else {
+        return TierControlDecision::Degraded;
+    };
+    if paired_speedup.ci95_lower_speedup_millionths >= TIER_CONTROL_KEEP_FLOOR_MILLIONTHS {
+        TierControlDecision::Keep
+    } else if paired_speedup.ci95_upper_speedup_millionths < TIER_CONTROL_KEEP_FLOOR_MILLIONTHS {
+        TierControlDecision::Kill
+    } else {
+        TierControlDecision::Inconclusive
+    }
+}
+
+fn tier_control_iteration_events_jsonl_sha256(
+    events: &[TierControlIterationEvent],
+) -> Option<String> {
+    let mut bytes = Vec::new();
+    for event in events {
+        bytes.extend_from_slice(&serde_json::to_vec(event).ok()?);
+        bytes.push(b'\n');
+    }
+    Some(sha256_hex(&bytes))
+}
+
+/// Run the purpose-specific same-binary Tier-I treatment/control experiment.
+/// This is independent of the Node/Bun v3 report and cannot promote
+/// FE-CLAIM-010; it exists solely to decide whether the compact interpreter
+/// tranche clears its predeclared 5% native keep floor.
+pub fn run_tier_control_perf(
+    corpus: &[PerfCorpusCase],
+    config: &TierControlConfig,
+) -> (TierControlPerfReport, Vec<TierControlIterationEvent>) {
+    let generated_unix_ns = current_unix_ns();
+    let required_case_identities = required_tier_control_case_identities();
+    let selected_case_identities = tier_control_case_identities(corpus);
+    let required_case_ids = required_case_identities
+        .iter()
+        .map(|identity| identity.case_id.clone())
+        .collect::<Vec<_>>();
+    let selected_case_ids = selected_case_identities
+        .iter()
+        .map(|identity| identity.case_id.clone())
+        .collect::<Vec<_>>();
+    let decision_corpus_complete = selected_case_identities == required_case_identities;
+    let decision_policy_complete = tier_control_decision_policy_complete(config);
+    let decision_build_complete = tier_control_decision_build_complete();
+    let decision_scope_complete =
+        decision_corpus_complete && decision_policy_complete && decision_build_complete;
+    let environment = TierControlEnvironment {
+        host: capture_host_facts(),
+        executable_sha256: current_executable_sha256(),
+        cpu_affinity: linux_process_status_field("Cpus_allowed_list:"),
+        numa_memory_affinity: linux_process_status_field("Mems_allowed_list:"),
+        load_avg_1m_millionths: read_load_avg_1m_millionths(),
+        cpu_governor: read_cpu_governor(),
+        warmup_iterations: config.warmup_iterations,
+        measured_iterations: config.measured_iterations,
+        max_cv_millionths: config.max_cv_millionths,
+        engine_instruction_budget: config.engine_instruction_budget,
+        cargo_profile_class: CARGO_BUILD_PROFILE_CLASS.to_string(),
+        cargo_profile_directory: CARGO_BUILD_PROFILE_DIRECTORY.to_string(),
+        cargo_opt_level: CARGO_BUILD_OPT_LEVEL.to_string(),
+        cargo_debug_info: CARGO_BUILD_DEBUG_INFO.to_string(),
+        debug_assertions_enabled: cfg!(debug_assertions),
+        decision_corpus_complete,
+        decision_policy_complete,
+        decision_build_complete,
+        decision_scope_complete,
+        required_case_ids,
+        selected_case_ids,
+        required_case_identities,
+        selected_case_identities,
+        lifecycle: "prepare_once_fresh_router_and_interpreter_core_per_arm_invocation".to_string(),
+        pair_order: "alternating_production_first_then_control_first_by_pair_sequence".to_string(),
+        execution_artifact_projection: "tier-neutral positional projection of every ExecutionResult field except tier_i_instructions_executed and tier_i_specialized_instructions_executed".to_string(),
+        corpus_case_count: corpus.len(),
+        corpus_sha256: corpus_sha256(corpus),
+        generated_unix_ns,
+    };
+    let mut cases = Vec::with_capacity(corpus.len());
+    let mut events = Vec::new();
+    for case in corpus {
+        let (result, mut case_events) = run_tier_control_case(case, config);
+        cases.push(result);
+        events.append(&mut case_events);
+    }
+    let iteration_events_jsonl_sha256 = tier_control_iteration_events_jsonl_sha256(&events);
+    let ratios = cases
+        .iter()
+        .filter(|case| case.admitted)
+        .filter_map(|case| case.tier_i_speedup_over_tier_r_millionths)
+        .collect::<Vec<_>>();
+    let paired_speedup = aggregate_tier_control_paired_speedup(&cases);
+    let mut degraded_reasons = Vec::new();
+    if ratios.is_empty() {
+        degraded_reasons.push("no case satisfied the matched-control admission rules".to_string());
+    }
+    if ratios.len() != cases.len() {
+        degraded_reasons.push(format!(
+            "only {}/{} selected cases satisfied every admission rule",
+            ratios.len(),
+            cases.len()
+        ));
+    }
+    if !ratios.is_empty() && paired_speedup.is_none() {
+        degraded_reasons.push(
+            "admitted paired samples did not yield an aggregate log-ratio confidence interval"
+                .to_string(),
+        );
+    }
+    if !environment.decision_corpus_complete {
+        degraded_reasons.push(
+            "selected case IDs and source hashes do not exactly match the predeclared Tier-control decision denominator"
+                .to_string(),
+        );
+    }
+    if !environment.decision_policy_complete {
+        degraded_reasons.push(
+            "measurement policy does not exactly match the predeclared Tier-control decision protocol"
+                .to_string(),
+        );
+    }
+    if !environment.decision_build_complete {
+        degraded_reasons.push(
+            "executable was not built by Cargo profile release-perf at effective opt-level 3 with debug assertions disabled"
+                .to_string(),
+        );
+    }
+    if environment.executable_sha256.is_none() {
+        degraded_reasons.push("exact current executable SHA-256 could not be captured".to_string());
+    }
+    if iteration_events_jsonl_sha256.is_none() {
+        degraded_reasons.push("iteration event stream could not be encoded and hashed".to_string());
+    }
+    if environment.host.os != "linux" {
+        degraded_reasons
+            .push("the decision-bearing Tier-control protocol is currently Linux-only".to_string());
+    } else {
+        if environment
+            .cpu_affinity
+            .as_deref()
+            .is_none_or(|affinity| !affinity_is_exactly_one_cpu(affinity))
+        {
+            degraded_reasons.push(
+                "Linux decision runs require affinity to exactly one recorded logical CPU"
+                    .to_string(),
+            );
+        }
+        if environment.numa_memory_affinity.is_none() {
+            degraded_reasons.push(
+                "Linux NUMA-memory affinity could not be captured from /proc/self/status"
+                    .to_string(),
+            );
+        }
+    }
+    let publishable = !cases.is_empty()
+        && ratios.len() == cases.len()
+        && paired_speedup.is_some()
+        && iteration_events_jsonl_sha256.is_some()
+        && degraded_reasons.is_empty();
+    let decision = classify_tier_control_decision(publishable, paired_speedup.as_ref());
+    let summary = TierControlSummary {
+        admitted_cases: ratios.len(),
+        excluded_cases: cases.len().saturating_sub(ratios.len()),
+        geomean_speedup_millionths: if publishable {
+            paired_speedup
+                .as_ref()
+                .map(|speedup| speedup.geomean_speedup_millionths)
+        } else {
+            None
+        },
+        meets_keep_floor: match decision {
+            TierControlDecision::Keep => Some(true),
+            TierControlDecision::Kill => Some(false),
+            TierControlDecision::Inconclusive | TierControlDecision::Degraded => None,
+        },
+        decision,
+        paired_speedup: if publishable { paired_speedup } else { None },
+        keep_floor_millionths: TIER_CONTROL_KEEP_FLOOR_MILLIONTHS,
+        degraded_reasons,
+    };
+    (
+        TierControlPerfReport {
+            schema_version: TIER_CONTROL_PERF_SCHEMA_VERSION.to_string(),
+            generated_unix_ns,
+            environment,
+            cases,
+            iteration_event_count: events.len(),
+            iteration_events_jsonl_sha256,
+            summary,
+        },
+        events,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2136,6 +3212,310 @@ mod tests {
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"measured\""));
         assert!(json.contains("node_lts"));
+    }
+
+    fn canonical_tier_control_corpus() -> Vec<PerfCorpusCase> {
+        vec![
+            PerfCorpusCase::new(
+                "micro-arithmetic-loop",
+                include_str!(
+                    "../../../benchmarks/runtime_comparison/programs/micro_arithmetic_loop.js"
+                ),
+            ),
+            PerfCorpusCase::new(
+                "micro-function-calls",
+                include_str!(
+                    "../../../benchmarks/runtime_comparison/programs/micro_function_calls.js"
+                ),
+            ),
+            PerfCorpusCase::new(
+                "micro-object-property-access",
+                include_str!(
+                    "../../../benchmarks/runtime_comparison/programs/micro_object_property_access.js"
+                ),
+            ),
+            PerfCorpusCase::new(
+                "micro-array-indexing",
+                include_str!(
+                    "../../../benchmarks/runtime_comparison/programs/micro_array_indexing.js"
+                ),
+            ),
+            PerfCorpusCase::new(
+                "micro-bitwise-ops",
+                include_str!(
+                    "../../../benchmarks/runtime_comparison/programs/micro_bitwise_ops.js"
+                ),
+            ),
+            PerfCorpusCase::new(
+                "micro-modulo-ops",
+                include_str!("../../../benchmarks/runtime_comparison/programs/micro_modulo_ops.js"),
+            ),
+            PerfCorpusCase::new(
+                "micro-float-arithmetic",
+                include_str!(
+                    "../../../benchmarks/runtime_comparison/programs/micro_float_arithmetic.js"
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn tier_control_decision_scope_binds_exact_sources_and_protocol() {
+        let corpus = canonical_tier_control_corpus();
+        assert_eq!(
+            tier_control_case_identities(&corpus),
+            required_tier_control_case_identities()
+        );
+        assert!(tier_control_decision_policy_complete(
+            &TierControlConfig::default()
+        ));
+
+        let mut substituted = corpus.clone();
+        substituted[0].source = substituted[1].source.clone();
+        assert_ne!(
+            tier_control_case_identities(&substituted),
+            required_tier_control_case_identities()
+        );
+
+        let mut reordered = corpus.clone();
+        reordered.swap(0, 1);
+        assert_ne!(
+            tier_control_case_identities(&reordered),
+            required_tier_control_case_identities()
+        );
+
+        let diagnostic_policy = TierControlConfig {
+            measured_iterations: TIER_CONTROL_DECISION_MEASURED_ITERATIONS - 1,
+            ..TierControlConfig::default()
+        };
+        assert!(!tier_control_decision_policy_complete(&diagnostic_policy));
+    }
+
+    #[test]
+    fn tier_control_paired_interval_drives_three_state_decision() {
+        let exact_keep = paired_speedup(
+            &[100; 30],
+            &[106; 30],
+            "deterministic_test_paired_log_ratio",
+        )
+        .expect("constant positive paired ratio");
+        assert!(exact_keep.geomean_speedup_millionths.abs_diff(1_060_000) <= 1);
+        assert!(exact_keep.ci95_lower_speedup_millionths.abs_diff(1_060_000) <= 1);
+        assert!(exact_keep.ci95_upper_speedup_millionths.abs_diff(1_060_000) <= 1);
+        assert_eq!(
+            classify_tier_control_decision(true, Some(&exact_keep)),
+            TierControlDecision::Keep
+        );
+
+        let exact_kill = paired_speedup(
+            &[100; 30],
+            &[104; 30],
+            "deterministic_test_paired_log_ratio",
+        )
+        .expect("constant sub-floor paired ratio");
+        assert_eq!(
+            classify_tier_control_decision(true, Some(&exact_kill)),
+            TierControlDecision::Kill
+        );
+
+        let straddling = TierControlPairedSpeedup {
+            pair_count: 30,
+            geomean_speedup_millionths: TIER_CONTROL_KEEP_FLOOR_MILLIONTHS,
+            ci95_lower_speedup_millionths: TIER_CONTROL_KEEP_FLOOR_MILLIONTHS - 1,
+            ci95_upper_speedup_millionths: TIER_CONTROL_KEEP_FLOOR_MILLIONTHS + 1,
+            confidence_method: "deterministic_test".to_string(),
+        };
+        assert_eq!(
+            classify_tier_control_decision(true, Some(&straddling)),
+            TierControlDecision::Inconclusive
+        );
+        assert_eq!(
+            classify_tier_control_decision(false, Some(&exact_keep)),
+            TierControlDecision::Degraded
+        );
+    }
+
+    #[test]
+    fn tier_control_float_speedup_conversion_is_positive_and_representable() {
+        assert_eq!(speedup_millionths_from_float(f64::NAN, false), None);
+        assert_eq!(speedup_millionths_from_float(f64::INFINITY, false), None);
+        assert_eq!(speedup_millionths_from_float(0.0, false), None);
+        assert_eq!(speedup_millionths_from_float(-1.0, false), None);
+        assert_eq!(speedup_millionths_from_float(0.000_000_1, false), None);
+        assert_eq!(speedup_millionths_from_float(0.000_001, false), Some(1));
+        assert_eq!(speedup_millionths_from_float(f64::MAX, true), None);
+        assert_eq!(
+            speedup_millionths_from_float(u64::MAX as f64 / MILLIONTHS as f64, true),
+            None
+        );
+    }
+
+    #[test]
+    fn tier_control_build_profile_contract_is_fail_closed() {
+        let exact_contract = CARGO_BUILD_PROFILE_CLASS == "release"
+            && CARGO_BUILD_PROFILE_DIRECTORY == "release-perf"
+            && CARGO_BUILD_OPT_LEVEL == "3"
+            && !cfg!(debug_assertions);
+        assert_eq!(tier_control_decision_build_complete(), exact_contract);
+    }
+
+    #[test]
+    fn tier_control_scalar_case_is_exact_and_counter_bound() {
+        let corpus = vec![PerfCorpusCase::new(
+            "scalar-add",
+            "var answer = 1 + 1; answer;",
+        )];
+        let config = TierControlConfig {
+            warmup_iterations: 1,
+            measured_iterations: 10,
+            max_cv_millionths: u32::MAX,
+            engine_instruction_budget: 1_000_000,
+        };
+        let (report, events) = run_tier_control_perf(&corpus, &config);
+        assert_eq!(report.schema_version, TIER_CONTROL_PERF_SCHEMA_VERSION);
+        assert_eq!(
+            report
+                .environment
+                .executable_sha256
+                .as_deref()
+                .map(str::len),
+            Some(64)
+        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(report.environment.cpu_affinity.is_some());
+            assert!(report.environment.numa_memory_affinity.is_some());
+        }
+        assert_eq!(report.cases.len(), 1);
+        let case = &report.cases[0];
+        assert!(case.equivalent, "{}", case.equivalence_detail);
+        assert!(case.admitted, "{:?}", case.exclusion_reasons);
+        assert!(!report.environment.decision_scope_complete);
+        assert!(report.summary.meets_keep_floor.is_none());
+        assert_eq!(report.summary.decision, TierControlDecision::Degraded);
+        assert!(case.tier_i_speedup_over_tier_r_millionths.is_some());
+        assert_eq!(case.production.warmup_ns.len(), 1);
+        assert_eq!(case.production.measured_ns.len(), 10);
+        assert_eq!(case.control.warmup_ns.len(), 1);
+        assert_eq!(case.control.measured_ns.len(), 10);
+        assert_eq!(
+            case.production.warmup_execution_artifact_sha256,
+            case.control.warmup_execution_artifact_sha256
+        );
+        assert_eq!(
+            case.production.measured_execution_artifact_sha256,
+            case.control.measured_execution_artifact_sha256
+        );
+        assert!(
+            case.production
+                .warmup_counters
+                .iter()
+                .chain(&case.production.measured_counters)
+                .all(|counters| counters.tier_i_instructions_executed > 0
+                    && counters.tier_i_specialized_instructions_executed
+                        <= counters.tier_i_instructions_executed
+                    && counters.tier_i_instructions_executed <= counters.instructions_executed)
+        );
+        assert!(
+            case.control
+                .warmup_counters
+                .iter()
+                .chain(&case.control.measured_counters)
+                .all(|counters| counters.tier_i_instructions_executed == 0
+                    && counters.tier_i_specialized_instructions_executed == 0)
+        );
+        assert_eq!(events.len(), 22);
+        let (event_pairs, event_remainder) = events.as_chunks::<2>();
+        assert!(event_remainder.is_empty());
+        assert!(
+            event_pairs
+                .iter()
+                .all(|pair| pair[0].order_in_pair == 0 && pair[1].order_in_pair == 1)
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.execution_artifact_sha256.len() == 64)
+        );
+        for pair_sequence in 0..11_u32 {
+            let pair = events
+                .iter()
+                .filter(|event| event.pair_sequence == pair_sequence)
+                .collect::<Vec<_>>();
+            assert_eq!(pair.len(), 2);
+            assert!(pair.iter().any(|event| event.order_in_pair == 0));
+            assert!(pair.iter().any(|event| event.order_in_pair == 1));
+            let production = pair
+                .iter()
+                .find(|event| event.arm == TierControlArm::ProductionTierI)
+                .expect("production event");
+            assert_eq!(
+                production.order_in_pair,
+                if pair_sequence.is_multiple_of(2) {
+                    0
+                } else {
+                    1
+                }
+            );
+        }
+        let json = serde_json::to_string(&report).expect("serialize tier-control report");
+        let parsed: TierControlPerfReport =
+            serde_json::from_str(&json).expect("deserialize tier-control report");
+        assert_eq!(parsed, report);
+    }
+
+    #[test]
+    fn tier_control_preparation_failure_cannot_emit_a_ratio() {
+        let corpus = vec![PerfCorpusCase::new("invalid", "syntax error here (")];
+        let config = TierControlConfig {
+            warmup_iterations: 1,
+            measured_iterations: 10,
+            max_cv_millionths: u32::MAX,
+            engine_instruction_budget: 1_000_000,
+        };
+        let (report, events) = run_tier_control_perf(&corpus, &config);
+        assert!(events.is_empty());
+        assert!(!report.cases[0].admitted);
+        assert!(!report.cases[0].equivalent);
+        assert!(
+            report.cases[0]
+                .tier_i_speedup_over_tier_r_millionths
+                .is_none()
+        );
+        assert_eq!(report.summary.admitted_cases, 0);
+        assert!(report.summary.geomean_speedup_millionths.is_none());
+        assert!(report.summary.meets_keep_floor.is_none());
+    }
+
+    #[test]
+    fn tier_control_excluded_survivor_cannot_emit_a_keep_verdict() {
+        let mut corpus = TIER_CONTROL_REQUIRED_CASE_SOURCES_SHA256
+            .iter()
+            .map(|(case_id, _)| PerfCorpusCase::new(*case_id, "var answer = 1 + 1; answer;"))
+            .collect::<Vec<_>>();
+        corpus[0].source = "syntax error here (".to_string();
+        let config = TierControlConfig {
+            warmup_iterations: 1,
+            measured_iterations: 10,
+            max_cv_millionths: u32::MAX,
+            engine_instruction_budget: 1_000_000,
+        };
+
+        let (report, _) = run_tier_control_perf(&corpus, &config);
+        assert!(!report.environment.decision_corpus_complete);
+        assert!(!report.environment.decision_policy_complete);
+        assert!(!report.environment.decision_scope_complete);
+        assert_eq!(report.summary.excluded_cases, 1);
+        assert_eq!(report.summary.admitted_cases, corpus.len() - 1);
+        assert!(report.summary.geomean_speedup_millionths.is_none());
+        assert!(report.summary.meets_keep_floor.is_none());
+        assert!(
+            report
+                .summary
+                .degraded_reasons
+                .iter()
+                .any(|reason| { reason.contains("selected cases satisfied every admission rule") })
+        );
     }
 
     fn test_environment() -> PerfEnvironmentManifest {

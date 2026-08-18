@@ -1015,6 +1015,19 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     for alias in confirmed_path_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(path_module_alias_sentinel(&alias), 0);
     }
+    // bd-4awsz: the legacy `url` facade is likewise lowering-only. Record
+    // immutable module aliases and destructured `fileURLToPath` bindings only
+    // when their complete use stays inside the finite pure-compute surface.
+    // Bare, escaped, reassigned, computed, and unsupported uses retain the
+    // ambient module-load denial instead of materializing a module object.
+    for alias in confirmed_url_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(url_module_alias_sentinel(&alias), 0);
+    }
+    for local in
+        confirmed_url_file_url_to_path_destructured_requires(&ir0.tree.body, &binding_lookup)
+    {
+        binding_lookup.insert(url_named_binding_sentinel(&local), 0);
+    }
     // bd-qmy52: same usage-gated sentinel recording for the two other
     // pure-compute module families — `require('querystring')` (member calls
     // lower to `builtin:Querystring*` HostCalls) and `require('os')` (member
@@ -2430,6 +2443,8 @@ fn binding_entry_snapshot(
             let event_emitter = event_emitter_binding_sentinel(name);
             let events_once = events_once_binding_sentinel(name);
             let events_module = events_module_alias_sentinel(name);
+            let url_module = url_module_alias_sentinel(name);
+            let url_named = url_named_binding_sentinel(name);
             let crypto_hash_object = crypto_hash_object_alias_sentinel(name);
             let crypto_hmac_object = crypto_hmac_object_alias_sentinel(name);
             let crypto_cipher_object = crypto_cipher_object_alias_sentinel(name);
@@ -2502,6 +2517,8 @@ fn binding_entry_snapshot(
                     events_module.clone(),
                     binding_lookup.get(&events_module).copied(),
                 ),
+                (url_module.clone(), binding_lookup.get(&url_module).copied()),
+                (url_named.clone(), binding_lookup.get(&url_named).copied()),
                 (
                     crypto_hash_object.clone(),
                     binding_lookup.get(&crypto_hash_object).copied(),
@@ -3733,6 +3750,9 @@ fn lower_statement_to_ir1_with_flow(
                                 )
                             })
                             .or_else(|| {
+                                confirmed_url_destructure_locals(&d.pattern, init, binding_lookup)
+                            })
+                            .or_else(|| {
                                 confirmed_stream_destructure_locals(
                                     &d.pattern,
                                     init,
@@ -3876,6 +3896,8 @@ fn lower_statement_to_ir1_with_flow(
                                     .contains_key(&https_module_alias_sentinel(alias)))
                             || (is_require_path_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&path_module_alias_sentinel(alias)))
+                            || (is_require_url_module_initializer(init, binding_lookup)
+                                && binding_lookup.contains_key(&url_module_alias_sentinel(alias)))
                             || (is_require_querystring_module_initializer(init, binding_lookup)
                                 && binding_lookup
                                     .contains_key(&querystring_module_alias_sentinel(alias)))
@@ -12627,6 +12649,21 @@ fn lower_expression_to_ir1_inner(
                     )?;
                     return Ok(());
                 }
+                if let Some(capability) = url_builtin_call_capability(callee, binding_lookup) {
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    return Ok(());
+                }
                 // bd-qmy52: spread forms of the querystring/os builtins route
                 // through ReflectApply the same way (`qs.parse(...xs)`,
                 // `os.setPriority(...xs)`).
@@ -12980,6 +13017,7 @@ fn lower_expression_to_ir1_inner(
             // and arity is validated at dispatch (Node semantics: optional
             // sep/eq/options on parse/stringify, optional pid on getPriority).
             if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
+                .or_else(|| url_builtin_call_capability(callee, binding_lookup))
                 .or_else(|| os_builtin_call_capability(callee, binding_lookup))
                 .or_else(|| zlib_builtin_call_capability(callee, binding_lookup))
                 .or_else(|| crypto_builtin_call_capability(callee, arguments, binding_lookup))
@@ -17086,6 +17124,263 @@ fn confirmed_path_module_aliases(
 }
 
 // ---------------------------------------------------------------------------
+// Legacy Node `url` builtin recognition (bd-4awsz)
+//
+// This is a finite lowering-only facade over the interpreter's existing
+// WHATWG URL implementation. No ambient module object or filesystem authority
+// is manufactured: only `fileURLToPath`, `format`, and `parse` calls on a
+// closed-use `require('url')` / `require('node:url')` alias are rewritten.
+// The idiomatic destructured `fileURLToPath` binding shares the same rule.
+
+fn is_url_module_specifier(specifier: &str) -> bool {
+    specifier == "url" || specifier == "node:url"
+}
+
+fn url_module_alias_sentinel(name: &str) -> String {
+    format!("\0urlmod\0{name}")
+}
+
+fn url_named_binding_sentinel(name: &str) -> String {
+    format!("\0urlnamed\0{name}")
+}
+
+fn is_require_url_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        && matches!(arguments.as_slice(), [specifier]
+            if well_formed_string_literal(specifier).is_some_and(is_url_module_specifier))
+}
+
+fn url_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "fileURLToPath" => Some("builtin:UrlFileUrlToPath"),
+        "format" => Some("builtin:UrlFormat"),
+        "parse" => Some("builtin:UrlParse"),
+        _ => None,
+    }
+}
+
+fn is_url_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&url_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_url_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+fn url_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    match callee {
+        Expression::Identifier(local)
+            if binding_lookup.contains_key(&url_named_binding_sentinel(local)) =>
+        {
+            Some("builtin:UrlFileUrlToPath")
+        }
+        Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } if is_url_module_object(object, binding_lookup) => {
+            well_formed_static_name(property).and_then(url_method_capability)
+        }
+        _ => None,
+    }
+}
+
+fn is_url_module_alias_usage(expr: &Expression, alias: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if module_alias_member_name(callee, alias)
+                .is_some_and(|method| url_method_capability(method).is_some()))
+}
+
+fn is_url_named_binding_usage(expr: &Expression, local: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, .. }
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == local))
+}
+
+fn confirmed_url_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                if let (BindingPattern::Identifier(alias), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && is_require_url_module_initializer(initializer, binding_lookup)
+                {
+                    candidates.insert(alias.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                LoweringOnlyModuleAliasSurface::UrlModule,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::UrlModule,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::UrlModule,
+                )
+            })
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
+fn confirmed_url_file_url_to_path_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+            let (BindingPattern::ObjectPattern(properties), Some(initializer)) =
+                (&declarator.pattern, &declarator.initializer)
+            else {
+                continue;
+            };
+            if !is_require_url_module_initializer(initializer, binding_lookup) {
+                continue;
+            }
+            for property in properties {
+                if property.computed
+                    || !well_formed_static_name(&property.key)
+                        .is_some_and(|name| name == "fileURLToPath")
+                {
+                    continue;
+                }
+                if let BindingPattern::Identifier(local) = &property.value {
+                    candidates.insert(local.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(local, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                local,
+                LoweringOnlyModuleAliasSurface::UrlNamed,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    local,
+                    LoweringOnlyModuleAliasSurface::UrlNamed,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
+                    statement,
+                    local,
+                    LoweringOnlyModuleAliasSurface::UrlNamed,
+                )
+            })
+        })
+        .map(|(local, _)| local)
+        .collect()
+}
+
+fn confirmed_url_destructure_locals(
+    pattern: &BindingPattern,
+    init: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<Vec<String>> {
+    let BindingPattern::ObjectPattern(properties) = pattern else {
+        return None;
+    };
+    if !is_require_url_module_initializer(init, binding_lookup) {
+        return None;
+    }
+    let mut locals = Vec::new();
+    for property in properties {
+        if property.computed
+            || !well_formed_static_name(&property.key).is_some_and(|name| name == "fileURLToPath")
+        {
+            return None;
+        }
+        let BindingPattern::Identifier(local) = &property.value else {
+            return None;
+        };
+        if !binding_lookup.contains_key(&url_named_binding_sentinel(local)) {
+            return None;
+        }
+        locals.push(local.clone());
+    }
+    (!locals.is_empty()).then_some(locals)
+}
+
+fn seed_url_module_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0urlmod\0") || key.starts_with("\0urlnamed\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn suppress_url_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&url_module_alias_sentinel(name));
+    binding_lookup.remove(&url_named_binding_sentinel(name));
+}
+
+fn suppress_url_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_url_module_sentinel(binding_lookup, name);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Node `querystring` + `os` builtin recognition (bd-qmy52)
 //
 // Two further pure-compute module families following the `path` template
@@ -19077,6 +19372,8 @@ enum LoweringOnlyModuleAliasSurface {
     EventEmitter,
     EventsOnce,
     EventsModule,
+    UrlModule,
+    UrlNamed,
 }
 
 impl LoweringOnlyModuleAliasSurface {
@@ -19208,6 +19505,8 @@ fn is_module_alias_usage(
             is_events_alias_capture_rejections_read(expr, alias)
                 || is_events_alias_once_call(expr, alias)
         }
+        LoweringOnlyModuleAliasSurface::UrlModule => is_url_module_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::UrlNamed => is_url_named_binding_usage(expr, alias),
     }
 }
 
@@ -19692,6 +19991,8 @@ fn module_alias_expr_has_rejected_use(
             LoweringOnlyModuleAliasSurface::EventEmitter => false,
             LoweringOnlyModuleAliasSurface::EventsOnce => is_events_once_direct_call(expr, alias),
             LoweringOnlyModuleAliasSurface::EventsModule => is_events_alias_once_call(expr, alias),
+            LoweringOnlyModuleAliasSurface::UrlModule => is_url_module_alias_usage(expr, alias),
+            LoweringOnlyModuleAliasSurface::UrlNamed => is_url_named_binding_usage(expr, alias),
         } =>
         {
             is_discarded_crypto_identity_call(expr, alias, surface)
@@ -20447,6 +20748,7 @@ fn module_alias_expression_is_predeclaration_call_hazard(
         && !is_require_crypto_module_initializer(expression, binding_lookup)
         && !is_require_cluster_module_initializer(expression, binding_lookup)
         && !is_require_child_process_module_initializer(expression, binding_lookup)
+        && !is_require_url_module_initializer(expression, binding_lookup)
 }
 
 fn module_alias_expression_has_predeclaration_call_hazard(
@@ -21831,6 +22133,7 @@ fn seed_events_module_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
+    seed_url_module_sentinels(body_lookup, outer_lookup);
     for key in outer_lookup.keys() {
         if key.starts_with("\0eventemitter\0")
             || key.starts_with("\0eventsonce\0")
@@ -21845,6 +22148,7 @@ fn suppress_events_module_sentinel(binding_lookup: &mut BTreeMap<String, Binding
     binding_lookup.remove(&event_emitter_binding_sentinel(name));
     binding_lookup.remove(&events_once_binding_sentinel(name));
     binding_lookup.remove(&events_module_alias_sentinel(name));
+    suppress_url_module_sentinel(binding_lookup, name);
 }
 
 fn suppress_events_module_sentinels(
@@ -21854,6 +22158,7 @@ fn suppress_events_module_sentinels(
     for name in names {
         suppress_events_module_sentinel(binding_lookup, name);
     }
+    suppress_url_module_sentinels(binding_lookup, names);
 }
 
 fn events_once_call_capability(
@@ -24275,9 +24580,14 @@ fn hostcall_exception_is_operand_derived(
         // These exact pure-compute entry points validate only primitive
         // arguments. Object inputs remain fail-high because their coercion or
         // transitive state does not yet have a complete static summary.
-        "builtin:PathJoin" | "builtin:OsSetPriority" | "builtin:Url" => inputs
+        "builtin:PathJoin"
+        | "builtin:OsSetPriority"
+        | "builtin:Url"
+        | "builtin:UrlFileUrlToPath"
+        | "builtin:UrlParse" => inputs
             .iter()
             .all(|value| value.shape == FlowValueShape::Primitive),
+        "builtin:UrlFormat" => inputs.iter().all(|value| value.shape.is_closed()),
         // These constructors are intercepted only for the unshadowed native
         // globals. Closed direct inputs cover primitive lengths/offsets,
         // engine-owned ArrayBuffers/views, and fresh array literals without

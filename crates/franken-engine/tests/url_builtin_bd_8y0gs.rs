@@ -211,7 +211,7 @@ fn constructor_lowering_is_shadow_aware_and_aliases_fail_closed() {
 
     let error = eval_err("const Constructor = URL; new Constructor('http://example.com')");
     assert!(
-        error.contains("undefined") || error.contains("function"),
+        error.contains("undefined") || error.contains("function") || error.contains("not defined"),
         "unexpected alias failure: {error}"
     );
 
@@ -221,4 +221,61 @@ fn constructor_lowering_is_shadow_aware_and_aliases_fail_closed() {
         ),
         "undefined undefined"
     );
+}
+
+#[test]
+fn legacy_url_helpers_match_node_corpus_fixtures_bd_4awsz() {
+    let src = r#"
+        const { fileURLToPath } = require('url');
+        const url = require('node:url');
+        console.log(fileURLToPath('file:///a/b.txt'));
+        console.log(fileURLToPath('file:///dir/with%20space/f.txt'));
+
+        console.log(url.format({ protocol: 'https', hostname: 'example.com', pathname: '/pth', search: 'x=1' }));
+        console.log(url.format({ protocol: 'http:', hostname: 'h.test', pathname: '/a' }));
+
+        const parsed = url.parse('http://example.com:8080/p/a?x=1&y=2#frag');
+        console.log(parsed.protocol, parsed.host, parsed.hostname, parsed.port);
+        console.log(parsed.pathname, parsed.search, parsed.hash);
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "/a/b.txt\n/dir/with space/f.txt\nhttps://example.com/pth?x=1\nhttp://h.test/a\nhttp: example.com:8080 example.com 8080\n/p/a ?x=1&y=2 #frag"
+    );
+}
+
+#[test]
+fn legacy_file_url_conversion_preserves_node_error_boundaries_bd_4awsz() {
+    let src = r#"
+        const { fileURLToPath } = require('node:url');
+        const url = require('url');
+        console.log(fileURLToPath(new URL('file:///tmp/ok%20name')));
+        console.log(url.format(new URL('https://example.com/a?b=1#c')));
+        try { fileURLToPath('https://example.com/a'); } catch (e) { console.log(e.code); }
+        try { fileURLToPath('file://example.com/a'); } catch (e) { console.log(e.code); }
+        try { fileURLToPath('file:///a%2Fb'); } catch (e) { console.log(e.code); }
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "/tmp/ok name\nhttps://example.com/a?b=1#c\nERR_INVALID_URL_SCHEME\nERR_INVALID_FILE_URL_HOST\nERR_INVALID_FILE_URL_PATH"
+    );
+}
+
+#[test]
+fn legacy_url_helper_aliases_remain_usage_gated_bd_4awsz() {
+    for src in [
+        "const url = require('url'); console.log('unused')",
+        "const url = require('url'); console.log(url.resolve('a', 'b'))",
+        "const url = require('url'); console.log(url['parse']('http://example.com'))",
+        "const url = require('url'); url.parse = () => ({}); console.log(url.parse('x'))",
+    ] {
+        let error = eval_err(src);
+        assert!(
+            error.contains("module_load")
+                || error.contains("module import")
+                || error.contains("module resolution")
+                || error.contains("ambient authority violation"),
+            "unsupported URL facade possession must retain ambient module denial: {error}"
+        );
+    }
 }

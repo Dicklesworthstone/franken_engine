@@ -55474,6 +55474,269 @@ impl InterpreterCore {
         }
     }
 
+    fn throw_legacy_url_type_error(&mut self, code: &str, message: String) -> InterpreterError {
+        let thrown = (|| {
+            let prototype = self.ensure_builtin_prototype("TypeError")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(error_id, "TypeError", message)?;
+            self.set_object_property(error_id, "code".to_string(), Value::str(code))?;
+            Ok::<Value, InterpreterError>(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&thrown),
+        }
+    }
+
+    fn legacy_url_file_url_input(&mut self, args: RegRange) -> Result<String, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        match value {
+            Value::Str(input) => {
+                self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+                    Self::estimate_js_string_bytes(&input),
+                    0,
+                ))?;
+                Ok(input.to_string())
+            }
+            Value::Object(object_id) => {
+                let Some(href_bytes) = self
+                    .url_objects
+                    .get(&object_id)
+                    .map(|state| Self::estimate_string_bytes(&state.href))
+                else {
+                    return Err(self.throw_legacy_url_type_error(
+                        "ERR_INVALID_ARG_TYPE",
+                        "The path argument must be of type string or an instance of URL"
+                            .to_string(),
+                    ));
+                };
+                self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+                    href_bytes, 0,
+                ))?;
+                Ok(self
+                    .url_objects
+                    .get(&object_id)
+                    .expect("URL object was authenticated before allocation preflight")
+                    .href
+                    .clone())
+            }
+            other => Err(self.throw_legacy_url_type_error(
+                "ERR_INVALID_ARG_TYPE",
+                format!(
+                    "The path argument must be of type string or an instance of URL. Received {}",
+                    other.type_name()
+                ),
+            )),
+        }
+    }
+
+    fn legacy_url_file_url_to_path(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let input = self.legacy_url_file_url_input(args)?;
+        let parsed = self.parse_whatwg_url(&input, None)?;
+        if parsed.scheme() != "file" {
+            return Err(self.throw_legacy_url_type_error(
+                "ERR_INVALID_URL_SCHEME",
+                "The URL must be of scheme file".to_string(),
+            ));
+        }
+        if parsed
+            .host_str()
+            .is_some_and(|host| !host.eq_ignore_ascii_case("localhost"))
+        {
+            return Err(self.throw_legacy_url_type_error(
+                "ERR_INVALID_FILE_URL_HOST",
+                "File URL host must be localhost or empty on this platform".to_string(),
+            ));
+        }
+        let encoded_path = parsed.path();
+        let has_encoded_separator = encoded_path.as_bytes().windows(3).any(|window| {
+            window[0] == b'%' && window[1] == b'2' && matches!(window[2], b'f' | b'F')
+                || window[0] == b'%' && window[1] == b'5' && matches!(window[2], b'c' | b'C')
+        });
+        if has_encoded_separator {
+            return Err(self.throw_legacy_url_type_error(
+                "ERR_INVALID_FILE_URL_PATH",
+                "File URL path must not include encoded path separators".to_string(),
+            ));
+        }
+        let path = qs_strict_percent_decode(encoded_path).ok_or_else(|| {
+            self.throw_legacy_url_type_error(
+                "ERR_INVALID_FILE_URL_PATH",
+                "File URL path contains an invalid percent-encoding".to_string(),
+            )
+        })?;
+        Ok(Value::str(path))
+    }
+
+    fn legacy_url_format_object_property(&self, object_id: ObjectId, key: &str) -> String {
+        match self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key).cloned())
+        {
+            None | Some(Value::Undefined) | Some(Value::Null) => String::new(),
+            Some(Value::Str(value)) => value.to_string(),
+            Some(other) => self.value_to_string(&other),
+        }
+    }
+
+    fn legacy_url_format(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Object(object_id) = value else {
+            return Err(self.throw_legacy_url_type_error(
+                "ERR_INVALID_ARG_TYPE",
+                format!(
+                    "The urlObject argument must be of type object. Received {}",
+                    value.type_name()
+                ),
+            ));
+        };
+        if let Some(href_bytes) = self
+            .url_objects
+            .get(&object_id)
+            .map(|state| Self::estimate_string_bytes(&state.href))
+        {
+            self.check_temporary_memory_budget(href_bytes)?;
+            return Ok(Value::str(
+                self.url_objects
+                    .get(&object_id)
+                    .expect("URL object was authenticated before allocation preflight")
+                    .href
+                    .clone(),
+            ));
+        }
+        let object_working_bound = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(Self::estimate_heap_object_bytes)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .saturating_mul(3)
+            .saturating_add(256);
+        self.check_temporary_memory_budget(object_working_bound)?;
+
+        let protocol = self.legacy_url_format_object_property(object_id, "protocol");
+        let mut host = self.legacy_url_format_object_property(object_id, "host");
+        if host.is_empty() {
+            host = self.legacy_url_format_object_property(object_id, "hostname");
+            let port = self.legacy_url_format_object_property(object_id, "port");
+            if !host.is_empty() && !port.is_empty() {
+                host.push(':');
+                host.push_str(&port);
+            }
+        }
+        let mut pathname = self.legacy_url_format_object_property(object_id, "pathname");
+        let mut search = self.legacy_url_format_object_property(object_id, "search");
+        let mut hash = self.legacy_url_format_object_property(object_id, "hash");
+        let working_bytes = [
+            protocol.len(),
+            host.len(),
+            pathname.len(),
+            search.len(),
+            hash.len(),
+        ]
+        .into_iter()
+        .fold(64_u64, |total, len| {
+            total.saturating_add(u64::try_from(len).unwrap_or(u64::MAX))
+        })
+        .saturating_mul(3);
+        self.check_temporary_memory_budget(working_bytes)?;
+
+        let mut formatted = String::new();
+        if !protocol.is_empty() {
+            formatted.push_str(protocol.trim_end_matches(':'));
+            formatted.push(':');
+        }
+        if !host.is_empty() {
+            formatted.push_str("//");
+            formatted.push_str(&host);
+            if !pathname.is_empty() && !pathname.starts_with('/') {
+                pathname.insert(0, '/');
+            }
+        }
+        formatted.push_str(&pathname);
+        if !search.is_empty() {
+            if !search.starts_with('?') {
+                search.insert(0, '?');
+            }
+            formatted.push_str(&search);
+        }
+        if !hash.is_empty() {
+            if !hash.starts_with('#') {
+                hash.insert(0, '#');
+            }
+            formatted.push_str(&hash);
+        }
+        Ok(Value::str(formatted))
+    }
+
+    fn legacy_url_parse(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Str(input) = value else {
+            return Err(self.throw_legacy_url_type_error(
+                "ERR_INVALID_ARG_TYPE",
+                format!(
+                    "The url argument must be of type string. Received {}",
+                    value.type_name()
+                ),
+            ));
+        };
+        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+            Self::estimate_js_string_bytes(&input),
+            0,
+        ))?;
+        let parsed = self.parse_whatwg_url(&input, None)?;
+        let protocol = format!("{}:", parsed.scheme());
+        let hostname = parsed.host_str().unwrap_or_default().to_string();
+        let port = parsed.port().map(|port| port.to_string());
+        let host = port
+            .as_ref()
+            .map(|port| format!("{hostname}:{port}"))
+            .unwrap_or_else(|| hostname.clone());
+        let pathname = parsed.path().to_string();
+        let search = parsed.query().map(|query| format!("?{query}"));
+        let hash = parsed.fragment().map(|fragment| format!("#{fragment}"));
+        let path = format!("{}{}", pathname, search.as_deref().unwrap_or_default());
+        let href = parsed.as_str().to_string();
+        let auth = if parsed.username().is_empty() {
+            Value::Null
+        } else {
+            let mut auth = parsed.username().to_string();
+            if let Some(password) = parsed.password() {
+                auth.push(':');
+                auth.push_str(password);
+            }
+            Value::str(auth)
+        };
+        let object_id = self.alloc_object_with_properties(&[
+            ("protocol", Value::str(protocol)),
+            ("slashes", Value::Bool(true)),
+            ("auth", auth),
+            ("host", Value::str(host)),
+            (
+                "port",
+                port.map(Value::str).unwrap_or(Value::Null),
+            ),
+            ("hostname", Value::str(hostname)),
+            (
+                "hash",
+                hash.map(Value::str).unwrap_or(Value::Null),
+            ),
+            (
+                "search",
+                search.map(Value::str).unwrap_or(Value::Null),
+            ),
+            ("pathname", Value::str(pathname)),
+            ("path", Value::str(path)),
+            ("href", Value::str(href)),
+        ])?;
+        Ok(Value::Object(object_id))
+    }
+
     fn url_pairs(parsed: &Url) -> Vec<(String, String)> {
         parsed.query_pairs().into_owned().collect()
     }
@@ -59979,6 +60242,9 @@ impl InterpreterCore {
             }
             "builtin:Url" => self.construct_url(args),
             "builtin:UrlSearchParams" => self.construct_url_search_params(args),
+            "builtin:UrlFileUrlToPath" => self.legacy_url_file_url_to_path(args),
+            "builtin:UrlFormat" => self.legacy_url_format(args),
+            "builtin:UrlParse" => self.legacy_url_parse(args),
             "builtin:ClusterFacade" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {

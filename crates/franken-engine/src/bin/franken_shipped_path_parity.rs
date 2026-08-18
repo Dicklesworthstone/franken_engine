@@ -1428,6 +1428,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::WitnessSealing { .. }
         | OrchestratorError::InvalidModuleRoot { .. }
         | OrchestratorError::EmptyExtensionId
+        | OrchestratorError::ProcessSpawnAttempt(_)
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
         OrchestratorError::PostCellFailure(_) => {
             unreachable!("primary_error recursively unwraps post-cell failures")
@@ -2574,6 +2575,15 @@ mod tests {
         let error = OrchestratorError::AdaptiveRoutingDecisionInvalid {
             detail: "decision digest mismatch".to_string(),
         };
+
+        assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
+    }
+
+    #[test]
+    fn process_spawn_attempt_failure_is_classified_as_runtime_bd_x85a7_1() {
+        let error = OrchestratorError::ProcessSpawnAttempt(
+            frankenengine_engine::execution_orchestrator::ProcessSpawnAttemptError::Revoked,
+        );
 
         assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
     }

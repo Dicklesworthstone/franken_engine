@@ -23,10 +23,11 @@ use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
     ProcessSpawnAttemptAuthority, ProcessSpawnAttemptError,
 };
-#[cfg(unix)]
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
-use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::lowering_pipeline::{
+    LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
@@ -741,7 +742,15 @@ fn oversized_request_preflight_precedes_journal_hash_and_cell_proposal() {
         ))
         .expect_err("preflight refusal must fail the guest effect");
 
-    assert!(error.to_string().contains("process_spawn_handler"));
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(
+            frankenengine_engine::baseline_interpreter::InterpreterError::HostProcess {
+                code,
+                ..
+            }
+        ) if code == "ENOBUFS"
+    ));
     assert_eq!(provider.prepares.load(Ordering::Acquire), 0);
     assert_eq!(provider.performs.load(Ordering::Acquire), 0);
     assert!(journal.attempt_records().is_empty());
@@ -945,7 +954,7 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
         .collect();
     assert_eq!(
         proposals,
-        vec!["process_spawn"],
+        vec!["run"],
         "only the real provider dispatch crosses the sealed cell permit"
     );
 }
@@ -1393,11 +1402,13 @@ fn async_spawn_facade_delivers_stream_and_exit_events_after_registration() {
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
     orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
+    let mut package = process_package(
+        "const cp = require('child_process'); const child = cp.spawn('tool', ['alpha']); child.on('spawn', () => console.log('spawn')); child.stdout.on('data', chunk => console.log('data:' + chunk)); child.on('exit', code => console.log('exit:' + code)); setTimeout(() => console.log('timer'), 0);",
+    );
+    package.capabilities.push("timer".to_string());
 
     let result = orchestrator
-        .execute(&process_package(
-            "const cp = require('child_process'); const child = cp.spawn('tool', ['alpha']); child.on('spawn', () => console.log('spawn')); child.stdout.on('data', chunk => console.log('data:' + chunk)); child.on('exit', code => console.log('exit:' + code)); setTimeout(() => console.log('timer'), 0);",
-        ))
+        .execute(&package)
         .expect("completed child facade should drain registered events");
 
     assert_eq!(
@@ -1414,7 +1425,7 @@ fn async_spawn_facade_delivers_stream_and_exit_events_after_registration() {
             .iter()
             .map(|entry| entry.message.as_str())
             .collect::<Vec<_>>(),
-        vec!["spawn", "timer", "data:async-output", "exit:0"]
+        vec!["spawn", "data:async-output", "exit:0", "timer"]
     );
     assert_eq!(result.host_effect_journal.len(), 2);
 }
@@ -1457,11 +1468,13 @@ fn async_exec_callback_receives_output_in_the_requested_encoding() {
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
     orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
+    let mut package = process_package(
+        "const cp = require('child_process'); cp.execFile('tool', ['alpha'], { encoding: 'utf8' }, (error, stdout, stderr) => console.log(String(error) + ':' + stdout + ':' + stderr));",
+    );
+    package.capabilities.push("builtin".to_string());
 
     let result = orchestrator
-        .execute(&process_package(
-            "const cp = require('child_process'); cp.execFile('tool', ['alpha'], { encoding: 'utf8' }, (error, stdout, stderr) => console.log(String(error) + ':' + stdout + ':' + stderr));",
-        ))
+        .execute(&package)
         .expect("an async execFile callback should observe decoded output");
 
     assert_eq!(
@@ -1687,7 +1700,7 @@ fn non_public_request_data_is_blocked_before_the_provider() {
 }
 
 #[test]
-fn non_public_mutation_of_a_public_options_alias_is_blocked_at_runtime() {
+fn non_public_mutation_of_a_public_options_alias_is_blocked_by_static_flow_proof() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
@@ -1699,20 +1712,32 @@ fn non_public_mutation_of_a_public_options_alias_is_blocked_at_runtime() {
         ))
         .expect_err("mutating an aliased public options object must not launder its label");
 
-    assert!(error.to_string().contains("FLOW_POLICY_BLOCKED"));
+    let primary_error = error.primary_error();
+    assert!(
+        matches!(
+            primary_error,
+            OrchestratorError::Lowering(lowering_error)
+                if matches!(
+                    lowering_error.as_ref(),
+                    LoweringPipelineError::UnauthorizedFlow {
+                        source_label: Label::Secret,
+                        sink_clearance: Label::Internal,
+                        ..
+                    }
+                )
+        ),
+        "static IFC denial must retain its typed lowering error, got {primary_error:?}"
+    );
     assert!(
         provider
             .seen
             .lock()
             .expect("recording provider mutex")
             .is_empty(),
-        "dynamic IFC denial must occur before the native provider"
+        "static IFC denial must occur before the native provider"
     );
-    assert!(matches!(
-        orchestrator.last_failed_host_effect_journal(),
-        [HostEffectJournalEntry::ProcessSpawn {
-            outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
-            ..
-        }]
-    ));
+    assert!(
+        orchestrator.last_failed_host_effect_journal().is_empty(),
+        "static IFC denial must happen before a host-effect request exists"
+    );
 }

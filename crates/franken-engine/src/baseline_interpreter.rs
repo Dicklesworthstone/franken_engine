@@ -7610,8 +7610,17 @@ pub struct ExecutionResult {
 #[derive(Debug)]
 pub(crate) struct CompactTier1Program {
     source_module_hash: ContentHash,
+    /// `Ir3FunctionDesc::canonical_value` intentionally omits rest metadata
+    /// for historical hash stability. Keep an exact private ABI twin so a
+    /// compact plan cannot trust frame verification from a same-hash module
+    /// with different rest-parameter binding behavior.
+    source_rest_param_indices: Box<[Option<u32>]>,
     instructions: Box<[CompactTier1Instruction]>,
     compact_instruction_count: usize,
+    /// Largest verified callable frame in this exact module.
+    /// `None` keeps the canonical full-width reset for hand-authored or
+    /// structurally unusual IR without changing module admission.
+    verified_function_frame_clear_width: Option<u32>,
 }
 
 #[repr(u8)]
@@ -7719,6 +7728,7 @@ impl CompactTier1Program {
     /// remain explicit baseline cells; compilation itself never changes module
     /// admission or execution semantics.
     pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
+        let verified_function_frame_clear_width = Self::verified_function_frame_clear_width(module);
         let mut compact_instruction_count = 0usize;
         let mut compact_work_instruction_count = 0usize;
         let instructions = module
@@ -7740,9 +7750,282 @@ impl CompactTier1Program {
             .into_boxed_slice();
         (compact_work_instruction_count > 0).then_some(Self {
             source_module_hash: module.content_hash(),
+            source_rest_param_indices: module
+                .function_table
+                .iter()
+                .map(|function| function.rest_param_index)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             instructions,
             compact_instruction_count,
+            verified_function_frame_clear_width,
         })
+    }
+
+    /// Derive one conservative clear width for every stacked function frame.
+    ///
+    /// A module-wide maximum deliberately trades a few extra stores for a
+    /// simple stale-state proof: every entry clears at least as far as every
+    /// other function in the same immutable module, so alternating wide and
+    /// narrow calls cannot retain a prior value or IFC label. Any malformed
+    /// descriptor, register span, fallthrough edge, or cross-function control
+    /// target disables the optimization and preserves the legacy full-width
+    /// reset.
+    fn verified_function_frame_clear_width(module: &Ir3Module) -> Option<u32> {
+        let instruction_count = u32::try_from(module.instructions.len()).ok()?;
+        let main = module.function_table.first()?;
+        if main.entry != 0 {
+            return None;
+        }
+
+        let mut widest_function = 0u32;
+        for (function_index, function) in module.function_table.iter().enumerate() {
+            let start = function.entry;
+            let end = module
+                .function_table
+                .get(function_index + 1)
+                .map_or(instruction_count, |next| next.entry);
+            if start >= end || end > instruction_count || function.frame_size == 0 {
+                return None;
+            }
+            if function.arity > function.frame_size
+                || function
+                    .rest_param_index
+                    .is_some_and(|rest| rest >= function.arity)
+            {
+                return None;
+            }
+
+            let window = module.instructions.get(start as usize..end as usize)?;
+            for instruction in window {
+                if Self::instruction_register_requirement(instruction)? > function.frame_size
+                    || !Self::instruction_targets_stay_in_window(instruction, start, end)
+                {
+                    return None;
+                }
+            }
+
+            // Falling off the final instruction stream is already a defined
+            // implicit return. Falling into the next physical function body
+            // is not frame-safe, so intermediate windows must end in an
+            // instruction that cannot advance to `end`.
+            if function_index + 1 < module.function_table.len()
+                && !window
+                    .last()
+                    .is_some_and(Self::instruction_prevents_fallthrough)
+            {
+                return None;
+            }
+
+            widest_function = widest_function.max(function.frame_size);
+        }
+        Some(widest_function)
+    }
+
+    fn instruction_register_requirement(instruction: &Ir3Instruction) -> Option<u32> {
+        fn requirement(registers: &[u32], ranges: &[RegRange]) -> Option<u32> {
+            let mut required = 0u32;
+            for register in registers {
+                required = required.max(register.checked_add(1)?);
+            }
+            for range in ranges {
+                if range.count > 0 {
+                    required = required.max(range.start.checked_add(range.count)?);
+                }
+            }
+            Some(required)
+        }
+
+        match instruction {
+            Ir3Instruction::LoadInt { dst, .. }
+            | Ir3Instruction::LoadBigInt { dst, .. }
+            | Ir3Instruction::LoadFloat { dst, .. }
+            | Ir3Instruction::LoadStr { dst, .. }
+            | Ir3Instruction::LoadBool { dst, .. }
+            | Ir3Instruction::LoadNull { dst }
+            | Ir3Instruction::LoadUndefined { dst }
+            | Ir3Instruction::NewObject { dst }
+            | Ir3Instruction::NewArray { dst }
+            | Ir3Instruction::LoadThis { dst }
+            | Ir3Instruction::LoadNewTarget { dst }
+            | Ir3Instruction::LoadSuper { dst }
+            | Ir3Instruction::EnterCatch { dst }
+            | Ir3Instruction::LoadScoped { dst, .. }
+            | Ir3Instruction::LoadName { dst, .. }
+            | Ir3Instruction::ResolveNameStatus { dst, .. }
+            | Ir3Instruction::DeleteName { dst, .. }
+            | Ir3Instruction::CreateClosure { dst, .. }
+            | Ir3Instruction::CreateGenerator { dst, .. }
+            | Ir3Instruction::CreateAsyncFunction { dst, .. }
+            | Ir3Instruction::CreateAsyncGenerator { dst, .. } => requirement(&[*dst], &[]),
+            Ir3Instruction::UnaryNeg { dst, src }
+            | Ir3Instruction::UnaryPlus { dst, src }
+            | Ir3Instruction::LogicalNot { dst, src }
+            | Ir3Instruction::BitNot { dst, src }
+            | Ir3Instruction::TypeOf { dst, src }
+            | Ir3Instruction::Void { dst, src }
+            | Ir3Instruction::Move { dst, src }
+            | Ir3Instruction::ForInInit { src, dst }
+            | Ir3Instruction::ForOfInit { src, dst } => requirement(&[*dst, *src], &[]),
+            Ir3Instruction::Add { dst, lhs, rhs }
+            | Ir3Instruction::Sub { dst, lhs, rhs }
+            | Ir3Instruction::Mul { dst, lhs, rhs }
+            | Ir3Instruction::Div { dst, lhs, rhs }
+            | Ir3Instruction::Mod { dst, lhs, rhs }
+            | Ir3Instruction::Exp { dst, lhs, rhs }
+            | Ir3Instruction::Lt { dst, lhs, rhs }
+            | Ir3Instruction::Lte { dst, lhs, rhs }
+            | Ir3Instruction::Gt { dst, lhs, rhs }
+            | Ir3Instruction::Gte { dst, lhs, rhs }
+            | Ir3Instruction::Eq { dst, lhs, rhs }
+            | Ir3Instruction::StrictEq { dst, lhs, rhs }
+            | Ir3Instruction::NotEq { dst, lhs, rhs }
+            | Ir3Instruction::StrictNotEq { dst, lhs, rhs }
+            | Ir3Instruction::BitAnd { dst, lhs, rhs }
+            | Ir3Instruction::BitOr { dst, lhs, rhs }
+            | Ir3Instruction::BitXor { dst, lhs, rhs }
+            | Ir3Instruction::Shl { dst, lhs, rhs }
+            | Ir3Instruction::Shr { dst, lhs, rhs }
+            | Ir3Instruction::Ushr { dst, lhs, rhs }
+            | Ir3Instruction::InstanceOf { dst, lhs, rhs }
+            | Ir3Instruction::InOp { dst, lhs, rhs } => requirement(&[*dst, *lhs, *rhs], &[]),
+            Ir3Instruction::Construct { callee, args, dst }
+            | Ir3Instruction::Call { callee, args, dst } => requirement(&[*callee, *dst], &[*args]),
+            Ir3Instruction::ConstructSuper { args, dst }
+            | Ir3Instruction::HostCall { args, dst, .. }
+            | Ir3Instruction::TemplateLiteral { parts: args, dst } => {
+                requirement(&[*dst], &[*args])
+            }
+            Ir3Instruction::RegisterDerivedConstructor {
+                constructor,
+                parent,
+                ..
+            } => requirement(&[*constructor, *parent], &[]),
+            Ir3Instruction::ForInNext {
+                iterator,
+                value_dst,
+                ..
+            }
+            | Ir3Instruction::ForOfNext {
+                iterator,
+                value_dst,
+                ..
+            } => requirement(&[*iterator, *value_dst], &[]),
+            Ir3Instruction::IteratorClose { iterator, .. }
+            | Ir3Instruction::Return { value: iterator }
+            | Ir3Instruction::Throw { value: iterator }
+            | Ir3Instruction::StoreScoped { src: iterator, .. }
+            | Ir3Instruction::PutName { src: iterator, .. }
+            | Ir3Instruction::InitBinding { src: iterator, .. }
+            | Ir3Instruction::ExportBinding { src: iterator, .. }
+            | Ir3Instruction::AwaitValue {
+                promise_reg: iterator,
+            }
+            | Ir3Instruction::AsyncReturn {
+                value_reg: iterator,
+            }
+            | Ir3Instruction::AsyncThrow {
+                error_reg: iterator,
+            }
+            | Ir3Instruction::ModuleAwaitValue {
+                promise_reg: iterator,
+            } => requirement(&[*iterator], &[]),
+            Ir3Instruction::JumpIf { cond, .. } | Ir3Instruction::JumpIfNullish { cond, .. } => {
+                requirement(&[*cond], &[])
+            }
+            Ir3Instruction::CallMethod {
+                receiver,
+                callee,
+                args,
+                dst,
+            } => requirement(&[*receiver, *callee, *dst], &[*args]),
+            Ir3Instruction::GetProperty { obj, key, dst }
+            | Ir3Instruction::DeleteProperty { obj, key, dst } => {
+                requirement(&[*obj, *key, *dst], &[])
+            }
+            Ir3Instruction::SetProperty { obj, key, val } => requirement(&[*obj, *key, *val], &[]),
+            Ir3Instruction::DefineAccessor { obj, key, func, .. }
+            | Ir3Instruction::DefineMethod { obj, key, func } => {
+                requirement(&[*obj, *key, *func], &[])
+            }
+            Ir3Instruction::ArrayPush { array, element }
+            | Ir3Instruction::SpreadIntoArray {
+                array,
+                iterable: element,
+            }
+            | Ir3Instruction::SpreadIntoObject {
+                target: array,
+                source: element,
+            } => requirement(&[*array, *element], &[]),
+            Ir3Instruction::ArraySlice { array, start, dst } => {
+                requirement(&[*array, *start, *dst], &[])
+            }
+            Ir3Instruction::PutNameWithStatus { src, status, .. } => {
+                requirement(&[*src, *status], &[])
+            }
+            Ir3Instruction::ImportModule { specifier, dst } => {
+                requirement(&[*specifier, *dst], &[])
+            }
+            Ir3Instruction::Yield {
+                value, resume_dst, ..
+            } => requirement(&[*value, *resume_dst], &[]),
+            Ir3Instruction::Jump { .. }
+            | Ir3Instruction::Halt
+            | Ir3Instruction::BeginTry { .. }
+            | Ir3Instruction::EndTry
+            | Ir3Instruction::EnterFinally
+            | Ir3Instruction::EndFinally
+            | Ir3Instruction::DiscardAbruptCompletion
+            | Ir3Instruction::PushCapture { .. }
+            | Ir3Instruction::PushScope
+            | Ir3Instruction::PopScope
+            | Ir3Instruction::DeclareBinding { .. }
+            | Ir3Instruction::CreatePerIterationBinding { .. } => requirement(&[], &[]),
+        }
+    }
+
+    fn instruction_targets_stay_in_window(
+        instruction: &Ir3Instruction,
+        start: u32,
+        end: u32,
+    ) -> bool {
+        let in_window = |target: u32| (start..end).contains(&target);
+        match instruction {
+            Ir3Instruction::Jump { target }
+            | Ir3Instruction::JumpIf { target, .. }
+            | Ir3Instruction::JumpIfNullish { target, .. }
+            | Ir3Instruction::ForInNext {
+                done_target: target,
+                ..
+            }
+            | Ir3Instruction::ForOfNext {
+                done_target: target,
+                ..
+            } => in_window(*target),
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target,
+            } => in_window(*catch_target) && finally_target.is_none_or(in_window),
+            _ => true,
+        }
+    }
+
+    fn instruction_prevents_fallthrough(instruction: &Ir3Instruction) -> bool {
+        matches!(
+            instruction,
+            Ir3Instruction::Jump { .. }
+                | Ir3Instruction::Return { .. }
+                | Ir3Instruction::Throw { .. }
+                | Ir3Instruction::AsyncReturn { .. }
+                | Ir3Instruction::AsyncThrow { .. }
+                | Ir3Instruction::Halt
+        )
+    }
+
+    fn function_frame_clear_width(&self, max_registers: u32) -> Option<usize> {
+        self.verified_function_frame_clear_width
+            .filter(|width| *width > 0 && *width <= max_registers)
+            .map(|width| width as usize)
     }
 
     fn compile_instruction(instruction: &Ir3Instruction) -> Option<CompactTier1Instruction> {
@@ -7872,6 +8155,17 @@ impl CompactTier1Program {
                     "compact Tier-I plan/module identity mismatch: expected {}, got {}",
                     self.source_module_hash, actual_hash
                 ),
+            });
+        }
+        if self.source_rest_param_indices.len() != module.function_table.len()
+            || self
+                .source_rest_param_indices
+                .iter()
+                .zip(&module.function_table)
+                .any(|(expected, actual)| *expected != actual.rest_param_index)
+        {
+            return Err(InterpreterError::InternalError {
+                details: "compact Tier-I plan/module rest-parameter ABI mismatch".to_string(),
             });
         }
         Ok(())
@@ -9490,6 +9784,11 @@ pub struct InterpreterCore {
     trace_id: String,
     /// Base register offset for current frame.
     register_base: usize,
+    /// Largest stacked-frame prefix ever occupied by this core. This monotonic
+    /// high-water mark keeps reduced clears safe when a reusable core later
+    /// executes a narrower module: stale values and labels from the older,
+    /// wider module are still cleared before the new callee starts.
+    stacked_register_frame_clear_width_high_water: usize,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
     /// A pending exception value during an unwind edge, consumed by
@@ -10322,6 +10621,7 @@ impl InterpreterCore {
             witness_seq: 0,
             trace_id,
             register_base: 0,
+            stacked_register_frame_clear_width_high_water: 0,
             catch_frames: Vec::new(),
             pending_exception: None,
             pending_exception_label: Label::Public,
@@ -36850,6 +37150,7 @@ impl InterpreterCore {
         new_target_value: Value,
         new_target_label: Label,
         initialize_derived_this_on_return: bool,
+        compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<(), InterpreterError> {
         let mut active_callee = callee_value;
         let mut active_callee_label = callee_label;
@@ -37054,8 +37355,7 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        self.register_base += self.config.max_registers as usize;
-        self.clear_current_register_frame();
+        self.enter_stacked_register_frame(compact_tier1);
         for (index, (value, label)) in argument_values.into_iter().zip(argument_labels).enumerate()
         {
             let register = index as u32;
@@ -38943,8 +39243,11 @@ impl InterpreterCore {
                                 previous_call_stack_bytes,
                             )?;
 
-                            self.register_base += self.config.max_registers as usize;
-                            self.clear_current_register_frame();
+                            // Async suspension snapshots retain the historical
+                            // full register window. Keep their entry reset
+                            // unchanged until snapshot width is independently
+                            // verified and measured.
+                            self.enter_stacked_register_frame(None);
                             for (i, (val, label)) in
                                 arg_vals.into_iter().zip(arg_labels).enumerate()
                             {
@@ -39168,8 +39471,7 @@ impl InterpreterCore {
                                 return Err(err);
                             }
 
-                            self.register_base += self.config.max_registers as usize;
-                            self.clear_current_register_frame();
+                            self.enter_stacked_register_frame(compact_tier1);
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
@@ -39549,8 +39851,11 @@ impl InterpreterCore {
                                 previous_call_stack_bytes,
                             )?;
 
-                            self.register_base += self.config.max_registers as usize;
-                            self.clear_current_register_frame();
+                            // Async suspension snapshots retain the historical
+                            // full register window. Keep their entry reset
+                            // unchanged until snapshot width is independently
+                            // verified and measured.
+                            self.enter_stacked_register_frame(None);
                             for (i, (val, label)) in
                                 arg_vals.into_iter().zip(arg_labels).enumerate()
                             {
@@ -39715,8 +40020,7 @@ impl InterpreterCore {
                         return Err(err);
                     }
 
-                    self.register_base += self.config.max_registers as usize;
-                    self.clear_current_register_frame();
+                    self.enter_stacked_register_frame(compact_tier1);
 
                     for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                         let reg = i as u32;
@@ -40876,6 +41180,7 @@ impl InterpreterCore {
                         new_target,
                         new_target_label,
                         true,
+                        compact_tier1,
                     ) {
                         match self.route_isolated_explicit_throw(module, error)? {
                             None => continue,
@@ -40982,6 +41287,7 @@ impl InterpreterCore {
                             callee_val,
                             callee_label,
                             false,
+                            compact_tier1,
                         ) {
                             match self.route_isolated_explicit_throw(module, error)? {
                                 None => continue,
@@ -41141,8 +41447,7 @@ impl InterpreterCore {
                                 return Err(err);
                             }
 
-                            self.register_base += self.config.max_registers as usize;
-                            self.clear_current_register_frame();
+                            self.enter_stacked_register_frame(compact_tier1);
 
                             // Arguments occupy r0..rN-1, matching the IR3
                             // lowering's parameter-register allocation
@@ -69409,14 +69714,32 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Advance to and reset one stacked register frame as a value+label unit.
+    fn enter_stacked_register_frame(&mut self, compact_tier1: Option<&CompactTier1Program>) {
+        self.register_base += self.config.max_registers as usize;
+        let requested_clear_width = compact_tier1
+            .and_then(|program| program.function_frame_clear_width(self.config.max_registers))
+            .unwrap_or(self.config.max_registers as usize);
+        self.stacked_register_frame_clear_width_high_water = self
+            .stacked_register_frame_clear_width_high_water
+            .max(requested_clear_width);
+        let clear_width = self.stacked_register_frame_clear_width_high_water;
+        self.clear_current_register_frame_width(clear_width);
+    }
+
     /// Reset the active stacked register frame as one value+label unit.
     ///
     /// Values have always been isolated per call frame. Keeping the parallel
     /// label file at the same physical indices prevents a new callee from
     /// inheriting stale caller taint after `register_base` advances.
+    #[cfg(test)]
     fn clear_current_register_frame(&mut self) {
+        self.clear_current_register_frame_width(self.config.max_registers as usize);
+    }
+
+    fn clear_current_register_frame_width(&mut self, clear_width: usize) {
         let frame_start = self.register_base;
-        let frame_end = frame_start + self.config.max_registers as usize;
+        let frame_end = frame_start + clear_width;
         let released_value_bytes = self
             .registers
             .get(frame_start..frame_end.min(self.registers.len()))
@@ -104355,6 +104678,49 @@ mod tests {
     }
 
     #[test]
+    fn compact_tier1_plan_binds_noncanonical_rest_abi_bd_bridge_5_3() {
+        let descriptor = |entry, arity, rest_param_index| Ir3FunctionDesc {
+            entry,
+            arity,
+            frame_size: arity.max(1),
+            name: None,
+            is_generator: false,
+            rest_param_index,
+        };
+        let planned_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![descriptor(0, 0, None), descriptor(2, 1, None)],
+        );
+        let mut executed_module = planned_module.clone();
+        executed_module.function_table[1].rest_param_index = Some(0);
+        assert_eq!(
+            planned_module.content_hash(),
+            executed_module.content_hash(),
+            "the historical IR3 hash deliberately omits rest metadata"
+        );
+
+        let plan = CompactTier1Program::compile(&planned_module).expect("compact ABI plan");
+        let mut core = quickjs_test_core();
+        let seed_epoch_before = core.seed_epoch;
+        let error = core
+            .execute_with_trace_handoff(&executed_module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("same-hash rest ABI drift must be rejected before execution");
+
+        assert_eq!(
+            error,
+            InterpreterError::InternalError {
+                details: "compact Tier-I plan/module rest-parameter ABI mismatch".to_string(),
+            }
+        );
+        assert_eq!(core.instructions_executed, 0);
+        assert_eq!(core.seed_epoch, seed_epoch_before);
+    }
+
+    #[test]
     fn compact_tier1_budget_refusal_matches_tier_r_bd_performance_bridge_5_2() {
         let module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
         let plan = CompactTier1Program::compile(&module).expect("compact jump plan");
@@ -104725,6 +105091,527 @@ mod tests {
                 "case {index} must exercise Tier-I"
             );
         }
+    }
+
+    #[test]
+    fn compact_tier1_frame_width_clears_wide_then_narrow_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 20 },
+                Ir3Instruction::LoadInt { dst: 2, value: 22 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 2,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Add {
+                    dst: 7,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 7 },
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 4,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 2,
+                    frame_size: 8,
+                    name: Some("wide".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 9,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("narrow".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("compact function plan");
+        assert_eq!(plan.verified_function_frame_clear_width, Some(8));
+
+        let config = test_quickjs_config();
+        let max_registers = config.max_registers as usize;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-frame-width");
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("verified-width execution");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-frame-width");
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("full-width execution");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(7));
+        assert_eq!(compact_core.registers.len(), max_registers + 8);
+        assert_eq!(compact_core.register_labels.len(), max_registers + 8);
+        assert_eq!(baseline_core.registers.len(), max_registers * 2);
+        assert_eq!(baseline_core.register_labels.len(), max_registers * 2);
+        assert_eq!(compact_core.registers[max_registers + 7], Value::Undefined);
+        assert_eq!(
+            compact_core.register_labels[max_registers + 7],
+            Label::Public
+        );
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            baseline_core.estimated_memory_bytes(),
+            baseline_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_verified_width_covers_method_call_entry_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 3, value: 0 },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 4, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 4,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("return_this".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("method compact plan");
+        assert_eq!(plan.verified_function_frame_clear_width, Some(4));
+
+        let config = test_quickjs_config();
+        let max_registers = config.max_registers as usize;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-method-frame");
+        compact_core.set_reg(0, Value::Int(77));
+        compact_core.set_reg(1, Value::Function(1));
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact method call");
+
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-method-frame");
+        baseline_core.set_reg(0, Value::Int(77));
+        baseline_core.set_reg(1, Value::Function(1));
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("baseline method call");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(77));
+        assert_eq!(compact_core.registers.len(), max_registers + 4);
+        assert_eq!(compact_core.register_labels.len(), max_registers + 4);
+        assert_eq!(baseline_core.registers.len(), max_registers * 2);
+        assert_eq!(baseline_core.register_labels.len(), max_registers * 2);
+    }
+
+    #[test]
+    fn compact_tier1_verified_width_covers_constructor_entry_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 3, value: 0 },
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 2, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 4,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("Ctor".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("constructor compact plan");
+        assert_eq!(plan.verified_function_frame_clear_width, Some(4));
+
+        let config = test_quickjs_config();
+        let max_registers = config.max_registers as usize;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-constructor-frame");
+        compact_core.set_reg(0, Value::Function(1));
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact construction");
+
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-constructor-frame");
+        baseline_core.set_reg(0, Value::Function(1));
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("baseline construction");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert!(matches!(compact.value, Value::Object(_)));
+        assert_eq!(compact_core.registers.len(), max_registers + 4);
+        assert_eq!(compact_core.register_labels.len(), max_registers + 4);
+        assert_eq!(baseline_core.registers.len(), max_registers * 2);
+        assert_eq!(baseline_core.register_labels.len(), max_registers * 2);
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            baseline_core.estimated_memory_bytes(),
+            baseline_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_invalid_frame_falls_back_to_full_width_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 42 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Move { dst: 7, src: 0 },
+                Ir3Instruction::Return { value: 7 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 2,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("underdeclared".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("compact fallback plan");
+        assert_eq!(plan.verified_function_frame_clear_width, None);
+
+        let config = test_quickjs_config();
+        let max_registers = config.max_registers as usize;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-frame-fallback");
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("fallback execution");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-frame-fallback");
+        let baseline = baseline_core.execute(&module).expect("baseline execution");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(42));
+        assert_eq!(compact_core.registers.len(), max_registers * 2);
+        assert_eq!(compact_core.register_labels.len(), max_registers * 2);
+    }
+
+    #[test]
+    fn compact_tier1_frame_high_water_survives_narrower_module_bd_bridge_5_3() {
+        let module = |frame_size, body| {
+            test_module_with_functions(
+                vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                    Ir3Instruction::Halt,
+                    body,
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("main".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 2,
+                        arity: 0,
+                        frame_size,
+                        name: Some("callee".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            )
+        };
+        let wide = module(8, Ir3Instruction::LoadInt { dst: 7, value: 99 });
+        let narrow = module(1, Ir3Instruction::LoadInt { dst: 0, value: 7 });
+        let wide_plan = CompactTier1Program::compile(&wide).expect("wide compact plan");
+        let narrow_plan = CompactTier1Program::compile(&narrow).expect("narrow compact plan");
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+
+        core.enter_stacked_register_frame(Some(&wide_plan));
+        core.write_reg_with_label(7, Value::Int(99), Label::Secret)
+            .expect("seed stale wide-frame state");
+        core.register_base = 0;
+        core.enter_stacked_register_frame(Some(&narrow_plan));
+
+        assert_eq!(core.stacked_register_frame_clear_width_high_water, 8);
+        assert_eq!(core.registers[max_registers + 7], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+    }
+
+    #[test]
+    fn compact_tier1_verified_width_preserves_nested_fixed_stride_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 1, value: 2 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 2,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 2,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 0,
+                    frame_size: 2,
+                    name: Some("outer".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 8,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("inner".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("nested compact plan");
+        assert_eq!(plan.verified_function_frame_clear_width, Some(2));
+
+        let config = test_quickjs_config();
+        let max_registers = config.max_registers as usize;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-nested-frame");
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("nested compact execution");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-nested-frame");
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("nested baseline execution");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(42));
+        assert_eq!(compact_core.registers.len(), max_registers * 2 + 2);
+        assert_eq!(baseline_core.registers.len(), max_registers * 3);
+    }
+
+    #[test]
+    fn compact_tier1_verified_width_preserves_exception_unwind_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Jump { target: 6 },
+                Ir3Instruction::EnterCatch { dst: 0 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 9 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("throwing".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("throwing compact plan");
+        assert_eq!(plan.verified_function_frame_clear_width, Some(1));
+
+        let config = test_quickjs_config();
+        let max_registers = config.max_registers as usize;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-unwind-frame");
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact caught throw");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-unwind-frame");
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("baseline caught throw");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(9));
+        assert_eq!(compact_core.registers.len(), max_registers + 1);
+        assert_eq!(baseline_core.registers.len(), max_registers * 2);
+    }
+
+    #[test]
+    fn compact_tier1_frame_verifier_rejects_bad_edges_bd_bridge_5_3() {
+        let descriptor = |entry, frame_size| Ir3FunctionDesc {
+            entry,
+            arity: 0,
+            frame_size,
+            name: None,
+            is_generator: false,
+            rest_param_index: None,
+        };
+
+        let cross_window = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Jump { target: 3 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![descriptor(0, 1), descriptor(2, 1), descriptor(3, 1)],
+        );
+        assert_eq!(
+            CompactTier1Program::compile(&cross_window)
+                .expect("compact cross-window plan")
+                .verified_function_frame_clear_width,
+            None
+        );
+
+        let overflowing_range = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange {
+                        start: u32::MAX,
+                        count: 2,
+                    },
+                    dst: 0,
+                },
+            ],
+            vec![descriptor(0, 1), descriptor(2, 1)],
+        );
+        assert_eq!(
+            CompactTier1Program::compile(&overflowing_range)
+                .expect("compact overflowing-range plan")
+                .verified_function_frame_clear_width,
+            None
+        );
     }
 
     fn test_module_with_functions(

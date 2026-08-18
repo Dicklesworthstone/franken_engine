@@ -23,12 +23,13 @@ use frankenengine_engine::baseline_interpreter::{
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::forensic_replayer::{IncidentMetadata, IncidentTrace};
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_telemetry::{
     HostcallResult, HostcallTelemetryRecord, HostcallType,
 };
 use frankenengine_engine::ir_contract::{
-    CapabilityTag, ContentHash, Ir0Module, Ir3Instruction, Ir3Module, IrHeader, IrLevel,
-    IrSchemaVersion, RegRange, WitnessEventKind,
+    CapabilityTag, Ir0Module, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
+    RegRange, WitnessEventKind,
 };
 use frankenengine_engine::lowering_pipeline::{
     lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,

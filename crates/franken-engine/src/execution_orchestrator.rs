@@ -14,7 +14,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -98,7 +100,8 @@ use frankenengine_extension_host::host_io::{
     HostIoRecorder, HostIoRequest,
 };
 use frankenengine_extension_host::process_spawn::{
-    ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnProvider, ProcessSpawnRequest,
+    ProcessSpawnControl, ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnProvider,
+    ProcessSpawnRequest, UnrestrictedProcessSpawnControl,
 };
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
@@ -214,17 +217,193 @@ impl HostIoProvider for CellAuthorizedHostIoProvider {
     }
 }
 
-/// Tier-I adapter for the extraordinary process provider. Preparation,
-/// dispatch, and compensating cleanup all cross the same sealed cell channel.
+/// Tier-I adapter for the extraordinary process provider. Live dispatch and
+/// compensating cleanup cross the sealed cell channel; deterministic request
+/// preparation remains outside the effect transcript.
+const PROCESS_ATTEMPT_FRESH: u8 = 0;
+const PROCESS_ATTEMPT_ADMITTED: u8 = 1;
+/// Maximum remaining lifetime accepted when a process attempt is admitted.
+///
+/// FrankenNode signs child-process grants with the same fifteen-minute maximum
+/// lifetime. Keeping the substrate bounded makes conversion from wall-clock
+/// expiry to a monotonic deadline deterministic and fail-closed even for
+/// otherwise representable but nonsensical far-future timestamps.
+pub const MAX_PROCESS_SPAWN_ATTEMPT_HORIZON_MILLIS: u64 = 15 * 60 * 1_000;
+
+/// One exact signed process authority shared by every effect in an execution
+/// attempt.
+///
+/// The atomic admission state makes one-shot authority a cross-orchestrator
+/// invariant rather than an `Option::take` implementation detail. Expiry and
+/// revocation are live-only and deliberately excluded from replay request
+/// identity.
+#[derive(Debug, Clone)]
+pub struct ProcessSpawnAttemptAuthority {
+    inner: Arc<ProcessSpawnAttemptAuthorityInner>,
+}
+
+#[derive(Debug)]
+struct ProcessSpawnAttemptAuthorityInner {
+    state: AtomicU8,
+    revoked: AtomicBool,
+    expires_at_unix_ms: u64,
+    monotonic_deadline: OnceLock<Result<Instant, ProcessSpawnAttemptError>>,
+}
+
+impl ProcessSpawnAttemptAuthority {
+    #[must_use]
+    pub fn expiring_at_unix_ms(expires_at_unix_ms: u64) -> Self {
+        Self {
+            inner: Arc::new(ProcessSpawnAttemptAuthorityInner {
+                state: AtomicU8::new(PROCESS_ATTEMPT_FRESH),
+                revoked: AtomicBool::new(false),
+                expires_at_unix_ms,
+                monotonic_deadline: OnceLock::new(),
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn expires_at_unix_ms(&self) -> u64 {
+        self.inner.expires_at_unix_ms
+    }
+
+    /// Permanently revoke this attempt. Revocation is sticky and cleanup does
+    /// not consult it.
+    pub fn revoke(&self) {
+        self.inner.revoked.store(true, Ordering::Release);
+    }
+
+    fn admit_once(&self) -> Result<(), ProcessSpawnAttemptError> {
+        self.inner
+            .state
+            .compare_exchange(
+                PROCESS_ATTEMPT_FRESH,
+                PROCESS_ATTEMPT_ADMITTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| ProcessSpawnAttemptError::AlreadyAdmitted)?;
+        // Capture the monotonic clock first. Any preemption before the wall
+        // clock read can only shorten the authority window. Wall milliseconds
+        // are truncated, so subtract one millisecond below as well; the
+        // resulting deadline may be conservatively early but never later than
+        // the signed integer-millisecond expiry.
+        let monotonic_now = Instant::now();
+        let deadline = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ProcessSpawnAttemptError::ClockInvalid)
+            .map(|elapsed| {
+                let now_ms = elapsed.as_millis();
+                if now_ms >= u128::from(self.inner.expires_at_unix_ms) {
+                    Ok(monotonic_now)
+                } else {
+                    let remaining_ms =
+                        u128::from(self.inner.expires_at_unix_ms).saturating_sub(now_ms);
+                    if remaining_ms > u128::from(MAX_PROCESS_SPAWN_ATTEMPT_HORIZON_MILLIS) {
+                        return Err(ProcessSpawnAttemptError::DeadlineBeyondHorizon);
+                    }
+                    let remaining_ms = u64::try_from(remaining_ms)
+                        .map_err(|_| ProcessSpawnAttemptError::DeadlineBeyondHorizon)?
+                        .saturating_sub(1);
+                    monotonic_now
+                        .checked_add(Duration::from_millis(remaining_ms))
+                        .ok_or(ProcessSpawnAttemptError::DeadlineOverflow)
+                }
+            })
+            .and_then(std::convert::identity);
+        self.inner
+            .monotonic_deadline
+            .set(deadline)
+            .map_err(|_| ProcessSpawnAttemptError::AlreadyAdmitted)?;
+        Ok(())
+    }
+
+    fn ensure_current(&self) -> Result<(), ProcessSpawnAttemptError> {
+        match self.inner.state.load(Ordering::Acquire) {
+            PROCESS_ATTEMPT_ADMITTED => {}
+            _ => return Err(ProcessSpawnAttemptError::NotAdmitted),
+        }
+        if self.inner.revoked.load(Ordering::Acquire) {
+            return Err(ProcessSpawnAttemptError::Revoked);
+        }
+        let Some(deadline) = self.inner.monotonic_deadline.get() else {
+            return Err(ProcessSpawnAttemptError::NotAdmitted);
+        };
+        let deadline = deadline.as_ref().map_err(|error| *error)?;
+        if Instant::now() >= *deadline {
+            return Err(ProcessSpawnAttemptError::Expired);
+        }
+        Ok(())
+    }
+}
+
+/// Stable attempt-boundary failures that occur before or between process
+/// effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessSpawnAttemptError {
+    AlreadyAdmitted,
+    NotAdmitted,
+    Revoked,
+    Expired,
+    ClockInvalid,
+    DeadlineBeyondHorizon,
+    DeadlineOverflow,
+}
+
+impl ProcessSpawnAttemptError {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::AlreadyAdmitted => "PROCESS_SPAWN_ATTEMPT_ALREADY_ADMITTED",
+            Self::NotAdmitted => "PROCESS_SPAWN_ATTEMPT_NOT_ADMITTED",
+            Self::Revoked => "PROCESS_SPAWN_AUTHORITY_REVOKED",
+            Self::Expired => "PROCESS_SPAWN_AUTHORITY_EXPIRED",
+            Self::ClockInvalid => "PROCESS_SPAWN_CLOCK_INVALID",
+            Self::DeadlineBeyondHorizon => "PROCESS_SPAWN_DEADLINE_BEYOND_HORIZON",
+            Self::DeadlineOverflow => "PROCESS_SPAWN_DEADLINE_OVERFLOW",
+        }
+    }
+
+    fn provider_error(self) -> ProcessSpawnError {
+        ProcessSpawnError::Denied {
+            reason: self.code().to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessSpawnAttemptError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for ProcessSpawnAttemptError {}
+
+#[derive(Debug, Clone)]
+struct InstalledProcessSpawnAttempt {
+    provider: Arc<dyn ProcessSpawnProvider>,
+    journal: Arc<InMemoryHostEffectJournal>,
+    authority: ProcessSpawnAttemptAuthority,
+}
+
 #[derive(Debug)]
 struct CellAuthorizedProcessSpawnProvider {
     provider: Arc<dyn ProcessSpawnProvider>,
     permit: CellExecutionPermit,
+    authority: ProcessSpawnAttemptAuthority,
 }
 
 impl CellAuthorizedProcessSpawnProvider {
-    fn new(provider: Arc<dyn ProcessSpawnProvider>, permit: CellExecutionPermit) -> Self {
-        Self { provider, permit }
+    fn new(
+        provider: Arc<dyn ProcessSpawnProvider>,
+        permit: CellExecutionPermit,
+        authority: ProcessSpawnAttemptAuthority,
+    ) -> Self {
+        Self {
+            provider,
+            permit,
+            authority,
+        }
     }
 
     fn denied(error: impl fmt::Display) -> ProcessSpawnError {
@@ -234,32 +413,41 @@ impl CellAuthorizedProcessSpawnProvider {
     }
 }
 
+#[derive(Debug)]
+struct CellProcessSpawnControl {
+    permit: CellExecutionPermit,
+    authority: ProcessSpawnAttemptAuthority,
+    upstream: Arc<dyn ProcessSpawnControl>,
+}
+
+impl ProcessSpawnControl for CellProcessSpawnControl {
+    fn checkpoint(&self) -> Result<(), ProcessSpawnError> {
+        self.authority
+            .ensure_current()
+            .map_err(ProcessSpawnAttemptError::provider_error)?;
+        if self.permit.cancellation_token().is_cancelled() {
+            return Err(ProcessSpawnError::Denied {
+                reason: "PROCESS_SPAWN_EXECUTION_CANCELLED".to_string(),
+            });
+        }
+        self.upstream.checkpoint()
+    }
+}
+
 impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
     fn name(&self) -> &str {
         self.provider.name()
+    }
+
+    fn preflight_request(&self, request: &ProcessSpawnRequest) -> Result<(), ProcessSpawnError> {
+        self.provider.preflight_request(request)
     }
 
     fn prepare_request(
         &self,
         request: &ProcessSpawnRequest,
     ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
-        let proposal = self
-            .permit
-            .begin_effect(
-                "process_spawn_prepare",
-                request.kind(),
-                cell_effect_request_digest(request),
-                RuntimeCapability::ProcessSpawn,
-            )
-            .map_err(Self::denied)?;
-        let outcome = self.provider.prepare_request(request);
-        let classification = if outcome.is_ok() {
-            "provider_succeeded"
-        } else {
-            "provider_failed"
-        };
-        proposal.complete(classification).map_err(Self::denied)?;
-        outcome
+        self.provider.prepare_request(request)
     }
 
     fn perform(
@@ -267,6 +455,22 @@ impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
         request: &ProcessSpawnRequest,
         granted: &[frankenengine_extension_host::process_spawn::ProcessSpawnCapability],
     ) -> ProcessSpawnOutcome {
+        self.perform_controlled(request, granted, Arc::new(UnrestrictedProcessSpawnControl))
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &ProcessSpawnRequest,
+        granted: &[frankenengine_extension_host::process_spawn::ProcessSpawnCapability],
+        control: Arc<dyn ProcessSpawnControl>,
+    ) -> ProcessSpawnOutcome {
+        self.provider.preflight_request(request)?;
+        let control = Arc::new(CellProcessSpawnControl {
+            permit: self.permit.clone(),
+            authority: self.authority.clone(),
+            upstream: control,
+        });
+        control.checkpoint()?;
         let proposal = self
             .permit
             .begin_effect(
@@ -276,7 +480,7 @@ impl ProcessSpawnProvider for CellAuthorizedProcessSpawnProvider {
                 RuntimeCapability::ProcessSpawn,
             )
             .map_err(Self::denied)?;
-        let outcome = self.provider.perform(request, granted);
+        let outcome = self.provider.perform_controlled(request, granted, control);
         let classification = if outcome.is_ok() {
             "provider_succeeded"
         } else {
@@ -1319,6 +1523,7 @@ pub enum OrchestratorError {
     Ledger(LedgerError),
     Saga(SagaError),
     Cell(CellError),
+    ProcessSpawnAttempt(ProcessSpawnAttemptError),
     Containment(ContainmentError),
     TsNormalization(TsNormalizationError),
     ScheduleCostGraph {
@@ -1378,6 +1583,7 @@ impl fmt::Display for OrchestratorError {
             Self::Ledger(e) => write!(f, "ledger: {e}"),
             Self::Saga(e) => write!(f, "saga: {e}"),
             Self::Cell(e) => write!(f, "cell: {e}"),
+            Self::ProcessSpawnAttempt(e) => write!(f, "process spawn attempt: {e}"),
             Self::Containment(e) => write!(f, "containment: {e}"),
             Self::TsNormalization(e) => write!(f, "ts normalization: {e}"),
             Self::ScheduleCostGraph { detail } => {
@@ -1592,8 +1798,7 @@ pub struct ExecutionOrchestrator {
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
-    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
-    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    process_spawn_attempt: Option<InstalledProcessSpawnAttempt>,
     last_failed_host_effect_journal: Vec<HostEffectJournalEntry>,
     last_failed_host_effect_journal_records: Vec<HostEffectJournalAttemptRecord>,
     /// Trace of the most recent execution attempt that returned an error, bound
@@ -1876,8 +2081,7 @@ impl ExecutionOrchestrator {
             execution_counter: 0,
             host_io: None,
             host_io_recorder: None,
-            process_spawn: None,
-            host_effect_journal: None,
+            process_spawn_attempt: None,
             last_failed_host_effect_journal: Vec::new(),
             last_failed_host_effect_journal_records: Vec::new(),
             last_failed_trace_id: None,
@@ -1947,9 +2151,13 @@ impl ExecutionOrchestrator {
         &mut self,
         provider: Arc<dyn ProcessSpawnProvider>,
         journal: Arc<InMemoryHostEffectJournal>,
+        authority: ProcessSpawnAttemptAuthority,
     ) {
-        self.process_spawn = Some(provider);
-        self.host_effect_journal = Some(journal);
+        self.process_spawn_attempt = Some(InstalledProcessSpawnAttempt {
+            provider,
+            journal,
+            authority,
+        });
     }
 
     /// Journal finalized from the most recent execution attempt that returned
@@ -2190,11 +2398,25 @@ impl ExecutionOrchestrator {
         // A signed process admission authorizes exactly one execution attempt.
         // Consume it before validation so a malformed package cannot preserve
         // the authority and reuse it for a later, unrelated package.
-        let process_spawn = self.process_spawn.take();
-        let host_effect_journal = self.host_effect_journal.take();
+        let process_spawn_attempt = self.process_spawn_attempt.clone();
         self.last_failed_host_effect_journal.clear();
         self.last_failed_host_effect_journal_records.clear();
         self.last_failed_trace_id = None;
+        if let Some(attempt) = &process_spawn_attempt {
+            attempt
+                .authority
+                .admit_once()
+                .map_err(OrchestratorError::ProcessSpawnAttempt)?;
+        }
+        let process_spawn = process_spawn_attempt
+            .as_ref()
+            .map(|attempt| Arc::clone(&attempt.provider));
+        let host_effect_journal = process_spawn_attempt
+            .as_ref()
+            .map(|attempt| Arc::clone(&attempt.journal));
+        let process_spawn_authority = process_spawn_attempt
+            .as_ref()
+            .map(|attempt| attempt.authority.clone());
         // Step 0: Validate.
         Self::validate_package(package)?;
         self.ensure_not_cancelled()?;
@@ -2300,12 +2522,16 @@ impl ExecutionOrchestrator {
                     Arc::new(CellAuthorizedHostIoProvider::new(provider, permit.clone()))
                         as Arc<dyn HostIoProvider>
                 });
-                let process_spawn = process_spawn.clone().map(|provider| {
-                    Arc::new(CellAuthorizedProcessSpawnProvider::new(
-                        provider,
-                        permit.clone(),
-                    )) as Arc<dyn ProcessSpawnProvider>
-                });
+                let process_spawn = process_spawn
+                    .clone()
+                    .zip(process_spawn_authority.clone())
+                    .map(|(provider, authority)| {
+                        Arc::new(CellAuthorizedProcessSpawnProvider::new(
+                            provider,
+                            permit.clone(),
+                            authority,
+                        )) as Arc<dyn ProcessSpawnProvider>
+                    });
                 let timer_effect_authority =
                     Arc::new(CellAuthorizedTimerEffectAuthority::new(permit.clone()))
                         as Arc<dyn TimerEffectAuthority>;
@@ -2893,7 +3119,9 @@ impl ExecutionOrchestrator {
             package,
             trace_id,
             decision_id,
-            self.host_effect_journal.as_deref(),
+            self.process_spawn_attempt
+                .as_ref()
+                .map(|attempt| attempt.journal.as_ref()),
         )
     }
 

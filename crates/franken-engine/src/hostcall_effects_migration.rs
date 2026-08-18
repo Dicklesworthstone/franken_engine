@@ -995,14 +995,28 @@ impl ProcessSpawnHandler {
     ) -> Result<Result<ProcessSpawnResponse, ProcessSpawnError>, EffectError> {
         if journal.mode() == HostEffectJournalMode::Replay {
             return Ok(match self.provider.prepare_request(request) {
-                Ok(prepared) => journal.replay_process_spawn(&prepared).ok_or_else(|| {
-                    host_effect_journal_error(
-                        "process_spawn_handler",
-                        HostEffectJournalError::Lifecycle {
-                            detail: "replay journal omitted a typed process outcome".to_string(),
-                        },
-                    )
-                })?,
+                Ok(prepared) => match self.provider.preflight_request(&prepared) {
+                    Ok(()) => journal.replay_process_spawn(&prepared).ok_or_else(|| {
+                        host_effect_journal_error(
+                            "process_spawn_handler",
+                            HostEffectJournalError::Lifecycle {
+                                detail: "replay journal omitted a typed process outcome"
+                                    .to_string(),
+                            },
+                        )
+                    })?,
+                    Err(failure) => journal
+                        .replay_process_spawn_preparation_failure(request, &failure)
+                        .ok_or_else(|| {
+                            host_effect_journal_error(
+                                "process_spawn_handler",
+                                HostEffectJournalError::Lifecycle {
+                                    detail: "replay journal omitted a typed prepared-request preflight outcome"
+                                        .to_string(),
+                                },
+                            )
+                        })?,
+                },
                 Err(failure) => journal
                     .replay_process_spawn_preparation_failure(request, &failure)
                     .ok_or_else(|| {
@@ -1029,6 +1043,13 @@ impl ProcessSpawnHandler {
                 return Ok(outcome);
             }
         };
+        if let Err(error) = self.provider.preflight_request(&prepared) {
+            let outcome = Err(error);
+            journal
+                .complete_process_spawn(reservation, request, &outcome)
+                .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+            return Ok(outcome);
+        }
         let reservation = journal
             .bind_prepared_process_spawn(reservation, &prepared)
             .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
@@ -1048,15 +1069,20 @@ impl ProcessSpawnHandler {
                 reason: "expected a typed ProcessSpawnRequest".to_string(),
             })?;
         let granted = [ProcessSpawnCapability::Spawn];
-        let outcome = if let Some(journal) = self.host_effect_journal.as_deref() {
-            self.journaled_outcome(journal, request.as_ref(), &granted)?
-        } else {
-            perform_recorded(
-                self.provider.as_ref(),
-                self.recorder.as_deref(),
-                request.as_ref(),
-                &granted,
-            )
+        let outcome = match self.provider.preflight_request(request.as_ref()) {
+            Err(error) => Err(error),
+            Ok(()) => {
+                if let Some(journal) = self.host_effect_journal.as_deref() {
+                    self.journaled_outcome(journal, request.as_ref(), &granted)?
+                } else {
+                    perform_recorded(
+                        self.provider.as_ref(),
+                        self.recorder.as_deref(),
+                        request.as_ref(),
+                        &granted,
+                    )
+                }
+            }
         };
         match outcome {
             Ok(response) => Ok(Some(EffectResult::new(response))),
@@ -2153,6 +2179,68 @@ mod tests {
         perform_calls: std::sync::atomic::AtomicUsize,
     }
 
+    #[derive(Debug, Default)]
+    struct ExpandingProcessSpawn {
+        preflights: std::sync::atomic::AtomicUsize,
+        perform_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ProcessSpawnProvider for ExpandingProcessSpawn {
+        fn name(&self) -> &str {
+            "expanding-test-process-spawn"
+        }
+
+        fn preflight_request(
+            &self,
+            request: &ProcessSpawnRequest,
+        ) -> Result<(), ProcessSpawnError> {
+            self.preflights
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let executable_bytes = match request {
+                ProcessSpawnRequest::Run { launch, .. } | ProcessSpawnRequest::Spawn { launch } => {
+                    launch.executable.len()
+                }
+                _ => 0,
+            };
+            if executable_bytes > 32 {
+                return Err(ProcessSpawnError::LimitExceeded {
+                    limit: "executable_path_bytes".to_string(),
+                    actual: u64::try_from(executable_bytes).unwrap_or(u64::MAX),
+                    maximum: 32,
+                });
+            }
+            Ok(())
+        }
+
+        fn prepare_request(
+            &self,
+            request: &ProcessSpawnRequest,
+        ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+            let mut prepared = request.clone();
+            match &mut prepared {
+                ProcessSpawnRequest::Run { launch, .. } | ProcessSpawnRequest::Spawn { launch } => {
+                    launch.executable = "x".repeat(64);
+                }
+                _ => {}
+            }
+            Ok(prepared)
+        }
+
+        fn perform(
+            &self,
+            _request: &ProcessSpawnRequest,
+            _granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            self.perform_calls
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            panic!("an over-limit prepared request must never dispatch")
+        }
+
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
+    }
+
     impl ProcessSpawnProvider for PreparationDenyingProcessSpawn {
         fn name(&self) -> &str {
             "preparation-denying-test-process-spawn"
@@ -2468,6 +2556,74 @@ mod tests {
                 outcome: Ok(ProcessSpawnResponse::Run { .. }),
             }]) if recorded == &request
         ));
+    }
+
+    #[test]
+    fn prepared_request_is_repreflighted_before_binding_or_dispatch_bd_x85a7_2() {
+        let request = process_run_request();
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().expect("begin global journal");
+        let provider = Arc::new(ExpandingProcessSpawn::default());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+
+        let error = stack
+            .handle_effect(create_process_spawn_effect(request.clone()).as_ref())
+            .expect_err("expanded prepared request must fail its second preflight");
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("PROCESS_SPAWN_LIMIT_EXCEEDED")
+        ));
+        assert_eq!(
+            provider
+                .preflights
+                .load(std::sync::atomic::Ordering::Acquire),
+            2,
+            "the raw request and prepared request need separate preflight checks"
+        );
+        assert_eq!(
+            provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        let entries = journal.finish_execution().expect("finish global journal");
+        assert!(matches!(
+            entries.as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn {
+                request: recorded,
+                outcome: Err(ProcessSpawnError::LimitExceeded { .. }),
+            }] if recorded == &request
+        ));
+
+        let replay = Arc::new(InMemoryHostEffectJournal::replaying(entries.clone()));
+        replay.begin_execution().expect("begin exact replay");
+        let replay_provider = Arc::new(ExpandingProcessSpawn::default());
+        let mut replay_stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(replay_provider.clone()),
+            None,
+            Some(replay.clone()),
+        );
+        replay_stack
+            .handle_effect(create_process_spawn_effect(request).as_ref())
+            .expect_err("the exact prepared-request refusal must replay as a guest error");
+        assert_eq!(
+            replay_provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        assert_eq!(replay.finish_execution().unwrap(), entries);
     }
 
     #[test]

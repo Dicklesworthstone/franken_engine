@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Barrier, Mutex};
 #[cfg(unix)]
 use std::time::Instant;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
@@ -21,6 +21,7 @@ use frankenengine_engine::execution_cell::{CellError, CellExecutionError, CellEx
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
+    ProcessSpawnAttemptAuthority, ProcessSpawnAttemptError,
 };
 #[cfg(unix)]
 use frankenengine_engine::ifc_artifacts::Label;
@@ -186,6 +187,115 @@ impl ProcessSpawnProvider for CommitBoundaryProcessSpawn {
     }
 }
 
+#[derive(Debug)]
+struct RevokingLifecycleProcessSpawn {
+    authority: ProcessSpawnAttemptAuthority,
+    calls: AtomicUsize,
+}
+
+#[derive(Debug)]
+struct ExpiringLifecycleProcessSpawn {
+    expires_at_unix_ms: u64,
+    calls: AtomicUsize,
+}
+
+impl ProcessSpawnProvider for ExpiringLifecycleProcessSpawn {
+    fn name(&self) -> &str {
+        "expiring-lifecycle-process-spawn"
+    }
+
+    fn perform(
+        &self,
+        request: &ProcessSpawnRequest,
+        _granted: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        match request {
+            ProcessSpawnRequest::Spawn { .. } => {
+                while unix_now_ms() < self.expires_at_unix_ms {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(ProcessSpawnResponse::Spawned {
+                    handle: "expired-after-spawn".to_string(),
+                })
+            }
+            _ => panic!("expired authority must refuse later effects before provider dispatch"),
+        }
+    }
+
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+    }
+}
+
+impl ProcessSpawnProvider for RevokingLifecycleProcessSpawn {
+    fn name(&self) -> &str {
+        "revoking-lifecycle-process-spawn"
+    }
+
+    fn perform(
+        &self,
+        request: &ProcessSpawnRequest,
+        _granted: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        match request {
+            ProcessSpawnRequest::Spawn { .. } => {
+                self.authority.revoke();
+                Ok(ProcessSpawnResponse::Spawned {
+                    handle: "revoked-after-spawn".to_string(),
+                })
+            }
+            _ => panic!("revoked authority must refuse later effects before provider dispatch"),
+        }
+    }
+
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+    }
+}
+
+#[derive(Debug, Default)]
+struct PreflightRejectingProcessSpawn {
+    prepares: AtomicUsize,
+    performs: AtomicUsize,
+}
+
+impl ProcessSpawnProvider for PreflightRejectingProcessSpawn {
+    fn name(&self) -> &str {
+        "preflight-rejecting-process-spawn"
+    }
+
+    fn preflight_request(&self, _request: &ProcessSpawnRequest) -> Result<(), ProcessSpawnError> {
+        Err(ProcessSpawnError::LimitExceeded {
+            limit: "request_bytes".to_string(),
+            actual: 2,
+            maximum: 1,
+        })
+    }
+
+    fn prepare_request(
+        &self,
+        request: &ProcessSpawnRequest,
+    ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+        self.prepares.fetch_add(1, Ordering::AcqRel);
+        Ok(request.clone())
+    }
+
+    fn perform(
+        &self,
+        _request: &ProcessSpawnRequest,
+        _granted: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        self.performs.fetch_add(1, Ordering::AcqRel);
+        panic!("preflight refusal must precede provider dispatch")
+    }
+
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+    }
+}
+
 fn process_package(source: &str) -> ExtensionPackage {
     ExtensionPackage {
         extension_id: "bd-x85a7-process-bridge".to_string(),
@@ -196,6 +306,19 @@ fn process_package(source: &str) -> ExtensionPackage {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     }
+}
+
+fn unix_now_ms() -> u64 {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_millis();
+    u64::try_from(now_ms).expect("test clock must fit u64 milliseconds")
+}
+
+fn test_process_authority() -> ProcessSpawnAttemptAuthority {
+    let expires_at_ms = unix_now_ms().saturating_add(5 * 60 * 1_000);
+    ProcessSpawnAttemptAuthority::expiring_at_unix_ms(expires_at_ms)
 }
 
 #[cfg(unix)]
@@ -220,6 +343,7 @@ fn native_process_provider(
         .authorize_alias(alias, executable)
         .expect("authorize exact native process alias");
     policy.limits.max_runtime_millis = max_runtime_millis;
+    policy.limits.max_children = 1;
     let provider = NativeProcessSpawn::new(policy).expect("install native process provider");
     (Arc::new(provider), canonical)
 }
@@ -428,7 +552,7 @@ fn signed_process_authority_is_consumed_by_one_execution_attempt() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"first-only"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
     let package =
         process_package("const cp = require('child_process'); cp.execFileSync('tool', ['alpha']);");
 
@@ -439,11 +563,10 @@ fn signed_process_authority_is_consumed_by_one_execution_attempt() {
         .execute(&package)
         .expect_err("a second execution needs a fresh signed process admission");
 
-    assert!(
-        error
-            .to_string()
-            .contains("process_spawn provider admission")
-    );
+    assert!(matches!(
+        error,
+        OrchestratorError::ProcessSpawnAttempt(ProcessSpawnAttemptError::AlreadyAdmitted)
+    ));
     assert_eq!(
         provider
             .seen
@@ -453,6 +576,263 @@ fn signed_process_authority_is_consumed_by_one_execution_attempt() {
         1,
         "reused orchestrators must not carry process authority across attempts"
     );
+}
+
+#[test]
+fn expired_process_authority_fails_closed_and_remains_consumed() {
+    let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(
+        provider.clone(),
+        journal,
+        ProcessSpawnAttemptAuthority::expiring_at_unix_ms(0),
+    );
+    let package = process_package(
+        "const cp = require('child_process'); cp.execFileSync('tool', ['expired']);",
+    );
+
+    orchestrator
+        .execute(&package)
+        .expect_err("expired authority must refuse the live process effect");
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Err(ProcessSpawnError::Denied { reason }),
+            ..
+        }] if reason == "PROCESS_SPAWN_AUTHORITY_EXPIRED"
+    ));
+    assert!(matches!(
+        orchestrator.execute(&package),
+        Err(OrchestratorError::ProcessSpawnAttempt(
+            ProcessSpawnAttemptError::AlreadyAdmitted
+        ))
+    ));
+    assert!(
+        provider
+            .seen
+            .lock()
+            .expect("recording provider mutex")
+            .is_empty()
+    );
+}
+
+#[test]
+fn process_deadline_beyond_the_bounded_horizon_fails_closed_and_is_journaled() {
+    let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(
+        provider.clone(),
+        journal,
+        ProcessSpawnAttemptAuthority::expiring_at_unix_ms(u64::MAX),
+    );
+
+    orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('tool', ['overflow']);",
+        ))
+        .expect_err("an expiry beyond the bounded attempt horizon must fail closed");
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Err(ProcessSpawnError::Denied { reason }),
+            ..
+        }] if reason == "PROCESS_SPAWN_DEADLINE_BEYOND_HORIZON"
+    ));
+    assert!(
+        provider
+            .seen
+            .lock()
+            .expect("recording provider mutex")
+            .is_empty()
+    );
+}
+
+#[test]
+fn malformed_attempt_consumes_process_authority_before_package_validation() {
+    let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
+    let malformed = process_package("");
+
+    assert!(matches!(
+        orchestrator.execute(&malformed),
+        Err(OrchestratorError::EmptySource)
+    ));
+    assert!(matches!(
+        orchestrator.execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('tool');"
+        )),
+        Err(OrchestratorError::ProcessSpawnAttempt(
+            ProcessSpawnAttemptError::AlreadyAdmitted
+        ))
+    ));
+    assert!(
+        provider
+            .seen
+            .lock()
+            .expect("recording provider mutex")
+            .is_empty()
+    );
+}
+
+#[test]
+fn shared_process_authority_admits_exactly_one_concurrent_orchestrator() {
+    let authority = test_process_authority();
+    let provider = Arc::new(RecordingProcessSpawn::successful(b"atomic-winner"));
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let package = process_package(
+        "const cp = require('child_process'); cp.execFileSync('tool', ['atomic']);",
+    );
+    let barrier = Arc::new(Barrier::new(3));
+    let workers = (0..2)
+        .map(|_| {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+            orchestrator.set_process_spawn(provider.clone(), journal.clone(), authority.clone());
+            let package = package.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                orchestrator.execute(&package)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = workers
+        .into_iter()
+        .map(|worker| worker.join().expect("orchestrator worker must not panic"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(OrchestratorError::ProcessSpawnAttempt(
+                    ProcessSpawnAttemptError::AlreadyAdmitted
+                ))
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        provider
+            .seen
+            .lock()
+            .expect("recording provider mutex")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn oversized_request_preflight_precedes_journal_hash_and_cell_proposal() {
+    let provider = Arc::new(PreflightRejectingProcessSpawn::default());
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider.clone(), journal.clone(), test_process_authority());
+
+    let error = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('tool', ['oversized']);",
+        ))
+        .expect_err("preflight refusal must fail the guest effect");
+
+    assert!(error.to_string().contains("process_spawn_handler"));
+    assert_eq!(provider.prepares.load(Ordering::Acquire), 0);
+    assert_eq!(provider.performs.load(Ordering::Acquire), 0);
+    assert!(journal.attempt_records().is_empty());
+    let transcript = error
+        .post_cell_failure()
+        .expect("preflight occurs after cell creation")
+        .cleanup
+        .cell_execution_transcript
+        .as_ref()
+        .expect("failed cell must retain its transcript");
+    assert!(
+        transcript
+            .events
+            .iter()
+            .all(|event| !matches!(event.kind, CellExecutionEventKind::EffectProposed { .. }))
+    );
+}
+
+#[test]
+fn revocation_between_spawn_and_wait_is_denied_journaled_and_cleanup_survives() {
+    let authority = test_process_authority();
+    let provider = Arc::new(RevokingLifecycleProcessSpawn {
+        authority: authority.clone(),
+        calls: AtomicUsize::new(0),
+    });
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider.clone(), journal, authority);
+
+    orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.spawn('tool', ['revoked']);",
+        ))
+        .expect_err("revocation after Spawn must refuse the automatic Wait");
+
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Spawn { .. },
+                outcome: Ok(ProcessSpawnResponse::Spawned { .. }),
+            },
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Wait { .. },
+                outcome: Err(ProcessSpawnError::Denied { reason }),
+            },
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Cleanup { .. },
+                outcome: Ok(ProcessSpawnResponse::Cleaned { was_present: true }),
+            },
+        ] if reason == "PROCESS_SPAWN_AUTHORITY_REVOKED"
+    ));
+}
+
+#[test]
+fn expiry_between_spawn_and_wait_is_denied_journaled_and_cleanup_survives() {
+    let expires_at_unix_ms = unix_now_ms().saturating_add(2_000);
+    let authority = ProcessSpawnAttemptAuthority::expiring_at_unix_ms(expires_at_unix_ms);
+    let provider = Arc::new(ExpiringLifecycleProcessSpawn {
+        expires_at_unix_ms,
+        calls: AtomicUsize::new(0),
+    });
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider.clone(), journal, authority);
+
+    orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.spawn('tool', ['expired']);",
+        ))
+        .expect_err("expiry after Spawn must refuse the automatic Wait");
+
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Spawn { .. },
+                outcome: Ok(ProcessSpawnResponse::Spawned { .. }),
+            },
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Wait { .. },
+                outcome: Err(ProcessSpawnError::Denied { reason }),
+            },
+            HostEffectJournalEntry::ProcessSpawn {
+                request: ProcessSpawnRequest::Cleanup { .. },
+                outcome: Ok(ProcessSpawnResponse::Cleaned { was_present: true }),
+            }
+        ] if reason == "PROCESS_SPAWN_AUTHORITY_EXPIRED"
+    ));
 }
 
 #[test]
@@ -467,7 +847,7 @@ fn child_process_overloads_and_optional_async_callbacks_are_normalized() {
         let provider = Arc::new(RecordingProcessSpawn::successful(b"normalized"));
         let journal = Arc::new(InMemoryHostEffectJournal::recording());
         let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-        orchestrator.set_process_spawn(provider.clone(), journal);
+        orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
         orchestrator
             .execute(&process_package(source))
             .unwrap_or_else(|error| panic!("overload should execute: {source}: {error}"));
@@ -493,7 +873,7 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"typed-process-output"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let result = orchestrator
         .execute(&process_package(
@@ -565,8 +945,8 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
         .collect();
     assert_eq!(
         proposals,
-        vec!["process_spawn_prepare", "process_spawn"],
-        "request preparation and real dispatch must both cross the sealed cell permit"
+        vec!["process_spawn"],
+        "only the real provider dispatch crosses the sealed cell permit"
     );
 }
 
@@ -577,7 +957,7 @@ fn no_mock_native_os_process_executes_under_exact_cell_authority() {
         native_process_provider("native-printf", &["/usr/bin/printf", "/bin/printf"], 2_000);
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider, journal);
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
 
     let result = orchestrator
         .execute(&process_package(
@@ -667,15 +1047,8 @@ fn no_mock_native_os_process_executes_under_exact_cell_authority() {
         .collect::<Vec<_>>();
     assert_eq!(
         proposals,
-        vec![
-            (
-                "process_spawn_prepare",
-                "run",
-                RuntimeCapability::ProcessSpawn,
-            ),
-            ("process_spawn", "run", RuntimeCapability::ProcessSpawn,),
-        ],
-        "policy preparation and OS dispatch must both cross the sealed permit"
+        vec![("process_spawn", "run", RuntimeCapability::ProcessSpawn,)],
+        "only the OS dispatch crosses the sealed permit"
     );
 }
 
@@ -686,7 +1059,7 @@ fn no_mock_native_hang_times_out_finalizes_and_provider_recovers() {
         native_process_provider("native-sleep", &["/usr/bin/sleep", "/bin/sleep"], 500);
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let started = Instant::now();
     let error = orchestrator
@@ -732,7 +1105,7 @@ fn no_mock_native_hang_times_out_finalizes_and_provider_recovers() {
 
     let recovery_journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut recovery = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    recovery.set_process_spawn(provider, recovery_journal);
+    recovery.set_process_spawn(provider, recovery_journal, test_process_authority());
     let recovered = recovery
         .execute(&process_package(
             "const cp = require('child_process'); cp.execFileSync('native-sleep', ['0']);",
@@ -752,7 +1125,7 @@ fn no_mock_native_child_signal_is_audited_and_parent_recovers() {
     let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 2_000);
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(
@@ -787,7 +1160,7 @@ fn no_mock_native_child_signal_is_audited_and_parent_recovers() {
 
     let recovery_journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut recovery = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    recovery.set_process_spawn(provider, recovery_journal);
+    recovery.set_process_spawn(provider, recovery_journal, test_process_authority());
     let recovered = recovery
         .execute(&process_package(
             "const cp = require('child_process'); console.log(cp.execFileSync('native-sh', ['-c', 'printf recovered'], { encoding: 'utf8' }));",
@@ -808,7 +1181,7 @@ fn no_mock_native_descendant_is_gone_before_cell_result_returns() {
     );
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider, journal);
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
 
     let started = Instant::now();
     let result = orchestrator
@@ -861,7 +1234,7 @@ fn cancellation_during_provider_dispatch_commits_prefix_then_finalizes_once() {
     let cancellation = CancellationToken::new();
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
     orchestrator.set_cancellation_token(cancellation.clone());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let worker = std::thread::spawn(move || {
         let error = orchestrator
@@ -916,8 +1289,8 @@ fn cancellation_during_provider_dispatch_commits_prefix_then_finalizes_once() {
             .iter()
             .filter(|event| matches!(&event.kind, CellExecutionEventKind::EffectProposed { .. }))
             .count(),
-        2,
-        "only preparation and the already-admitted dispatch may be proposed"
+        1,
+        "only the already-admitted dispatch may be proposed"
     );
     assert_eq!(
         transcript
@@ -925,7 +1298,7 @@ fn cancellation_during_provider_dispatch_commits_prefix_then_finalizes_once() {
             .iter()
             .filter(|event| matches!(&event.kind, CellExecutionEventKind::EffectCompleted { .. }))
             .count(),
-        2,
+        1,
         "the already-completed provider effect must not become commit-unknown"
     );
     assert!(!transcript.events.iter().any(|event| matches!(
@@ -943,12 +1316,83 @@ fn cancellation_during_provider_dispatch_commits_prefix_then_finalizes_once() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cancellation_reaps_a_real_blocking_child_before_the_policy_timeout() {
+    let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 30_000);
+    let temp_dir = tempfile::tempdir().expect("create cancellation marker directory");
+    let marker = temp_dir.path().join("child-started");
+    let sleep = unix_executable(&["/usr/bin/sleep", "/bin/sleep"]);
+    let command = format!(": > '{}'; exec '{}' 30", marker.display(), sleep.display());
+    let command_literal =
+        serde_json::to_string(&command).expect("encode cancellation shell command");
+    let source = format!(
+        "const cp = require('child_process'); cp.execFileSync('native-sh', ['-c', {command_literal}]);"
+    );
+    let cancellation = CancellationToken::new();
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_cancellation_token(cancellation.clone());
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
+
+    let worker = std::thread::spawn(move || {
+        let error = orchestrator
+            .execute(&process_package(&source))
+            .expect_err("cancelling a live native Run must fail the guest execution");
+        (orchestrator, error)
+    });
+    let marker_deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() && Instant::now() < marker_deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    if !marker.exists() {
+        cancellation.cancel();
+        let _ = worker.join();
+        panic!("native child did not reach its start marker");
+    }
+
+    let cancelled_at = Instant::now();
+    cancellation.cancel();
+    let (orchestrator, error) = worker
+        .join()
+        .expect("native cancellation worker must not panic");
+    assert!(
+        cancelled_at.elapsed() < Duration::from_secs(2),
+        "cooperative native cancellation must beat the 30 second process policy timeout"
+    );
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Err(ProcessSpawnError::Denied { reason }),
+            ..
+        }] if reason == "PROCESS_SPAWN_EXECUTION_CANCELLED"
+    ));
+    error
+        .post_cell_failure()
+        .expect("native cancellation occurs after cell creation")
+        .cleanup
+        .cell_execution_transcript
+        .as_ref()
+        .expect("native cancellation must retain a cell transcript")
+        .verify()
+        .expect("native cancellation transcript must replay-verify");
+
+    let recovery_journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut recovery = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    recovery.set_process_spawn(provider, recovery_journal, test_process_authority());
+    recovery
+        .execute(&process_package(
+            "const cp = require('child_process'); cp.execFileSync('native-sh', ['-c', 'exit 0']);",
+        ))
+        .expect("max_children=1 must be reusable immediately after cancellation teardown");
+}
+
 #[test]
 fn async_spawn_facade_delivers_stream_and_exit_events_after_registration() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"async-output"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let result = orchestrator
         .execute(&process_package(
@@ -980,7 +1424,7 @@ fn async_spawn_with_empty_output_does_not_fabricate_stream_data() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b""));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let result = orchestrator
         .execute(&process_package(
@@ -1012,7 +1456,7 @@ fn async_exec_callback_receives_output_in_the_requested_encoding() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"decoded-output"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let result = orchestrator
         .execute(&process_package(
@@ -1040,7 +1484,7 @@ fn unhandled_async_spawn_error_escapes_the_event_loop_boundary() {
     let provider = Arc::new(RecordingProcessSpawn::denying());
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(
@@ -1048,7 +1492,12 @@ fn unhandled_async_spawn_error_escapes_the_event_loop_boundary() {
         ))
         .expect_err("an unhandled child error must fail the execution");
 
-    assert!(error.to_string().contains("test policy denied"));
+    assert!(
+        error
+            .to_string()
+            .contains("process spawn denied: redacted reason")
+    );
+    assert!(!error.to_string().contains("test policy denied"));
     assert_eq!(
         provider
             .seen
@@ -1067,14 +1516,19 @@ fn failed_execution_retains_the_denied_process_journal_prefix() {
     let provider = Arc::new(RecordingProcessSpawn::denying());
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider, journal);
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(
             "const cp = require('child_process'); cp.execFileSync('tool', ['alpha']);",
         ))
         .expect_err("provider denial should abort an uncaught synchronous call");
-    assert!(error.to_string().contains("test policy denied"));
+    assert!(
+        error
+            .to_string()
+            .contains("process spawn denied: redacted reason")
+    );
+    assert!(!error.to_string().contains("test policy denied"));
     assert!(matches!(
         orchestrator.last_failed_host_effect_journal(),
         [HostEffectJournalEntry::ProcessSpawn {
@@ -1104,7 +1558,7 @@ fn replay_finalization_failure_retains_the_consumed_effect_prefix() {
     ]));
     let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(
@@ -1134,11 +1588,51 @@ fn replay_finalization_failure_retains_the_consumed_effect_prefix() {
 }
 
 #[test]
+fn replay_is_independent_of_live_process_expiry_and_provider_dispatch() {
+    let recorded = HostEffectJournalEntry::ProcessSpawn {
+        request: expected_run_request(),
+        outcome: Ok(ProcessSpawnResponse::Run {
+            exit: ProcessExit {
+                success: true,
+                code: Some(0),
+                signal: None,
+            },
+            stdout: b"replayed-after-expiry".to_vec(),
+            stderr: Vec::new(),
+        }),
+    };
+    let journal = Arc::new(InMemoryHostEffectJournal::replaying(vec![recorded]));
+    let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(
+        provider.clone(),
+        journal,
+        ProcessSpawnAttemptAuthority::expiring_at_unix_ms(0),
+    );
+
+    let result = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); console.log(cp.execFileSync('tool', ['alpha'], { encoding: 'utf8' }));",
+        ))
+        .expect("replay must not consult live process expiry");
+
+    assert_eq!(result.console_output[0].message, "replayed-after-expiry");
+    assert!(
+        provider
+            .seen
+            .lock()
+            .expect("recording provider mutex")
+            .is_empty(),
+        "replay must never invoke the live provider"
+    );
+}
+
+#[test]
 fn cleanup_failure_is_typed_journaled_and_preserves_the_effect_prefix() {
     let provider = Arc::new(CleanupFailingProcessSpawn);
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider, journal);
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(
@@ -1170,7 +1664,7 @@ fn non_public_request_data_is_blocked_before_the_provider() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(
@@ -1197,7 +1691,7 @@ fn non_public_mutation_of_a_public_options_alias_is_blocked_at_runtime() {
     let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
     let journal = Arc::new(InMemoryHostEffectJournal::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_process_spawn(provider.clone(), journal);
+    orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
         .execute(&process_package(

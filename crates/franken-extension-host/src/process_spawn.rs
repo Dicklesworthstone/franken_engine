@@ -25,7 +25,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -624,13 +624,51 @@ impl std::error::Error for ProcessSpawnError {}
 
 pub type ProcessSpawnOutcome = Result<ProcessSpawnResponse, ProcessSpawnError>;
 
+/// Live execution control checked by effectful process providers.
+///
+/// The engine supplies a control that combines the cell cancellation signal
+/// with the exact process-attempt authority. Native providers poll it while
+/// hashing, launching, waiting, and draining. Cleanup deliberately does not
+/// take a control: containment must remain available after cancellation,
+/// expiry, or revocation.
+pub trait ProcessSpawnControl: fmt::Debug + Send + Sync {
+    /// Refuse further native work when the enclosing execution is no longer
+    /// authorized to continue.
+    fn checkpoint(&self) -> Result<(), ProcessSpawnError>;
+}
+
+/// Control used by direct provider callers that have no enclosing cell.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnrestrictedProcessSpawnControl;
+
+impl ProcessSpawnControl for UnrestrictedProcessSpawnControl {
+    fn checkpoint(&self) -> Result<(), ProcessSpawnError> {
+        Ok(())
+    }
+}
+
 /// Resource ceilings applied to every native provider instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpawnLimits {
     pub max_children: u64,
+    /// Maximum bytes in the requested executable path.
+    pub max_executable_path_bytes: u64,
+    /// Maximum executable image size inspected by SHA-256 verification.
+    pub max_executable_bytes: u64,
     pub max_argv_count: u64,
     pub max_argv_bytes: u64,
+    pub max_env_count: u64,
+    /// Aggregate key + value bytes after fixed and request env are merged.
+    pub max_env_bytes: u64,
+    pub max_cwd_bytes: u64,
+    /// Aggregate executable path + argv + env + cwd bytes admitted before any
+    /// canonicalization, hashing, or process creation.
+    pub max_prelaunch_bytes: u64,
+    /// Maximum canonical JSON bytes for every request kind. The exact encoded
+    /// size is counted through a non-allocating writer before callers clone or
+    /// hash the request.
+    pub max_request_bytes: u64,
     pub max_stdin_bytes: u64,
     /// Per-stream capture cap.
     pub max_output_bytes: u64,
@@ -641,8 +679,15 @@ impl Default for ProcessSpawnLimits {
     fn default() -> Self {
         Self {
             max_children: 4,
+            max_executable_path_bytes: 4 * 1024,
+            max_executable_bytes: 128 * 1024 * 1024,
             max_argv_count: 128,
             max_argv_bytes: 64 * 1024,
+            max_env_count: 128,
+            max_env_bytes: 64 * 1024,
+            max_cwd_bytes: 4 * 1024,
+            max_prelaunch_bytes: 128 * 1024,
+            max_request_bytes: 16 * 1024 * 1024,
             max_stdin_bytes: 1024 * 1024,
             max_output_bytes: 4 * 1024 * 1024,
             max_runtime_millis: 30_000,
@@ -749,7 +794,12 @@ impl ProcessSpawnPolicy {
             });
         }
         let canonical = path_string(&canonical)?;
-        let digest = digest_file(Path::new(&canonical))?;
+        enforce_limit(
+            "executable_path_bytes",
+            u64::try_from(canonical.len()).unwrap_or(u64::MAX),
+            self.limits.max_executable_path_bytes,
+        )?;
+        let digest = digest_file(Path::new(&canonical), self.limits.max_executable_bytes)?;
         self.allowed_executables.insert(canonical.clone(), digest);
         Ok(canonical)
     }
@@ -772,6 +822,16 @@ impl ProcessSpawnPolicy {
 pub trait ProcessSpawnProvider: fmt::Debug + Send + Sync {
     fn name(&self) -> &str;
 
+    /// Allocation-free, side-effect-free request admission.
+    ///
+    /// Callers invoke this before journal reservation or request hashing so an
+    /// oversized request cannot force an unbounded clone/serialization before
+    /// the provider's policy sees it. Implementations must not perform I/O or
+    /// mutate provider state here; live preparation remains journaled.
+    fn preflight_request(&self, _request: &ProcessSpawnRequest) -> Result<(), ProcessSpawnError> {
+        Ok(())
+    }
+
     /// Resolve policy-owned aliases into a canonical request before replay or
     /// live dispatch. The default provider has no alias vocabulary.
     fn prepare_request(
@@ -787,6 +847,21 @@ pub trait ProcessSpawnProvider: fmt::Debug + Send + Sync {
         request: &ProcessSpawnRequest,
         granted: &[ProcessSpawnCapability],
     ) -> ProcessSpawnOutcome;
+
+    /// Perform while honoring a live cancellation/deadline/authority control.
+    ///
+    /// Providers whose work can block must override this method and poll the
+    /// control through every blocking phase. The default is suitable only for
+    /// already-bounded, synchronous providers.
+    fn perform_controlled(
+        &self,
+        request: &ProcessSpawnRequest,
+        granted: &[ProcessSpawnCapability],
+        control: Arc<dyn ProcessSpawnControl>,
+    ) -> ProcessSpawnOutcome {
+        control.checkpoint()?;
+        self.perform(request, granted)
+    }
 
     /// Abandon one engine-owned lifecycle handle during execution teardown.
     /// This is compensating containment, not a guest-requested signal: native
@@ -986,10 +1061,149 @@ impl NativeProcessSpawn {
         }
     }
 
-    fn validate_launch(
+    fn preflight_launch(&self, launch: &ProcessLaunch) -> Result<u64, ProcessSpawnError> {
+        let limits = &self.policy.limits;
+        let executable_bytes = u64::try_from(launch.executable.len()).unwrap_or(u64::MAX);
+        enforce_limit(
+            "executable_path_bytes",
+            executable_bytes,
+            limits.max_executable_path_bytes,
+        )?;
+        if launch.executable.contains('\0') {
+            return Err(policy_error(
+                "invalid_executable",
+                "executable path contains a NUL byte",
+            ));
+        }
+
+        let argv_count = u64::try_from(launch.argv.len()).unwrap_or(u64::MAX);
+        enforce_limit("argv_count", argv_count, limits.max_argv_count)?;
+        let argv_bytes = launch.argv.iter().try_fold(0_u64, |total, argument| {
+            if argument.contains('\0') {
+                return Err(policy_error("invalid_argv", "argv contains a NUL byte"));
+            }
+            Ok(total.saturating_add(u64::try_from(argument.len()).unwrap_or(u64::MAX)))
+        })?;
+        enforce_limit("argv_bytes", argv_bytes, limits.max_argv_bytes)?;
+
+        let env_count = self.policy.fixed_env.len().saturating_add(launch.env.len());
+        let env_count = u64::try_from(env_count).unwrap_or(u64::MAX);
+        enforce_limit("env_count", env_count, limits.max_env_count)?;
+        let fixed_env_bytes = self
+            .policy
+            .fixed_env
+            .iter()
+            .fold(0_u64, |total, (key, value)| {
+                total
+                    .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
+                    .saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
+            });
+        let env_bytes = launch.env.iter().try_fold(
+            fixed_env_bytes,
+            |total, (key, value)| -> Result<u64, ProcessSpawnError> {
+                validate_env_pair(key, value)?;
+                if !self.policy.allowed_env_keys.contains(key) {
+                    return Err(policy_error(
+                        "env_key_denied",
+                        format!("environment key {key} is not allowed"),
+                    ));
+                }
+                if self.policy.fixed_env.contains_key(key) {
+                    return Err(policy_error(
+                        "fixed_env_override",
+                        format!("environment key {key} is fixed by policy"),
+                    ));
+                }
+                Ok(total
+                    .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
+                    .saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX)))
+            },
+        )?;
+        enforce_limit("env_bytes", env_bytes, limits.max_env_bytes)?;
+
+        let cwd_bytes = launch
+            .cwd
+            .as_ref()
+            .map_or(0, |cwd| u64::try_from(cwd.len()).unwrap_or(u64::MAX));
+        enforce_limit("cwd_bytes", cwd_bytes, limits.max_cwd_bytes)?;
+        if launch.cwd.as_ref().is_some_and(|cwd| cwd.contains('\0')) {
+            return Err(policy_error(
+                "invalid_cwd",
+                "working directory contains a NUL byte",
+            ));
+        }
+
+        let prelaunch_bytes = executable_bytes
+            .saturating_add(argv_bytes)
+            .saturating_add(env_bytes)
+            .saturating_add(cwd_bytes);
+        enforce_limit(
+            "prelaunch_bytes",
+            prelaunch_bytes,
+            limits.max_prelaunch_bytes,
+        )?;
+        Ok(prelaunch_bytes)
+    }
+
+    fn preflight_process_request(
+        &self,
+        request: &ProcessSpawnRequest,
+    ) -> Result<(), ProcessSpawnError> {
+        let request_bytes = match request {
+            ProcessSpawnRequest::Run { launch, stdin, .. } => {
+                let prelaunch_bytes = self.preflight_launch(launch)?;
+                let stdin_bytes = u64::try_from(stdin.len()).unwrap_or(u64::MAX);
+                enforce_limit(
+                    "stdin_bytes",
+                    stdin_bytes,
+                    self.policy.limits.max_stdin_bytes,
+                )?;
+                prelaunch_bytes.saturating_add(stdin_bytes)
+            }
+            ProcessSpawnRequest::Spawn { launch } => self.preflight_launch(launch)?,
+            ProcessSpawnRequest::WriteStdin { handle, data } => {
+                let data_bytes = u64::try_from(data.len()).unwrap_or(u64::MAX);
+                enforce_limit(
+                    "stdin_bytes",
+                    data_bytes,
+                    self.policy.limits.max_stdin_bytes,
+                )?;
+                u64::try_from(handle.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(data_bytes)
+            }
+            ProcessSpawnRequest::CloseStdin { handle }
+            | ProcessSpawnRequest::Wait { handle, .. }
+            | ProcessSpawnRequest::Kill { handle, .. }
+            | ProcessSpawnRequest::Cleanup { handle } => {
+                u64::try_from(handle.len()).unwrap_or(u64::MAX)
+            }
+        };
+        enforce_limit(
+            "request_raw_bytes",
+            request_bytes,
+            self.policy.limits.max_request_bytes,
+        )?;
+        let mut counter = CountingWriter::default();
+        serde_json::to_writer(&mut counter, request).map_err(|error| {
+            ProcessSpawnError::InvalidState {
+                detail: format!("typed process request could not be size-counted: {error}"),
+            }
+        })?;
+        enforce_limit(
+            "request_bytes",
+            counter.bytes,
+            self.policy.limits.max_request_bytes,
+        )
+    }
+
+    fn validate_launch_controlled(
         &self,
         launch: &ProcessLaunch,
+        control: &dyn ProcessSpawnControl,
     ) -> Result<ValidatedLaunch, ProcessSpawnError> {
+        self.preflight_launch(launch)?;
+        control.checkpoint()?;
         if launch.shell && !self.policy.allow_shell {
             return Err(policy_error(
                 "shell_denied",
@@ -1025,6 +1239,7 @@ impl NativeProcessSpawn {
 
         let executable =
             std::fs::canonicalize(&launch.executable).map_err(executable_canonicalize_error)?;
+        control.checkpoint()?;
         let executable_string = path_string(&executable)?;
         if executable_string != launch.executable {
             return Err(policy_error(
@@ -1084,8 +1299,13 @@ impl NativeProcessSpawn {
             env.insert(key.clone(), value.clone());
         }
 
-        let executable_file =
-            open_verified_executable(&executable, expected_digest, &executable_string)?;
+        let executable_file = open_verified_executable(
+            &executable,
+            expected_digest,
+            &executable_string,
+            self.policy.limits.max_executable_bytes,
+            control,
+        )?;
 
         Ok(ValidatedLaunch {
             executable,
@@ -1095,6 +1315,14 @@ impl NativeProcessSpawn {
             cwd,
             stdio: launch.stdio,
         })
+    }
+
+    #[cfg(test)]
+    fn validate_launch(
+        &self,
+        launch: &ProcessLaunch,
+    ) -> Result<ValidatedLaunch, ProcessSpawnError> {
+        self.validate_launch_controlled(launch, &UnrestrictedProcessSpawnControl)
     }
 
     fn prepare_launch(&self, launch: &ProcessLaunch) -> Result<ProcessLaunch, ProcessSpawnError> {
@@ -1180,7 +1408,8 @@ impl NativeProcessSpawn {
         &self,
         request: &ProcessSpawnRequest,
     ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
-        Ok(match request {
+        self.preflight_process_request(request)?;
+        let prepared = match request {
             ProcessSpawnRequest::Run {
                 launch,
                 stdin,
@@ -1214,7 +1443,9 @@ impl NativeProcessSpawn {
             ProcessSpawnRequest::Cleanup { handle } => ProcessSpawnRequest::Cleanup {
                 handle: handle.clone(),
             },
-        })
+        };
+        self.preflight_process_request(&prepared)?;
+        Ok(prepared)
     }
 
     fn spawn_validated(
@@ -1292,17 +1523,30 @@ impl NativeProcessSpawn {
         })
     }
 
-    fn launch(&self, launch: &ProcessLaunch) -> Result<RunningChild, ProcessSpawnError> {
-        let launch = self.validate_launch(launch)?;
+    fn launch_controlled(
+        &self,
+        launch: &ProcessLaunch,
+        control: &dyn ProcessSpawnControl,
+    ) -> Result<RunningChild, ProcessSpawnError> {
+        let launch = self.validate_launch_controlled(launch, control)?;
         let permit = self.reserve_child()?;
-        self.spawn_validated(launch, permit)
+        control.checkpoint()?;
+        let mut running = self.spawn_validated(launch, permit)?;
+        if let Err(error) = control.checkpoint() {
+            let _ = terminate_remaining_process_group(&running);
+            kill_and_reap(&mut running.child);
+            let _ = collect_outputs(running);
+            return Err(error);
+        }
+        Ok(running)
     }
 
-    fn run(
+    fn run_controlled(
         &self,
         launch: &ProcessLaunch,
         stdin: &[u8],
         timeout_millis: Option<u64>,
+        control: &dyn ProcessSpawnControl,
     ) -> ProcessSpawnOutcome {
         enforce_limit(
             "stdin_bytes",
@@ -1315,7 +1559,7 @@ impl NativeProcessSpawn {
                 "run input requires piped stdin",
             ));
         }
-        let mut running = self.launch(launch)?;
+        let mut running = self.launch_controlled(launch, control)?;
         let stdin_writer = if stdin.is_empty() {
             drop(running.stdin.take());
             None
@@ -1333,7 +1577,7 @@ impl NativeProcessSpawn {
             None
         };
         let timeout = effective_timeout(timeout_millis, self.policy.limits.max_runtime_millis);
-        let process_result = wait_and_collect(running, timeout);
+        let process_result = wait_and_collect_controlled(running, timeout, control);
         let stdin_result = join_stdin_writer(stdin_writer);
         let (exit, stdout, stderr) = match process_result {
             Ok(result) => {
@@ -1354,12 +1598,16 @@ impl NativeProcessSpawn {
         })
     }
 
-    fn spawn(&self, launch: &ProcessLaunch) -> ProcessSpawnOutcome {
-        let running = self.launch(launch)?;
+    fn spawn_controlled(
+        &self,
+        launch: &ProcessLaunch,
+        control: Arc<dyn ProcessSpawnControl>,
+    ) -> ProcessSpawnOutcome {
+        let running = self.launch_controlled(launch, control.as_ref())?;
         let nonce = self.next_handle.fetch_add(1, Ordering::Relaxed);
         let handle = format!("ps-{}-{nonce:016x}", self.scope);
         lock_unpoison(&self.children).insert(handle.clone(), LifecycleChild::Running(running));
-        match self.start_watchdog(handle.clone()) {
+        match self.start_watchdog(handle.clone(), control) {
             Ok(cancel) => {
                 let mut children = lock_unpoison(&self.children);
                 match children.get_mut(&handle) {
@@ -1391,7 +1639,11 @@ impl NativeProcessSpawn {
         Ok(ProcessSpawnResponse::Spawned { handle })
     }
 
-    fn start_watchdog(&self, handle: String) -> Result<SyncSender<()>, ProcessSpawnError> {
+    fn start_watchdog(
+        &self,
+        handle: String,
+        control: Arc<dyn ProcessSpawnControl>,
+    ) -> Result<SyncSender<()>, ProcessSpawnError> {
         let children = Arc::downgrade(&self.children);
         let active_watchdogs = Arc::clone(&self.active_watchdogs);
         let timeout = Duration::from_millis(self.policy.limits.max_runtime_millis);
@@ -1406,9 +1658,23 @@ impl NativeProcessSpawn {
                 let _permit = ActiveWatchdogPermit {
                     active: active_watchdogs,
                 };
-                if cancelled.recv_timeout(timeout).is_ok() {
-                    return;
-                }
+                let deadline = Instant::now().checked_add(timeout);
+                let stop_error = loop {
+                    if let Err(error) = control.checkpoint() {
+                        break Some(error);
+                    }
+                    let Some(remaining) =
+                        deadline.and_then(|value| value.checked_duration_since(Instant::now()))
+                    else {
+                        break None;
+                    };
+                    let poll = remaining.min(Duration::from_millis(2));
+                    match cancelled.recv_timeout(poll) {
+                        Ok(()) => return,
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break None,
+                    }
+                };
                 let Some(children) = Weak::upgrade(&children) else {
                     return;
                 };
@@ -1420,19 +1686,19 @@ impl NativeProcessSpawn {
                     return;
                 };
                 let outcome = match running.child.try_wait() {
-                    Ok(Some(status)) => collect_outputs(running).map(|(stdout, stderr)| {
-                        ProcessSpawnResponse::Waited {
+                    Ok(Some(status)) => collect_outputs_controlled(running, control.as_ref()).map(
+                        |(stdout, stderr)| ProcessSpawnResponse::Waited {
                             exit: exit_from_status(status),
                             stdout,
                             stderr,
-                        }
-                    }),
+                        },
+                    ),
                     Ok(None) => {
                         let _ = terminate_remaining_process_group(&running);
                         kill_and_reap(&mut running.child);
                         let runtime_millis = elapsed_millis(running.started);
                         let _ = collect_outputs(running);
-                        Err(ProcessSpawnError::TimedOut { runtime_millis })
+                        Err(stop_error.unwrap_or(ProcessSpawnError::TimedOut { runtime_millis }))
                     }
                     Err(error) => {
                         let _ = terminate_remaining_process_group(&running);
@@ -1516,7 +1782,13 @@ impl NativeProcessSpawn {
         Ok(ProcessSpawnResponse::StdinClosed)
     }
 
-    fn wait(&self, handle: &str, timeout_millis: Option<u64>) -> ProcessSpawnOutcome {
+    fn wait_controlled(
+        &self,
+        handle: &str,
+        timeout_millis: Option<u64>,
+        control: &dyn ProcessSpawnControl,
+    ) -> ProcessSpawnOutcome {
+        control.checkpoint()?;
         let state = lock_unpoison(&self.children)
             .remove(handle)
             .ok_or_else(|| unknown_handle(handle))?;
@@ -1530,7 +1802,7 @@ impl NativeProcessSpawn {
             .max_runtime_millis
             .saturating_sub(elapsed_millis(running.started));
         let timeout = effective_timeout(timeout_millis, remaining_policy_millis);
-        let (exit, stdout, stderr) = wait_and_collect(running, timeout)?;
+        let (exit, stdout, stderr) = wait_and_collect_controlled(running, timeout, control)?;
         Ok(ProcessSpawnResponse::Waited {
             exit,
             stdout,
@@ -1538,7 +1810,12 @@ impl NativeProcessSpawn {
         })
     }
 
-    fn kill(&self, handle: &str, signal: ProcessSignal) -> ProcessSpawnOutcome {
+    fn kill_controlled(
+        &self,
+        handle: &str,
+        signal: ProcessSignal,
+        control: &dyn ProcessSpawnControl,
+    ) -> ProcessSpawnOutcome {
         if !self.policy.allowed_signals.contains(&signal) {
             return Err(policy_error(
                 "signal_denied",
@@ -1598,7 +1875,7 @@ impl NativeProcessSpawn {
                 });
             }
         };
-        let (stdout, stderr) = collect_outputs(running)?;
+        let (stdout, stderr) = collect_outputs_controlled(running, control)?;
         Ok(ProcessSpawnResponse::Killed {
             signal,
             exit: exit_from_status(status),
@@ -1613,6 +1890,10 @@ impl ProcessSpawnProvider for NativeProcessSpawn {
         "native-process-spawn"
     }
 
+    fn preflight_request(&self, request: &ProcessSpawnRequest) -> Result<(), ProcessSpawnError> {
+        self.preflight_process_request(request)
+    }
+
     fn prepare_request(
         &self,
         request: &ProcessSpawnRequest,
@@ -1625,27 +1906,50 @@ impl ProcessSpawnProvider for NativeProcessSpawn {
         request: &ProcessSpawnRequest,
         granted: &[ProcessSpawnCapability],
     ) -> ProcessSpawnOutcome {
+        self.perform_controlled(request, granted, Arc::new(UnrestrictedProcessSpawnControl))
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &ProcessSpawnRequest,
+        granted: &[ProcessSpawnCapability],
+        control: Arc<dyn ProcessSpawnControl>,
+    ) -> ProcessSpawnOutcome {
         let required = request.required_capability();
         if !process_capability_granted(granted, required) {
             return Err(ProcessSpawnError::CapabilityMissing {
                 capability: required,
             });
         }
+        self.preflight_process_request(request)?;
+        control.checkpoint()?;
         let request = self.prepare_process_request(request)?;
+        control.checkpoint()?;
         match &request {
             ProcessSpawnRequest::Run {
                 launch,
                 stdin,
                 timeout_millis,
-            } => self.run(launch, stdin, *timeout_millis),
-            ProcessSpawnRequest::Spawn { launch } => self.spawn(launch),
-            ProcessSpawnRequest::WriteStdin { handle, data } => self.write_stdin(handle, data),
-            ProcessSpawnRequest::CloseStdin { handle } => self.close_stdin(handle),
+            } => self.run_controlled(launch, stdin, *timeout_millis, control.as_ref()),
+            ProcessSpawnRequest::Spawn { launch } => {
+                self.spawn_controlled(launch, Arc::clone(&control))
+            }
+            ProcessSpawnRequest::WriteStdin { handle, data } => {
+                control.checkpoint()?;
+                self.write_stdin(handle, data)
+            }
+            ProcessSpawnRequest::CloseStdin { handle } => {
+                control.checkpoint()?;
+                self.close_stdin(handle)
+            }
             ProcessSpawnRequest::Wait {
                 handle,
                 timeout_millis,
-            } => self.wait(handle, *timeout_millis),
-            ProcessSpawnRequest::Kill { handle, signal } => self.kill(handle, *signal),
+            } => self.wait_controlled(handle, *timeout_millis, control.as_ref()),
+            ProcessSpawnRequest::Kill { handle, signal } => {
+                control.checkpoint()?;
+                self.kill_controlled(handle, *signal, control.as_ref())
+            }
             ProcessSpawnRequest::Cleanup { .. } => Err(ProcessSpawnError::Denied {
                 reason: "process cleanup is an engine-owned teardown operation".to_string(),
             }),
@@ -1712,10 +2016,29 @@ fn validate_policy(policy: &ProcessSpawnPolicy) -> Result<(), ProcessSpawnError>
             "jailed cwd root must be its exact canonical path",
         ));
     }
+    enforce_limit(
+        "fixed_env_count",
+        u64::try_from(policy.fixed_env.len()).unwrap_or(u64::MAX),
+        policy.limits.max_env_count,
+    )?;
+    let mut fixed_env_bytes = 0_u64;
     for (key, value) in &policy.fixed_env {
         validate_env_pair(key, value)?;
+        fixed_env_bytes = fixed_env_bytes
+            .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
     }
+    enforce_limit(
+        "fixed_env_bytes",
+        fixed_env_bytes,
+        policy.limits.max_env_bytes,
+    )?;
     for executable in policy.allowed_executables.keys() {
+        enforce_limit(
+            "executable_path_bytes",
+            u64::try_from(executable.len()).unwrap_or(u64::MAX),
+            policy.limits.max_executable_path_bytes,
+        )?;
         let path = Path::new(executable);
         if !path.is_absolute() {
             return Err(policy_error(
@@ -1733,6 +2056,18 @@ fn validate_policy(policy: &ProcessSpawnPolicy) -> Result<(), ProcessSpawnError>
                 format!("allowlisted executable is not an exact canonical file: {executable}"),
             ));
         }
+        let executable_bytes = canonical
+            .metadata()
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "inspect allowlisted executable".to_string(),
+                detail: error.to_string(),
+            })?
+            .len();
+        enforce_limit(
+            "executable_bytes",
+            executable_bytes,
+            policy.limits.max_executable_bytes,
+        )?;
     }
     for (alias, executable) in &policy.executable_aliases {
         validate_executable_alias(alias)?;
@@ -1777,6 +2112,17 @@ fn validate_policy(policy: &ProcessSpawnPolicy) -> Result<(), ProcessSpawnError>
         return Err(policy_error(
             "invalid_limit",
             "max_runtime_millis must be greater than zero",
+        ));
+    }
+    if policy.limits.max_executable_path_bytes == 0
+        || policy.limits.max_executable_bytes == 0
+        || policy.limits.max_cwd_bytes == 0
+        || policy.limits.max_prelaunch_bytes == 0
+        || policy.limits.max_request_bytes == 0
+    {
+        return Err(policy_error(
+            "invalid_limit",
+            "executable, cwd, prelaunch, and request byte limits must be greater than zero",
         ));
     }
     Ok(())
@@ -1846,13 +2192,22 @@ fn path_string(path: &Path) -> Result<String, ProcessSpawnError> {
         .ok_or_else(|| policy_error("non_utf8_path", path.display().to_string()))
 }
 
-fn digest_file(path: &Path) -> Result<[u8; 32], ProcessSpawnError> {
+fn digest_file(path: &Path, maximum_bytes: u64) -> Result<[u8; 32], ProcessSpawnError> {
     let mut file = File::open(path).map_err(|error| ProcessSpawnError::Io {
         operation: "open executable for digest".to_string(),
         detail: error.to_string(),
     })?;
+    let executable_bytes = file
+        .metadata()
+        .map_err(|error| ProcessSpawnError::Io {
+            operation: "inspect executable for digest".to_string(),
+            detail: error.to_string(),
+        })?
+        .len();
+    enforce_limit("executable_bytes", executable_bytes, maximum_bytes)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 16 * 1024];
+    let mut total_bytes = 0_u64;
     loop {
         let read = file
             .read(&mut buffer)
@@ -1863,6 +2218,8 @@ fn digest_file(path: &Path) -> Result<[u8; 32], ProcessSpawnError> {
         if read == 0 {
             break;
         }
+        total_bytes = total_bytes.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        enforce_limit("executable_bytes", total_bytes, maximum_bytes)?;
         digest.update(&buffer[..read]);
     }
     Ok(digest.finalize().into())
@@ -1873,28 +2230,33 @@ fn open_verified_executable(
     executable: &Path,
     expected_digest: &[u8; 32],
     executable_string: &str,
+    maximum_bytes: u64,
+    control: &dyn ProcessSpawnControl,
 ) -> Result<File, ProcessSpawnError> {
+    control.checkpoint()?;
     let mut executable_file = File::open(executable).map_err(|error| ProcessSpawnError::Io {
         operation: "open executable identity".to_string(),
         detail: error.to_string(),
     })?;
-    if !executable_file
+    let metadata = executable_file
         .metadata()
         .map_err(|error| ProcessSpawnError::Io {
             operation: "inspect executable identity".to_string(),
             detail: error.to_string(),
-        })?
-        .is_file()
-    {
+        })?;
+    if !metadata.is_file() {
         return Err(policy_error(
             "executable_not_file",
             executable_string.to_string(),
         ));
     }
+    enforce_limit("executable_bytes", metadata.len(), maximum_bytes)?;
 
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 16 * 1024];
+    let mut total_bytes = 0_u64;
     loop {
+        control.checkpoint()?;
         let read = executable_file
             .read(&mut buffer)
             .map_err(|error| ProcessSpawnError::Io {
@@ -1904,6 +2266,8 @@ fn open_verified_executable(
         if read == 0 {
             break;
         }
+        total_bytes = total_bytes.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        enforce_limit("executable_bytes", total_bytes, maximum_bytes)?;
         digest.update(&buffer[..read]);
     }
     let actual_digest: [u8; 32] = digest.finalize().into();
@@ -1921,6 +2285,8 @@ fn open_verified_executable(
     _executable: &Path,
     _expected_digest: &[u8; 32],
     _executable_string: &str,
+    _maximum_bytes: u64,
+    _control: &dyn ProcessSpawnControl,
 ) -> Result<File, ProcessSpawnError> {
     Err(ProcessSpawnError::NotImplemented {
         what: "descriptor-pinned executable launch is unavailable on this platform".to_string(),
@@ -1976,6 +2342,24 @@ fn enforce_limit(limit: &str, actual: u64, maximum: u64) -> Result<(), ProcessSp
         });
     }
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct CountingWriter {
+    bytes: u64,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(buffer.len()).unwrap_or(u64::MAX));
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn to_stdio(mode: ProcessStdioMode) -> Stdio {
@@ -2131,22 +2515,36 @@ fn terminal_operation_error(handle: &str, outcome: &ProcessSpawnOutcome) -> Proc
 }
 
 fn collect_outputs(mut running: RunningChild) -> Result<(Vec<u8>, Vec<u8>), ProcessSpawnError> {
-    cancel_watchdog(&mut running);
-    // A child may exit after spawning a descendant that inherited its pipes.
-    // Give ordinary buffered output a short grace period, then terminate the
-    // child's private process group before joining. Nonblocking reader threads
-    // have their own cancellation flag as the final bound, so even a
-    // session-escaping descendant cannot hold engine teardown forever.
-    wait_for_output_drains(&running, Duration::from_millis(50));
-    let group_teardown = if !output_drains_finished(&running) {
-        let result = terminate_remaining_process_group(&running);
-        wait_for_output_drains(&running, Duration::from_millis(250));
-        result
-    } else {
-        Ok(())
-    };
-    let stdout = join_reader(running.stdout, "stdout");
-    let stderr = join_reader(running.stderr, "stderr");
+    collect_outputs_inner(&mut running, None)
+}
+
+fn collect_outputs_controlled(
+    mut running: RunningChild,
+    control: &dyn ProcessSpawnControl,
+) -> Result<(Vec<u8>, Vec<u8>), ProcessSpawnError> {
+    collect_outputs_inner(&mut running, Some(control))
+}
+
+fn collect_outputs_inner(
+    running: &mut RunningChild,
+    control: Option<&dyn ProcessSpawnControl>,
+) -> Result<(Vec<u8>, Vec<u8>), ProcessSpawnError> {
+    cancel_watchdog(running);
+    // The direct child owns a private process group. Once it has been reaped,
+    // always terminate that group before accepting success: a descendant can
+    // redirect both capture pipes and would otherwise be invisible to drain
+    // completion. ESRCH is success when the group is already empty.
+    let group_teardown = terminate_remaining_process_group(running);
+    let control_error =
+        wait_for_output_drains_controlled(running, Duration::from_millis(250), control).err();
+    let stdout = join_reader(running.stdout.take(), "stdout");
+    let stderr = join_reader(running.stderr.take(), "stderr");
+    // A temporal refusal observed during output drain is the primary guest
+    // outcome. Group termination and reader joins above still run to preserve
+    // containment before the denial is returned.
+    if let Some(error) = control_error {
+        return Err(error);
+    }
     group_teardown?;
     let stdout = stdout?;
     let stderr = stderr?;
@@ -2215,13 +2613,24 @@ fn output_drains_finished(running: &RunningChild) -> bool {
             .is_none_or(|reader| reader.thread.is_finished())
 }
 
-fn wait_for_output_drains(running: &RunningChild, timeout: Duration) {
+fn wait_for_output_drains_controlled(
+    running: &RunningChild,
+    timeout: Duration,
+    control: Option<&dyn ProcessSpawnControl>,
+) -> Result<(), ProcessSpawnError> {
     let deadline = Instant::now().checked_add(timeout);
     while !output_drains_finished(running)
         && deadline.is_some_and(|deadline| Instant::now() < deadline)
     {
+        if let Some(control) = control {
+            control.checkpoint()?;
+        }
         thread::sleep(Duration::from_millis(2));
     }
+    if let Some(control) = control {
+        control.checkpoint()?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2257,9 +2666,18 @@ fn effective_timeout(requested_millis: Option<u64>, policy_millis: u64) -> Durat
     Duration::from_millis(requested_millis)
 }
 
+#[cfg(test)]
 fn wait_and_collect(
+    running: RunningChild,
+    timeout: Duration,
+) -> Result<(ProcessExit, Vec<u8>, Vec<u8>), ProcessSpawnError> {
+    wait_and_collect_controlled(running, timeout, &UnrestrictedProcessSpawnControl)
+}
+
+fn wait_and_collect_controlled(
     mut running: RunningChild,
     timeout: Duration,
+    control: &dyn ProcessSpawnControl,
 ) -> Result<(ProcessExit, Vec<u8>, Vec<u8>), ProcessSpawnError> {
     let deadline = Instant::now().checked_add(timeout);
     let status = loop {
@@ -2276,6 +2694,12 @@ fn wait_and_collect(
             Ok(Some(status)) => break status,
             Ok(None) => {}
         }
+        if let Err(error) = control.checkpoint() {
+            let _ = terminate_remaining_process_group(&running);
+            kill_and_reap(&mut running.child);
+            let _ = collect_outputs(running);
+            return Err(error);
+        }
         if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
             let _ = terminate_remaining_process_group(&running);
             kill_and_reap(&mut running.child);
@@ -2288,7 +2712,7 @@ fn wait_and_collect(
         thread::sleep(Duration::from_millis(2));
     };
     let exit = exit_from_status(status);
-    let (stdout, stderr) = collect_outputs(running)?;
+    let (stdout, stderr) = collect_outputs_controlled(running, control)?;
     Ok((exit, stdout, stderr))
 }
 
@@ -2658,11 +3082,189 @@ mod tests {
         let canonical = policy
             .authorize_executable(executable)
             .expect("authorize executable");
-        policy.limits.max_runtime_millis = 2_000;
+        // Keep ordinary lifecycle tests insulated from scheduler stalls when
+        // the full module runs in parallel. Timeout-specific tests supply a
+        // much smaller per-request bound explicitly.
+        policy.limits.max_runtime_millis = 10_000;
         (
             NativeProcessSpawn::new(policy).expect("native provider"),
             canonical,
         )
+    }
+
+    #[derive(Debug)]
+    struct TestStopControl {
+        stopped: Arc<AtomicUsize>,
+    }
+
+    impl ProcessSpawnControl for TestStopControl {
+        fn checkpoint(&self) -> Result<(), ProcessSpawnError> {
+            if self.stopped.load(Ordering::Acquire) == 0 {
+                Ok(())
+            } else {
+                Err(ProcessSpawnError::Denied {
+                    reason: "TEST_PROCESS_CONTROL_STOPPED".to_string(),
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn native_preflight_enforces_each_shape_budget_at_the_exact_boundary() {
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        policy.allowed_env_keys.insert("E".to_string());
+        policy.limits.max_executable_path_bytes = 4;
+        policy.limits.max_argv_count = 1;
+        policy.limits.max_argv_bytes = 3;
+        policy.limits.max_env_count = 1;
+        policy.limits.max_env_bytes = 3;
+        policy.limits.max_cwd_bytes = 3;
+        policy.limits.max_prelaunch_bytes = 13;
+        let boundary = ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "tool".to_string(),
+                argv: vec!["arg".to_string()],
+                env: BTreeMap::from([("E".to_string(), "vv".to_string())]),
+                cwd: Some("cwd".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: Vec::new(),
+            timeout_millis: None,
+        };
+        policy.limits.max_request_bytes = u64::try_from(
+            serde_json::to_vec(&boundary)
+                .expect("encode boundary")
+                .len(),
+        )
+        .expect("request length fits u64");
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        provider
+            .preflight_request(&boundary)
+            .expect("every shape field is exactly at its configured boundary");
+
+        let mut over_path = boundary.clone();
+        let ProcessSpawnRequest::Run { launch, .. } = &mut over_path else {
+            unreachable!("boundary request is Run")
+        };
+        launch.executable.push('x');
+        assert!(matches!(
+            provider.preflight_request(&over_path),
+            Err(ProcessSpawnError::LimitExceeded { limit, .. })
+                if limit == "executable_path_bytes"
+        ));
+
+        let mut over_argv = boundary.clone();
+        let ProcessSpawnRequest::Run { launch, .. } = &mut over_argv else {
+            unreachable!("boundary request is Run")
+        };
+        launch.argv.push(String::new());
+        assert!(matches!(
+            provider.preflight_request(&over_argv),
+            Err(ProcessSpawnError::LimitExceeded { limit, .. }) if limit == "argv_count"
+        ));
+
+        let mut over_env = boundary.clone();
+        let ProcessSpawnRequest::Run { launch, .. } = &mut over_env else {
+            unreachable!("boundary request is Run")
+        };
+        launch.env.insert("X".to_string(), String::new());
+        assert!(matches!(
+            provider.preflight_request(&over_env),
+            Err(ProcessSpawnError::LimitExceeded { limit, .. }) if limit == "env_count"
+        ));
+
+        let mut over_cwd = boundary.clone();
+        let ProcessSpawnRequest::Run { launch, .. } = &mut over_cwd else {
+            unreachable!("boundary request is Run")
+        };
+        launch.cwd = Some("cwdx".to_string());
+        assert!(matches!(
+            provider.preflight_request(&over_cwd),
+            Err(ProcessSpawnError::LimitExceeded { limit, .. }) if limit == "cwd_bytes"
+        ));
+
+        let oversized_handle = ProcessSpawnRequest::CloseStdin {
+            handle: "h".repeat(
+                usize::try_from(provider.policy().limits.max_request_bytes)
+                    .expect("test request limit fits usize"),
+            ),
+        };
+        assert!(matches!(
+            provider.preflight_request(&oversized_handle),
+            Err(ProcessSpawnError::LimitExceeded { limit, .. })
+                if limit == "request_bytes" || limit == "request_raw_bytes"
+        ));
+    }
+
+    #[test]
+    fn executable_image_limit_is_checked_before_authorization_hashing() {
+        let directory = tempfile::tempdir().expect("create executable fixture directory");
+        let executable = directory.path().join("oversized-image");
+        std::fs::write(&executable, [0_u8; 2]).expect("write executable fixture");
+        let mut policy = ProcessSpawnPolicy::jailed(directory.path()).expect("fixture policy");
+        policy.limits.max_executable_bytes = 1;
+
+        assert!(matches!(
+            policy.authorize_executable(&executable),
+            Err(ProcessSpawnError::LimitExceeded {
+                limit,
+                actual: 2,
+                maximum: 1,
+            }) if limit == "executable_bytes"
+        ));
+        assert!(policy.allowed_executables.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_spawn_watchdog_reaps_when_live_control_stops() {
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let (provider, canonical) = provider_for(&sleep);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let control = Arc::new(TestStopControl {
+            stopped: Arc::clone(&stopped),
+        });
+        let response = provider
+            .perform_controlled(
+                &ProcessSpawnRequest::Spawn {
+                    launch: ProcessLaunch {
+                        executable: canonical,
+                        argv: vec!["30".to_string()],
+                        env: BTreeMap::new(),
+                        cwd: None,
+                        shell: false,
+                        stdio: ProcessStdio::default(),
+                    },
+                },
+                &[ProcessSpawnCapability::Spawn],
+                control,
+            )
+            .expect("spawn controlled sleep");
+        let ProcessSpawnResponse::Spawned { handle } = response else {
+            panic!("expected Spawned response")
+        };
+        stopped.store(1, Ordering::Release);
+        for _ in 0..1_000 {
+            if provider.active_watchdogs.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+        assert_eq!(provider.active_watchdogs.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::Wait {
+                    handle,
+                    timeout_millis: Some(10),
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Err(ProcessSpawnError::Denied { reason })
+                if reason == "TEST_PROCESS_CONTROL_STOPPED"
+        ));
     }
 
     #[test]
@@ -3321,6 +3923,99 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exited_child_descendant_cannot_escape_by_redirecting_capture_pipes() {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let (provider, canonical_shell) = provider_for(&shell);
+        let command = format!("{} 5 >/dev/null 2>&1 & echo $!", sleep.display());
+        let response = provider
+            .perform(
+                &run_request(canonical_shell, vec!["-c", &command]),
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .expect("redirected descendant must remain inside the private process group");
+        let ProcessSpawnResponse::Run { stdout, .. } = response else {
+            panic!("run response");
+        };
+        let descendant = String::from_utf8(stdout)
+            .expect("shell pid output")
+            .trim()
+            .parse::<u32>()
+            .expect("descendant pid");
+        let proc_entry = PathBuf::from(format!("/proc/{descendant}"));
+        for _ in 0..100 {
+            if !proc_entry.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !proc_entry.exists(),
+            "a same-group descendant must be terminated even after closing inherited pipes"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancellation_during_post_exit_output_drain_remains_the_primary_outcome() {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let setsid = executable(&["/usr/bin/setsid", "/bin/setsid"]);
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let (provider, canonical_shell) = provider_for(&shell);
+        let temp_dir = tempfile::tempdir().expect("create drain-cancellation marker directory");
+        let marker = temp_dir.path().join("direct-child-exiting");
+        let escaped_ready = temp_dir.path().join("escaped-session-ready");
+        let command = format!(
+            "{} {} -c 'echo ready > {}; exec {} 0.5' & escaped_pid=$!; \
+             i=0; while [ ! -f {} ] && [ $i -lt 100 ]; do {} 0.01; i=$((i+1)); done; \
+             [ -f {} ] || exit 97; echo $escaped_pid > {}",
+            setsid.display(),
+            shell.display(),
+            escaped_ready.display(),
+            sleep.display(),
+            escaped_ready.display(),
+            sleep.display(),
+            escaped_ready.display(),
+            marker.display()
+        );
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let stop_after_parent_exit = {
+            let marker = marker.clone();
+            let stopped = Arc::clone(&stopped);
+            thread::spawn(move || {
+                for _ in 0..1_000 {
+                    if marker.is_file() {
+                        // The shell writes the marker immediately before
+                        // exiting. Give the direct child ample time to reap so
+                        // the stop is observed in the bounded drain phase.
+                        thread::sleep(Duration::from_millis(50));
+                        stopped.store(1, Ordering::Release);
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                panic!("shell must publish the drain-cancellation marker");
+            })
+        };
+        let outcome = provider.perform_controlled(
+            &run_request(canonical_shell, vec!["-c", &command]),
+            &[ProcessSpawnCapability::Spawn],
+            Arc::new(TestStopControl {
+                stopped: Arc::clone(&stopped),
+            }),
+        );
+        stop_after_parent_exit
+            .join()
+            .expect("drain-cancellation controller must not panic");
+        assert!(matches!(
+            outcome,
+            Err(ProcessSpawnError::Denied { reason })
+                if reason == "TEST_PROCESS_CONTROL_STOPPED"
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn zero_timeout_uses_the_policy_deadline_instead_of_immediate_expiry() {
@@ -3405,7 +4100,9 @@ mod tests {
         else {
             unreachable!()
         };
-        *stdin = vec![b'x'; 512 * 1024];
+        // Exceed an ordinary Linux pipe capacity while keeping the test's
+        // preflight serialization cost well below the teardown deadline.
+        *stdin = vec![b'x'; 128 * 1024];
         *timeout_millis = Some(10);
         let started = Instant::now();
         assert!(matches!(
@@ -3451,16 +4148,17 @@ mod tests {
         ));
         assert!(handle.starts_with("ps-"));
         assert!(!handle.contains(&std::process::id().to_string()));
-        assert!(matches!(
-            provider.perform(
-                &ProcessSpawnRequest::Kill {
-                    handle: handle.clone(),
-                    signal: ProcessSignal::Kill,
-                },
-                &[ProcessSpawnCapability::Spawn],
-            ),
-            Ok(ProcessSpawnResponse::Killed { .. })
-        ));
+        let kill = provider.perform(
+            &ProcessSpawnRequest::Kill {
+                handle: handle.clone(),
+                signal: ProcessSignal::Kill,
+            },
+            &[ProcessSpawnCapability::Spawn],
+        );
+        assert!(
+            matches!(kill, Ok(ProcessSpawnResponse::Killed { .. })),
+            "unexpected lifecycle kill outcome: {kill:?}"
+        );
         assert!(matches!(
             provider.perform(
                 &ProcessSpawnRequest::Wait {

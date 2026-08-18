@@ -99275,14 +99275,17 @@ mod async_runtime_tests_current {
         core.write_reg_with_label(1, first_constructor, Label::Public)
             .expect("public EventEmitter constructor");
         let execution = core
-            .execute(&test_module(vec![
-                Ir3Instruction::InstanceOf {
-                    dst: 2,
-                    lhs: 0,
-                    rhs: 1,
-                },
-                Ir3Instruction::Halt,
-            ]))
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::InstanceOf {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                Vec::new(),
+            ))
             .expect("ordinary IR3 instanceof execution");
         assert_eq!(core.registers[2], Value::Bool(true));
         assert_eq!(

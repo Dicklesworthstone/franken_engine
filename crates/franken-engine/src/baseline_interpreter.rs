@@ -7754,10 +7754,12 @@ impl CompactTier1Program {
     /// admission or execution semantics.
     pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
         let verified_function_frame_clear_width = Self::verified_function_frame_clear_width(module);
-        let verified_scope_inert_leaf_functions = verified_function_frame_clear_width
-            .is_some()
-            .then(|| Self::verified_scope_inert_leaf_functions(module))
-            .unwrap_or_else(|| vec![false; module.function_table.len()])
+        let verified_scope_inert_leaf_functions =
+            if verified_function_frame_clear_width.is_some() {
+                Self::verified_scope_inert_leaf_functions(module)
+            } else {
+                vec![false; module.function_table.len()]
+            }
             .into_boxed_slice();
         let mut compact_instruction_count = 0usize;
         let mut compact_work_instruction_count = 0usize;

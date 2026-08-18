@@ -55717,19 +55717,10 @@ impl InterpreterCore {
             ("slashes", Value::Bool(true)),
             ("auth", auth),
             ("host", Value::str(host)),
-            (
-                "port",
-                port.map(Value::str).unwrap_or(Value::Null),
-            ),
+            ("port", port.map(Value::str).unwrap_or(Value::Null)),
             ("hostname", Value::str(hostname)),
-            (
-                "hash",
-                hash.map(Value::str).unwrap_or(Value::Null),
-            ),
-            (
-                "search",
-                search.map(Value::str).unwrap_or(Value::Null),
-            ),
+            ("hash", hash.map(Value::str).unwrap_or(Value::Null)),
+            ("search", search.map(Value::str).unwrap_or(Value::Null)),
             ("pathname", Value::str(pathname)),
             ("path", Value::str(path)),
             ("href", Value::str(href)),

@@ -11646,6 +11646,28 @@ fn lower_expression_to_ir1_inner(
             right,
         } => {
             if *operator == BinaryOperator::Instanceof
+                && matches!(left.as_ref(), Expression::Identifier(name)
+                    if binding_lookup.contains_key(&cluster_module_alias_sentinel(name)))
+                && !matches!(right.as_ref(), Expression::Identifier(name)
+                    if binding_lookup.contains_key(&event_emitter_binding_sentinel(name)))
+            {
+                // bd-dspwz: the pre-scan admits the syntactic boolean
+                // observation so the cluster require can be elided, but the
+                // scoped lowering lookup is the authority for the RHS. This
+                // recheck rejects arbitrary constructors and lexical shadows
+                // after their EventEmitter sentinel has been suppressed.
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::FsRead,
+                    caller_profile: ambient_authority_profile_for_scope(
+                        root_scope_id,
+                        binding_lookup,
+                    ),
+                    accessor: "cluster instanceof unauthenticated constructor".to_string(),
+                    span: None,
+                });
+            }
+
+            if *operator == BinaryOperator::Instanceof
                 && matches!(right.as_ref(), Expression::Identifier(name) if name == "Array")
                 && !is_lexically_shadowed(binding_lookup, "Array")
             {
@@ -15218,8 +15240,8 @@ fn lower_expression_to_ir1_inner(
             }
             // bd-dspwz: a confirmed EventEmitter export is now a real lexical
             // builtin constructor reference. Let ordinary `New` lowering load
-            // and construct that value so TDZ, shadowing, identity, IFC, and
-            // `instanceof` all use the normal runtime path.
+            // and construct that value so post-initialization shadowing,
+            // identity, IFC, and `instanceof` all use the normal runtime path.
             // `new Error(msg)` / error subclasses have no global binding on the
             // eval scope path; recognize the constructor and route to the
             // `builtin:<Name>` hostcall (bd-bg9l1.27.10), mirroring the other
@@ -31292,6 +31314,10 @@ mod tests {
                 "detached",
                 "const EventEmitter = require('events').EventEmitter; new EventEmitter(); const Detached = EventEmitter; new Detached();",
             ),
+            (
+                "pre-use",
+                "new EventEmitter(); const EventEmitter = require('events').EventEmitter;",
+            ),
         ] {
             let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
             let ir0 = Ir0Module::from_syntax_tree(tree, format!("events_{label}_bd_dspwz.js"));
@@ -31317,6 +31343,35 @@ mod tests {
             0,
             "a lexical require shadow must never gain builtin provenance"
         );
+    }
+
+    #[test]
+    fn cluster_instanceof_requires_the_scoped_event_emitter_constructor_bd_dspwz() {
+        for (label, source) in [
+            (
+                "arbitrary-rhs",
+                "function Local() {} const cluster = require('cluster'); console.log(cluster instanceof Local);",
+            ),
+            (
+                "shadowed-rhs",
+                "const cluster = require('cluster'); const EventEmitter = require('events').EventEmitter; console.log(cluster instanceof EventEmitter); function probe(EventEmitter) { return cluster instanceof EventEmitter; }",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(
+                tree,
+                format!("cluster_instanceof_{label}_bd_dspwz.js"),
+            );
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("cluster instanceof must require authenticated EventEmitter RHS");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} must preserve ambient denial, got {error:?}"
+            );
+        }
     }
 
     #[test]

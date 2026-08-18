@@ -744,6 +744,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "SyntaxError" => Some("SyntaxError"),
         "EvalError" => Some("EvalError"),
         "URIError" => Some("URIError"),
+        "EventEmitter" => Some("EventEmitter"),
         _ => None,
     }
 }
@@ -2927,18 +2928,25 @@ pub enum BuiltinFunctionKind {
     /// `bound_object` is the ordinary property carrier that exposes
     /// `.listener`; private invocation state remains interpreter-owned.
     EmitterOnceWrapper,
+    /// First-class constructor reference for the finite Node EventEmitter
+    /// surface (bd-dspwz). Appended at the true enum tail because builtin
+    /// discriminants participate in deterministic register hashes.
+    EventEmitterConstructor,
 }
 
 impl BuiltinFunctionKind {
     /// Whether this first-class builtin implements ECMAScript `[[Construct]]`.
     ///
     /// Most builtins exposed by this interpreter are callable methods. The
-    /// `Function` and the materialized writable `Date` global are constructible
-    /// builtin values; other global constructors still lower directly to
+    /// `Function`, the materialized writable `Date` global, and the authenticated
+    /// EventEmitter reference are constructible builtin values; other globals lower to
     /// dedicated hostcalls instead of passing through [`Value::BuiltinFunction`]
     /// (bd-zyndq, bd-1piai).
     const fn is_constructible(self) -> bool {
-        matches!(self, Self::FunctionConstructor | Self::DateConstructor)
+        matches!(
+            self,
+            Self::FunctionConstructor | Self::DateConstructor | Self::EventEmitterConstructor
+        )
     }
 }
 
@@ -4511,6 +4519,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MathAtanh => "atanh",
             BuiltinFunctionKind::EmitterRawListeners => "rawListeners",
             BuiltinFunctionKind::EmitterOnceWrapper => "onceWrapper",
+            BuiltinFunctionKind::EventEmitterConstructor => "EventEmitter",
         }
     }
 }
@@ -33892,6 +33901,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::DateConstructor => {
                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))
             }
+            BuiltinFunctionKind::EventEmitterConstructor => {
+                self.dispatch_builtin_hostcall("builtin:EventEmitter", args, Some(module))
+            }
             BuiltinFunctionKind::DateNow => {
                 self.dispatch_builtin_hostcall("builtin:DateNow", args, Some(module))
             }
@@ -43345,6 +43357,11 @@ impl InterpreterCore {
                     owner_module.as_deref().unwrap_or(module),
                     closure_id,
                 )?
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::EventEmitterConstructor =>
+            {
+                self.ensure_builtin_prototype("EventEmitter")?
             }
             other => {
                 return Err(InterpreterError::TypeError {
@@ -60391,12 +60408,16 @@ impl InterpreterCore {
             return Ok(Value::Object(facade));
         }
 
+        // Materialize the seed-tracked prototype before the facade transaction.
+        // A later rollback may truncate only objects allocated after this point,
+        // so builtin_prototypes can never retain a dangling ObjectId.
+        let event_emitter_prototype = self.ensure_builtin_prototype("EventEmitter")?;
         let previous_heap_len = self.heap.len();
         let previous_estimated_bytes = self.estimated_memory_bytes;
         let result = (|| {
             let workers = self.alloc_object_with_properties(&[])?;
             let settings = self.alloc_object_with_properties(&[])?;
-            let facade = self.alloc_object_with_properties(&[])?;
+            let facade = self.alloc_object_with_prototype(Some(event_emitter_prototype))?;
             let bound = |kind| {
                 let mut builtin = BuiltinFunction::new_kind(kind);
                 builtin.bound_object = Some(facade.0);
@@ -60705,16 +60726,44 @@ impl InterpreterCore {
                     unreachable!("cluster facade constructor returned a non-object")
                 }
             }
+            "builtin:EventEmitterConstructorRef" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero EventEmitter constructor-reference arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::EventEmitterConstructor,
+                )))
+            }
             "builtin:EventEmitter" => {
-                // bd-2dmnn: both `EventEmitter()` and `new EventEmitter()` lower
-                // to this pure-compute constructor. Methods are resolved lazily
-                // from the `__type` tag through `collection_prototype_method`,
-                // while listener state remains in the shared HTTP emitter table.
-                let object_id = self.alloc_object_with_properties(&[
-                    ("__type", Value::str("EventEmitter")),
-                    ("__maxListeners", Value::Int(10)),
-                ])?;
-                Ok(Value::Object(object_id))
+                // bd-2dmnn / bd-dspwz: callable and constructible EventEmitter
+                // references share one canonical prototype. The private method
+                // table still resolves through `__type`; prototype membership
+                // is identity semantics, never an authority decision.
+                let prototype = self.ensure_builtin_prototype("EventEmitter")?;
+                let previous_heap_len = self.heap.len();
+                let previous_estimated_bytes = self.estimated_memory_bytes;
+                let result = (|| {
+                    let object_id = self.alloc_object_with_prototype(Some(prototype))?;
+                    self.set_object_property(
+                        object_id,
+                        "__type".to_string(),
+                        Value::str("EventEmitter"),
+                    )?;
+                    self.set_object_property(
+                        object_id,
+                        "__maxListeners".to_string(),
+                        Value::Int(10),
+                    )?;
+                    Ok(Value::Object(object_id))
+                })();
+                if result.is_err() {
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
+                }
+                result
             }
             "builtin:NetIsIP" | "builtin:NetIsIPv4" | "builtin:NetIsIPv6" => {
                 let candidate = self
@@ -99154,8 +99203,140 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn event_emitter_constructor_cluster_and_instances_share_canonical_prototype_bd_dspwz() {
+        let mut core = test_interpreter();
+        let first_constructor = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:EventEmitterConstructorRef",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("first EventEmitter constructor reference");
+        let second_constructor = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:EventEmitterConstructorRef",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("second EventEmitter constructor reference");
+        assert_eq!(first_constructor, second_constructor);
+        assert!(matches!(
+            &first_constructor,
+            Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::EventEmitterConstructor,
+                ..
+            })
+        ));
+
+        let Value::Object(emitter_id) = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:EventEmitter",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("construct standalone EventEmitter")
+        else {
+            panic!("EventEmitter constructor must return an object");
+        };
+        let Value::Object(cluster_id) = core
+            .construct_cluster_facade()
+            .expect("construct cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        let prototype = core
+            .builtin_prototypes
+            .get("EventEmitter")
+            .copied()
+            .expect("canonical EventEmitter prototype");
+        assert_eq!(core.heap[emitter_id.0 as usize].prototype, Some(prototype));
+        assert_eq!(core.heap[cluster_id.0 as usize].prototype, Some(prototype));
+
+        for tag in ["Cluster", "EventEmitter"] {
+            let forged = core
+                .alloc_object_with_properties(&[("__type", Value::str(tag))])
+                .expect("allocate forged tag object");
+            assert!(
+                !core
+                    .prototype_chain_contains(forged, prototype)
+                    .expect("walk forged object prototype chain"),
+                "a writable __type={tag:?} tag must not forge prototype identity"
+            );
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg_with_label(0, Value::Object(cluster_id), Label::Secret)
+            .expect("secret cluster candidate");
+        core.write_reg_with_label(1, first_constructor, Label::Public)
+            .expect("public EventEmitter constructor");
+        let execution = core
+            .execute(&test_module(vec![
+                Ir3Instruction::InstanceOf {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .expect("ordinary IR3 instanceof execution");
+        assert_eq!(core.registers[2], Value::Bool(true));
+        assert_eq!(
+            core.get_register_label(2).expect("instanceof result label"),
+            &Label::Secret,
+            "ordinary InstanceOf must join candidate and constructor labels"
+        );
+        assert_eq!(
+            execution.instructions_executed, 3,
+            "InstanceOf, Halt, and the empty Writable checkpoint scan are charged"
+        );
+    }
+
+    #[test]
+    fn event_emitter_instance_allocation_is_atomic_under_final_byte_refusal_bd_dspwz() {
+        let mut core = test_interpreter();
+        let prototype = core
+            .ensure_builtin_prototype("EventEmitter")
+            .expect("materialize EventEmitter prototype before instance transaction");
+        let baseline = core.sync_estimated_memory_bytes().expect("memory baseline");
+        let heap_before = core.heap.len();
+        core.dispatch_builtin_hostcall_inner(
+            "builtin:EventEmitter",
+            RegRange { start: 0, count: 0 },
+            None,
+        )
+        .expect("probe EventEmitter allocation");
+        let instance_delta = core.estimated_memory_bytes.saturating_sub(baseline);
+        assert!(instance_delta > 0);
+        core.rollback_heap_to_len(heap_before);
+        core.estimated_memory_bytes = baseline;
+        core.config.max_total_memory_bytes =
+            baseline.saturating_add(instance_delta).saturating_sub(1);
+
+        assert!(matches!(
+            core.dispatch_builtin_hostcall_inner(
+                "builtin:EventEmitter",
+                RegRange { start: 0, count: 0 },
+                None,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes, baseline);
+        assert_eq!(
+            core.builtin_prototypes.get("EventEmitter"),
+            Some(&prototype)
+        );
+    }
+
+    #[test]
     fn cluster_facade_allocation_is_atomic_under_final_byte_refusal_bd_9p2v3() {
         let mut core = test_interpreter();
+        let event_emitter_prototype = core
+            .ensure_builtin_prototype("EventEmitter")
+            .expect("materialize EventEmitter prototype before facade transaction");
         let baseline = core.sync_estimated_memory_bytes().expect("memory baseline");
         let heap_before = core.heap.len();
 
@@ -99186,6 +99367,11 @@ mod async_runtime_tests_current {
         assert_eq!(core.heap.len(), heap_before);
         assert_eq!(core.estimated_memory_bytes, baseline);
         assert!(core.cluster_facades.is_empty());
+        assert_eq!(
+            core.builtin_prototypes.get("EventEmitter"),
+            Some(&event_emitter_prototype),
+            "facade rollback must retain only the valid pre-transaction prototype"
+        );
     }
 
     #[test]

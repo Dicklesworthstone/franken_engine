@@ -148,17 +148,8 @@ fn event_emitter_constructor_and_prototype_identity_are_shared_bd_dspwz() {
 
 #[test]
 fn event_emitter_shadowing_and_unsupported_extraction_remain_bounded_bd_dspwz() {
-    let output = eval_console(
-        r#"
-        const cluster = require('cluster');
-        const EventEmitter = require('events').EventEmitter;
-        function probe(EventEmitter) { return cluster instanceof EventEmitter; }
-        console.log(cluster instanceof EventEmitter, probe(function Local() {}));
-        "#,
-    );
-    assert_eq!(output, "true false");
-
     for source in [
+        "const cluster = require('cluster'); const EventEmitter = require('events').EventEmitter; console.log(cluster instanceof EventEmitter); function probe(EventEmitter) { return cluster instanceof EventEmitter; }",
         "const EventEmitter = require('events')['EventEmitter']; new EventEmitter();",
         "let EventEmitter = require('events').EventEmitter; new EventEmitter();",
         "const EventEmitter = require('events').EventEmitter; new EventEmitter(); const Detached = EventEmitter; new Detached();",

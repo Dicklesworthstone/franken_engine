@@ -1099,12 +1099,12 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     for alias in confirmed_timers_promises_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(timers_promises_module_alias_sentinel(&alias), 0);
     }
-    // bd-2dmnn: `events` is also a lowering-only Node builtin surface. Record
-    // only the CJS bindings whose supported exports are actually consumed:
-    // destructured `EventEmitter` locals used as constructors/static constants,
+    // bd-2dmnn / bd-dspwz: `events` is also a finite Node builtin surface.
+    // Record only the CJS bindings whose supported exports are actually consumed:
+    // destructured or direct-member `EventEmitter` constructor references,
     // and module aliases used for `events.captureRejections`. This keeps a
     // bare/unused `require('events')` on the ambient-authority denial path.
-    for local in confirmed_event_emitter_destructured_requires(&ir0.tree.body, &binding_lookup) {
+    for local in confirmed_event_emitter_bindings(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(event_emitter_binding_sentinel(&local), 0);
     }
     for local in confirmed_events_once_destructured_requires(&ir0.tree.body, &binding_lookup) {
@@ -3798,9 +3798,20 @@ fn lower_statement_to_ir1_with_flow(
                             binding_lookup.insert(stream_promises_binding_sentinel(local), 0);
                         }
                         if let Some(&local_bid) = binding_lookup.get(local) {
-                            ops.push(Ir1Op::LoadLiteral {
-                                value: Ir1Literal::Undefined,
-                            });
+                            if binding_lookup.contains_key(&event_emitter_binding_sentinel(local)) {
+                                // bd-dspwz: unlike the remaining lowering-only
+                                // exports, EventEmitter is observable as a real
+                                // constructor value (`typeof`, identity,
+                                // `.prototype`, and ordinary `instanceof`).
+                                ops.push(Ir1Op::HostCall {
+                                    capability: "builtin:EventEmitterConstructorRef".to_string(),
+                                    arg_count: 0,
+                                });
+                            } else {
+                                ops.push(Ir1Op::LoadLiteral {
+                                    value: Ir1Literal::Undefined,
+                                });
+                            }
                             ops.push(Ir1Op::StoreBinding {
                                 binding_id: local_bid,
                             });
@@ -3854,6 +3865,14 @@ fn lower_statement_to_ir1_with_flow(
                     // (`builtin:Querystring*` / `builtin:Os*` hostcalls and
                     // string constants). Unused aliases stay ambient-refused.
                     if let BindingPattern::Identifier(alias) = &d.pattern
+                        && is_require_event_emitter_member_initializer(init, binding_lookup)
+                        && binding_lookup.contains_key(&event_emitter_binding_sentinel(alias))
+                    {
+                        ops.push(Ir1Op::HostCall {
+                            capability: "builtin:EventEmitterConstructorRef".to_string(),
+                            arg_count: 0,
+                        });
+                    } else if let BindingPattern::Identifier(alias) = &d.pattern
                         && is_require_cluster_module_initializer(init, binding_lookup)
                         && binding_lookup.contains_key(&cluster_module_alias_sentinel(alias))
                     {
@@ -14162,6 +14181,13 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            if event_emitter_prototype_member(object, property, *computed, binding_lookup) {
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:proto:EventEmitter".to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
             if events_capture_rejections_member(object, property, *computed, binding_lookup) {
                 ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::Boolean(false),
@@ -15190,36 +15216,10 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            // bd-2dmnn: a confirmed destructured `EventEmitter` export is a
-            // lowering-only constructor binding (the `events` module itself is
-            // never materialized). Route `new EventEmitter(...)` directly to
-            // the interpreter builtin and do not load the undefined shim local.
-            if event_emitter_constructor_capability(callee, binding_lookup).is_some() {
-                let arg_count = arguments.len();
-                if arg_count > u32::MAX as usize {
-                    return Err(LoweringPipelineError::TooManyArguments {
-                        count: arg_count,
-                        max: u32::MAX as usize,
-                    });
-                }
-                for arg in arguments {
-                    lower_expression_to_ir1(
-                        arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                }
-                ops.push(Ir1Op::HostCall {
-                    capability: "builtin:EventEmitter".to_string(),
-                    arg_count: arg_count as u32,
-                });
-                return Ok(());
-            }
+            // bd-dspwz: a confirmed EventEmitter export is now a real lexical
+            // builtin constructor reference. Let ordinary `New` lowering load
+            // and construct that value so TDZ, shadowing, identity, IFC, and
+            // `instanceof` all use the normal runtime path.
             // `new Error(msg)` / error subclasses have no global binding on the
             // eval scope path; recognize the constructor and route to the
             // `builtin:<Name>` hostcall (bd-bg9l1.27.10), mirroring the other
@@ -18530,6 +18530,11 @@ fn is_cluster_alias_usage(expr: &Expression, alias: &str) -> bool {
         Expression::Member { .. } => {
             module_alias_member_name(expr, alias).is_some_and(cluster_property_is_supported)
         }
+        Expression::Binary {
+            operator: BinaryOperator::Instanceof,
+            left,
+            ..
+        } => matches!(left.as_ref(), Expression::Identifier(name) if name == alias),
         _ => false,
     }
 }
@@ -19945,6 +19950,15 @@ fn module_alias_expr_has_rejected_use(
         }
         Expression::Call {
             callee, arguments, ..
+        } if surface == LoweringOnlyModuleAliasSurface::EventEmitter
+            && matches!(callee.as_ref(), Expression::Identifier(name) if name == alias) =>
+        {
+            arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+        }
+        Expression::Call {
+            callee, arguments, ..
         } if match surface {
             LoweringOnlyModuleAliasSurface::Net => net_alias_member_name(callee, alias)
                 .is_some_and(|method| net_method_capability(method).is_some()),
@@ -20036,6 +20050,43 @@ fn module_alias_expr_has_rejected_use(
             operator: BinaryOperator::Instanceof,
             left,
             right,
+        } if surface == LoweringOnlyModuleAliasSurface::Cluster
+            && matches!(left.as_ref(), Expression::Identifier(name) if name == alias) =>
+        {
+            module_alias_expr_has_rejected_use(right, alias, surface)
+        }
+        Expression::Binary {
+            operator: BinaryOperator::Instanceof,
+            left,
+            right,
+        } if surface == LoweringOnlyModuleAliasSurface::EventEmitter
+            && matches!(right.as_ref(), Expression::Identifier(name) if name == alias) =>
+        {
+            module_alias_expr_has_rejected_use(left, alias, surface)
+        }
+        Expression::Binary {
+            operator: BinaryOperator::StrictEqual | BinaryOperator::StrictNotEqual,
+            left,
+            right,
+        } if surface == LoweringOnlyModuleAliasSurface::EventEmitter
+            && matches!(left.as_ref(), Expression::Identifier(name) if name == alias) =>
+        {
+            !matches!(right.as_ref(), Expression::Identifier(name) if name == alias)
+                && module_alias_expr_has_rejected_use(right, alias, surface)
+        }
+        Expression::Binary {
+            operator: BinaryOperator::StrictEqual | BinaryOperator::StrictNotEqual,
+            left,
+            right,
+        } if surface == LoweringOnlyModuleAliasSurface::EventEmitter
+            && matches!(right.as_ref(), Expression::Identifier(name) if name == alias) =>
+        {
+            module_alias_expr_has_rejected_use(left, alias, surface)
+        }
+        Expression::Binary {
+            operator: BinaryOperator::Instanceof,
+            left,
+            right,
         } if surface == LoweringOnlyModuleAliasSurface::Net
             && net_alias_member_name(right, alias) == Some("Socket") =>
         {
@@ -20079,6 +20130,14 @@ fn module_alias_expr_has_rejected_use(
                 LoweringOnlyModuleAliasSurface::EventEmitter
                     | LoweringOnlyModuleAliasSurface::EventsModule
             ) && is_module_alias_usage(expr, alias, surface) =>
+        {
+            false
+        }
+        Expression::Unary {
+            operator: UnaryOperator::Typeof,
+            argument,
+        } if surface == LoweringOnlyModuleAliasSurface::EventEmitter
+            && matches!(argument.as_ref(), Expression::Identifier(name) if name == alias) =>
         {
             false
         }
@@ -20749,6 +20808,7 @@ fn module_alias_expression_is_predeclaration_call_hazard(
         && !is_require_cluster_module_initializer(expression, binding_lookup)
         && !is_require_child_process_module_initializer(expression, binding_lookup)
         && !is_require_url_module_initializer(expression, binding_lookup)
+        && !is_require_events_module_initializer(expression, binding_lookup)
 }
 
 fn module_alias_expression_has_predeclaration_call_hazard(
@@ -21854,16 +21914,21 @@ fn is_require_events_module_initializer(
         if well_formed_string_literal(specifier).is_some_and(is_events_module_specifier))
 }
 
-fn event_emitter_constructor_capability(
-    callee: &Expression,
+fn is_require_event_emitter_member_initializer(
+    expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Identifier(name) = callee else {
-        return None;
+) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expression
+    else {
+        return false;
     };
-    binding_lookup
-        .contains_key(&event_emitter_binding_sentinel(name))
-        .then_some("builtin:EventEmitter")
+    is_require_events_module_initializer(object, binding_lookup)
+        && well_formed_static_name(property).is_some_and(|name| name == "EventEmitter")
 }
 
 fn event_emitter_default_max_listeners_member(
@@ -21878,6 +21943,20 @@ fn event_emitter_default_max_listeners_member(
     matches!(object, Expression::Identifier(name)
         if binding_lookup.contains_key(&event_emitter_binding_sentinel(name)))
         && well_formed_static_name(property).is_some_and(|name| name == "defaultMaxListeners")
+}
+
+fn event_emitter_prototype_member(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    if computed {
+        return false;
+    }
+    matches!(object, Expression::Identifier(name)
+        if binding_lookup.contains_key(&event_emitter_binding_sentinel(name)))
+        && well_formed_static_name(property).is_some_and(|name| name == "prototype")
 }
 
 fn events_capture_rejections_member(
@@ -21896,8 +21975,25 @@ fn events_capture_rejections_member(
 
 fn is_event_emitter_usage(expr: &Expression, local: &str) -> bool {
     match expr {
-        Expression::New { callee, .. } => {
+        Expression::Call { callee, .. } | Expression::New { callee, .. } => {
             matches!(callee.as_ref(), Expression::Identifier(name) if name == local)
+        }
+        Expression::Unary {
+            operator: UnaryOperator::Typeof,
+            argument,
+        } => matches!(argument.as_ref(), Expression::Identifier(name) if name == local),
+        Expression::Binary {
+            operator: BinaryOperator::Instanceof,
+            right,
+            ..
+        } => matches!(right.as_ref(), Expression::Identifier(name) if name == local),
+        Expression::Binary {
+            operator: BinaryOperator::StrictEqual | BinaryOperator::StrictNotEqual,
+            left,
+            right,
+        } => {
+            matches!(left.as_ref(), Expression::Identifier(name) if name == local)
+                || matches!(right.as_ref(), Expression::Identifier(name) if name == local)
         }
         Expression::Member {
             object,
@@ -21907,7 +22003,7 @@ fn is_event_emitter_usage(expr: &Expression, local: &str) -> bool {
         } => {
             matches!(object.as_ref(), Expression::Identifier(name) if name == local)
                 && well_formed_static_name(property)
-                    .is_some_and(|name| name == "defaultMaxListeners")
+                    .is_some_and(|name| matches!(name, "defaultMaxListeners" | "prototype"))
         }
         _ => false,
     }
@@ -21943,32 +22039,44 @@ fn is_events_alias_once_call(expr: &Expression, alias: &str) -> bool {
                 && well_formed_static_name(property).is_some_and(|name| name == "once")))
 }
 
-fn confirmed_event_emitter_destructured_requires(
+fn confirmed_event_emitter_bindings(
     body: &[Statement],
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> BTreeSet<String> {
-    let mut candidates = BTreeSet::new();
-    for stmt in body {
-        if let Statement::VariableDeclaration(vd) = stmt {
-            for declaration in &vd.declarations {
-                let (Some(init), BindingPattern::ObjectPattern(properties)) =
-                    (&declaration.initializer, &declaration.pattern)
-                else {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                let Some(initializer) = &declarator.initializer else {
                     continue;
                 };
-                if !is_require_events_module_initializer(init, binding_lookup) {
-                    continue;
-                }
-                for property in properties {
-                    if property.computed
-                        || !well_formed_static_name(&property.key)
-                            .is_some_and(|name| name == "EventEmitter")
+                match &declarator.pattern {
+                    BindingPattern::Identifier(local)
+                        if is_require_event_emitter_member_initializer(
+                            initializer,
+                            binding_lookup,
+                        ) =>
                     {
-                        continue;
+                        candidates.insert(local.clone(), (statement_index, declarator_index));
                     }
-                    if let BindingPattern::Identifier(local) = &property.value {
-                        candidates.insert(local.clone());
+                    BindingPattern::ObjectPattern(properties)
+                        if is_require_events_module_initializer(initializer, binding_lookup) =>
+                    {
+                        for property in properties {
+                            if !property.computed
+                                && well_formed_static_name(&property.key)
+                                    .is_some_and(|name| name == "EventEmitter")
+                                && let BindingPattern::Identifier(local) = &property.value
+                            {
+                                candidates
+                                    .insert(local.clone(), (statement_index, declarator_index));
+                            }
+                        }
                     }
+                    _ => {}
                 }
             }
         }
@@ -21976,15 +22084,29 @@ fn confirmed_event_emitter_destructured_requires(
 
     candidates
         .into_iter()
-        .filter(|local| {
-            body.iter().any(|statement| {
+        .filter(|(local, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                local,
+                LoweringOnlyModuleAliasSurface::EventEmitter,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
                 module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    local,
+                    LoweringOnlyModuleAliasSurface::EventEmitter,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
                     statement,
                     local,
                     LoweringOnlyModuleAliasSurface::EventEmitter,
                 )
             })
         })
+        .map(|(local, _)| local)
         .collect()
 }
 
@@ -31076,15 +31198,16 @@ mod tests {
     }
 
     #[test]
-    fn events_destructured_constructor_lowers_to_builtin_bd_2dmnn() {
+    fn events_destructured_constructor_materializes_first_class_builtin_bd_dspwz() {
         let ops = lower_script_source_ops(
             "const { EventEmitter } = require('events');\n\
              const emitter = new EventEmitter();\n",
-            "events_constructor_bd_2dmnn.js",
+            "events_constructor_bd_dspwz.js",
         );
         assert!(ops.iter().any(|op| matches!(op,
             Ir1Op::HostCall { capability, arg_count: 0 }
-                if capability == "builtin:EventEmitter")));
+                if capability == "builtin:EventEmitterConstructorRef")));
+        assert!(ops.iter().any(|op| matches!(op, Ir1Op::Construct { .. })));
     }
 
     #[test]
@@ -31097,7 +31220,103 @@ mod tests {
         );
         assert!(ops_deep_match(&ops, &|op| matches!(op,
             Ir1Op::HostCall { capability, arg_count: 0 }
-                if capability == "builtin:EventEmitter")));
+                if capability == "builtin:EventEmitterConstructorRef")));
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::Construct { .. }
+        )));
+    }
+
+    #[test]
+    fn direct_event_emitter_member_and_cluster_instanceof_use_ordinary_values_bd_dspwz() {
+        let ops = lower_script_source_ops(
+            "const cluster = require('cluster');\n\
+             const EventEmitter = require('events').EventEmitter;\n\
+             console.log('instanceof-ee:' + (cluster instanceof EventEmitter));\n\
+             console.log(typeof EventEmitter);\n\
+             console.log(EventEmitter === EventEmitter);\n\
+             console.log(EventEmitter.prototype);\n",
+            "cluster_event_emitter_identity_bd_dspwz.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&ops, "builtin:EventEmitterConstructorRef"),
+            1
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:ClusterFacade"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:proto:EventEmitter"), 1);
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::BinaryOp {
+                operator: BinaryOperator::Instanceof
+            }
+        )));
+        assert!(!ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall { capability, .. } if capability == "module:require"
+        )));
+
+        let reversed_ops = lower_script_source_ops(
+            "const EventEmitter = require('node:events').EventEmitter;\n\
+             const cluster = require('node:cluster');\n\
+             console.log(cluster instanceof EventEmitter);\n",
+            "event_emitter_then_cluster_bd_dspwz.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&reversed_ops, "builtin:EventEmitterConstructorRef"),
+            1
+        );
+        assert_eq!(
+            count_hostcall_deep(&reversed_ops, "builtin:ClusterFacade"),
+            1
+        );
+        assert!(ops_deep_match(&reversed_ops, &|op| matches!(
+            op,
+            Ir1Op::BinaryOp {
+                operator: BinaryOperator::Instanceof
+            }
+        )));
+    }
+
+    #[test]
+    fn event_emitter_member_provenance_rejects_computed_mutable_and_detached_forms_bd_dspwz() {
+        for (label, source) in [
+            (
+                "computed",
+                "const EventEmitter = require('events')['EventEmitter']; new EventEmitter();",
+            ),
+            (
+                "mutable",
+                "let EventEmitter = require('events').EventEmitter; new EventEmitter();",
+            ),
+            (
+                "detached",
+                "const EventEmitter = require('events').EventEmitter; new EventEmitter(); const Detached = EventEmitter; new Detached();",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("events_{label}_bd_dspwz.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("unsupported EventEmitter possession must remain ambient-refused");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} must preserve ambient require denial, got {error:?}"
+            );
+        }
+
+        let shadowed_require_ops = lower_script_source_ops(
+            "const require = () => ({ EventEmitter: function LocalEmitter() {} });\n\
+             const EventEmitter = require('events').EventEmitter;\n\
+             console.log(typeof EventEmitter);\n",
+            "events_shadowed_require_bd_dspwz.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&shadowed_require_ops, "builtin:EventEmitterConstructorRef"),
+            0,
+            "a lexical require shadow must never gain builtin provenance"
+        );
     }
 
     #[test]
@@ -31187,7 +31406,10 @@ mod tests {
             )
         });
         assert_eq!(folded_capture_rejections, 1);
-        assert_eq!(count_hostcall_deep(&ops, "builtin:EventEmitter"), 1);
+        assert_eq!(
+            count_hostcall_deep(&ops, "builtin:EventEmitterConstructorRef"),
+            1
+        );
     }
 
     #[test]

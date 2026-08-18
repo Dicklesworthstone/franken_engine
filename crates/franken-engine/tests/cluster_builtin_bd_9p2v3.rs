@@ -109,6 +109,69 @@ fn node_and_bare_aliases_share_one_facade_identity_per_compilation_unit() {
 }
 
 #[test]
+fn node_cluster_fixture_0012_observes_real_event_emitter_identity_bd_dspwz() {
+    let output = eval_console(
+        r#"
+        const cluster = require('cluster');
+        const EventEmitter = require('events').EventEmitter;
+        console.log('instanceof-ee:' + (cluster instanceof EventEmitter));
+        console.log('on:' + typeof cluster.on);
+        console.log('once:' + typeof cluster.once);
+        console.log('emit:' + typeof cluster.emit);
+        "#,
+    );
+    assert_eq!(
+        output,
+        "instanceof-ee:true\non:function\nonce:function\nemit:function"
+    );
+}
+
+#[test]
+fn event_emitter_constructor_and_prototype_identity_are_shared_bd_dspwz() {
+    let output = eval_console(
+        r#"
+        const cluster = require('node:cluster');
+        const EventEmitter = require('events').EventEmitter;
+        const { EventEmitter: NodeEventEmitter } = require('node:events');
+        const emitter = new EventEmitter();
+        const calledEmitter = EventEmitter();
+        console.log(typeof EventEmitter, EventEmitter === NodeEventEmitter);
+        console.log(emitter instanceof EventEmitter, calledEmitter instanceof EventEmitter);
+        console.log(cluster instanceof EventEmitter);
+        console.log(Object.getPrototypeOf(emitter) === NodeEventEmitter.prototype);
+        console.log(({ __type: 'Cluster' }) instanceof EventEmitter);
+        console.log(({ __type: 'EventEmitter' }) instanceof EventEmitter);
+        "#,
+    );
+    assert_eq!(output, "function true\ntrue true\ntrue\ntrue\nfalse\nfalse");
+}
+
+#[test]
+fn event_emitter_shadowing_and_unsupported_extraction_remain_bounded_bd_dspwz() {
+    let output = eval_console(
+        r#"
+        const cluster = require('cluster');
+        const EventEmitter = require('events').EventEmitter;
+        function probe(EventEmitter) { return cluster instanceof EventEmitter; }
+        console.log(cluster instanceof EventEmitter, probe(function Local() {}));
+        "#,
+    );
+    assert_eq!(output, "true false");
+
+    for source in [
+        "const EventEmitter = require('events')['EventEmitter']; new EventEmitter();",
+        "let EventEmitter = require('events').EventEmitter; new EventEmitter();",
+        "const EventEmitter = require('events').EventEmitter; new EventEmitter(); const Detached = EventEmitter; new Detached();",
+    ] {
+        let error = eval_error(source);
+        assert!(
+            error.contains("ambient") || error.contains("Ambient") || error.contains("authority"),
+            "unsupported EventEmitter extraction must preserve ambient denial: {source:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn authenticated_alias_reaches_nested_closure_but_parameter_shadow_does_not_spoof_it() {
     let output = eval_console(
         r#"

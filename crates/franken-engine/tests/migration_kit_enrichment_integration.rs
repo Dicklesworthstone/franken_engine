@@ -576,7 +576,7 @@ fn lookup_api_url_metadata_matches_partial_whatwg_surface() {
     assert_eq!(url.support_level, ApiSupportLevel::PartiallySupported);
     assert_eq!(
         url.notes,
-        "partial WHATWG global: getters plus pathname/hash setters; legacy require('url') helpers tracked by bd-4awsz"
+        "partial WHATWG global: getters plus pathname/hash setters; usage-gated legacy require('url') fileURLToPath/format/parse supported"
     );
 
     let search_params = lookup_api("url", "URLSearchParams").unwrap();
@@ -586,7 +586,7 @@ fn lookup_api_url_metadata_matches_partial_whatwg_surface() {
     );
     assert_eq!(
         search_params.notes,
-        "partial WHATWG global: get/has/getAll/append/sort/delete/set/toString; legacy require('url') helpers tracked by bd-4awsz"
+        "partial WHATWG global: get/has/getAll/append/sort/delete/set/toString"
     );
 }
 

@@ -666,13 +666,13 @@ const KNOWN_APIS: &[KnownApi] = &[
         module_name: "url",
         api_name: "URL",
         support_level: ApiSupportLevel::PartiallySupported,
-        notes: "partial WHATWG global: getters plus pathname/hash setters; legacy require('url') helpers tracked by bd-4awsz",
+        notes: "partial WHATWG global: getters plus pathname/hash setters; usage-gated legacy require('url') fileURLToPath/format/parse supported",
     },
     KnownApi {
         module_name: "url",
         api_name: "URLSearchParams",
         support_level: ApiSupportLevel::PartiallySupported,
-        notes: "partial WHATWG global: get/has/getAll/append/sort/delete/set/toString; legacy require('url') helpers tracked by bd-4awsz",
+        notes: "partial WHATWG global: get/has/getAll/append/sort/delete/set/toString",
     },
     KnownApi {
         module_name: "util",

@@ -9,9 +9,10 @@
 //! The default [`DenyAllProcessSpawn`] provider performs no effects. The native
 //! provider is suitable only when the product layer has installed an explicit
 //! policy: it clears the ambient environment, confines working directories,
-//! verifies the canonical executable and its SHA-256 digest immediately before
-//! every launch, bounds input/output/runtime, and exposes only provider-scoped
-//! opaque handles (never native process identifiers).
+//! snapshots the canonical executable into a sealed anonymous file while
+//! verifying its SHA-256 digest, launches that immutable file identity, bounds
+//! input/output/runtime, and exposes only provider-scoped opaque handles (never
+//! native process identifiers).
 
 #![forbid(unsafe_code)]
 
@@ -31,6 +32,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::fd::AsFd;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
@@ -651,7 +654,8 @@ impl Default for ProcessSpawnLimits {
 ///
 /// `allowed_executables` maps an exact canonical path string to the SHA-256
 /// digest of the file authorized at that path. Both path and digest must match
-/// immediately before launch. An empty map denies every executable.
+/// the immutable executable snapshot used for launch. An empty map denies
+/// every executable.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpawnPolicy {
@@ -729,8 +733,9 @@ impl ProcessSpawnPolicy {
 
     /// Add one exact canonical executable and its current SHA-256 digest.
     ///
-    /// The provider re-hashes the file before every launch; this method does not
-    /// turn the setup-time digest into a trust-on-first-use bypass.
+    /// The provider snapshots and re-hashes the file before every launch; this
+    /// method does not turn the setup-time digest into a trust-on-first-use
+    /// bypass.
     pub fn authorize_executable(
         &mut self,
         executable: impl AsRef<Path>,
@@ -931,15 +936,15 @@ impl fmt::Debug for NativeProcessSpawn {
 impl NativeProcessSpawn {
     /// Install a policy after validating its canonical jail and fixed fields.
     pub fn new(policy: ProcessSpawnPolicy) -> Result<Self, ProcessSpawnError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             let _ = policy;
             Err(ProcessSpawnError::NotImplemented {
-                what: "native process containment requires a platform job/process-group backend"
+                what: "native process containment requires sealed executable identity and process-group backends"
                     .to_string(),
             })
         }
-        #[cfg(unix)]
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             validate_policy(&policy)?;
             Ok(Self {
@@ -1037,14 +1042,6 @@ impl NativeProcessSpawn {
                     format!("{executable_string} is not allowlisted"),
                 )
             })?;
-        let actual_digest = digest_file(&executable)?;
-        if &actual_digest != expected_digest {
-            return Err(policy_error(
-                "executable_digest_mismatch",
-                format!("digest changed for {executable_string}"),
-            ));
-        }
-
         let cwd_root = PathBuf::from(&self.policy.jailed_cwd_root);
         let requested_cwd = launch.cwd.as_deref().map_or_else(
             || cwd_root.clone(),
@@ -1087,8 +1084,12 @@ impl NativeProcessSpawn {
             env.insert(key.clone(), value.clone());
         }
 
+        let executable_image =
+            snapshot_verified_executable(&executable, expected_digest, &executable_string)?;
+
         Ok(ValidatedLaunch {
             executable,
+            executable_image: Some(executable_image),
             argv: launch.argv.clone(),
             env,
             cwd,
@@ -1221,7 +1222,16 @@ impl NativeProcessSpawn {
         launch: ValidatedLaunch,
         permit: ActiveChildPermit,
     ) -> Result<RunningChild, ProcessSpawnError> {
-        let mut command = Command::new(&launch.executable);
+        let executable_image =
+            launch
+                .executable_image
+                .as_ref()
+                .ok_or_else(|| ProcessSpawnError::InvalidState {
+                    detail: "validated launch is missing its verified executable image".to_string(),
+                })?;
+        let mut command = Command::new(pinned_executable_path(executable_image)?);
+        #[cfg(unix)]
+        command.arg0(&launch.executable);
         command
             .args(&launch.argv)
             .current_dir(&launch.cwd)
@@ -1662,6 +1672,7 @@ impl Drop for NativeProcessSpawn {
 
 struct ValidatedLaunch {
     executable: PathBuf,
+    executable_image: Option<File>,
     argv: Vec<String>,
     env: BTreeMap<String, String>,
     cwd: PathBuf,
@@ -1855,6 +1866,149 @@ fn digest_file(path: &Path) -> Result<[u8; 32], ProcessSpawnError> {
         digest.update(&buffer[..read]);
     }
     Ok(digest.finalize().into())
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn executable_snapshot_error(operation: &str, error: rustix::io::Errno) -> ProcessSpawnError {
+    ProcessSpawnError::Io {
+        operation: operation.to_string(),
+        detail: error.to_string(),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn create_executable_memfd() -> Result<File, ProcessSpawnError> {
+    let base_flags = rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING;
+
+    #[cfg(target_os = "linux")]
+    let descriptor = match rustix::fs::memfd_create(
+        "frankenengine-verified-executable",
+        base_flags | rustix::fs::MemfdFlags::EXEC,
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(rustix::io::Errno::INVAL) => {
+            rustix::fs::memfd_create("frankenengine-verified-executable", base_flags)
+                .map_err(|error| executable_snapshot_error("create executable snapshot", error))?
+        }
+        Err(error) => {
+            return Err(executable_snapshot_error(
+                "create executable snapshot",
+                error,
+            ));
+        }
+    };
+
+    #[cfg(target_os = "freebsd")]
+    let descriptor = rustix::fs::memfd_create("frankenengine-verified-executable", base_flags)
+        .map_err(|error| executable_snapshot_error("create executable snapshot", error))?;
+
+    Ok(File::from(descriptor))
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn snapshot_verified_executable(
+    executable: &Path,
+    expected_digest: &[u8; 32],
+    executable_string: &str,
+) -> Result<File, ProcessSpawnError> {
+    let mut source = File::open(executable).map_err(|error| ProcessSpawnError::Io {
+        operation: "open executable for snapshot".to_string(),
+        detail: error.to_string(),
+    })?;
+    if !source
+        .metadata()
+        .map_err(|error| ProcessSpawnError::Io {
+            operation: "inspect executable snapshot source".to_string(),
+            detail: error.to_string(),
+        })?
+        .is_file()
+    {
+        return Err(policy_error(
+            "executable_not_file",
+            executable_string.to_string(),
+        ));
+    }
+
+    let mut image = create_executable_memfd()?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "read executable snapshot source".to_string(),
+                detail: error.to_string(),
+            })?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        image
+            .write_all(&buffer[..read])
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "write executable snapshot".to_string(),
+                detail: error.to_string(),
+            })?;
+    }
+    let actual_digest: [u8; 32] = digest.finalize().into();
+    if &actual_digest != expected_digest {
+        return Err(policy_error(
+            "executable_digest_mismatch",
+            format!("digest changed for {executable_string}"),
+        ));
+    }
+
+    rustix::fs::fchmod(
+        image.as_fd(),
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::XUSR,
+    )
+    .map_err(|error| executable_snapshot_error("mark executable snapshot executable", error))?;
+    let required_seals = rustix::fs::SealFlags::SEAL
+        | rustix::fs::SealFlags::SHRINK
+        | rustix::fs::SealFlags::GROW
+        | rustix::fs::SealFlags::WRITE;
+    rustix::fs::fcntl_add_seals(image.as_fd(), required_seals)
+        .map_err(|error| executable_snapshot_error("seal executable snapshot", error))?;
+    let installed_seals = rustix::fs::fcntl_get_seals(image.as_fd())
+        .map_err(|error| executable_snapshot_error("verify executable snapshot seals", error))?;
+    if !installed_seals.contains(required_seals) {
+        return Err(ProcessSpawnError::InvalidState {
+            detail: "executable snapshot did not retain every required immutability seal"
+                .to_string(),
+        });
+    }
+    Ok(image)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn snapshot_verified_executable(
+    _executable: &Path,
+    _expected_digest: &[u8; 32],
+    _executable_string: &str,
+) -> Result<File, ProcessSpawnError> {
+    Err(ProcessSpawnError::NotImplemented {
+        what: "sealed executable snapshots are unavailable on this platform".to_string(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn pinned_executable_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
+    Ok(PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        image.as_raw_fd()
+    )))
+}
+
+#[cfg(target_os = "freebsd")]
+fn pinned_executable_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
+    Ok(PathBuf::from(format!("/dev/fd/{}", image.as_raw_fd())))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn pinned_executable_path(_image: &File) -> Result<PathBuf, ProcessSpawnError> {
+    Err(ProcessSpawnError::NotImplemented {
+        what: "sealed executable launch is unavailable on this platform".to_string(),
+    })
 }
 
 fn policy_error(code: impl Into<String>, detail: impl Into<String>) -> ProcessSpawnError {
@@ -2774,6 +2928,7 @@ mod tests {
         };
         let validated = ValidatedLaunch {
             executable: PathBuf::from(executable_secret),
+            executable_image: None,
             argv: vec![argument_secret.to_string()],
             env: BTreeMap::from([(env_key_secret.to_string(), env_value_secret.to_string())]),
             cwd: PathBuf::from(cwd_secret),
@@ -2955,6 +3110,53 @@ mod tests {
                 ref stderr,
             } if stdout == b"hello\n" && stderr.is_empty()
         ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn verified_executable_snapshot_is_sealed_and_survives_path_replacement() {
+        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let temporary = tempfile::tempdir().expect("temporary executable directory");
+        let authorized_path = temporary.path().join("echo");
+        let replacement_path = temporary.path().join("replacement");
+        std::fs::copy(&echo, &authorized_path).expect("copy authorized executable");
+        std::fs::copy(&shell, &replacement_path).expect("copy replacement executable");
+
+        let mut policy =
+            ProcessSpawnPolicy::jailed(temporary.path()).expect("temporary jailed policy");
+        let canonical = policy
+            .authorize_executable(&authorized_path)
+            .expect("authorize copied executable");
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let request = run_request(canonical, vec!["verified"]);
+        let ProcessSpawnRequest::Run { launch, .. } = request else {
+            unreachable!()
+        };
+        let validated = provider.validate_launch(&launch).expect("validated launch");
+
+        std::fs::rename(&replacement_path, &authorized_path)
+            .expect("replace the authorized pathname after validation");
+        let mut attempted_writer = validated
+            .executable_image
+            .as_ref()
+            .expect("verified executable image")
+            .try_clone()
+            .expect("clone sealed executable descriptor");
+        assert!(
+            attempted_writer.write_all(b"replacement").is_err(),
+            "the verified executable image must reject writes after sealing"
+        );
+
+        let permit = provider.reserve_child().expect("reserve child");
+        let running = provider
+            .spawn_validated(validated, permit)
+            .expect("spawn verified executable image");
+        let (exit, stdout, stderr) =
+            wait_and_collect(running, Duration::from_secs(1)).expect("collect verified process");
+        assert!(exit.success);
+        assert_eq!(stdout, b"verified\n");
+        assert!(stderr.is_empty());
     }
 
     #[cfg(unix)]

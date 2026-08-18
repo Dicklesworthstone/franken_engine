@@ -6141,14 +6141,22 @@ impl ScopeChain {
     }
 
     fn push(&mut self, max_scope_depth: u32) -> Result<(), InterpreterError> {
+        Self::preflight_push_depth(self.frames.len(), max_scope_depth)?;
+        self.frames.push(ScopeFrame::new());
+        Ok(())
+    }
+
+    fn preflight_push_depth(
+        current_depth: usize,
+        max_scope_depth: u32,
+    ) -> Result<(), InterpreterError> {
         let max_scope_depth = usize::try_from(max_scope_depth).unwrap_or(usize::MAX);
-        if self.frames.len() >= max_scope_depth {
+        if current_depth >= max_scope_depth {
             return Err(InterpreterError::ScopeDepthExceeded {
-                requested_depth: self.frames.len().saturating_add(1),
+                requested_depth: current_depth.saturating_add(1),
                 max_depth: max_scope_depth,
             });
         }
-        self.frames.push(ScopeFrame::new());
         Ok(())
     }
 
@@ -6296,6 +6304,11 @@ struct CallFrame {
     /// the chain with the captured environment. `None` for plain function
     /// calls where the chain is only extended, not replaced.
     saved_scope_chain: Option<Vec<ScopeFrame>>,
+    /// Logical scope bytes retained by a verified Tier-I leaf activation that
+    /// cannot inspect or mutate any lexical environment, create a closure, or
+    /// re-enter guest code. A non-zero value marks the optimized frame while
+    /// preserving the captured-environment plus empty-local-frame budget charge.
+    scope_inert_virtual_scope_bytes: u64,
     /// Async function object that owns the result promise for this frame.
     async_function_id: Option<u32>,
 }
@@ -7621,6 +7634,9 @@ pub(crate) struct CompactTier1Program {
     /// `None` keeps the canonical full-width reset for hand-authored or
     /// structurally unusual IR without changing module admission.
     verified_function_frame_clear_width: Option<u32>,
+    /// Per-function proof that execution is a non-reentrant register-only leaf
+    /// and therefore does not require a fresh lexical scope activation.
+    verified_scope_inert_leaf_functions: Box<[bool]>,
 }
 
 #[repr(u8)]
@@ -7729,6 +7745,11 @@ impl CompactTier1Program {
     /// admission or execution semantics.
     pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
         let verified_function_frame_clear_width = Self::verified_function_frame_clear_width(module);
+        let verified_scope_inert_leaf_functions = verified_function_frame_clear_width
+            .is_some()
+            .then(|| Self::verified_scope_inert_leaf_functions(module))
+            .unwrap_or_else(|| vec![false; module.function_table.len()])
+            .into_boxed_slice();
         let mut compact_instruction_count = 0usize;
         let mut compact_work_instruction_count = 0usize;
         let instructions = module
@@ -7759,7 +7780,71 @@ impl CompactTier1Program {
             instructions,
             compact_instruction_count,
             verified_function_frame_clear_width,
+            verified_scope_inert_leaf_functions,
         })
+    }
+
+    fn verified_scope_inert_leaf_functions(module: &Ir3Module) -> Vec<bool> {
+        let instruction_count = module.instructions.len();
+        module
+            .function_table
+            .iter()
+            .enumerate()
+            .map(|(function_index, function)| {
+                if function_index == 0 || function.is_generator {
+                    return false;
+                }
+                let start = function.entry as usize;
+                let end = module
+                    .function_table
+                    .get(function_index + 1)
+                    .map_or(instruction_count, |next| next.entry as usize);
+                module
+                    .instructions
+                    .get(start..end)
+                    .is_some_and(|window| window.iter().all(Self::instruction_is_scope_inert_leaf))
+            })
+            .collect()
+    }
+
+    fn instruction_is_scope_inert_leaf(instruction: &Ir3Instruction) -> bool {
+        matches!(
+            instruction,
+            Ir3Instruction::LoadInt { .. }
+                | Ir3Instruction::LoadFloat { .. }
+                | Ir3Instruction::LoadBool { .. }
+                | Ir3Instruction::LoadNull { .. }
+                | Ir3Instruction::LoadUndefined { .. }
+                | Ir3Instruction::Move { .. }
+                | Ir3Instruction::Add { .. }
+                | Ir3Instruction::Sub { .. }
+                | Ir3Instruction::Mul { .. }
+                | Ir3Instruction::Div { .. }
+                | Ir3Instruction::Mod { .. }
+                | Ir3Instruction::Exp { .. }
+                | Ir3Instruction::UnaryNeg { .. }
+                | Ir3Instruction::UnaryPlus { .. }
+                | Ir3Instruction::LogicalNot { .. }
+                | Ir3Instruction::BitNot { .. }
+                | Ir3Instruction::Lt { .. }
+                | Ir3Instruction::Lte { .. }
+                | Ir3Instruction::Gt { .. }
+                | Ir3Instruction::Gte { .. }
+                | Ir3Instruction::Eq { .. }
+                | Ir3Instruction::StrictEq { .. }
+                | Ir3Instruction::NotEq { .. }
+                | Ir3Instruction::StrictNotEq { .. }
+                | Ir3Instruction::BitAnd { .. }
+                | Ir3Instruction::BitOr { .. }
+                | Ir3Instruction::BitXor { .. }
+                | Ir3Instruction::Shl { .. }
+                | Ir3Instruction::Shr { .. }
+                | Ir3Instruction::Ushr { .. }
+                | Ir3Instruction::Jump { .. }
+                | Ir3Instruction::JumpIf { .. }
+                | Ir3Instruction::JumpIfNullish { .. }
+                | Ir3Instruction::Return { .. }
+        )
     }
 
     /// Derive one conservative clear width for every stacked function frame.
@@ -8026,6 +8111,13 @@ impl CompactTier1Program {
         self.verified_function_frame_clear_width
             .filter(|width| *width > 0 && *width <= max_registers)
             .map(|width| width as usize)
+    }
+
+    fn scope_inert_leaf_function(&self, function_index: u32) -> bool {
+        self.verified_scope_inert_leaf_functions
+            .get(function_index as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     fn compile_instruction(instruction: &Ir3Instruction) -> Option<CompactTier1Instruction> {
@@ -35382,8 +35474,14 @@ impl InterpreterCore {
         // not leak into the caller's unwind state.
         self.catch_frames
             .retain(|frame| frame.call_depth < current_depth);
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_closure_bytes = self.closures_memory_bytes();
+        let scope_inert_activation = self
+            .call_stack
+            .last()
+            .is_some_and(|frame| frame.scope_inert_virtual_scope_bytes > 0);
+        let previous_scope_bytes =
+            (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
+        let previous_closure_bytes =
+            (!scope_inert_activation).then(|| self.closures_memory_bytes());
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         if let Some(mut frame) = self.call_stack.pop() {
             let completion = if frame.derived_constructor {
@@ -35420,11 +35518,16 @@ impl InterpreterCore {
             let return_ip = frame.return_ip;
             self.restore_call_frame_state(&mut frame);
             self.ip = return_ip;
-            let frame_memory_result = self.apply_scope_closure_call_stack_memory_delta(
-                previous_scope_bytes,
-                previous_closure_bytes,
-                previous_call_stack_bytes,
-            );
+            let frame_memory_result = match (previous_scope_bytes, previous_closure_bytes) {
+                (Some(previous_scope_bytes), Some(previous_closure_bytes)) => self
+                    .apply_scope_closure_call_stack_memory_delta(
+                        previous_scope_bytes,
+                        previous_closure_bytes,
+                        previous_call_stack_bytes,
+                    ),
+                (None, None) => self.apply_call_stack_memory_delta(previous_call_stack_bytes),
+                _ => unreachable!("scope and closure accounting share one activation proof"),
+            };
             if let Err(error) = frame_memory_result {
                 if let (Some(async_id), Some(label)) = (async_function_id, async_failure_label) {
                     self.terminally_reject_abandoned_async_functions(&[async_id], label);
@@ -37336,6 +37439,7 @@ impl InterpreterCore {
             saved_finally_mode_depth: self.finally_frames.len(),
             saved_scope_depth: scope_depth,
             saved_scope_chain,
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         });
 
@@ -37582,6 +37686,7 @@ impl InterpreterCore {
                 saved_finally_mode_depth: 0,
                 saved_scope_depth,
                 saved_scope_chain: None,
+                scope_inert_virtual_scope_bytes: 0,
                 async_function_id: None,
             }],
             ip: func.entry as usize,
@@ -39230,6 +39335,7 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
+                                scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: Some(async_id),
                             });
 
@@ -39344,6 +39450,8 @@ impl InterpreterCore {
                                     });
                                 }
                             };
+                            let scope_inert_activation = compact_tier1
+                                .is_some_and(|plan| plan.scope_inert_leaf_function(func_idx));
 
                             let effective_depth = self.effective_call_depth();
                             if effective_depth >= self.config.max_call_depth {
@@ -39408,17 +39516,36 @@ impl InterpreterCore {
                                 .saturating_add(Self::estimate_label_bytes(&call_this_label));
                             let scope_depth = self.scope_chain.depth();
                             let saved_chain = if captured_env.is_some() {
-                                Some(
-                                    self.snapshot_scope_chain_with_temporary_budget(
+                                if scope_inert_activation {
+                                    self.preflight_scope_chain_snapshot_with_temporary_budget(
                                         binding_temporary_bytes
                                             .saturating_add(call_this_temporary_bytes),
-                                    )?,
-                                )
+                                    )?;
+                                    None
+                                } else {
+                                    Some(
+                                        self.snapshot_scope_chain_with_temporary_budget(
+                                            binding_temporary_bytes
+                                                .saturating_add(call_this_temporary_bytes),
+                                        )?,
+                                    )
+                                }
                             } else {
                                 None
                             };
-                            let previous_scope_bytes = self.scope_chain_memory_bytes();
-                            let previous_closure_bytes = self.closures_memory_bytes();
+                            if scope_inert_activation {
+                                let virtual_scope_depth = captured_env
+                                    .as_ref()
+                                    .map_or(scope_depth, |environment| environment.len());
+                                ScopeChain::preflight_push_depth(
+                                    virtual_scope_depth,
+                                    self.config.max_scope_depth,
+                                )?;
+                            }
+                            let previous_scope_bytes =
+                                (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
+                            let previous_closure_bytes =
+                                (!scope_inert_activation).then(|| self.closures_memory_bytes());
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
                             self.call_stack.push(CallFrame {
@@ -39449,26 +39576,42 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
+                                scope_inert_virtual_scope_bytes: if scope_inert_activation {
+                                    captured_env_bytes
+                                        .saturating_add(MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES)
+                                } else {
+                                    0
+                                },
                                 async_function_id: None,
                             });
 
-                            // If calling a closure, restore its captured environment.
-                            if let Some(env) = captured_env {
-                                self.scope_chain.frames = env;
-                            }
+                            if scope_inert_activation {
+                                if let Err(err) =
+                                    self.apply_call_stack_memory_delta(previous_call_stack_bytes)
+                                {
+                                    self.rollback_call_setup_state();
+                                    return Err(err);
+                                }
+                            } else {
+                                // If calling a closure, restore its captured environment.
+                                if let Some(env) = captured_env {
+                                    self.scope_chain.frames = env;
+                                }
 
-                            // Push a fresh scope for the callee's locals.
-                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup_state();
-                                return Err(err);
-                            }
-                            if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                                previous_scope_bytes,
-                                previous_closure_bytes,
-                                previous_call_stack_bytes,
-                            ) {
-                                self.rollback_call_setup_state();
-                                return Err(err);
+                                // Push a fresh scope for the callee's locals.
+                                if let Err(err) = self.scope_chain.push(self.config.max_scope_depth)
+                                {
+                                    self.rollback_call_setup_state();
+                                    return Err(err);
+                                }
+                                if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                                    previous_scope_bytes.expect("ordinary scope accounting"),
+                                    previous_closure_bytes.expect("ordinary closure accounting"),
+                                    previous_call_stack_bytes,
+                                ) {
+                                    self.rollback_call_setup_state();
+                                    return Err(err);
+                                }
                             }
 
                             self.enter_stacked_register_frame(compact_tier1);
@@ -39838,6 +39981,7 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
+                                scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: Some(async_id),
                             });
 
@@ -40001,6 +40145,7 @@ impl InterpreterCore {
                         saved_finally_mode_depth: self.finally_frames.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
+                        scope_inert_virtual_scope_bytes: 0,
                         async_function_id: None,
                     });
 
@@ -41427,6 +41572,7 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
+                                scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: None,
                             });
 
@@ -71230,6 +71376,7 @@ impl InterpreterCore {
                     .as_ref()
                     .map_or(0, |frames| Self::estimate_scope_chain_bytes(frames)),
             )
+            .saturating_add(frame.scope_inert_virtual_scope_bytes)
     }
 
     fn estimate_call_frame_snapshot_clone_bytes(frame: &CallFrame) -> u64 {
@@ -71268,6 +71415,7 @@ impl InterpreterCore {
             .saturating_add(frame.saved_scope_chain.as_ref().map_or(0, |frames| {
                 Self::estimate_scope_chain_shallow_clone_bytes(frames)
             }))
+            .saturating_add(frame.scope_inert_virtual_scope_bytes)
     }
 
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
@@ -71984,6 +72132,13 @@ impl InterpreterCore {
         )
     }
 
+    fn apply_call_stack_memory_delta(
+        &mut self,
+        previous_call_stack_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(previous_call_stack_bytes, self.call_stack_memory_bytes())
+    }
+
     fn apply_scope_closure_call_stack_realm_memory_delta(
         &mut self,
         previous_scope_bytes: u64,
@@ -72059,11 +72214,18 @@ impl InterpreterCore {
         &self,
         temporary_bytes: u64,
     ) -> Result<Vec<ScopeFrame>, InterpreterError> {
+        self.preflight_scope_chain_snapshot_with_temporary_budget(temporary_bytes)?;
+        Ok(self.scope_chain.snapshot())
+    }
+
+    fn preflight_scope_chain_snapshot_with_temporary_budget(
+        &self,
+        temporary_bytes: u64,
+    ) -> Result<(), InterpreterError> {
         self.check_temporary_memory_budget(
             temporary_bytes
                 .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames)),
-        )?;
-        Ok(self.scope_chain.snapshot())
+        )
     }
 
     fn rollback_call_setup_state(&mut self) {
@@ -84064,6 +84226,7 @@ mod async_runtime_tests_current {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -85896,10 +86059,24 @@ mod async_runtime_tests_current {
             saved_finally_mode_depth: 0,
             saved_scope_depth: core.scope_chain.depth(),
             saved_scope_chain: None,
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         };
         let frame_bytes = InterpreterCore::estimate_call_frame_bytes(&frame);
         let snapshot_bytes = InterpreterCore::estimate_call_frame_snapshot_clone_bytes(&frame);
+        let virtual_scope_bytes = 137;
+        let mut virtual_scope_frame = frame.clone();
+        virtual_scope_frame.scope_inert_virtual_scope_bytes = virtual_scope_bytes;
+        assert_eq!(
+            InterpreterCore::estimate_call_frame_bytes(&virtual_scope_frame),
+            frame_bytes + virtual_scope_bytes,
+            "verified scope-inert activation must retain its exact logical live charge"
+        );
+        assert_eq!(
+            InterpreterCore::estimate_call_frame_snapshot_clone_bytes(&virtual_scope_frame),
+            snapshot_bytes + virtual_scope_bytes,
+            "capturing an optimized frame must retain its exact logical scope charge"
+        );
         let mut public_labels = frame.clone();
         public_labels.new_target_label = Label::Public;
         public_labels.super_label = Label::Public;
@@ -100566,6 +100743,7 @@ mod function_prototype_call_apply_tests_current {
             saved_finally_mode_depth: 0,
             saved_scope_depth: core.scope_chain.depth(),
             saved_scope_chain: None,
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: Some(async_id),
         });
         core.register_base = core.config.max_registers as usize;
@@ -105189,6 +105367,151 @@ mod tests {
             baseline_core.estimated_memory_bytes(),
             baseline_core.recompute_estimated_memory_bytes()
         );
+    }
+
+    fn scope_inert_leaf_call_module() -> Ir3Module {
+        test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 20 },
+                Ir3Instruction::LoadInt { dst: 2, value: 22 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 3,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 5,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("add".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_matches_full_activation_bd_bridge_5_3() {
+        let module = scope_inert_leaf_call_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact leaf plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, true]);
+
+        let config = test_quickjs_config();
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-scope-inert-leaf");
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("scope-inert compact call");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-scope-inert-leaf");
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("full scope activation call");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(42));
+        assert_eq!(
+            compact_core.scope_chain.frames.len(),
+            baseline_core.scope_chain.frames.len()
+        );
+        assert!(compact_core.call_stack.is_empty());
+        assert_eq!(compact_core.register_base, 0);
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            baseline_core.estimated_memory_bytes(),
+            baseline_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_preserves_scope_depth_refusal_bd_bridge_5_3() {
+        let module = scope_inert_leaf_call_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact leaf plan");
+        let mut config = test_quickjs_config();
+        config.max_scope_depth = 1;
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-scope-depth");
+        let compact_error = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("virtual leaf scope must retain the depth refusal");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-scope-depth");
+        let baseline_error = baseline_core
+            .execute(&module)
+            .expect_err("full leaf scope must hit the same depth refusal");
+
+        assert_eq!(compact_error, baseline_error);
+        assert!(matches!(
+            compact_error,
+            InterpreterError::ScopeDepthExceeded {
+                requested_depth: 2,
+                max_depth: 1
+            }
+        ));
+        assert!(compact_core.call_stack.is_empty());
+        assert_eq!(compact_core.register_base, 0);
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_rejects_reentrant_or_scope_ops_bd_bridge_5_3() {
+        let mut module = scope_inert_leaf_call_module();
+        module.instructions[5] = Ir3Instruction::CreateClosure {
+            dst: 2,
+            function_index: 1,
+            capture_count: 0,
+        };
+        let plan = CompactTier1Program::compile(&module).expect("mixed compact plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, false]);
+
+        module.instructions[5] = Ir3Instruction::Call {
+            callee: 0,
+            args: RegRange { start: 1, count: 0 },
+            dst: 2,
+        };
+        let plan = CompactTier1Program::compile(&module).expect("reentrant compact plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, false]);
+
+        module.instructions[5] = Ir3Instruction::LoadScoped {
+            dst: 2,
+            name_pool_index: 0,
+        };
+        let plan = CompactTier1Program::compile(&module).expect("scope-reading compact plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, false]);
+
+        module.instructions[5] = Ir3Instruction::Add {
+            dst: 2,
+            lhs: 0,
+            rhs: 1,
+        };
+        module.function_table[1].is_generator = true;
+        let plan = CompactTier1Program::compile(&module).expect("generator compact plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, false]);
     }
 
     #[test]
@@ -113312,6 +113635,7 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -113488,6 +113812,7 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: Some(async_function_id),
         });
         core.sync_estimated_memory_bytes()
@@ -113671,6 +113996,7 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -113771,6 +114097,7 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -114533,6 +114860,7 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
+            scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()

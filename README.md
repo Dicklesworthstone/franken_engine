@@ -249,7 +249,7 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 | Integration tests in `crates/franken-engine/tests/` | 1,653 top-level files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
-| Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
+| Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
 | Tracked beads in `.beads/issues.jsonl` | 4,511 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
@@ -273,7 +273,7 @@ franken_engine/
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)
 │   └── franken-core/                # Extracted runtime; included in workspace and standalone compileable
-├── docs/                            # Charters, contracts, audits, gate specs (727 top-level files + subdirs)
+├── docs/                            # Charters, contracts, audits, gate specs (727 top-level files + subdirs including docs/planning/)
 ├── examples/                        # 13 impossible-by-default capabilities across 24 numbered demo dirs (01..26, gaps at 08/10) + live runtime examples
 ├── scripts/                         # 293 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback

@@ -2,11 +2,75 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
-Base synthesis window: project inception on 2026-02-18 through `d51f2715` (2026-05-15). Dated post-snapshot sections below record later changes.
+Scope window: project inception on 2026-02-18 through HEAD
+[`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8)
+(2026-08-19). Base synthesis covered inception through
+[`d51f2715`](https://github.com/Dicklesworthstone/franken_engine/commit/d51f2715)
+(2026-05-15). Dated post-snapshot sections below record later changes, including
+the current window after
+[`7ec31d156`](https://github.com/Dicklesworthstone/franken_engine/commit/7ec31d156bed6af58a2c292862201002c5900c68)
+(2026-07-25).
 
 The base synthesis was rebuilt from git history (4,446 commits and no published releases at that snapshot), the checked-in beads tracker (`.beads/issues.jsonl`), the in-tree `docs/CLAIM_TO_PROOF_MATRIX_V1.md` claim ledger, and the contemporaneous workstream notes left in `docs/` and `runbooks/`; the dated sections below carry the later release history forward.
 
 The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `main` also uses artifact-bundle versions for individual decision, benchmark, and replay claims; those schema versions remain independent of Cargo package semver.
+
+The current-window catch-up below covers
+[`7ec31d156`](https://github.com/Dicklesworthstone/franken_engine/commit/7ec31d156bed6af58a2c292862201002c5900c68)
+(2026-07-25) through
+[`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8)
+(2026-08-19): 513 non-merge commits. There is still only one GitHub Release
+([`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0)).
+Cargo `frankenengine-engine` / `frankenengine-core` remain on the unreleased
+`0.2.0` compatibility-staging line; that number is not a tag and not a Release.
+
+---
+
+## Post-Snapshot Update — Current window (2026-07-26 → 2026-08-19)
+
+After the sibling-gating correction of 2026-07-25, the next month is the product-authority and evidence-honesty wave: host effects stop being ambient, generated code gets its own realm, IFC labels survive the heap, and the engine finally consumes published sibling crates instead of `/dp` path deps. HEAD is
+[`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8)
+(2026-08-19).
+
+### Delivered capability
+
+- **Checkout-independent sibling isolation (`bd-gw4cg`).** The nine FrankenSuite siblings that used to be `/dp` path deps now resolve from crates.io. CI gained a standalone-release lane that must compile without a sibling checkout. This is the follow-through on the 2026-07-25 claim correction: `--no-default-features` still requires manifests to exist, but those manifests are now registry crates, not local trees.
+- **Evidence freshness and split signing authority.** Claim freshness became risk-weighted (drift signals, tiers, a schedule) and fail-closed at release. Live orchestrator batches seal as chained artifacts. Runtime vs Lab signing authority split; the ledger schema moved to v2. Generated `Function` objects got a realm-owned store with content-addressed provenance and isolated globals (`bd-fw7zd.8`).
+- **Execution cells, adaptive routing, timers.** A sealed Tier-I cell is now the authority boundary for interpreter instruction use, host I/O, and process spawn. Adaptive routing v2 binds profile selection before dispatch, with a SafeMode and a state budget (`bd-wftp1`). Timers run through two-phase cell authority and refuse until an interpreter event-loop is bound.
+- **Module load, EventEmitter identity, RandomRead entropy.** `ImportModule` and `require` share one `module_load` capability key (`bd-iyp3h`). `EventEmitter` is a constructible identity with authenticated `instanceof` so cluster identity works (`bd-dspwz`). Cryptographic entropy is its own `RandomRead` grant, lowered through typed hostcalls (`bd-opsnv`). Process spawn gained sealed verified-file identity (`bd-m5p8q`) and stable NotFound discriminators (`bd-x85a7.3`). `require('url')` helpers lower behind a usage gate (`bd-4awsz`).
+- **Prepared Hybrid eval and interpreter hot-path cuts.** Hybrid `eval` compiles once and reuses immutable IR3. Ordinary own-property reads skip proxy/IFC scans; dense array growth/pop skip length scans; ephemeral traces hand off without cloning payloads. Differential-oracle reports are v2 with honest lifecycles.
+- **Janitor docs-reorg (2026-08-19).** Root reports moved under `docs/planning/`; skill-loop scratch is untracked. See the janitor wave below.
+
+### Closed workstreams (selected)
+
+`bd-gw4cg`, `bd-fw7zd.8`, `bd-wftp1`, `bd-iyp3h`, `bd-dspwz`, `bd-opsnv`, `bd-m5p8q`, `bd-x85a7.1` / `.3`, `bd-padqo`, `bd-ojvo1`, `bd-4awsz`.
+
+### Representative commits
+
+- [`5a40110e5`](https://github.com/Dicklesworthstone/franken_engine/commit/5a40110e59ff763e18d8d3ccb212af62e1ff737d) — `build(deps): resolve the nine sibling crates from crates.io, not /dp paths (bd-gw4cg)`
+- [`3526cf9d4`](https://github.com/Dicklesworthstone/franken_engine/commit/3526cf9d425238ebb2441cad00274ac82e348c97) — `ci: enforce checkout-independent standalone release`
+- [`61d4d7591`](https://github.com/Dicklesworthstone/franken_engine/commit/61d4d75912330cf9dd80a74ab64aa1b63135f84d) — `feat(evidence): make freshness actually risk-weighted -- drift signals, tiers, schedule (BRIDGE-19.18)`
+- [`dedd88284`](https://github.com/Dicklesworthstone/franken_engine/commit/dedd882849d9a2c42dc8dc7293f7e1a1f2e36c96) — `feat(evidence): split Runtime vs Lab signing authority; ledger schema v2`
+- [`ad2d6f176`](https://github.com/Dicklesworthstone/franken_engine/commit/ad2d6f1762120942c5bbe9e15ef24a18b55e80bd) — `feat(engine): isolate generated-function realm globals and rotate identities`
+- [`57dbc1d08`](https://github.com/Dicklesworthstone/franken_engine/commit/57dbc1d08163d431af2cb2c5ca87dfac9739dff2) — `feat(cell): seal a Tier-I interpreter and effect authority boundary`
+- [`fd7c61e5e`](https://github.com/Dicklesworthstone/franken_engine/commit/fd7c61e5e4870bb97044b40d4bea2dc5dc5d18fa) — `feat(engine): harden adaptive routing v2 — budgeted state, staged learn (bd-wftp1)`
+- [`4c06e8402`](https://github.com/Dicklesworthstone/franken_engine/commit/4c06e840255ea4123f65dccc5e1ab5cad92a92cb) — `feat(timer): run interpreter timers through a two-phase cell authority`
+- [`0e4e1c20e`](https://github.com/Dicklesworthstone/franken_engine/commit/0e4e1c20ecaaee829a3ea6f5c431b0446763bcf0) — `feat(capability): gate ImportModule and require on one module_load key (bd-iyp3h)`
+- [`75cf4822d`](https://github.com/Dicklesworthstone/franken_engine/commit/75cf4822d4d8ffaec30c4afb33ef6b074db13c8f) — `feat(events): give EventEmitter a constructible identity and authenticated instanceof (bd-dspwz)`
+- [`050b77e2c`](https://github.com/Dicklesworthstone/franken_engine/commit/050b77e2cbb57038b4ebd8e21e202e1e2eb82b6a) — `feat(crypto): lower authenticated entropy through typed RandomRead hostcalls (bd-opsnv)`
+- [`9781a7dd1`](https://github.com/Dicklesworthstone/franken_engine/commit/9781a7dd19a38f161a98c68a665eda908efbbbd3) — `feat(eval): compile Hybrid eval once and reuse immutable IR3`
+- [`17c7fb24c`](https://github.com/Dicklesworthstone/franken_engine/commit/17c7fb24cb9e7443e8495fd65325e74a3658351c) — `feat(url): lower usage-gated require('url') helpers (bd-4awsz)`
+
+---
+
+## Post-Snapshot Update — Janitor docs-reorg (2026-08-19)
+
+Root planning and audit leftovers left the repository root. `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md` and `REVIEW_SUMMARY.md` now live under [`docs/planning/`](https://github.com/Dicklesworthstone/franken_engine/tree/main/docs/planning). `audit_observed_claims.py` and `test_script_fix.sh` moved into `scripts/`. Skill-loop scratch is gitignored. This is hygiene, not a behavior change.
+
+### Representative commits
+
+- [`49abf340d`](https://github.com/Dicklesworthstone/franken_engine/commit/49abf340de0de4465b615027256cfd24343fe5cd) — `chore(janitor): untrack skill-loop scratch; move root planning docs into docs/planning/`
+- [`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8) — `chore(janitor): relocate remaining root reports and planning docs`
 
 ---
 
@@ -281,8 +345,9 @@ Commits: `619479f2`, `163c17472`.
 
 | Version | Kind | Date | Summary |
 |---------|------|------|---------|
+| `main` @ [`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8) | Unreleased `main` tip (not a tag, not a Release) | 2026-08-19 | Current window: crates.io sibling isolation, cell authority, RandomRead entropy, janitor docs-reorg. |
 | `0.2.0` (unreleased) | `frankenengine-core` / `frankenengine-engine` Cargo versions | 2026-07-16 → present | Compatibility-staging line for public exhaustive-enum evolution; no tag or publication. |
-| [`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0) | Published release | 2026-05-29 | First conventional release and installed-binary baseline. |
+| [`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0) | Published GitHub Release | 2026-05-29 | First conventional release and installed-binary baseline. The only GitHub Release in this repo. |
 | [`backup/main-tip-1b2e6cf0`](https://github.com/Dicklesworthstone/franken_engine/tree/backup/main-tip-1b2e6cf0) | Backup tag (not a release) | 2026-04-16 | Mid-April main tip preserved during the Test262 / async-execution work. |
 | [`backup/worktree-tip-1f288b45`](https://github.com/Dicklesworthstone/franken_engine/tree/backup/worktree-tip-1f288b45) | Backup tag (not a release) | 2026-03-18 | Mid-March worktree tip preserved during the integration-test enrichment wave. |
 
@@ -510,7 +575,7 @@ Per `docs/RUNTIME_CHARTER.md` §5, `franken_engine` consumes (one-way): `/dp/asu
 
 ## Notes for Agents
 
-- The version timeline is intentionally sparse: this repo has no released versions. To pick a "as-of" snapshot, use a commit SHA, not a tag.
+- The version timeline is sparse on purpose: the only GitHub Release is [`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0) (2026-05-29). Cargo `0.2.0` is an unreleased compatibility-staging line, not a tag. To pick an "as-of" snapshot after that, use a commit SHA.
 - The capability-wave sections are research-grouped by month because that's how the work actually landed; they are not release notes.
 - For any claim made in `README.md`, the authoritative gate is `scripts/run_claim_to_proof_matrix_gate.sh ci` against `docs/claim_to_proof_matrix_v1.json`. If a README claim says something stronger than the matrix allows, the gate fails — the matrix wins.
 - For implementation evidence behind any wave entry, follow the linked commit, then `git log -- <touched-files>` from that commit to see the surrounding cluster.

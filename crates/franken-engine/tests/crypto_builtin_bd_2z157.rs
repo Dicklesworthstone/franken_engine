@@ -1,9 +1,13 @@
-//! bd-2z157: deterministic Node `crypto` compute builtins.
+//! bd-2z157 / bd-opsnv: bounded Node `crypto` builtins.
 //!
-//! Entropy and key-generation operations deliberately remain outside this
-//! surface. The lowering sentinel accepts only the bounded deterministic API
-//! and keeps every unsupported/escaped/dynamic use on the ambient-authority
-//! denial path.
+//! Deterministic operations stay compute-only. Authenticated entropy operations
+//! require the separate `random_read` capability and cross the typed host-I/O
+//! journal; asymmetric, unsupported, escaped, mutated, computed, and inline
+//! require uses remain on the ambient-authority denial path.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::declassification_pipeline::{
@@ -13,10 +17,18 @@ use frankenengine_engine::declassification_pipeline::{
     CryptographicTransformReleaseGuard, CryptographicTransformReleaseRequest,
     DeclassificationPipeline, LossAssessment,
 };
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt as _,
+    OrchestratorConfig, OrchestratorResult,
+};
 use frankenengine_engine::ifc_artifacts::{
     DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use frankenengine_extension_host::host_io::{
+    HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
+    HostIoResponse, InMemoryHostIoTranscript,
+};
 
 fn eval_console(source: &str) -> String {
     let mut engine = HybridRouter::default();
@@ -37,6 +49,111 @@ fn eval_error(source: &str) -> String {
         Ok(outcome) => panic!("expected eval failure for {source:?}, got {outcome:?}"),
         Err(error) => error.to_string(),
     }
+}
+
+#[derive(Debug)]
+struct ScriptedRandomHostIo {
+    outcomes: Mutex<VecDeque<HostIoOutcome>>,
+    calls: AtomicUsize,
+    panic_on_call: bool,
+}
+
+impl ScriptedRandomHostIo {
+    fn bytes(responses: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        Self {
+            outcomes: Mutex::new(
+                responses
+                    .into_iter()
+                    .map(|bytes| Ok(HostIoResponse::RandomRead { bytes }))
+                    .collect(),
+            ),
+            calls: AtomicUsize::new(0),
+            panic_on_call: false,
+        }
+    }
+
+    fn denying(count: usize) -> Self {
+        Self {
+            outcomes: Mutex::new(
+                (0..count)
+                    .map(|_| {
+                        Err(HostIoError::Denied {
+                            reason: "test entropy source denied".to_string(),
+                        })
+                    })
+                    .collect(),
+            ),
+            calls: AtomicUsize::new(0),
+            panic_on_call: false,
+        }
+    }
+
+    fn never() -> Self {
+        Self {
+            outcomes: Mutex::new(VecDeque::new()),
+            calls: AtomicUsize::new(0),
+            panic_on_call: true,
+        }
+    }
+}
+
+impl HostIoProvider for ScriptedRandomHostIo {
+    fn name(&self) -> &str {
+        "scripted-random-host-io"
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        assert!(!self.panic_on_call, "replay must not consult live entropy");
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        assert_eq!(granted, &[HostIoCapability::RandomRead]);
+        assert!(matches!(request, HostIoRequest::RandomRead { .. }));
+        self.outcomes
+            .lock()
+            .expect("scripted entropy queue")
+            .pop_front()
+            .unwrap_or_else(|| {
+                Err(HostIoError::Denied {
+                    reason: "scripted entropy exhausted".to_string(),
+                })
+            })
+    }
+}
+
+fn crypto_package(source: &str, grant_random_read: bool) -> ExtensionPackage {
+    let mut capabilities = vec!["builtin".to_string(), "timer".to_string()];
+    if grant_random_read {
+        capabilities.push("random_read".to_string());
+    }
+    ExtensionPackage {
+        extension_id: "bd-opsnv-crypto-entropy".to_string(),
+        source: source.to_string(),
+        source_file: None,
+        module_root: None,
+        capabilities,
+        version: "1.0.0".to_string(),
+        metadata: BTreeMap::new(),
+    }
+}
+
+fn execute_crypto(
+    source: &str,
+    provider: Arc<dyn HostIoProvider>,
+    recorder: Arc<dyn HostIoRecorder>,
+) -> OrchestratorResult {
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider, Some(recorder));
+    orchestrator
+        .execute(&crypto_package(source, true))
+        .unwrap_or_else(|error| panic!("orchestrated crypto eval failed for {source:?}: {error}"))
+}
+
+fn orchestrated_console(result: &OrchestratorResult) -> String {
+    result
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 const CRYPTO_RELEASE_TIME_MS: u64 = 1_700_000_000_000;
@@ -701,13 +818,12 @@ fn metadata_constants_and_static_invalid_random_int_match_node() {
 }
 
 #[test]
-fn entropy_asymmetric_dynamic_and_escaped_uses_remain_fail_closed() {
+fn asymmetric_inline_and_escaped_uses_remain_fail_closed() {
     for source in [
-        "const crypto = require('crypto'); crypto.randomBytes(8);",
-        "const crypto = require('crypto'); crypto.randomUUID();",
-        "const crypto = require('crypto'); crypto.randomFillSync(Buffer.alloc(8));",
-        "const crypto = require('crypto'); crypto.randomInt(10);",
-        "const crypto = require('crypto'); const lo = 5, hi = 5; crypto.randomInt(lo, hi);",
+        "require('crypto').randomBytes(8);",
+        "require('crypto').randomUUID();",
+        "require('crypto').randomFillSync(Buffer.alloc(8));",
+        "require('crypto').randomInt(10);",
         "const crypto = require('crypto'); crypto.generateKeyPairSync('ed25519');",
         "const crypto = require('crypto'); crypto.createSign('sha256');",
         "const crypto = require('crypto'); crypto;",
@@ -722,6 +838,200 @@ fn entropy_asymmetric_dynamic_and_escaped_uses_remain_fail_closed() {
             "unexpected fail-closed error for {source:?}: {error}"
         );
     }
+}
+
+#[test]
+fn authenticated_entropy_apis_use_typed_ordered_host_effects_bd_opsnv() {
+    let source = r#"
+        const crypto = require('crypto');
+        const bytes = crypto.randomBytes(16);
+        console.log(Buffer.isBuffer(bytes), bytes.length, crypto.randomBytes(0).length);
+        const uuid = crypto.randomUUID();
+        console.log(typeof uuid, uuid.length, uuid[14] === '4');
+        console.log(['8', '9', 'a', 'b'].includes(uuid[19]));
+        const first = crypto.randomInt(10);
+        console.log(Number.isInteger(first), first >= 0 && first < 10);
+        console.log(crypto.randomInt(5, 8));
+        const target = Buffer.alloc(8);
+        const filled = crypto.randomFillSync(target);
+        console.log(filled === target, filled.length, filled.toString('hex'));
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([
+        vec![0x11; 16],
+        vec![0; 16],
+        vec![0; 6],
+        vec![0; 6],
+        vec![0x5a; 8],
+    ]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+    let result = execute_crypto(source, provider.clone(), recorder_dyn);
+
+    assert_eq!(
+        orchestrated_console(&result),
+        "true 16 0\nstring 36 true\ntrue\ntrue true\n5\ntrue 8 5a5a5a5a5a5a5a5a"
+    );
+    assert_eq!(provider.calls.load(Ordering::Acquire), 5);
+    assert_eq!(result.host_effect_transcript, recorder.recorded_entries());
+    let lengths = result
+        .host_effect_transcript
+        .iter()
+        .map(|(request, outcome)| match (request, outcome) {
+            (HostIoRequest::RandomRead { byte_len }, Ok(HostIoResponse::RandomRead { bytes })) => {
+                assert_eq!(*byte_len as usize, bytes.len());
+                *byte_len
+            }
+            other => panic!("unexpected entropy transcript entry: {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(lengths, vec![16, 16, 6, 6, 8]);
+}
+
+#[test]
+fn random_int_rejection_sampling_discards_biased_tail_bd_opsnv() {
+    let source = "const crypto = require('crypto'); console.log(crypto.randomInt(10));";
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0xff; 6], vec![0; 6]]));
+    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+    let result = execute_crypto(source, provider.clone(), recorder);
+    assert_eq!(orchestrated_console(&result), "0");
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+    assert_eq!(result.host_effect_transcript.len(), 2);
+}
+
+#[test]
+fn entropy_callbacks_are_err_first_and_deferred_bd_opsnv() {
+    let source = r#"
+        const crypto = require('crypto');
+        const order = [];
+        crypto.randomBytes(4, (error, bytes) => {
+          order.push(`bytes:${error === null}:${bytes.length}`);
+        });
+        crypto.randomInt(3, (error, value) => {
+          order.push(`int:${error === null}:${value}`);
+        });
+        order.push('sync');
+        setTimeout(() => console.log(order.join(',')), 1);
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![1, 2, 3, 4], vec![0; 6]]));
+    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+    let result = execute_crypto(source, provider, recorder);
+    assert_eq!(
+        orchestrated_console(&result),
+        "sync,bytes:true:4,int:true:0"
+    );
+}
+
+#[test]
+fn entropy_provider_failures_are_redacted_and_err_first_bd_opsnv() {
+    let source = r#"
+        const crypto = require('crypto');
+        try { crypto.randomUUID(); } catch (error) {
+          console.log(error.code, error.message);
+        }
+        crypto.randomBytes(4, (error, bytes) => {
+          console.log(error.code, bytes === undefined);
+        });
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::denying(2));
+    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+    let result = execute_crypto(source, provider.clone(), recorder);
+    assert_eq!(
+        orchestrated_console(&result),
+        concat!(
+            "ERR_CRYPTO_OPERATION_FAILED Cryptographic random source unavailable\n",
+            "ERR_CRYPTO_OPERATION_FAILED true"
+        )
+    );
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+    assert!(
+        result
+            .host_effect_transcript
+            .iter()
+            .all(|(_, outcome)| outcome.is_err())
+    );
+}
+
+#[test]
+fn entropy_recording_replays_exact_bytes_without_live_provider_bd_opsnv() {
+    let source = r#"
+        const crypto = require('crypto');
+        console.log(crypto.randomBytes(4).toString('hex'));
+        console.log(crypto.randomInt(100));
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([
+        vec![0xde, 0xad, 0xbe, 0xef],
+        vec![0, 0, 0, 0, 0, 42],
+    ]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+    let recorded = execute_crypto(source, provider, recorder_dyn);
+    assert_eq!(orchestrated_console(&recorded), "deadbeef\n42");
+
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(
+        recorded.host_effect_transcript.clone(),
+    ));
+    let replay_dyn: Arc<dyn HostIoRecorder> = replay.clone();
+    let replayed = execute_crypto(source, Arc::new(ScriptedRandomHostIo::never()), replay_dyn);
+    assert_eq!(orchestrated_console(&replayed), "deadbeef\n42");
+    assert_eq!(
+        replayed.host_effect_transcript,
+        recorded.host_effect_transcript
+    );
+}
+
+#[test]
+fn entropy_replay_rejects_request_divergence_and_unused_suffix_bd_opsnv() {
+    let transcript = vec![
+        (
+            HostIoRequest::RandomRead { byte_len: 4 },
+            Ok(HostIoResponse::RandomRead {
+                bytes: vec![1, 2, 3, 4],
+            }),
+        ),
+        (
+            HostIoRequest::RandomRead { byte_len: 6 },
+            Ok(HostIoResponse::RandomRead { bytes: vec![0; 6] }),
+        ),
+    ];
+
+    let divergent: Arc<dyn HostIoRecorder> =
+        Arc::new(InMemoryHostIoTranscript::replaying(transcript.clone()));
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(Arc::new(ScriptedRandomHostIo::never()), Some(divergent));
+    let error = orchestrator
+        .execute(&crypto_package(
+            "const crypto = require('crypto'); crypto.randomBytes(5);",
+            true,
+        ))
+        .expect_err("a changed entropy byte count must diverge before live dispatch");
+    assert!(error.to_string().contains("host effect dispatch failed"));
+
+    let suffix: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::replaying(transcript));
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(Arc::new(ScriptedRandomHostIo::never()), Some(suffix));
+    let error = orchestrator
+        .execute(&crypto_package(
+            "const crypto = require('crypto'); crypto.randomBytes(4);",
+            true,
+        ))
+        .expect_err("unused entropy replay suffix must fail finalization");
+    assert!(error.to_string().contains("unused transcript entries"));
+}
+
+#[test]
+fn missing_random_read_capability_prevents_provider_dispatch_bd_opsnv() {
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0; 4]]));
+    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider.clone(), Some(recorder));
+    let error = orchestrator
+        .execute(&crypto_package(
+            "const crypto = require('crypto'); crypto.randomBytes(4);",
+            false,
+        ))
+        .expect_err("random_read must be an explicit package grant");
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+    assert!(error.to_string().contains("random_read"));
 }
 
 #[test]

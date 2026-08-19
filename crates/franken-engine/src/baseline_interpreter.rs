@@ -72,7 +72,7 @@ use frankenengine_core::object_model::{
 use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal;
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoExceptionProvenance, HostIoProvider,
-    HostIoRecorder,
+    HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRequest,
@@ -94,6 +94,7 @@ use crate::hostcall_effects_migration::{
     create_handler_stack_from_profile_with_effect_providers,
     create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
     create_interpreter_timer_handler_stack, create_network_effect, create_process_spawn_effect,
+    create_random_read_effect,
 };
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
@@ -58790,6 +58791,379 @@ impl InterpreterCore {
         ])?))
     }
 
+    fn perform_random_read_effect(&mut self, byte_len: usize) -> Result<Vec<u8>, ()> {
+        let provider = self.host_io.clone().ok_or(())?;
+        let byte_len = u64::try_from(byte_len).map_err(|_| ())?;
+        let effect = create_random_read_effect(byte_len);
+        let mut stack = if self.host_effect_journal.is_some() {
+            create_handler_stack_from_profile_with_effect_providers(
+                &CapabilityProfile::full(),
+                Some(provider),
+                self.host_io_recorder.clone(),
+                self.process_spawn.clone(),
+                None,
+                self.host_effect_journal.clone(),
+            )
+        } else {
+            create_handler_stack_from_profile_with_host_io(
+                &CapabilityProfile::full(),
+                provider,
+                self.host_io_recorder.clone(),
+            )
+        };
+        let result = stack.handle_effect(effect.as_ref()).map_err(|_| ())?;
+        let bytes = result.downcast::<Vec<u8>>().map_err(|_| ())?;
+        (bytes.len() == usize::try_from(byte_len).map_err(|_| ())?)
+            .then_some(bytes)
+            .ok_or(())
+    }
+
+    fn crypto_random_failure(
+        &mut self,
+        invocation_label: Label,
+        callback: Option<u32>,
+    ) -> Result<Value, InterpreterError> {
+        const CODE: &str = "ERR_CRYPTO_OPERATION_FAILED";
+        const MESSAGE: &str = "Cryptographic random source unavailable";
+        if let Some(callback) = callback {
+            self.ensure_builtin_prototype("Error")?;
+            let previous_heap_len = self.heap.len();
+            let previous_estimated_bytes = self.estimated_memory_bytes;
+            let error = match self.construct_buffer_node_error("Error", CODE, MESSAGE.to_string()) {
+                Ok(error) => error,
+                Err(error) => {
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.schedule_io_callback_with_label(
+                callback,
+                vec![error, Value::Undefined],
+                invocation_label,
+            ) {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_estimated_bytes;
+                return Err(error);
+            }
+            Ok(Value::Undefined)
+        } else {
+            Err(self.crypto_throw_node_error("Error", CODE, MESSAGE.to_string(), &invocation_label))
+        }
+    }
+
+    fn crypto_random_size(
+        &mut self,
+        value: &Value,
+        name: &str,
+        invocation_label: &Label,
+    ) -> Result<usize, InterpreterError> {
+        let size = self.crypto_integer_arg(value, name, true)?;
+        let cap = usize::try_from(SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST)
+            .expect("random-read request cap fits usize");
+        if size > cap {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                format!("crypto {name} exceeds the engine limit of {cap} bytes"),
+                invocation_label,
+            ));
+        }
+        Ok(size)
+    }
+
+    fn crypto_random_bytes(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let size_value = self.crypto_required_arg(args, 0, "random byte count")?;
+        let callback = match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => None,
+            Some(Value::Closure(callback)) => Some(callback),
+            Some(other) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "randomBytes callback function".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if args.count > 2 {
+            return Err(InterpreterError::TypeError {
+                expected: "randomBytes(size[, callback])".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let size = self.crypto_random_size(&size_value, "random byte count", &invocation_label)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(size)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(size))?;
+        let bytes = if size == 0 {
+            Vec::new()
+        } else {
+            let Ok(bytes) = self.perform_random_read_effect(size) else {
+                return self.crypto_random_failure(invocation_label, callback);
+            };
+            bytes
+        };
+        let value = self.crypto_output_value_with_temporary_budget(
+            &bytes,
+            None,
+            &invocation_label,
+            callback.is_none(),
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        )?;
+        if let Some(callback) = callback {
+            self.schedule_io_callback_with_label(
+                callback,
+                vec![Value::Null, value],
+                invocation_label,
+            )?;
+            Ok(Value::Undefined)
+        } else {
+            Ok(value)
+        }
+    }
+
+    fn crypto_random_uuid(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count != 0 {
+            return Err(InterpreterError::TypeError {
+                expected: "randomUUID()".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let invocation_label = self.crypto_invocation_label(args)?;
+        self.check_temporary_memory_budget(
+            36_u64.saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(16))?;
+        let Ok(mut bytes) = self.perform_random_read_effect(16) else {
+            return self.crypto_random_failure(invocation_label, None);
+        };
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let uuid = format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15]
+        );
+        self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+        Ok(Value::str(uuid))
+    }
+
+    fn crypto_random_int_arg(value: &Value, name: &str) -> Result<i64, InterpreterError> {
+        match value {
+            Value::Int(value) if value.unsigned_abs() <= CRYPTO_MAX_SAFE_INTEGER as u64 => {
+                Ok(*value)
+            }
+            Value::Float(value)
+                if value.inner().is_finite()
+                    && value.inner().fract() == 0.0
+                    && value.inner().abs() <= CRYPTO_MAX_SAFE_INTEGER as f64 =>
+            {
+                Ok(value.inner() as i64)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: format!("safe integer randomInt {name}"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn crypto_random_int(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        const DOMAIN: u64 = 1_u64 << 48;
+        const MAX_REJECTIONS: usize = 128;
+
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let first = self.crypto_required_arg(args, 0, "randomInt bound")?;
+        let second = self.builtin_arg(args, 1)?;
+        let third = self.builtin_arg(args, 2)?;
+        if args.count > 3 {
+            return Err(InterpreterError::TypeError {
+                expected: "randomInt(max[, callback]) or randomInt(min, max[, callback])"
+                    .to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let (min, max, callback) = match (second, third) {
+            (None, None) | (Some(Value::Undefined), None) => {
+                (0, Self::crypto_random_int_arg(&first, "max")?, None)
+            }
+            (Some(Value::Closure(callback)), None) => (
+                0,
+                Self::crypto_random_int_arg(&first, "max")?,
+                Some(callback),
+            ),
+            (Some(max), None) | (Some(max), Some(Value::Undefined)) => (
+                Self::crypto_random_int_arg(&first, "min")?,
+                Self::crypto_random_int_arg(&max, "max")?,
+                None,
+            ),
+            (Some(max), Some(Value::Closure(callback))) => (
+                Self::crypto_random_int_arg(&first, "min")?,
+                Self::crypto_random_int_arg(&max, "max")?,
+                Some(callback),
+            ),
+            (None, Some(_)) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "randomInt(min, max[, callback])".to_string(),
+                    got: "missing max argument".to_string(),
+                });
+            }
+            (_, Some(other)) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "randomInt callback function".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let Some(width_i64) = max.checked_sub(min) else {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "The randomInt range overflows a safe integer".to_string(),
+                &invocation_label,
+            ));
+        };
+        if width_i64 <= 0 || width_i64 as u64 >= DOMAIN {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "The value of max must be greater than min with a range at most 2^48".to_string(),
+                &invocation_label,
+            ));
+        }
+        let width = width_i64 as u64;
+        let acceptance_limit = DOMAIN - (DOMAIN % width);
+        let mut chosen = None;
+        for _ in 0..MAX_REJECTIONS {
+            self.charge_crypto_work(6)?;
+            let Ok(bytes) = self.perform_random_read_effect(6) else {
+                return self.crypto_random_failure(invocation_label, callback);
+            };
+            let sample = bytes
+                .into_iter()
+                .fold(0_u64, |value, byte| (value << 8) | u64::from(byte));
+            if sample < acceptance_limit {
+                chosen = Some(sample % width);
+                break;
+            }
+        }
+        let Some(offset) = chosen else {
+            return self.crypto_random_failure(invocation_label, callback);
+        };
+        let value = Value::Int(min + offset as i64);
+        if let Some(callback) = callback {
+            self.schedule_io_callback_with_label(
+                callback,
+                vec![Value::Null, value],
+                invocation_label,
+            )?;
+            Ok(Value::Undefined)
+        } else {
+            self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+            Ok(value)
+        }
+    }
+
+    fn crypto_random_fill_sync(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if !(1..=3).contains(&args.count) {
+            return Err(InterpreterError::TypeError {
+                expected: "randomFillSync(buffer[, offset][, size])".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let target = self.crypto_required_arg(args, 0, "randomFillSync Buffer")?;
+        let (buffer, view_offset, view_len) = self.crypto_binary_view_range(&target, false)?;
+        let offset = match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => 0,
+            Some(value) => self.crypto_integer_arg(&value, "random fill offset", true)?,
+        };
+        if offset > view_len {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "randomFillSync offset exceeds the target view".to_string(),
+                &invocation_label,
+            ));
+        }
+        let size = match self.builtin_arg(args, 2)? {
+            None | Some(Value::Undefined) => view_len - offset,
+            Some(value) => {
+                self.crypto_random_size(&value, "random fill size", &invocation_label)?
+            }
+        };
+        let end = offset
+            .checked_add(size)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "randomFillSync range overflows host address space".to_string(),
+            })?;
+        if end > view_len {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "randomFillSync range exceeds the target view".to_string(),
+                &invocation_label,
+            ));
+        }
+        self.check_temporary_memory_budget(
+            u64::try_from(size)
+                .unwrap_or(u64::MAX)
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(size))?;
+        let bytes = if size == 0 {
+            Vec::new()
+        } else {
+            let Ok(bytes) = self.perform_random_read_effect(size) else {
+                return self.crypto_random_failure(invocation_label, None);
+            };
+            bytes
+        };
+        let absolute_start =
+            view_offset
+                .checked_add(offset)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "randomFillSync backing range overflows host address space"
+                        .to_string(),
+                })?;
+        let absolute_end =
+            absolute_start
+                .checked_add(size)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "randomFillSync backing range overflows host address space"
+                        .to_string(),
+                })?;
+        self.with_array_buffer_bytes_mut(buffer, |storage| {
+            let destination = storage
+                .get_mut(absolute_start..absolute_end)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "randomFillSync range exceeds backing storage".to_string(),
+                })?;
+            destination.copy_from_slice(&bytes);
+            Ok(())
+        })??;
+        self.join_binary_storage_label(buffer, &invocation_label)?;
+        self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+        Ok(target)
+    }
+
     fn crypto_invalid_random_int(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
         let invocation_label = self.crypto_invocation_label(args)?;
         Err(self.crypto_throw_node_error(
@@ -60833,7 +61207,11 @@ impl InterpreterCore {
             "builtin:CryptoGetHashes" => self.crypto_get_hashes(),
             "builtin:CryptoGetCiphers" => self.crypto_get_ciphers(),
             "builtin:CryptoConstants" => self.crypto_constants(args),
-            "builtin:CryptoRandomInt" => self.crypto_invalid_random_int(args),
+            "builtin:CryptoInvalidRandomInt" => self.crypto_invalid_random_int(args),
+            "builtin:CryptoRandomBytes" => self.crypto_random_bytes(args),
+            "builtin:CryptoRandomUUID" => self.crypto_random_uuid(args),
+            "builtin:CryptoRandomInt" => self.crypto_random_int(args),
+            "builtin:CryptoRandomFillSync" => self.crypto_random_fill_sync(args),
             "builtin:CryptoObjectUpdate"
             | "builtin:CryptoObjectDigest"
             | "builtin:CryptoObjectCopy"
@@ -82334,6 +82712,9 @@ mod async_runtime_tests_current {
                     HostIoRequest::FsMeta { .. } => Ok(HostIoResponse::FsMeta {
                         result: FsMetaResult::Unit,
                     }),
+                    HostIoRequest::RandomRead { byte_len } => Ok(HostIoResponse::RandomRead {
+                        bytes: vec![0; *byte_len as usize],
+                    }),
                 }
             }
         }
@@ -82419,6 +82800,9 @@ mod async_runtime_tests_current {
                     }
                     HostIoRequest::FsMeta { .. } => Ok(HostIoResponse::FsMeta {
                         result: FsMetaResult::Unit,
+                    }),
+                    HostIoRequest::RandomRead { byte_len } => Ok(HostIoResponse::RandomRead {
+                        bytes: vec![0; *byte_len as usize],
                     }),
                 }
             }

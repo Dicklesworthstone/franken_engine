@@ -1047,13 +1047,12 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     for alias in confirmed_zlib_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(zlib_module_alias_sentinel(&alias), 0);
     }
-    // bd-2z157: deterministic `crypto` operations are a finite lowering-only
-    // facade. Only immutable const aliases whose complete use stays inside the
-    // authenticated hash/HMAC/KDF/cipher/metadata surface are recorded. CSPRNG,
-    // asymmetric, escaped, mutated, computed, and unsupported uses deliberately
-    // keep the ambient module-load denial. `randomInt` is admitted only for a
-    // statically provable invalid range, so its deterministic validation error
-    // never manufactures entropy.
+    // bd-2z157 / bd-opsnv: `crypto` is a finite lowering-only facade. Only
+    // immutable const aliases whose complete use stays inside the authenticated
+    // hash/HMAC/KDF/cipher/metadata/CSPRNG surface are recorded. Entropy calls
+    // carry a dedicated RandomRead capability and reach the typed host provider;
+    // inline require calls, asymmetric operations, escapes, mutations, computed
+    // access, and unsupported uses retain the ambient module-load denial.
     for alias in confirmed_crypto_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(crypto_module_alias_sentinel(&alias), 0);
     }
@@ -17793,8 +17792,8 @@ fn is_require_crypto_module_initializer(
 }
 
 /// Finite deterministic crypto surface. Entropy and asymmetric-key operations
-/// are intentionally absent: recognizing them would turn an ambient-denied
-/// module load into authority the lowering pass cannot honestly supply.
+/// remain separate so only the authenticated alias form can receive RandomRead
+/// authority.
 fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "createHash" => Some("builtin:CryptoCreateHash"),
@@ -17811,10 +17810,9 @@ fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> 
     }
 }
 
-/// `randomInt` normally consumes CSPRNG authority and therefore remains
-/// ambient-denied. A literal range that is already invalid is different: Node
-/// must throw before drawing entropy. Only those statically proved validation
-/// calls receive the deterministic validation hostcall.
+/// A literal `randomInt` range that is already invalid must throw before drawing
+/// entropy. Those calls receive a separate deterministic validation hostcall,
+/// which intentionally retains generic Builtin authority rather than RandomRead.
 fn crypto_random_int_args_are_statically_invalid(arguments: &[Expression]) -> bool {
     match arguments {
         [Expression::NumericLiteral(max)] => *max <= 0,
@@ -17833,10 +17831,18 @@ fn crypto_method_call_capability(method: &str, arguments: &[Expression]) -> Opti
     {
         return None;
     }
-    crypto_deterministic_method_capability(method).or_else(|| {
-        (method == "randomInt" && crypto_random_int_args_are_statically_invalid(arguments))
-            .then_some("builtin:CryptoRandomInt")
-    })
+    crypto_deterministic_method_capability(method)
+        .or_else(|| {
+            (method == "randomInt" && crypto_random_int_args_are_statically_invalid(arguments))
+                .then_some("builtin:CryptoInvalidRandomInt")
+        })
+        .or_else(|| match method {
+            "randomBytes" => Some("builtin:CryptoRandomBytes"),
+            "randomUUID" if arguments.is_empty() => Some("builtin:CryptoRandomUUID"),
+            "randomInt" => Some("builtin:CryptoRandomInt"),
+            "randomFillSync" => Some("builtin:CryptoRandomFillSync"),
+            _ => None,
+        })
 }
 
 fn is_crypto_module_object(
@@ -17869,7 +17875,18 @@ fn crypto_builtin_call_capability(
     if !is_crypto_module_object(object, binding_lookup) {
         return None;
     }
-    crypto_method_call_capability(well_formed_static_name(property)?, arguments)
+    let capability = crypto_method_call_capability(well_formed_static_name(property)?, arguments)?;
+    if matches!(
+        capability,
+        "builtin:CryptoRandomBytes"
+            | "builtin:CryptoRandomUUID"
+            | "builtin:CryptoRandomInt"
+            | "builtin:CryptoRandomFillSync"
+    ) && matches!(object.as_ref(), Expression::Call { .. })
+    {
+        return None;
+    }
+    Some(capability)
 }
 
 fn crypto_object_method_capability(method: &str) -> Option<&'static str> {
@@ -24691,7 +24708,7 @@ fn hostcall_exception_is_operand_derived(
             | "builtin:CryptoGetHashes"
             | "builtin:CryptoGetCiphers"
             | "builtin:CryptoConstants"
-            | "builtin:CryptoRandomInt"
+            | "builtin:CryptoInvalidRandomInt"
             | "builtin:CryptoObjectUpdate"
             | "builtin:CryptoObjectDigest"
             | "builtin:CryptoObjectCopy"
@@ -29274,7 +29291,7 @@ mod tests {
             ("builtin:CryptoGetHashes", 1),
             ("builtin:CryptoGetCiphers", 1),
             ("builtin:CryptoConstants", 1),
-            ("builtin:CryptoRandomInt", 2),
+            ("builtin:CryptoInvalidRandomInt", 2),
         ] {
             assert_eq!(
                 count_hostcall_deep(&ops, capability),
@@ -29424,36 +29441,12 @@ mod tests {
     }
 
     #[test]
-    fn crypto_successful_entropy_asymmetric_and_untrusted_alias_uses_fail_closed_bd_2z157() {
+    fn crypto_asymmetric_and_untrusted_alias_uses_fail_closed_bd_2z157() {
         for (label, source) in [
             ("unused", "const crypto = require('crypto');"),
             (
                 "mutable alias",
                 "let crypto = require('crypto'); crypto.getHashes();",
-            ),
-            (
-                "successful randomInt max",
-                "const crypto = require('crypto'); crypto.randomInt(10);",
-            ),
-            (
-                "successful randomInt range",
-                "const crypto = require('crypto'); crypto.randomInt(5, 8);",
-            ),
-            (
-                "dynamic randomInt range",
-                "const crypto = require('crypto'); const min = 5, max = 5; crypto.randomInt(min, max);",
-            ),
-            (
-                "random bytes",
-                "const crypto = require('crypto'); crypto.randomBytes(16);",
-            ),
-            (
-                "random UUID",
-                "const crypto = require('crypto'); crypto.randomUUID();",
-            ),
-            (
-                "random fill",
-                "const crypto = require('crypto'); crypto.randomFillSync(Buffer.alloc(8));",
             ),
             (
                 "asymmetric",
@@ -29513,6 +29506,34 @@ mod tests {
     }
 
     #[test]
+    fn crypto_authenticated_entropy_lowers_with_dedicated_capabilities_bd_opsnv() {
+        let ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             crypto.randomBytes(16);\n\
+             crypto.randomBytes(8, (_error, _bytes) => {});\n\
+             crypto.randomUUID();\n\
+             crypto.randomInt(10);\n\
+             crypto.randomInt(5, 8);\n\
+             crypto.randomInt(10, (_error, _value) => {});\n\
+             crypto.randomFillSync(Buffer.alloc(8));\n",
+            "crypto_entropy_bd_opsnv.js",
+        );
+        for (capability, expected_count) in [
+            ("builtin:CryptoRandomBytes", 2),
+            ("builtin:CryptoRandomUUID", 1),
+            ("builtin:CryptoRandomInt", 3),
+            ("builtin:CryptoRandomFillSync", 1),
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, capability),
+                expected_count,
+                "unexpected {capability} hostcall count"
+            );
+        }
+        assert_eq!(count_hostcall_deep(&ops, "module:require"), 0);
+    }
+
+    #[test]
     fn crypto_inline_entropy_and_forged_provenance_never_emit_crypto_hostcalls_bd_2z157() {
         assert_crypto_ambient_denied_bd_2z157(
             "require('crypto').randomInt(10);",
@@ -29535,7 +29556,11 @@ mod tests {
             "builtin:CryptoGetHashes",
             "builtin:CryptoGetCiphers",
             "builtin:CryptoConstants",
+            "builtin:CryptoInvalidRandomInt",
+            "builtin:CryptoRandomBytes",
+            "builtin:CryptoRandomUUID",
             "builtin:CryptoRandomInt",
+            "builtin:CryptoRandomFillSync",
         ] {
             assert_eq!(count_hostcall_deep(&forged, capability), 0);
         }

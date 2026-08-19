@@ -150,9 +150,9 @@
       "authority_id": "engine.baseline.string-property-route",
       "repository": "franken_engine",
       "path": "crates/franken-engine/src/baseline_interpreter.rs",
-      "start_anchor": "    fn string_property_value(receiver: &str, key: &str) -> Value {",
+      "start_anchor": "    fn string_property_value(receiver: &JsString, key: &str) -> Value {",
       "end_anchor": "    fn number_property_value(key: &str) -> Value {",
-      "sha256": "0db00c5a82cd0fe45a6cae1521f8facd297d2202afafb92b9dd25ab5dbe98b39",
+      "sha256": "e510f95fc4828d8262e99e699d5825a1fc06cf7cb299743046cc952806323050",
       "required_markers": [
         "\"localeCompare\" => Value::BuiltinFunction",
         "\"normalize\" => Value::BuiltinFunction"
@@ -269,7 +269,7 @@
       "path": "crates/franken-node/src/ops/engine_dispatcher.rs",
       "start_anchor": "    fn run_engine_native_guarded(",
       "end_anchor": "    fn build_host_effect_ledger(",
-      "sha256": "ca2d398a5575100a1be2fbb3f3cacf34dd1736d07e6308482c577d341b1739ee",
+      "sha256": "c933355a3acf88b575b367f4fc7cbfdcedc9008f47f34cbf96f20b14c89eff29",
       "required_markers": [
         "frankenengine_extension_host",
         "orchestrator.set_cancellation_token(cancellation.token().clone())",

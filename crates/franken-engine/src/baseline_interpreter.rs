@@ -44838,11 +44838,23 @@ impl InterpreterCore {
         Ok(Value::Str(self.string_pad_value(this_str, args, false)?))
     }
 
-    fn string_property_value(receiver: &str, key: &str) -> Value {
+    fn string_property_value(receiver: &JsString, key: &str) -> Value {
+        // String primitives expose indexed own properties over their exact
+        // UTF-16 code units. Reuse the canonical array-index parser so
+        // non-canonical keys such as `"01"` remain ordinary missing
+        // properties, while supplementary characters still occupy two
+        // independently observable indices and lone surrogates survive
+        // without being projected through U+FFFD.
+        if let Some(index) = Self::canonical_array_index_property(key, receiver.utf16_len()) {
+            return receiver
+                .encode_utf16()
+                .nth(index)
+                .map_or(Value::Undefined, |unit| {
+                    Value::Str(JsString::from_code_units(&[unit]))
+                });
+        }
         match key {
-            "length" => {
-                Value::Int(i64::try_from(receiver.encode_utf16().count()).unwrap_or(i64::MAX))
-            }
+            "length" => Value::Int(i64::try_from(receiver.utf16_len()).unwrap_or(i64::MAX)),
             "charAt" => Value::BuiltinFunction(BuiltinFunction::string_char_at()),
             "charCodeAt" => Value::BuiltinFunction(BuiltinFunction::string_char_code_at()),
             "at" => Value::BuiltinFunction(BuiltinFunction::string_at()),
@@ -58818,6 +58830,20 @@ impl InterpreterCore {
             .ok_or(())
     }
 
+    fn require_random_read_capability(&self) -> Result<(), InterpreterError> {
+        if self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::RandomRead)
+        {
+            Ok(())
+        } else {
+            Err(InterpreterError::CapabilityDenied {
+                capability: RuntimeCapability::RandomRead.to_string(),
+            })
+        }
+    }
+
     fn crypto_random_failure(
         &mut self,
         invocation_label: Label,
@@ -58891,6 +58917,7 @@ impl InterpreterCore {
                 got: format!("{} argument(s)", args.count),
             });
         }
+        self.require_random_read_capability()?;
         let size = self.crypto_random_size(&size_value, "random byte count", &invocation_label)?;
         self.check_temporary_memory_budget(
             u64::try_from(size)
@@ -58933,6 +58960,7 @@ impl InterpreterCore {
                 got: format!("{} argument(s)", args.count),
             });
         }
+        self.require_random_read_capability()?;
         let invocation_label = self.crypto_invocation_label(args)?;
         self.check_temporary_memory_budget(
             36_u64.saturating_add(Self::estimate_label_bytes(&invocation_label)),
@@ -58989,6 +59017,7 @@ impl InterpreterCore {
         const DOMAIN: u64 = 1_u64 << 48;
         const MAX_REJECTIONS: usize = 128;
 
+        self.require_random_read_capability()?;
         let invocation_label = self.crypto_invocation_label(args)?;
         let first = self.crypto_required_arg(args, 0, "randomInt bound")?;
         let second = self.builtin_arg(args, 1)?;
@@ -59088,6 +59117,7 @@ impl InterpreterCore {
                 got: format!("{} argument(s)", args.count),
             });
         }
+        self.require_random_read_capability()?;
         let invocation_label = self.crypto_invocation_label(args)?;
         let target = self.crypto_required_arg(args, 0, "randomFillSync Buffer")?;
         let (buffer, view_offset, view_len) = self.crypto_binary_view_range(&target, false)?;
@@ -120510,6 +120540,47 @@ mod tests {
             .read_register(2)
             .expect("operation should succeed for valid inputs");
         assert_eq!(result, Value::Int(72), "charCodeAt('H') should be 72");
+    }
+
+    #[test]
+    fn string_indexed_properties_follow_exact_utf16_code_units_bd_opsnv() {
+        let text = JsString::from("A😀B");
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "length"),
+            Value::Int(4)
+        );
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "0"),
+            Value::str("A")
+        );
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "1"),
+            Value::Str(JsString::from_code_units(&[0xD83D]))
+        );
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "2"),
+            Value::Str(JsString::from_code_units(&[0xDE00]))
+        );
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "3"),
+            Value::str("B")
+        );
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "4"),
+            Value::Undefined
+        );
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "01"),
+            Value::Undefined,
+            "a non-canonical numeric property key is not a string index"
+        );
+
+        let lone_surrogate = JsString::from_code_units(&[0xD800]);
+        assert_eq!(
+            InterpreterCore::string_property_value(&lone_surrogate, "0"),
+            Value::Str(lone_surrogate),
+            "indexed access must preserve an exact lone surrogate"
+        );
     }
 
     #[test]

@@ -1428,7 +1428,7 @@ fn authority_specs() -> Vec<AuthoritySpec> {
             authority_id: "engine.baseline.string-property-route",
             repository: RepositoryId::FrankenEngine,
             path: "crates/franken-engine/src/baseline_interpreter.rs",
-            start_anchor: "    fn string_property_value(receiver: &str, key: &str) -> Value {",
+            start_anchor: "    fn string_property_value(receiver: &JsString, key: &str) -> Value {",
             end_anchor: "    fn number_property_value(key: &str) -> Value {",
             required_markers: &[
                 "\"localeCompare\" => Value::BuiltinFunction",

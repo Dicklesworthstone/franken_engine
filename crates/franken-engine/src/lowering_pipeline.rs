@@ -17836,7 +17836,7 @@ fn crypto_method_call_capability(method: &str, arguments: &[Expression]) -> Opti
             (method == "randomInt" && crypto_random_int_args_are_statically_invalid(arguments))
                 .then_some("builtin:CryptoInvalidRandomInt")
         })
-        .or_else(|| match method {
+        .or(match method {
             "randomBytes" => Some("builtin:CryptoRandomBytes"),
             "randomUUID" if arguments.is_empty() => Some("builtin:CryptoRandomUUID"),
             "randomInt" => Some("builtin:CryptoRandomInt"),

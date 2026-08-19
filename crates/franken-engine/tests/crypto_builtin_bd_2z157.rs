@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::baseline_interpreter::InterpreterError;
 use frankenengine_engine::declassification_pipeline::{
     AuthenticationPolicy, CryptographicCipherAlgorithm, CryptographicCipherMode,
     CryptographicKeyPurpose, CryptographicReleaseSink, CryptographicTransformOutputClass,
@@ -19,7 +20,7 @@ use frankenengine_engine::declassification_pipeline::{
 };
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt as _,
-    OrchestratorConfig, OrchestratorResult,
+    OrchestratorConfig, OrchestratorError, OrchestratorResult,
 };
 use frankenengine_engine::ifc_artifacts::{
     DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
@@ -923,24 +924,39 @@ fn entropy_callbacks_are_err_first_and_deferred_bd_opsnv() {
 
 #[test]
 fn entropy_provider_failures_are_redacted_and_err_first_bd_opsnv() {
-    let source = r#"
+    let provider = Arc::new(ScriptedRandomHostIo::denying(2));
+
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    let synchronous_recorder: Arc<dyn HostIoRecorder> =
+        Arc::new(InMemoryHostIoTranscript::recording());
+    orchestrator.set_host_io(provider.clone(), Some(synchronous_recorder));
+    let error = orchestrator
+        .execute(&crypto_package(
+            "const crypto = require('crypto'); crypto.randomUUID();",
+            true,
+        ))
+        .expect_err("a denied synchronous entropy request must throw");
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+            if value == "Error: Cryptographic random source unavailable"
+    ));
+    assert!(
+        !error.to_string().contains("test entropy source denied"),
+        "the provider's private denial reason must not cross the guest boundary"
+    );
+
+    let callback_source = r#"
         const crypto = require('crypto');
-        try { crypto.randomUUID(); } catch (error) {
-          console.log(error.code, error.message);
-        }
         crypto.randomBytes(4, (error, bytes) => {
-          console.log(error.code, bytes === undefined);
+          console.log(error.code, error.message, bytes === undefined);
         });
     "#;
-    let provider = Arc::new(ScriptedRandomHostIo::denying(2));
     let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
-    let result = execute_crypto(source, provider.clone(), recorder);
+    let result = execute_crypto(callback_source, provider.clone(), recorder);
     assert_eq!(
         orchestrated_console(&result),
-        concat!(
-            "ERR_CRYPTO_OPERATION_FAILED Cryptographic random source unavailable\n",
-            "ERR_CRYPTO_OPERATION_FAILED true"
-        )
+        "ERR_CRYPTO_OPERATION_FAILED Cryptographic random source unavailable true"
     );
     assert_eq!(provider.calls.load(Ordering::Acquire), 2);
     assert!(
@@ -994,17 +1010,26 @@ fn entropy_replay_rejects_request_divergence_and_unused_suffix_bd_opsnv() {
         ),
     ];
 
-    let divergent: Arc<dyn HostIoRecorder> =
-        Arc::new(InMemoryHostIoTranscript::replaying(transcript.clone()));
+    let divergent = Arc::new(InMemoryHostIoTranscript::replaying(transcript.clone()));
+    let divergent_dyn: Arc<dyn HostIoRecorder> = divergent.clone();
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_host_io(Arc::new(ScriptedRandomHostIo::never()), Some(divergent));
+    orchestrator.set_host_io(Arc::new(ScriptedRandomHostIo::never()), Some(divergent_dyn));
     let error = orchestrator
         .execute(&crypto_package(
             "const crypto = require('crypto'); crypto.randomBytes(5);",
             true,
         ))
         .expect_err("a changed entropy byte count must diverge before live dispatch");
-    assert!(error.to_string().contains("host effect dispatch failed"));
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+            if value == "Error: Cryptographic random source unavailable"
+    ));
+    assert!(matches!(
+        divergent.finish_execution(),
+        Err(HostIoError::SandboxViolation { detail })
+            if detail.contains("host I/O replay divergence at index 0")
+    ));
 
     let suffix: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::replaying(transcript));
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
@@ -1020,18 +1045,24 @@ fn entropy_replay_rejects_request_divergence_and_unused_suffix_bd_opsnv() {
 
 #[test]
 fn missing_random_read_capability_prevents_provider_dispatch_bd_opsnv() {
-    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0; 4]]));
-    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
-    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
-    orchestrator.set_host_io(provider.clone(), Some(recorder));
-    let error = orchestrator
-        .execute(&crypto_package(
-            "const crypto = require('crypto'); crypto.randomBytes(4);",
-            false,
-        ))
-        .expect_err("random_read must be an explicit package grant");
-    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
-    assert!(error.to_string().contains("random_read"));
+    for byte_len in [0, 4] {
+        let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0; byte_len]]));
+        let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(provider.clone(), Some(recorder));
+        let error = orchestrator
+            .execute(&crypto_package(
+                &format!("const crypto = require('crypto'); crypto.randomBytes({byte_len});"),
+                false,
+            ))
+            .expect_err("random_read must be an explicit package grant");
+        assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                if capability == "random_read"
+        ));
+    }
 }
 
 #[test]

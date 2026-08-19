@@ -1057,11 +1057,13 @@ fn missing_random_read_capability_prevents_provider_dispatch_bd_opsnv() {
             ))
             .expect_err("random_read must be an explicit package grant");
         assert_eq!(provider.calls.load(Ordering::Acquire), 0);
-        assert!(matches!(
-            error.primary_error(),
+        match error.primary_error() {
             OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
-                if capability == "random_read"
-        ));
+                if capability == "random_read" => {}
+            other => panic!(
+                "missing random_read authority returned an unexpected error for {byte_len} bytes: {other:?}"
+            ),
+        }
     }
 }
 

@@ -784,12 +784,16 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// Canonical key used by the live gate, decision/witness evidence, and E9's
-/// pruned-dispatch table for module loading. The runtime accepts several
-/// historical spellings, but one logical authority must have one evidence
-/// identity or alias choice can fragment policy and replay records.
+/// pruned-dispatch table. The runtime accepts several route spellings for one
+/// logical authority; they must retain one evidence identity or alias choice
+/// can fragment policy and replay records.
 pub(crate) fn capability_gate_key(tag: &str) -> &str {
     match tag {
         "module:require" | "module:import" | "module.import" | "module_load" => "module_load",
+        "builtin:CryptoRandomBytes"
+        | "builtin:CryptoRandomUUID"
+        | "builtin:CryptoRandomInt"
+        | "builtin:CryptoRandomFillSync" => "random_read",
         _ => tag,
     }
 }
@@ -79551,7 +79555,7 @@ mod hostcall_capability_classification_tests {
 mod recordable_capability_tag_tests {
     use super::{
         CAPABILITY_TAG_DIGEST_PREFIX, CAPABILITY_TAG_RECORD_BYTE_CAP, ContentHash,
-        recordable_capability_tag,
+        capability_gate_key, recordable_capability_tag,
     };
 
     fn digest_marker(tag: &str) -> String {
@@ -79569,6 +79573,20 @@ mod recordable_capability_tag_tests {
         let recorded = recordable_capability_tag(tag);
         assert_eq!(recorded.as_ref(), tag);
         assert!(matches!(recorded, std::borrow::Cow::Borrowed(_)));
+    }
+
+    /// Route-specific crypto builtins share one authority, so their live,
+    /// pruned-dispatch, witness, and denial identities must stay identical.
+    #[test]
+    fn crypto_entropy_routes_share_random_read_gate_identity_bd_opsnv() {
+        for route in [
+            "builtin:CryptoRandomBytes",
+            "builtin:CryptoRandomUUID",
+            "builtin:CryptoRandomInt",
+            "builtin:CryptoRandomFillSync",
+        ] {
+            assert_eq!(capability_gate_key(route), "random_read");
+        }
     }
 
     /// Overlong tags remain bounded while committing their complete original

@@ -629,10 +629,11 @@ impl FullCapsHandler {
         outcome: Result<HostIoResponse, HostIoError>,
     ) -> Result<HostIoResponse, HostIoError> {
         match (request, outcome) {
-            (
-                HostIoRequest::RandomRead { byte_len },
-                Ok(response @ HostIoResponse::RandomRead { ref bytes }),
-            ) if u64::try_from(bytes.len()).unwrap_or(u64::MAX) == *byte_len => Ok(response),
+            (HostIoRequest::RandomRead { byte_len }, Ok(HostIoResponse::RandomRead { bytes }))
+                if u64::try_from(bytes.len()).unwrap_or(u64::MAX) == *byte_len =>
+            {
+                Ok(HostIoResponse::RandomRead { bytes })
+            }
             (HostIoRequest::RandomRead { byte_len }, Ok(HostIoResponse::RandomRead { bytes })) => {
                 Err(HostIoError::SandboxViolation {
                     detail: format!(

@@ -36,7 +36,7 @@ fn inventory_all_runtime_capability_variants_appear_in_all() {
         "duplicate variant in RuntimeCapability::ALL"
     );
     // Pin the count so adding a variant without updating ALL fails this test.
-    assert_eq!(all.len(), 21, "RuntimeCapability variant count drift");
+    assert_eq!(all.len(), 22, "RuntimeCapability variant count drift");
 }
 
 #[test]

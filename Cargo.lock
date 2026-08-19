@@ -1675,6 +1675,7 @@ dependencies = [
  "ed25519-dalek",
  "insta",
  "rcgen",
+ "rand 0.8.6",
  "rustix",
  "rustls",
  "rustls-pki-types",

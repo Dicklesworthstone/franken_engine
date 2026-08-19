@@ -90,6 +90,9 @@ impl Effect for FsHostcallEffect {
             HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
                 unreachable!("filesystem operations cannot require a network capability")
             }
+            HostIoCapability::RandomRead => {
+                unreachable!("filesystem operations cannot require random-read authority")
+            }
         }
     }
 
@@ -99,6 +102,9 @@ impl Effect for FsHostcallEffect {
             HostIoCapability::FsWrite => EffectCapabilities::runtime([RuntimeCapability::FsWrite]),
             HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
                 unreachable!("filesystem operations cannot require a network capability")
+            }
+            HostIoCapability::RandomRead => {
+                unreachable!("filesystem operations cannot require random-read authority")
             }
         }
     }
@@ -148,6 +154,33 @@ impl Effect for NetworkHostcallEffect {
 
     fn parameter_type_id(&self) -> TypeId {
         TypeId::of::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>()
+    }
+}
+
+/// Cryptographic entropy request. This effect carries only the byte count; the
+/// provider outcome contains the live or replayed bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RandomReadHostcallEffect {
+    pub byte_len: u64,
+}
+
+impl Effect for RandomReadHostcallEffect {
+    type Output = ();
+
+    fn effect_name(&self) -> &'static str {
+        "hostcall:random:read"
+    }
+
+    fn required_capabilities(&self) -> EffectCapabilities {
+        EffectCapabilities::runtime([RuntimeCapability::RandomRead])
+    }
+
+    fn parameters(&self) -> Box<dyn Any + Send + Sync> {
+        Box::new(self.byte_len)
+    }
+
+    fn parameter_type_id(&self) -> TypeId {
+        TypeId::of::<u64>()
     }
 }
 
@@ -538,12 +571,15 @@ impl FullCapsHandler {
         let granted = [request.required_capability()];
         let outcome = if let Some(journal) = self.host_effect_journal.as_deref() {
             match journal.replay_host_io(&request) {
-                Some(recorded) => recorded,
+                Some(recorded) => Self::validate_host_io_outcome(&request, recorded),
                 None => {
                     let reservation = journal
                         .reserve_host_io(&request)
                         .map_err(|error| host_effect_journal_error("full_caps_handler", error))?;
-                    let live = provider.perform(&request, &granted);
+                    let live = Self::validate_host_io_outcome(
+                        &request,
+                        provider.perform(&request, &granted),
+                    );
                     journal
                         .complete_host_io(reservation, &request, &live)
                         .map_err(|error| host_effect_journal_error("full_caps_handler", error))?;
@@ -556,9 +592,12 @@ impl FullCapsHandler {
                 .as_deref()
                 .and_then(|recorder| recorder.replay(&request))
             {
-                Some(recorded) => recorded,
+                Some(recorded) => Self::validate_host_io_outcome(&request, recorded),
                 None => {
-                    let live = provider.perform(&request, &granted);
+                    let live = Self::validate_host_io_outcome(
+                        &request,
+                        provider.perform(&request, &granted),
+                    );
                     if let Some(recorder) = self.host_io_recorder.as_deref() {
                         recorder.record(&request, &live);
                     }
@@ -582,6 +621,30 @@ impl FullCapsHandler {
             Err(_) => Err(EffectError::CapabilityDenied {
                 required: effect.required_capabilities(),
             }),
+        }
+    }
+
+    fn validate_host_io_outcome(
+        request: &HostIoRequest,
+        outcome: Result<HostIoResponse, HostIoError>,
+    ) -> Result<HostIoResponse, HostIoError> {
+        match (request, outcome) {
+            (
+                HostIoRequest::RandomRead { byte_len },
+                Ok(response @ HostIoResponse::RandomRead { ref bytes }),
+            ) if u64::try_from(bytes.len()).unwrap_or(u64::MAX) == *byte_len => Ok(response),
+            (HostIoRequest::RandomRead { byte_len }, Ok(HostIoResponse::RandomRead { bytes })) => {
+                Err(HostIoError::SandboxViolation {
+                    detail: format!(
+                        "random-read provider returned {} bytes for a {byte_len}-byte request",
+                        bytes.len()
+                    ),
+                })
+            }
+            (HostIoRequest::RandomRead { .. }, Ok(_)) => Err(HostIoError::SandboxViolation {
+                detail: "random-read provider returned an incompatible response kind".to_string(),
+            }),
+            (_, outcome) => outcome,
         }
     }
 
@@ -643,9 +706,20 @@ impl FullCapsHandler {
                     use_tls,
                 })
             }
+            "hostcall:random:read" => {
+                let byte_len = effect.parameters().downcast::<u64>().map_err(|_| {
+                    EffectError::InvalidParameters {
+                        effect_name: effect.effect_name().to_string(),
+                        reason: "Expected a u64 random byte count".to_string(),
+                    }
+                })?;
+                Ok(HostIoRequest::RandomRead {
+                    byte_len: *byte_len,
+                })
+            }
             other => Err(EffectError::InvalidParameters {
                 effect_name: other.to_string(),
-                reason: "not an fs/network hostcall".to_string(),
+                reason: "not an fs/network/random hostcall".to_string(),
             }),
         }
     }
@@ -660,6 +734,7 @@ impl FullCapsHandler {
             // bd-3894s slice (4): the raw response bytes flow back to the
             // interpreter, which parses them into a JS response object.
             HostIoResponse::NetworkRequest { response } => EffectResult::new(response.clone()),
+            HostIoResponse::RandomRead { bytes } => EffectResult::new(bytes.clone()),
         }
     }
 }
@@ -896,7 +971,10 @@ impl Handler for FullCapsHandler {
                     })
                 }
             }
-            "hostcall:fs:read" | "hostcall:fs:write" | "hostcall:network" => {
+            "hostcall:fs:read"
+            | "hostcall:fs:write"
+            | "hostcall:network"
+            | "hostcall:random:read" => {
                 // bd-6wc97 / bd-6wc97.1 decision: EXPLICIT-DENY by design.
                 // There is no real in-engine fs/network executor (only
                 // `MockFsHandler`); routing to host `std::fs`/sockets would be a
@@ -1494,6 +1572,11 @@ pub fn create_fs_effect(
     })
 }
 
+#[must_use]
+pub fn create_random_read_effect(byte_len: u64) -> Box<dyn ErasedEffect> {
+    Box::new(RandomReadHostcallEffect { byte_len })
+}
+
 pub fn create_effect_from_hostcall_tag(
     tag: &str,
     args: &[String],
@@ -2015,6 +2098,9 @@ mod tests {
                 HostIoRequest::NetworkRequest { .. } => HostIoResponse::NetworkRequest {
                     response: b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
                 },
+                HostIoRequest::RandomRead { byte_len } => HostIoResponse::RandomRead {
+                    bytes: vec![0xa5; *byte_len as usize],
+                },
             })
         }
     }
@@ -2033,6 +2119,25 @@ mod tests {
             _granted: &[HostIoCapability],
         ) -> Result<HostIoResponse, HostIoError> {
             panic!("provider must not be called in replay mode");
+        }
+    }
+
+    #[derive(Debug)]
+    struct MismatchedRandomHostIo;
+
+    impl HostIoProvider for MismatchedRandomHostIo {
+        fn name(&self) -> &str {
+            "mismatched-random-host-io"
+        }
+
+        fn perform(
+            &self,
+            _request: &HostIoRequest,
+            _granted: &[HostIoCapability],
+        ) -> Result<HostIoResponse, HostIoError> {
+            Ok(HostIoResponse::FsRead {
+                bytes: vec![0xa5; 6],
+            })
         }
     }
 
@@ -3133,8 +3238,18 @@ mod tests {
         };
         assert!(handler.handle(&network).expect("network routed").is_some());
 
+        let random = RandomReadHostcallEffect { byte_len: 16 };
+        let random_result = handler
+            .handle(&random)
+            .expect("random read routed")
+            .expect("random read result");
+        assert_eq!(
+            random_result.downcast::<Vec<u8>>().expect("random bytes"),
+            vec![0xa5; 16]
+        );
+
         let seen = provider.seen.lock().unwrap();
-        assert_eq!(seen.len(), 3);
+        assert_eq!(seen.len(), 4);
         for (request, granted) in seen.iter() {
             assert_eq!(granted.as_slice(), &[request.required_capability()]);
         }
@@ -3164,6 +3279,56 @@ mod tests {
             FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay.clone());
         assert!(replay_handler.handle(&network).is_ok());
         replay.finish_execution().expect("finish replay");
+    }
+
+    #[test]
+    fn random_read_record_and_replay_returns_exact_bytes_without_live_provider_bd_opsnv() {
+        use frankenengine_extension_host::host_io::InMemoryHostIoTranscript;
+
+        let provider = Arc::new(RecordingHostIo::default());
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let record_handler = FullCapsHandler::with_host_io_recorded(provider, recorder.clone());
+        recorder.begin_execution().expect("begin recording");
+        let random = RandomReadHostcallEffect { byte_len: 6 };
+        let recorded_result = record_handler
+            .handle(&random)
+            .expect("record random read")
+            .expect("recorded result")
+            .downcast::<Vec<u8>>()
+            .expect("recorded bytes");
+        assert_eq!(recorded_result, vec![0xa5; 6]);
+        let transcript = recorder.finish_execution().expect("finish recording");
+        assert_eq!(
+            transcript,
+            vec![(
+                HostIoRequest::RandomRead { byte_len: 6 },
+                Ok(HostIoResponse::RandomRead {
+                    bytes: vec![0xa5; 6]
+                })
+            )]
+        );
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(transcript));
+        replay.begin_execution().expect("begin replay");
+        let replay_handler =
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay.clone());
+        let replayed = replay_handler
+            .handle(&random)
+            .expect("replay random read")
+            .expect("replayed result")
+            .downcast::<Vec<u8>>()
+            .expect("replayed bytes");
+        assert_eq!(replayed, vec![0xa5; 6]);
+        replay.finish_execution().expect("finish replay");
+    }
+
+    #[test]
+    fn random_read_rejects_incompatible_provider_response_kind_bd_opsnv() {
+        let handler = FullCapsHandler::with_host_io(Arc::new(MismatchedRandomHostIo));
+        assert!(matches!(
+            handler.handle(&RandomReadHostcallEffect { byte_len: 6 }),
+            Err(EffectError::CapabilityDenied { .. })
+        ));
     }
 
     #[test]

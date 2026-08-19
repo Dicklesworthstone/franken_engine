@@ -74,6 +74,9 @@ pub enum RuntimeCapability {
     /// this capability without a valid staged receipt still fails closed there
     /// (bd-lduxz).
     Declassify,
+    /// Read fresh cryptographic entropy through the explicit host provider and
+    /// replay journal. This is intentionally distinct from generic built-ins.
+    RandomRead,
 }
 
 impl fmt::Display for RuntimeCapability {
@@ -100,6 +103,7 @@ impl fmt::Display for RuntimeCapability {
             Self::Timer => "timer",
             Self::Builtin => "builtin",
             Self::Declassify => "declassify",
+            Self::RandomRead => "random_read",
         };
         f.write_str(name)
     }
@@ -107,7 +111,7 @@ impl fmt::Display for RuntimeCapability {
 
 impl RuntimeCapability {
     /// Every runtime capability variant in canonical declaration order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::VmDispatch,
         Self::GcInvoke,
         Self::IrLowering,
@@ -129,6 +133,7 @@ impl RuntimeCapability {
         Self::Timer,
         Self::Builtin,
         Self::Declassify,
+        Self::RandomRead,
     ];
 
     /// Map a capability-tag string (as used in [`CapabilityTag`] / hostcall
@@ -160,6 +165,7 @@ impl RuntimeCapability {
             "timer" => Some(Self::Timer),
             "builtin" => Some(Self::Builtin),
             "declassify" => Some(Self::Declassify),
+            "random_read" => Some(Self::RandomRead),
 
             // Short aliases used in IR / tests
             // bd-656a2: `net:request` is the tag emitted by the JS http.get/
@@ -193,6 +199,14 @@ impl RuntimeCapability {
             | "builtin:SetImmediate"
             | "builtin:ClearImmediate"
             | "builtin:QueueMicrotask" => Some(Self::Timer),
+
+            // Successful Node crypto entropy never inherits generic Builtin
+            // authority. These exact authenticated lowering tags require the
+            // dedicated RandomRead grant and a live/replaying host provider.
+            "builtin:CryptoRandomBytes"
+            | "builtin:CryptoRandomUUID"
+            | "builtin:CryptoRandomInt"
+            | "builtin:CryptoRandomFillSync" => Some(Self::RandomRead),
 
             // Map console hostcalls to Console capability
             tag if tag.starts_with("console:") => Some(Self::Console),
@@ -363,6 +377,7 @@ impl CapabilityProfile {
                 Timer,
                 Builtin,
                 Declassify,
+                RandomRead,
             ]),
         }
     }
@@ -1872,6 +1887,29 @@ mod tests {
             Some(RuntimeCapability::Builtin),
             "unregistered builtin names must not acquire Timer authority"
         );
+    }
+
+    #[test]
+    fn crypto_entropy_tags_require_random_read_not_generic_builtin_bd_opsnv() {
+        for tag in [
+            "builtin:CryptoRandomBytes",
+            "builtin:CryptoRandomUUID",
+            "builtin:CryptoRandomInt",
+            "builtin:CryptoRandomFillSync",
+        ] {
+            assert_eq!(
+                RuntimeCapability::from_tag_str(tag),
+                Some(RuntimeCapability::RandomRead),
+                "{tag} must not inherit generic Builtin authority"
+            );
+        }
+        assert_eq!(
+            RuntimeCapability::from_tag_str("builtin:CryptoInvalidRandomInt"),
+            Some(RuntimeCapability::Builtin),
+            "a statically invalid range throws without consuming entropy"
+        );
+        assert!(CapabilityProfile::full().has(RuntimeCapability::RandomRead));
+        assert!(!CapabilityProfile::engine_core().has(RuntimeCapability::RandomRead));
     }
 
     #[test]

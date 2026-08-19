@@ -161,6 +161,7 @@ fn runtime_capability_for_host_io(capability: HostIoCapability) -> RuntimeCapabi
         HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
             RuntimeCapability::NetworkEgress
         }
+        HostIoCapability::RandomRead => RuntimeCapability::RandomRead,
     }
 }
 

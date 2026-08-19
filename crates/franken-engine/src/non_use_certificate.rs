@@ -777,6 +777,7 @@ fn map_host_capability(capability: HostIoCapability) -> RuntimeCapability {
         HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
             RuntimeCapability::NetworkEgress
         }
+        HostIoCapability::RandomRead => RuntimeCapability::RandomRead,
     }
 }
 
@@ -816,6 +817,7 @@ fn host_effect_target(request: &HostIoRequest) -> (String, u64, Option<String>) 
             payload.len() as u64,
             Some(ContentHash::compute(payload).to_hex()),
         ),
+        HostIoRequest::RandomRead { byte_len } => ("os-csprng".to_string(), *byte_len, None),
     }
 }
 
@@ -970,6 +972,7 @@ fn capability_use_is_witnessed(capability: RuntimeCapability) -> bool {
             | RuntimeCapability::FsRead
             | RuntimeCapability::FsWrite
             | RuntimeCapability::NetworkEgress
+            | RuntimeCapability::RandomRead
     )
 }
 
@@ -2865,6 +2868,7 @@ mod tests {
             RuntimeCapability::FsRead,
             RuntimeCapability::FsWrite,
             RuntimeCapability::NetworkEgress,
+            RuntimeCapability::RandomRead,
         ] {
             assert!(capability_use_is_witnessed(capability), "{capability:?}");
         }

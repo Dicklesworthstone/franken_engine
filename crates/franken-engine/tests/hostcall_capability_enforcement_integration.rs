@@ -838,6 +838,7 @@ fn runtime_capability_display_all_variants() {
         (RuntimeCapability::Timer, "timer"),
         (RuntimeCapability::Builtin, "builtin"),
         (RuntimeCapability::Declassify, "declassify"),
+        (RuntimeCapability::RandomRead, "random_read"),
     ];
     for (cap, label) in &expected {
         assert_eq!(cap.to_string(), *label, "Display mismatch for {:?}", cap);

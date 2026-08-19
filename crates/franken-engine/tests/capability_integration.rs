@@ -54,6 +54,7 @@ fn capability_display_all_variants() {
         (RuntimeCapability::Timer, "timer"),
         (RuntimeCapability::Builtin, "builtin"),
         (RuntimeCapability::Declassify, "declassify"),
+        (RuntimeCapability::RandomRead, "random_read"),
     ];
     assert_eq!(expected.len(), all_runtime_capabilities().len());
     for (capability, display) in expected {

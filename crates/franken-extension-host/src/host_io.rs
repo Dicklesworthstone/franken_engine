@@ -23,6 +23,8 @@ pub enum HostIoCapability {
     FsWrite,
     NetworkSend,
     NetworkRecv,
+    /// Read fresh bytes from the host operating-system CSPRNG.
+    RandomRead,
 }
 
 /// Filesystem operation carried across the engine/host policy seam.
@@ -182,6 +184,7 @@ impl HostIoCapability {
             Self::FsWrite => "fs_write",
             Self::NetworkSend => "network_send",
             Self::NetworkRecv => "network_recv",
+            Self::RandomRead => "random_read",
         }
     }
 }
@@ -236,6 +239,12 @@ pub enum HostIoRequest {
         #[serde(default)]
         use_tls: bool,
     },
+    /// Request fresh cryptographic entropy. The request records only the exact
+    /// byte count; the outcome carries the bytes so replay can return them
+    /// without consulting a live entropy source.
+    RandomRead {
+        byte_len: u64,
+    },
 }
 
 impl HostIoRequest {
@@ -250,6 +259,7 @@ impl HostIoRequest {
             // The egress write is the gated action; reading the reply on the same
             // socket is its natural completion, not a separately-grantable read.
             Self::NetworkRequest { .. } => HostIoCapability::NetworkSend,
+            Self::RandomRead { .. } => HostIoCapability::RandomRead,
         }
     }
 
@@ -262,6 +272,7 @@ impl HostIoRequest {
             Self::NetworkSend { .. } => "network_send",
             Self::NetworkRecv { .. } => "network_recv",
             Self::NetworkRequest { .. } => "network_request",
+            Self::RandomRead { .. } => "random_read",
         }
     }
 }
@@ -289,6 +300,11 @@ pub enum HostIoResponse {
     /// round trip (status line + headers + body, exactly as the peer sent them).
     NetworkRequest {
         response: Vec<u8>,
+    },
+    /// Fresh bytes returned by the operating-system CSPRNG, or the exact bytes
+    /// supplied by a replay transcript.
+    RandomRead {
+        bytes: Vec<u8>,
     },
 }
 
@@ -414,6 +430,17 @@ pub fn capability_granted(granted: &[HostIoCapability], required: HostIoCapabili
 /// use and provides a parser-bomb / OOM defense; mirrors the franken_node CAS
 /// per-blob cap.
 pub const SANDBOXED_HOST_IO_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Maximum entropy returned by one guest request. This is intentionally much
+/// smaller than the generic host-I/O cap: crypto APIs normally request tens of
+/// bytes, while an attacker-controlled allocation must remain bounded before a
+/// CSPRNG call or transcript clone can occur.
+pub const SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST: u64 = 1024 * 1024;
+
+/// Total entropy budget for one [`SandboxedHostIo`] instance. The product
+/// constructs one provider per run; clones share this atomic budget so a guest
+/// cannot multiply authority by making the provider cross interpreter lanes.
+pub const SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Per-operation network timeout for [`SandboxedHostIo`] connect/read/write.
 /// Bounds how long a single guest network effect may block so a slow or
@@ -555,6 +582,7 @@ pub struct SandboxedHostIo {
     #[cfg(unix)]
     root_fd: std::sync::Arc<OwnedFd>,
     max_bytes: u64,
+    random_bytes_remaining: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Trust anchors for `use_tls` round trips: the compiled-in webpki (Mozilla)
     /// roots by default, plus any operator-supplied extras added via
     /// [`Self::with_extra_tls_roots_pem`] (private CAs, test anchors). Shared via
@@ -608,6 +636,9 @@ impl SandboxedHostIo {
             #[cfg(unix)]
             root_fd: std::sync::Arc::new(root_fd),
             max_bytes,
+            random_bytes_remaining: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES,
+            )),
             tls_roots: std::sync::Arc::new(tls_roots),
             #[cfg(all(test, unix))]
             mutation_race_hook: None,
@@ -1881,6 +1912,48 @@ impl SandboxedHostIo {
         })
     }
 
+    fn random_read(&self, byte_len: u64) -> HostIoOutcome {
+        use rand::RngCore;
+        use std::sync::atomic::Ordering;
+
+        let per_request_cap = self
+            .max_bytes
+            .min(SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST);
+        if byte_len > per_request_cap {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "random read of {byte_len} bytes exceeds the {per_request_cap}-byte per-request cap"
+                ),
+            });
+        }
+        let byte_len_usize = usize::try_from(byte_len).map_err(|_| HostIoError::Io {
+            detail: format!("random read of {byte_len} bytes exceeds host addressable memory"),
+        })?;
+        if self
+            .random_bytes_remaining
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(byte_len)
+            })
+            .is_err()
+        {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "random read of {byte_len} bytes exceeds the remaining per-run entropy budget"
+                ),
+            });
+        }
+
+        let mut bytes = vec![0u8; byte_len_usize];
+        if let Err(error) = rand::rngs::OsRng.try_fill_bytes(&mut bytes) {
+            self.random_bytes_remaining
+                .fetch_add(byte_len, Ordering::AcqRel);
+            return Err(HostIoError::Io {
+                detail: format!("operating-system CSPRNG unavailable: {error}"),
+            });
+        }
+        Ok(HostIoResponse::RandomRead { bytes })
+    }
+
     fn network_recv(&self, endpoint: &str, max_len: u64) -> HostIoOutcome {
         // Bound the read by the smaller of the caller-requested length and the
         // provider's per-operation cap.
@@ -2078,6 +2151,7 @@ impl HostIoProvider for SandboxedHostIo {
                 max_len,
                 use_tls,
             } => self.network_request(endpoint, payload, *max_len, *use_tls),
+            HostIoRequest::RandomRead { byte_len } => self.random_read(*byte_len),
         }
     }
 }
@@ -2395,6 +2469,7 @@ mod tests {
                 endpoint: "example.com:443".to_string(),
                 max_len: 1024,
             },
+            HostIoRequest::RandomRead { byte_len: 32 },
         ]
     }
 
@@ -2465,6 +2540,10 @@ mod tests {
             .required_capability(),
             HostIoCapability::NetworkRecv
         );
+        assert_eq!(
+            HostIoRequest::RandomRead { byte_len: 32 }.required_capability(),
+            HostIoCapability::RandomRead
+        );
     }
 
     #[test]
@@ -2500,6 +2579,15 @@ mod tests {
             serde_json::from_str::<HostIoResponse>(&json).expect("deserialize fs meta response")
         );
 
+        let response = HostIoResponse::RandomRead {
+            bytes: vec![0, 1, 2, 255],
+        };
+        let json = serde_json::to_string(&response).expect("serialize random response");
+        assert_eq!(
+            response,
+            serde_json::from_str::<HostIoResponse>(&json).expect("deserialize random response")
+        );
+
         let error = HostIoError::CapabilityMissing {
             capability: HostIoCapability::FsRead,
         };
@@ -2522,11 +2610,97 @@ mod tests {
 
     #[test]
     fn capability_granted_membership() {
-        let granted = [HostIoCapability::FsRead, HostIoCapability::NetworkRecv];
+        let granted = [
+            HostIoCapability::FsRead,
+            HostIoCapability::NetworkRecv,
+            HostIoCapability::RandomRead,
+        ];
         assert!(capability_granted(&granted, HostIoCapability::FsRead));
         assert!(capability_granted(&granted, HostIoCapability::NetworkRecv));
+        assert!(capability_granted(&granted, HostIoCapability::RandomRead));
         assert!(!capability_granted(&granted, HostIoCapability::FsWrite));
         assert!(!capability_granted(&[], HostIoCapability::FsRead));
+    }
+
+    #[test]
+    fn sandboxed_random_read_is_capability_checked_and_bounded() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let request = HostIoRequest::RandomRead { byte_len: 32 };
+
+        assert!(matches!(
+            provider.perform(&request, &[]),
+            Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::RandomRead
+            })
+        ));
+        let outcome = provider.perform(&request, &[HostIoCapability::RandomRead]);
+        assert!(
+            matches!(outcome, Ok(HostIoResponse::RandomRead { ref bytes }) if bytes.len() == 32),
+            "authorized random read must return exactly the requested bytes: {outcome:?}"
+        );
+
+        let oversize = HostIoRequest::RandomRead {
+            byte_len: SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST + 1,
+        };
+        assert!(matches!(
+            provider.perform(&oversize, &[HostIoCapability::RandomRead]),
+            Err(HostIoError::Io { .. })
+        ));
+
+        let limited = SandboxedHostIo::with_root_and_limit(&scratch.path, 4).expect("provider");
+        assert!(matches!(
+            limited.perform(
+                &HostIoRequest::RandomRead { byte_len: 4 },
+                &[HostIoCapability::RandomRead]
+            ),
+            Ok(HostIoResponse::RandomRead { ref bytes }) if bytes.len() == 4
+        ));
+        assert!(matches!(
+            limited.perform(
+                &HostIoRequest::RandomRead { byte_len: 5 },
+                &[HostIoCapability::RandomRead]
+            ),
+            Err(HostIoError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn sandboxed_random_budget_is_shared_across_provider_clones() {
+        use std::sync::atomic::Ordering;
+
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        provider.random_bytes_remaining.store(4, Ordering::Release);
+        let clone = provider.clone();
+
+        let first = provider.perform(
+            &HostIoRequest::RandomRead { byte_len: 3 },
+            &[HostIoCapability::RandomRead],
+        );
+        assert!(matches!(first, Ok(HostIoResponse::RandomRead { ref bytes }) if bytes.len() == 3));
+        assert!(matches!(
+            clone.perform(
+                &HostIoRequest::RandomRead { byte_len: 2 },
+                &[HostIoCapability::RandomRead]
+            ),
+            Err(HostIoError::Io { .. })
+        ));
+        assert!(matches!(
+            clone.perform(
+                &HostIoRequest::RandomRead { byte_len: 1 },
+                &[HostIoCapability::RandomRead]
+            ),
+            Ok(HostIoResponse::RandomRead { ref bytes }) if bytes.len() == 1
+        ));
+        assert_eq!(provider.random_bytes_remaining.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            provider.perform(
+                &HostIoRequest::RandomRead { byte_len: 1 },
+                &[HostIoCapability::RandomRead]
+            ),
+            Err(HostIoError::Io { .. })
+        ));
     }
 
     #[test]
@@ -2582,6 +2756,36 @@ mod tests {
             .expect("second replay");
         assert_eq!(second, Ok(HostIoResponse::FsWrite { bytes_written: 3 }));
         assert_eq!(replay.finish_execution().unwrap(), replay.entries());
+        assert!(replay.finish_execution().is_err());
+    }
+
+    #[test]
+    fn replaying_random_read_returns_exact_recorded_bytes_without_live_entropy() {
+        let request = HostIoRequest::RandomRead { byte_len: 4 };
+        let outcome = Ok(HostIoResponse::RandomRead {
+            bytes: vec![0xde, 0xad, 0xbe, 0xef],
+        });
+        let replay = InMemoryHostIoTranscript::replaying(vec![(request.clone(), outcome.clone())]);
+
+        replay.begin_execution().expect("begin replay");
+        assert_eq!(replay.replay(&request), Some(outcome));
+        assert_eq!(replay.finish_execution().expect("exact replay").len(), 1);
+    }
+
+    #[test]
+    fn replaying_random_read_rejects_length_divergence() {
+        let replay = InMemoryHostIoTranscript::replaying(vec![(
+            HostIoRequest::RandomRead { byte_len: 4 },
+            Ok(HostIoResponse::RandomRead {
+                bytes: vec![1, 2, 3, 4],
+            }),
+        )]);
+
+        replay.begin_execution().expect("begin replay");
+        assert!(matches!(
+            replay.replay(&HostIoRequest::RandomRead { byte_len: 5 }),
+            Some(Err(HostIoError::SandboxViolation { .. }))
+        ));
         assert!(replay.finish_execution().is_err());
     }
 

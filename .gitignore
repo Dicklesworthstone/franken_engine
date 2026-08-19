@@ -259,3 +259,8 @@ crates/franken-engine/tests/*_irdump.rs
 
 # Claude Code temp files
 claude-upgrade-progress.json
+
+# Skill-loop / repo-janitor scratch
+.skill-loop-progress.md
+.skill-loop-progress-*.md
+

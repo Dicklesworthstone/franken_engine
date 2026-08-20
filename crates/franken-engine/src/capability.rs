@@ -13,6 +13,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ifc_artifacts::Label;
+
 pub mod trust_zone;
 
 // ---------------------------------------------------------------------------
@@ -233,6 +235,102 @@ impl RuntimeCapability {
             // Unknown / internal tags — not mapped
             _ => None,
         }
+    }
+}
+
+/// Canonical IFC contract for the value returned by a HostCall capability.
+///
+/// This is deliberately separate from [`RuntimeCapability`]'s authority
+/// decision. Authority answers whether a call may execute; this contract
+/// answers where the returned value's information came from. Keeping the
+/// contract shared prevents static lowering and the baseline interpreter from
+/// independently inventing result provenance (bd-z1peg).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostcallResultContract {
+    /// The result is a label-preserving transform of the direct operands.
+    PreserveInputs,
+    /// The host introduces data at this minimum label; operands and any
+    /// runtime-published hidden-state provenance may only raise it.
+    SourceFloor(Label),
+    /// A receipt-authenticated runtime path owns the effective result label.
+    /// Without an explicit runtime publication, the result fails high.
+    AuthenticatedRelease,
+    /// No result-provenance contract is known for this capability.
+    FailClosed,
+}
+
+impl HostcallResultContract {
+    /// Apply this contract to the direct operand join and an optional precise
+    /// label published by the runtime implementation.
+    ///
+    /// Authenticated releases intentionally do not rejoin the original inputs:
+    /// doing so would make an authorized downgrade impossible. The runtime
+    /// publication is the proof-bearing effective label; its absence fails
+    /// high instead of silently treating an authority grant as declassification.
+    pub fn result_label(&self, inputs: &Label, runtime: Option<&Label>) -> Label {
+        match self {
+            Self::PreserveInputs => runtime.map_or_else(
+                || inputs.clone(),
+                |runtime| inputs.join(runtime),
+            ),
+            Self::SourceFloor(floor) => runtime.map_or_else(
+                || floor.join(inputs),
+                |runtime| floor.join(inputs).join(runtime),
+            ),
+            Self::AuthenticatedRelease => runtime.cloned().unwrap_or(Label::TopSecret),
+            Self::FailClosed => Label::TopSecret,
+        }
+    }
+}
+
+/// Resolve a HostCall's returned-value IFC contract from its exact dispatch
+/// tag and typed authority class.
+///
+/// Exact entropy routes are classified before the generic `builtin:*` family,
+/// so fresh host randomness cannot inherit the old operand-only default.
+/// Read-like authority classes receive conservative source floors. Unknown
+/// authority tags fail high. Declassification-shaped tags remain unusable as
+/// releases unless their runtime implementation publishes a receipt-validated
+/// effective label.
+pub fn hostcall_result_contract(tag: &str) -> HostcallResultContract {
+    if matches!(
+        tag,
+        "promise:constructor"
+            | "promise:resolve"
+            | "promise:reject"
+            | "promise:then"
+            | "promise:catch"
+            | "promise:finally"
+            | "promise:all"
+            | "promise:race"
+            | "promise:allSettled"
+            | "promise:any"
+            | "promise:create"
+    ) {
+        return HostcallResultContract::PreserveInputs;
+    }
+    if tag.starts_with("declassify.") || tag.starts_with("declassify:") {
+        return HostcallResultContract::AuthenticatedRelease;
+    }
+
+    match RuntimeCapability::from_tag_str(tag) {
+        Some(RuntimeCapability::RandomRead | RuntimeCapability::EnvRead) => {
+            HostcallResultContract::SourceFloor(Label::Secret)
+        }
+        Some(RuntimeCapability::PolicyRead) => {
+            HostcallResultContract::SourceFloor(Label::Confidential)
+        }
+        Some(
+            RuntimeCapability::FsRead
+            | RuntimeCapability::NetworkEgress
+            | RuntimeCapability::ProcessSpawn
+            | RuntimeCapability::ModuleLoad
+            | RuntimeCapability::LeaseManagement
+            | RuntimeCapability::ExtensionLifecycle,
+        ) => HostcallResultContract::SourceFloor(Label::Internal),
+        Some(RuntimeCapability::Declassify) => HostcallResultContract::AuthenticatedRelease,
+        Some(_) => HostcallResultContract::PreserveInputs,
+        None => HostcallResultContract::FailClosed,
     }
 }
 
@@ -1910,6 +2008,69 @@ mod tests {
         );
         assert!(CapabilityProfile::full().has(RuntimeCapability::RandomRead));
         assert!(!CapabilityProfile::engine_core().has(RuntimeCapability::RandomRead));
+    }
+
+    #[test]
+    fn hostcall_result_contracts_are_source_aware_and_fail_closed_bd_z1peg() {
+        for tag in [
+            "builtin:CryptoRandomBytes",
+            "builtin:CryptoRandomUUID",
+            "builtin:CryptoRandomInt",
+            "builtin:CryptoRandomFillSync",
+            "env_read",
+        ] {
+            assert_eq!(
+                hostcall_result_contract(tag),
+                HostcallResultContract::SourceFloor(Label::Secret),
+                "{tag} must introduce Secret source provenance"
+            );
+        }
+        for tag in ["fs", "fs:read", "fs.read", "fs_read"] {
+            assert_eq!(
+                hostcall_result_contract(tag),
+                HostcallResultContract::SourceFloor(Label::Internal),
+                "filesystem-read aliases must share one result contract"
+            );
+        }
+        assert_eq!(
+            hostcall_result_contract("promise:resolve"),
+            HostcallResultContract::PreserveInputs
+        );
+        assert_eq!(
+            hostcall_result_contract("declassify.audit"),
+            HostcallResultContract::AuthenticatedRelease
+        );
+        assert_eq!(
+            hostcall_result_contract("future:host-source"),
+            HostcallResultContract::FailClosed
+        );
+
+        let secret_source = hostcall_result_contract("builtin:CryptoRandomUUID")
+            .result_label(&Label::Public, None);
+        assert_eq!(secret_source, Label::Secret);
+        let preserved = hostcall_result_contract("promise:resolve")
+            .result_label(&Label::Secret, None);
+        assert_eq!(preserved, Label::Secret);
+        let raised_source = hostcall_result_contract("builtin:CryptoRandomBytes")
+            .result_label(&Label::Public, Some(&Label::TopSecret));
+        assert_eq!(raised_source, Label::TopSecret);
+        assert_eq!(
+            hostcall_result_contract("future:host-source")
+                .result_label(&Label::Public, None),
+            Label::TopSecret
+        );
+        assert_eq!(
+            hostcall_result_contract("declassify.audit")
+                .result_label(&Label::Secret, None),
+            Label::TopSecret,
+            "a capability grant alone must not authenticate a release"
+        );
+        assert_eq!(
+            hostcall_result_contract("declassify.audit")
+                .result_label(&Label::Secret, Some(&Label::Public)),
+            Label::Public,
+            "a proof-bearing runtime publication owns an authenticated release label"
+        );
     }
 
     #[test]

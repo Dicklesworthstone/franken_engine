@@ -2696,6 +2696,18 @@ fn prepare_function_body_bindings(
             body_lookup.entry(key.clone()).or_insert(*binding_id);
         }
     }
+
+    // Buffer object provenance is intentionally not inherited from the outer
+    // lookup: a captured alias must retain generic fail-high method dispatch.
+    // A fresh function-like scope can still authenticate its own immutable
+    // Buffer factory bindings after all local declarations and inherited
+    // lexical-shadow markers are present.
+    if let Some(statements) = statements {
+        for alias in confirmed_buffer_object_aliases(statements, body_lookup) {
+            body_lookup.insert(buffer_object_alias_sentinel(&alias), 0);
+        }
+    }
+
     pre_lower_names
 }
 
@@ -30236,6 +30248,24 @@ mod tests {
                 "builtin:BufferObjectReadUInt32LE",
                 2,
             ),
+            (
+                "function_expression_local_alias",
+                "(function(){ const b=Buffer.alloc(2); try { b.readUInt32LE(0); } catch (error) { console.log(error); } }());",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
+            (
+                "arrow_block_local_alias",
+                "(()=>{ const b=Buffer.alloc(2); try { b.readUInt32LE(0); } catch (error) { console.log(error); } })();",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
+            (
+                "class_method_local_alias",
+                "class Reader { read(){ const b=Buffer.alloc(2); try { b.readUInt32LE(0); } catch (error) { console.log(error); } } } new Reader().read();",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
         ] {
             let tree = crate::parser_api_stability::parse_script(source)
                 .expect("parse authenticated Buffer object source");
@@ -30257,7 +30287,13 @@ mod tests {
                 } if observed == capability && *arg_count == expected_arg_count
             )));
 
-            if case_name == "function_local_alias" {
+            if matches!(
+                case_name,
+                "function_local_alias"
+                    | "function_expression_local_alias"
+                    | "arrow_block_local_alias"
+                    | "class_method_local_alias"
+            ) {
                 // Function bodies remain nested IR1 payloads at this stage;
                 // the checks above are the relevant scope-authentication
                 // proof. The top-level catch-flow assertions below exercise
@@ -30355,6 +30391,10 @@ mod tests {
                 "const b=Buffer.alloc(2); function read(){ return b.readUInt32LE(0); } read();",
             ),
             (
+                "function_local_nested_capture",
+                "function outer(){ const b=Buffer.alloc(2); function read(){ return b.readUInt32LE(0); } return read(); } outer();",
+            ),
+            (
                 "arrow_capture",
                 "const b=Buffer.alloc(2); const read=()=>b.readUInt32LE(0); read();",
             ),
@@ -30367,6 +30407,10 @@ mod tests {
                 "b.readUInt32LE(0); const b=Buffer.alloc(2);",
             ),
             (
+                "function_local_predeclaration",
+                "function read(){ b.readUInt32LE(0); const b=Buffer.alloc(2); } read();",
+            ),
+            (
                 "self_reference",
                 "const b=Buffer.from(b); b.toString('hex');",
             ),
@@ -30374,6 +30418,14 @@ mod tests {
             (
                 "shadowed_global",
                 "const Buffer={alloc(){return {readUInt32LE(){return 0;}}}}; const b=Buffer.alloc(2); b.readUInt32LE(0);",
+            ),
+            (
+                "function_outer_buffer_shadow",
+                "const Buffer={alloc(){return {readUInt32LE(){return 0;}}}}; function read(){ const b=Buffer.alloc(2); return b.readUInt32LE(0); } read();",
+            ),
+            (
+                "function_local_buffer_tdz_shadow",
+                "function read(){ const b=Buffer.alloc(2); const Buffer={alloc(){return {readUInt32LE(){return 0;}}}}; return b.readUInt32LE(0); } read();",
             ),
             (
                 "computed_factory",

@@ -50620,6 +50620,222 @@ impl InterpreterCore {
         Ok((object_id, view))
     }
 
+    fn authenticated_buffer_backing_label(
+        &self,
+        object_id: ObjectId,
+        simultaneous_clones: u64,
+    ) -> Result<Label, InterpreterError> {
+        let label = self.binary_storage_label_ref(object_id).ok_or_else(|| {
+            InterpreterError::InternalError {
+                details: format!(
+                    "private-branded Buffer object {} has no live ArrayBuffer backing",
+                    object_id.0
+                ),
+            }
+        })?;
+        self.check_temporary_memory_budget(
+            Self::estimate_label_bytes(label).saturating_mul(simultaneous_clones),
+        )?;
+        Ok(label.clone())
+    }
+
+    fn rollback_buffer_object_error_publication(
+        &mut self,
+        heap_checkpoint: usize,
+        memory_checkpoint: u64,
+        error_prototype_existed: bool,
+        type_error_prototype_existed: bool,
+        range_error_prototype_existed: bool,
+    ) {
+        self.pending_exception = None;
+        self.pending_exception_label = Label::Public;
+        self.rollback_heap_to_len(heap_checkpoint);
+        let remove_error =
+            !error_prototype_existed && self.builtin_prototypes.contains_key("Error");
+        let remove_type_error =
+            !type_error_prototype_existed && self.builtin_prototypes.contains_key("TypeError");
+        let remove_range_error =
+            !range_error_prototype_existed && self.builtin_prototypes.contains_key("RangeError");
+        if remove_error || remove_type_error || remove_range_error {
+            self.mutate_builtin_prototypes(|prototypes| {
+                if remove_error {
+                    prototypes.remove("Error");
+                }
+                if remove_type_error {
+                    prototypes.remove("TypeError");
+                }
+                if remove_range_error {
+                    prototypes.remove("RangeError");
+                }
+            });
+        }
+        self.estimated_memory_bytes = memory_checkpoint;
+    }
+
+    /// Dispatch one source-authenticated Buffer instance observation.
+    ///
+    /// Lowering's finite-use proof is not trusted here: slot zero must still
+    /// resolve to the interpreter's private Buffer brand and a live backing
+    /// store. The backing label is published separately because ordinary
+    /// HostCall execution joins register labels but cannot see hidden binary
+    /// storage provenance.
+    fn buffer_object_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if self.pending_exception.is_some() || self.pending_exception_label != Label::Public {
+            return Err(InterpreterError::InternalError {
+                details: "Buffer object HostCall entered with a stale pending exception"
+                    .to_string(),
+            });
+        }
+        if args.count == 0 {
+            return Err(InterpreterError::TypeError {
+                expected: "authenticated Buffer receiver in argument slot zero".to_string(),
+                got: "missing receiver".to_string(),
+            });
+        }
+        let receiver = self.read_reg(args.start)?;
+        let method_name = match capability {
+            "builtin:BufferObjectToString" => "toString",
+            "builtin:BufferObjectReadUInt32LE" => "readUInt32LE",
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: format!(
+                        "unsupported authenticated Buffer object capability {capability}"
+                    ),
+                });
+            }
+        };
+        let (object_id, _) = self.buffer_receiver_view(receiver.clone(), method_name)?;
+        if self.binary_storage_label_ref(object_id).is_none() {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "private-branded Buffer object {} has no live ArrayBuffer backing",
+                    object_id.0
+                ),
+            });
+        }
+        let method_start =
+            args.start
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Buffer object method argument range overflows register space"
+                        .to_string(),
+                })?;
+        let method_args = RegRange {
+            start: method_start,
+            count: args.count - 1,
+        };
+        let heap_checkpoint = self.heap.len();
+        let memory_checkpoint = self.estimated_memory_bytes;
+        let error_prototype_existed = self.builtin_prototypes.contains_key("Error");
+        let type_error_prototype_existed = self.builtin_prototypes.contains_key("TypeError");
+        let range_error_prototype_existed = self.builtin_prototypes.contains_key("RangeError");
+        let outcome = match capability {
+            "builtin:BufferObjectToString" => self.buffer_to_string(receiver, method_args),
+            "builtin:BufferObjectReadUInt32LE" => {
+                self.buffer_read_integer(receiver, method_args, BufferIntegerKind::UInt32, true)
+            }
+            _ => unreachable!("authenticated Buffer capability matched above"),
+        };
+        match outcome {
+            Ok(value) => {
+                let backing_label = match self.authenticated_buffer_backing_label(object_id, 1) {
+                    Ok(label) => label,
+                    Err(resource_error) => {
+                        self.rollback_buffer_object_error_publication(
+                            heap_checkpoint,
+                            memory_checkpoint,
+                            error_prototype_existed,
+                            type_error_prototype_existed,
+                            range_error_prototype_existed,
+                        );
+                        return Err(resource_error);
+                    }
+                };
+                if let Err(resource_error) =
+                    self.replace_pending_hostcall_result_label(Some(backing_label))
+                {
+                    self.rollback_buffer_object_error_publication(
+                        heap_checkpoint,
+                        memory_checkpoint,
+                        error_prototype_existed,
+                        type_error_prototype_existed,
+                        range_error_prototype_existed,
+                    );
+                    return Err(resource_error);
+                }
+                Ok(value)
+            }
+            Err(error @ InterpreterError::UncaughtException { .. }) => {
+                let backing_label = match self.authenticated_buffer_backing_label(object_id, 2) {
+                    Ok(label) => label,
+                    Err(resource_error) => {
+                        self.rollback_buffer_object_error_publication(
+                            heap_checkpoint,
+                            memory_checkpoint,
+                            error_prototype_existed,
+                            type_error_prototype_existed,
+                            range_error_prototype_existed,
+                        );
+                        return Err(resource_error);
+                    }
+                };
+                if let Err(resource_error) = self.join_pending_exception_label(&backing_label) {
+                    self.rollback_buffer_object_error_publication(
+                        heap_checkpoint,
+                        memory_checkpoint,
+                        error_prototype_existed,
+                        type_error_prototype_existed,
+                        range_error_prototype_existed,
+                    );
+                    return Err(resource_error);
+                }
+                Err(error)
+            }
+            Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                let backing_label = match self.authenticated_buffer_backing_label(object_id, 1) {
+                    Ok(label) => label,
+                    Err(resource_error) => {
+                        self.rollback_buffer_object_error_publication(
+                            heap_checkpoint,
+                            memory_checkpoint,
+                            error_prototype_existed,
+                            type_error_prototype_existed,
+                            range_error_prototype_existed,
+                        );
+                        return Err(resource_error);
+                    }
+                };
+                if let Err(resource_error) =
+                    self.replace_pending_hostcall_result_label(Some(backing_label))
+                {
+                    self.rollback_buffer_object_error_publication(
+                        heap_checkpoint,
+                        memory_checkpoint,
+                        error_prototype_existed,
+                        type_error_prototype_existed,
+                        range_error_prototype_existed,
+                    );
+                    return Err(resource_error);
+                }
+                Err(error)
+            }
+            Err(error) => {
+                self.rollback_buffer_object_error_publication(
+                    heap_checkpoint,
+                    memory_checkpoint,
+                    error_prototype_existed,
+                    type_error_prototype_existed,
+                    range_error_prototype_existed,
+                );
+                Err(error)
+            }
+        }
+    }
+
     fn typed_array_view_bytes<'a>(
         &'a self,
         view: &TypedArrayView,
@@ -63122,6 +63338,9 @@ impl InterpreterCore {
             "builtin:BufferConcat" => self.buffer_concat(args),
             "builtin:BufferCompare" => self.buffer_static_compare(args),
             "builtin:BufferIsBuffer" => self.buffer_is_buffer_builtin(args),
+            "builtin:BufferObjectToString" | "builtin:BufferObjectReadUInt32LE" => {
+                self.buffer_object_hostcall(cap, args)
+            }
             "builtin:MathPow" => {
                 // Math.pow(base, exponent) implementation
                 if args.count < 2 {
@@ -107651,6 +107870,323 @@ mod tests {
         ));
         assert_eq!(core.pending_exception_label, Label::TopSecret);
         core.clear_pending_exception_slot();
+    }
+
+    #[test]
+    fn buffer_object_hostcalls_revalidate_brand_and_publish_backing_labels_bd_nx5cb() {
+        let mut core = quickjs_test_core();
+        let buffer = core
+            .alloc_buffer_from_bytes(&[1, 0, 0, 0])
+            .expect("allocate authenticated Buffer");
+        core.join_binary_storage_label(buffer, &Label::Secret)
+            .expect("classify Buffer backing");
+
+        core.write_reg(0, Value::Object(buffer))
+            .expect("seed toString receiver");
+        core.write_reg(1, Value::str("hex")).expect("seed encoding");
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:BufferObjectToString",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("authenticated toString hostcall"),
+            Value::str("01000000")
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        core.clear_pending_hostcall_result_label();
+
+        core.write_reg(0, Value::Object(buffer))
+            .expect("seed integer receiver");
+        core.write_reg(1, Value::Int(0)).expect("seed offset");
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:BufferObjectReadUInt32LE",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("authenticated integer read hostcall"),
+            Value::Int(1)
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        core.clear_pending_hostcall_result_label();
+
+        core.write_reg(0, Value::Object(buffer))
+            .expect("seed invalid-encoding receiver");
+        core.write_reg(1, Value::str("bogus"))
+            .expect("seed invalid encoding");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:BufferObjectToString",
+                RegRange { start: 0, count: 2 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        let Value::Object(error_id) = core
+            .pending_exception
+            .as_ref()
+            .expect("unknown encoding must publish a Node error")
+        else {
+            panic!("unknown encoding must publish an object error")
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_UNKNOWN_ENCODING"))
+        );
+        core.clear_pending_exception_slot();
+
+        let short = core
+            .alloc_buffer_from_bytes(&[0, 0])
+            .expect("allocate short authenticated Buffer");
+        core.join_binary_storage_label(short, &Label::Secret)
+            .expect("classify short Buffer backing");
+        core.write_reg(0, Value::Object(short))
+            .expect("seed short integer receiver");
+        core.write_reg(1, Value::Int(0)).expect("seed short offset");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:BufferObjectReadUInt32LE",
+                RegRange { start: 0, count: 2 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        let Value::Object(error_id) = core
+            .pending_exception
+            .as_ref()
+            .expect("out-of-bounds read must publish a Node error")
+        else {
+            panic!("out-of-bounds read must publish an object error")
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_BUFFER_OUT_OF_BOUNDS"))
+        );
+        core.clear_pending_exception_slot();
+
+        let forged = core
+            .alloc_object_with_properties(&[("__type", Value::str("Buffer"))])
+            .expect("allocate forged Buffer tag");
+        let uint8 = core
+            .alloc_typed_array_with_fresh_buffer(TypedArrayKind::Uint8, 4)
+            .expect("allocate ordinary Uint8Array");
+        for (case_name, receiver) in [
+            ("forged", Value::Object(forged)),
+            ("uint8", Value::Object(uint8)),
+            ("primitive", Value::str("not-a-buffer")),
+        ] {
+            core.write_reg(0, receiver).expect("seed rejected receiver");
+            assert!(
+                matches!(
+                    core.dispatch_builtin_hostcall(
+                        "builtin:BufferObjectReadUInt32LE",
+                        RegRange { start: 0, count: 1 },
+                        None,
+                    ),
+                    Err(InterpreterError::TypeError { .. })
+                ),
+                "{case_name} receiver must fail private-brand validation"
+            );
+            assert!(core.pending_hostcall_result_label.is_none());
+        }
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:BufferObjectToString",
+                RegRange { start: 0, count: 0 },
+                None,
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(core.pending_hostcall_result_label.is_none());
+
+        let broken = core
+            .alloc_buffer_from_bytes(&[0, 0, 0, 0])
+            .expect("allocate Buffer before simulating broken backing identity");
+        core.mutate_heap(|heap| {
+            heap[broken.0 as usize]
+                .typed_array
+                .as_mut()
+                .expect("Buffer must carry a typed-array view")
+                .buffer = ObjectId(u32::MAX);
+        });
+        core.write_reg(0, Value::Object(broken))
+            .expect("seed broken Buffer receiver");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:BufferObjectReadUInt32LE",
+                RegRange { start: 0, count: 1 },
+                None,
+            ),
+            Err(InterpreterError::InternalError { .. })
+        ));
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn buffer_object_hostcall_exception_backing_label_reaches_enter_catch_bd_nx5cb() {
+        let mut core = quickjs_test_core();
+        let buffer = core
+            .alloc_buffer_from_bytes(&[1, 2, 3, 4])
+            .expect("allocate authenticated Buffer");
+        core.join_binary_storage_label(buffer, &Label::Secret)
+            .expect("classify Buffer backing");
+        core.write_reg_with_label(0, Value::Object(buffer), Label::Public)
+            .expect("seed public receiver register");
+        core.write_reg_with_label(1, Value::str("bogus"), Label::Public)
+            .expect("seed public encoding register");
+
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: None,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:BufferObjectToString".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 2,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Jump { target: 5 },
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        core.execute(&module)
+            .expect("Node-style Buffer error must enter the catch handler");
+
+        assert_eq!(core.register_labels[2], Label::Secret);
+        let Value::Object(error_id) = &core.registers[2] else {
+            panic!("catch register must contain the structured Buffer error")
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_UNKNOWN_ENCODING"))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn buffer_object_error_label_peak_and_inner_refusal_are_atomic_bd_nx5cb() {
+        let custom_label = Label::Custom {
+            name: "buffer-object-backing-label".repeat(128),
+            level: 7,
+        };
+        let fixture = || {
+            let mut core = quickjs_test_core();
+            let buffer = core
+                .alloc_buffer_from_bytes(&[1, 2, 3, 4])
+                .expect("allocate authenticated Buffer");
+            core.join_binary_storage_label(buffer, &custom_label)
+                .expect("classify Buffer backing");
+            core.write_reg_with_label(0, Value::Object(buffer), Label::Public)
+                .expect("seed public receiver register");
+            core.write_reg_with_label(1, Value::str("bogus"), Label::Public)
+                .expect("seed public encoding register");
+            core
+        };
+
+        let mut permissive = fixture();
+        assert!(matches!(
+            permissive.dispatch_builtin_hostcall(
+                "builtin:BufferObjectToString",
+                RegRange { start: 0, count: 2 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(permissive.pending_exception_label, custom_label);
+        let successful_accounted_bytes = permissive.estimated_memory_bytes();
+        let label_bytes = InterpreterCore::estimate_label_bytes(&custom_label);
+
+        let mut tight = fixture();
+        let heap_before = tight.heap.len();
+        let memory_before = tight.estimated_memory_bytes();
+        let prototypes_before = tight
+            .builtin_prototypes
+            .iter()
+            .map(|(name, object_id)| (name.clone(), *object_id))
+            .collect::<Vec<_>>();
+        // This admits the fully accounted successful state plus all but one
+        // byte of the additional live Custom-label clone. A one-copy check
+        // would accept it; the physical two-copy exception peak must refuse.
+        tight.config.max_total_memory_bytes = successful_accounted_bytes
+            .saturating_add(label_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            tight.dispatch_builtin_hostcall(
+                "builtin:BufferObjectToString",
+                RegRange { start: 0, count: 2 },
+                None,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(tight.heap.len(), heap_before);
+        assert_eq!(tight.estimated_memory_bytes(), memory_before);
+        assert!(tight.pending_exception.is_none());
+        assert_eq!(tight.pending_exception_label, Label::Public);
+        assert!(tight.pending_hostcall_result_label.is_none());
+        assert_eq!(
+            tight
+                .builtin_prototypes
+                .iter()
+                .map(|(name, object_id)| (name.clone(), *object_id))
+                .collect::<Vec<_>>(),
+            prototypes_before
+        );
+        assert_eq!(
+            tight.estimated_memory_bytes(),
+            tight.recompute_estimated_memory_bytes()
+        );
+
+        let mut inner_refusal = fixture();
+        inner_refusal
+            .ensure_builtin_prototype("Error")
+            .expect("seed stable parent prototype outside refusal boundary");
+        let heap_before = inner_refusal.heap.len();
+        let memory_before = inner_refusal.estimated_memory_bytes();
+        let prototypes_before = inner_refusal
+            .builtin_prototypes
+            .iter()
+            .map(|(name, object_id)| (name.clone(), *object_id))
+            .collect::<Vec<_>>();
+        inner_refusal.config.max_total_memory_bytes = memory_before;
+        assert!(matches!(
+            inner_refusal.dispatch_builtin_hostcall(
+                "builtin:BufferObjectToString",
+                RegRange { start: 0, count: 2 },
+                None,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(inner_refusal.heap.len(), heap_before);
+        assert_eq!(inner_refusal.estimated_memory_bytes(), memory_before);
+        assert!(inner_refusal.pending_exception.is_none());
+        assert_eq!(inner_refusal.pending_exception_label, Label::Public);
+        assert!(inner_refusal.pending_hostcall_result_label.is_none());
+        assert_eq!(
+            inner_refusal
+                .builtin_prototypes
+                .iter()
+                .map(|(name, object_id)| (name.clone(), *object_id))
+                .collect::<Vec<_>>(),
+            prototypes_before
+        );
+        assert_eq!(
+            inner_refusal.estimated_memory_bytes(),
+            inner_refusal.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

@@ -71,8 +71,8 @@ use frankenengine_core::object_model::{
 };
 use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal;
 use frankenengine_extension_host::host_io::{
-    FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoExceptionProvenance, HostIoProvider,
-    HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
+    FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoError, HostIoExceptionProvenance,
+    HostIoOutcome, HostIoProvider, HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRequest,
@@ -95,8 +95,8 @@ use crate::hostcall_effects_migration::{
     TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_fs_effect,
     create_handler_stack_from_profile_with_effect_providers,
     create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
-    create_interpreter_timer_handler_stack, create_network_effect, create_process_spawn_effect,
-    create_random_read_effect,
+    create_interpreter_timer_handler_stack, create_network_effect, create_network_host_io_request,
+    create_process_spawn_effect, create_random_read_effect,
 };
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
@@ -305,6 +305,7 @@ const MEMORY_ESTIMATE_HTTP_TASK_BASE_BYTES: u64 = 80;
 const MEMORY_ESTIMATE_HTTP_AGENT_BASE_BYTES: u64 = 48;
 const MEMORY_ESTIMATE_HTTP_HEADER_ARRAY_BASE_BYTES: u64 = 24;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+const DEFERRED_NETWORK_FLOW_POLICY_DENIAL: &str = "FLOW_POLICY_BLOCKED";
 const MAX_HTTP_HEADER_COUNT: usize = 128;
 const MAX_HTTP_HEADER_NAME_BYTES: usize = 256;
 const MAX_HTTP_HEADER_VALUE_BYTES: usize = 8 * 1024;
@@ -12617,6 +12618,60 @@ impl InterpreterCore {
         }
     }
 
+    /// Record a runtime IFC refusal for a deferred HTTP request without entering
+    /// the live provider. The request bytes come from the same typed conversion
+    /// used by the ordinary effect handler, so recording and replay bind the exact
+    /// endpoint, TLS mode, headers, and body that were refused.
+    fn record_deferred_network_ifc_denial(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &[(String, String)],
+        body: Option<&[u8]>,
+    ) -> Result<(), InterpreterError> {
+        let request = create_network_host_io_request(url, method, headers, body);
+        let denial: HostIoOutcome = Err(HostIoError::Denied {
+            reason: DEFERRED_NETWORK_FLOW_POLICY_DENIAL.to_string(),
+        });
+
+        if let Some(journal) = self.host_effect_journal.as_deref() {
+            if let Some(recorded) = journal.replay_host_io(&request) {
+                if recorded != denial {
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "deferred network IFC replay mismatch: expected {denial:?}, got {recorded:?}"
+                        ),
+                    });
+                }
+                return Ok(());
+            }
+            journal.record_host_io(&request, &denial).map_err(|error| {
+                InterpreterError::InternalError {
+                    details: format!("failed to journal deferred network IFC denial: {error}"),
+                }
+            })?;
+            return Ok(());
+        }
+
+        if let Some(recorder) = self.host_io_recorder.as_deref() {
+            if let Some(recorded) = recorder.replay(&request) {
+                if recorded != denial {
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "deferred network IFC transcript mismatch: expected {denial:?}, got {recorded:?}"
+                        ),
+                    });
+                }
+            } else {
+                recorder.record(&request, &denial);
+            }
+            return Ok(());
+        }
+        Err(InterpreterError::InternalError {
+            details: "deferred network IFC denial has no host-effect evidence sink".to_string(),
+        })
+    }
+
     /// bd-3894s slice (2b): build the writable `ClientRequest` object returned by
     /// `http.request(url[, opts])`. This does NOT egress — it captures the request
     /// target (`__url`), method (`__method`), and headers (`__headers`, a child
@@ -12665,6 +12720,29 @@ impl InterpreterCore {
         } else {
             Value::Undefined
         };
+        let initial_body_len = options
+            .as_ref()
+            .and_then(|value| match value {
+                Value::Object(id) => self.heap.get(id.0 as usize),
+                _ => None,
+            })
+            .and_then(|options| options.properties.get("body"))
+            .and_then(Self::client_request_chunk_len)
+            .unwrap_or(0);
+        if initial_body_len > MAX_HTTP_BODY_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+            });
+        }
+        self.check_temporary_memory_budget(
+            u64::try_from(initial_body_len)
+                .unwrap_or(u64::MAX)
+                // `resolve_net_request_options` first owns a byte vector, then
+                // request construction owns a String and the final JsString
+                // backing at the conversion peak.
+                .saturating_mul(3)
+                .saturating_add(64 * 1024),
+        )?;
         let (method, headers, body) = self.resolve_net_request_options(options.as_ref());
         // Persist the resolved headers as a child object so `.end()` can re-read
         // them (the headers are captured at request-construction time, matching
@@ -27201,17 +27279,118 @@ impl InterpreterCore {
         }
     }
 
-    /// bd-3894s slice (2b): coerce a `req.write(chunk)`/`req.end(chunk)` argument to
-    /// the bytes appended to the request body. A string contributes verbatim and an
-    /// integer is stringified (Node coerces a number chunk to its decimal string);
-    /// any other value (object/closure/undefined/Buffer) contributes nothing — a
-    /// faithful Buffer/Uint8Array body chunk is a follow-up to this slice.
-    fn client_request_chunk_string(chunk: &Value) -> String {
+    fn client_request_chunk_len(chunk: &Value) -> Option<usize> {
         match chunk {
-            Value::Str(s) => s.to_string(),
-            Value::Int(i) => i.to_string(),
-            _ => String::new(),
+            Value::Str(value) => Some(value.len()),
+            Value::Int(value) => Some(value.to_string().len()),
+            _ => None,
         }
+    }
+
+    /// Append one supported legacy `ClientRequest` body chunk as a single
+    /// bounded memory-and-provenance transaction. A refusal leaves the body,
+    /// mutation label, and running memory total unchanged.
+    fn append_legacy_client_request_body(
+        &mut self,
+        request_id: ObjectId,
+        chunk: &Value,
+        chunk_label: &Label,
+    ) -> Result<bool, InterpreterError> {
+        let Some(chunk_len) = Self::client_request_chunk_len(chunk) else {
+            return Ok(false);
+        };
+        if chunk_len == 0 {
+            return Ok(false);
+        }
+
+        let request_index = request_id.0 as usize;
+        let previous_body = match self
+            .heap
+            .get(request_index)
+            .and_then(|request| request.properties.get("__body"))
+        {
+            Some(Value::Str(body)) => body.clone(),
+            Some(value) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "string ClientRequest body state".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+            None => return Err(InterpreterError::ObjectNotFound { id: request_id.0 }),
+        };
+        let next_len = previous_body.len().checked_add(chunk_len).ok_or_else(|| {
+            InterpreterError::RangeError {
+                message: format!("HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+            }
+        })?;
+        if next_len > MAX_HTTP_BODY_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+            });
+        }
+
+        let previous_label = self
+            .object_mutation_labels
+            .get(&request_id)
+            .cloned()
+            .unwrap_or(Label::Public);
+        let temporary_bytes = u64::try_from(next_len)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2)
+            .saturating_add(Self::estimate_label_bytes(&previous_label).saturating_mul(2))
+            .saturating_add(Self::estimate_label_bytes(chunk_label).saturating_mul(2))
+            .saturating_add(64 * 1024);
+        self.check_temporary_memory_budget(temporary_bytes)?;
+
+        let next_label = previous_label.join(chunk_label);
+        let mut next_body = String::with_capacity(next_len);
+        next_body.push_str(previous_body.as_utf8_projection());
+        match chunk {
+            Value::Str(value) => next_body.push_str(value.as_utf8_projection()),
+            Value::Int(value) => next_body.push_str(&value.to_string()),
+            // This is unreachable after `client_request_chunk_len`, but retaining
+            // the ordinary no-op behavior here keeps a future shape extension
+            // from turning a guest value into a production panic.
+            _ => return Ok(false),
+        }
+        let next_body = Value::str(next_body);
+        let previous_body_value = Value::Str(previous_body);
+        let previous_property_bytes =
+            Self::estimate_property_entry_bytes("__body", &previous_body_value);
+        let next_property_bytes = Self::estimate_property_entry_bytes("__body", &next_body);
+        let previous_label_bytes = if previous_label == Label::Public {
+            0
+        } else {
+            Self::estimate_object_mutation_label_entry_bytes(&previous_label)
+        };
+        let next_label_bytes = if next_label == Label::Public {
+            0
+        } else {
+            Self::estimate_object_mutation_label_entry_bytes(&next_label)
+        };
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_property_bytes)
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_property_bytes)
+            .saturating_add(next_label_bytes);
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+
+        self.mutate_heap(|heap| {
+            heap[request_index]
+                .properties
+                .insert("__body".to_string(), next_body);
+        });
+        if next_label == Label::Public {
+            self.object_mutation_labels.remove(&request_id);
+        } else {
+            self.object_mutation_labels.insert(request_id, next_label);
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        self.gc_write_barrier(request_id);
+        Ok(true)
     }
 
     /// bd-rul7k item 3: true when `encoding` is a Node `BufferEncoding` recognized
@@ -34357,18 +34536,7 @@ impl InterpreterCore {
                 let chunk_label =
                     self.writable_invocation_label_with_receiver(args, receiver_register)?;
                 let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let chunk_str = Self::client_request_chunk_string(&chunk);
-                if !chunk_str.is_empty() {
-                    self.join_object_mutation_label(req_id, &chunk_label)?;
-                    let req_index = req_id.0 as usize;
-                    self.mutate_heap(|heap| {
-                        if let Some(req) = heap.get_mut(req_index)
-                            && let Some(Value::Str(buf)) = req.properties.get_mut("__body")
-                        {
-                            *buf = JsString::from(format!("{buf}{chunk_str}"));
-                        }
-                    });
-                }
+                self.append_legacy_client_request_body(req_id, &chunk, &chunk_label)?;
                 Ok(Value::Bool(true))
             }
             BuiltinFunctionKind::ClientRequestEnd => {
@@ -34412,24 +34580,17 @@ impl InterpreterCore {
                 if let Some(chunk) = arg0.as_ref()
                     && !matches!(chunk, Value::Closure(_))
                 {
-                    let chunk_str = Self::client_request_chunk_string(chunk);
-                    if !chunk_str.is_empty() {
-                        let req_index = req_id.0 as usize;
-                        self.mutate_heap(|heap| {
-                            if let Some(req) = heap.get_mut(req_index)
-                                && let Some(Value::Str(buf)) = req.properties.get_mut("__body")
-                            {
-                                *buf = JsString::from(format!("{buf}{chunk_str}"));
-                            }
-                        });
-                    }
+                    self.append_legacy_client_request_body(req_id, chunk, &end_label)?;
                 }
                 self.join_object_mutation_label(req_id, &end_label)?;
-                let request_label = match self.object_mutation_labels.get(&req_id) {
-                    Some(lifecycle_label) => self
-                        .join_owned_label_with_temporary_budget(end_label, lifecycle_label)?,
-                    None => end_label,
-                };
+                let reachable_request_label = self.process_dynamic_value_label(
+                    &Value::Object(req_id),
+                    &mut BTreeSet::new(),
+                );
+                let request_label = self.join_owned_label_with_temporary_budget(
+                    end_label,
+                    &reachable_request_label,
+                )?;
                 let response_label = hostcall_result_contract("net:request")
                     .result_label(&request_label, None);
                 // Capture the request state (immutable reads) before the mutable
@@ -34466,7 +34627,22 @@ impl InterpreterCore {
                             _ => Vec::new(),
                         };
                         let body_str = match req.properties.get("__body") {
-                            Some(Value::Str(s)) => s.to_string(),
+                            Some(Value::Str(s)) => {
+                                if s.len() > MAX_HTTP_BODY_BYTES {
+                                    return Err(InterpreterError::RangeError {
+                                        message: format!(
+                                            "HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"
+                                        ),
+                                    });
+                                }
+                                self.check_temporary_memory_budget(
+                                    u64::try_from(s.len())
+                                        .unwrap_or(u64::MAX)
+                                        .saturating_mul(3)
+                                        .saturating_add(64 * 1024),
+                                )?;
+                                s.to_string()
+                            }
                             _ => String::new(),
                         };
                         // bd-3894s slice (2c): the response callback captured by
@@ -34488,7 +34664,29 @@ impl InterpreterCore {
                 } else {
                     Some(body_str.into_bytes())
                 };
-                // Mark ended BEFORE the egress so a re-entrant `.end()` is a no-op.
+                if !request_label.can_flow_to(&Label::Public) {
+                    self.record_deferred_network_ifc_denial(
+                        &url,
+                        &method,
+                        &headers,
+                        body.as_deref(),
+                    )?;
+                    // A missing or mismatched evidence sink is a failed refusal,
+                    // not a consumed request. Only commit the one-shot state after
+                    // the typed denial has been accepted by the configured
+                    // journal or transcript.
+                    self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
+                    let err = self.build_request_error_value()?;
+                    self.schedule_http_task(PendingHttpTask::EmitLegacyEvent {
+                        target: req_id,
+                        event: "error".to_string(),
+                        arguments: vec![err],
+                        leading_callback: None,
+                        label: response_label,
+                    })?;
+                    return Ok(Value::Undefined);
+                }
+                // Mark ended BEFORE live egress so a re-entrant `.end()` is a no-op.
                 self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
                 let response = self.perform_net_request_effect(url, method, headers, body)?;
                 match response {
@@ -83692,8 +83890,8 @@ mod async_runtime_tests_current {
         let write = BuiltinFunction::client_request_write();
 
         // req.write('Hello, ')
-        core.write_reg_with_label(0, Value::str("Hello, "), Label::Secret)
-            .expect("classified first request chunk");
+        core.write_reg_with_label(0, Value::str("Hello, "), Label::Public)
+            .expect("public first request chunk");
         let w1 = core
             .dispatch_builtin_function(
                 &module,
@@ -83740,8 +83938,8 @@ mod async_runtime_tests_current {
         };
         assert_eq!(
             core.take_pending_hostcall_result_label(),
-            Some(Label::Secret),
-            "a synchronous response must retain the earlier classified write"
+            Some(Label::Internal),
+            "a synchronous network response must carry the host-source floor"
         );
         let resp = core
             .heap
@@ -84031,8 +84229,8 @@ mod async_runtime_tests_current {
         );
 
         let module = test_module_with_functions(vec![], vec![]);
-        core.write_reg_with_label(3, Value::str("classified body"), Label::Secret)
-            .expect("write classified request body register");
+        core.write_reg_with_label(3, Value::str("public body"), Label::Public)
+            .expect("write public request body register");
         let write = BuiltinFunction::client_request_write();
         let written = core
             .dispatch_builtin_function(
@@ -84042,12 +84240,11 @@ mod async_runtime_tests_current {
                 Some(Value::Object(req_id)),
                 None,
             )
-            .expect("req.write with a classified body");
+            .expect("req.write with a public body");
         assert_eq!(written, Value::Bool(true));
-        assert_eq!(
-            core.object_mutation_labels.get(&req_id),
-            Some(&Label::Secret),
-            "the request lifecycle must retain prior write provenance until end"
+        assert!(
+            !core.object_mutation_labels.contains_key(&req_id),
+            "public writes need no retained request label entry"
         );
 
         let end = BuiltinFunction::client_request_end();
@@ -84096,23 +84293,23 @@ mod async_runtime_tests_current {
         assert_eq!(*target, req_id);
         assert_eq!(event, "response");
         assert_eq!(*leading_callback, Some(0));
-        assert_eq!(label, &Label::Secret);
+        assert_eq!(label, &Label::Internal);
         let stream_registration = *core
             .pending_stream_emissions
             .keys()
             .next()
             .expect("a deferred response stream task");
-        let mut saw_secret_stream = false;
+        let mut saw_internal_stream = false;
         while let Some(macrotask) = core.event_loop.turn().macrotask {
             if macrotask.registration_seq == stream_registration {
-                assert_eq!(macrotask.label, Label::Secret);
-                saw_secret_stream = true;
+                assert_eq!(macrotask.label, Label::Internal);
+                saw_internal_stream = true;
                 break;
             }
         }
         assert!(
-            saw_secret_stream,
-            "response stream task must retain prior request-write provenance"
+            saw_internal_stream,
+            "response stream task must retain the network source floor"
         );
         assert_eq!(
             args.len(),
@@ -84181,6 +84378,447 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::str("http://127.0.0.1:9/"))
+            .expect("request URL");
+        let Value::Object(request) = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("empty client request")
+        else {
+            panic!("expected ClientRequest")
+        };
+
+        let first_chunk_len = MAX_HTTP_BODY_BYTES / 2;
+        core.write_reg(1, Value::str("x".repeat(first_chunk_len)))
+            .expect("first body chunk");
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(request)),
+                None,
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            core.heap[request.0 as usize]
+                .properties
+                .get("__body")
+                .and_then(|value| match value {
+                    Value::Str(body) => Some(body.len()),
+                    _ => None,
+                }),
+            Some(first_chunk_len)
+        );
+        core.write_reg(
+            1,
+            Value::str("x".repeat(MAX_HTTP_BODY_BYTES - first_chunk_len)),
+        )
+        .expect("final boundary body chunk");
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(request)),
+                None,
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            core.heap[request.0 as usize]
+                .properties
+                .get("__body")
+                .and_then(|value| match value {
+                    Value::Str(body) => Some(body.len()),
+                    _ => None,
+                }),
+            Some(MAX_HTTP_BODY_BYTES)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg(1, Value::str("y")).expect("overflow byte");
+        let before_body = core.heap[request.0 as usize]
+            .properties
+            .get("__body")
+            .cloned()
+            .expect("request body state");
+        let before_label = core.object_mutation_labels.get(&request).cloned();
+        let before_memory = core.estimated_memory_bytes();
+        let write_error = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(request)),
+                None,
+            )
+            .expect_err("one byte beyond the body ceiling must fail");
+        assert!(matches!(write_error, InterpreterError::RangeError { .. }));
+        assert_eq!(
+            core.heap[request.0 as usize].properties.get("__body"),
+            Some(&before_body)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&request).cloned(),
+            before_label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+
+        let end_error = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_end(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(request)),
+                None,
+            )
+            .expect_err("an oversized final chunk must fail before ending");
+        assert!(matches!(end_error, InterpreterError::RangeError { .. }));
+        assert_eq!(
+            core.heap[request.0 as usize].properties.get("__ended"),
+            Some(&Value::Bool(false))
+        );
+        assert!(core.pending_http_tasks.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+        assert_eq!(before_memory, core.recompute_estimated_memory_bytes());
+
+        core.set_object_property(
+            request,
+            "__body".to_string(),
+            Value::str("z".repeat(MAX_HTTP_BODY_BYTES + 1)),
+        )
+        .expect("direct body mutation remains within the interpreter memory budget");
+        let directly_mutated_body = core.heap[request.0 as usize]
+            .properties
+            .get("__body")
+            .cloned()
+            .expect("directly mutated request body state");
+        let direct_mutation_memory = core.estimated_memory_bytes();
+        let direct_mutation_error = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_end(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(request)),
+                None,
+            )
+            .expect_err("direct internal-slot mutation must not bypass the body ceiling");
+        assert!(matches!(
+            direct_mutation_error,
+            InterpreterError::RangeError { .. }
+        ));
+        assert_eq!(
+            core.heap[request.0 as usize].properties.get("__body"),
+            Some(&directly_mutated_body)
+        );
+        assert_eq!(
+            core.heap[request.0 as usize].properties.get("__ended"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(core.estimated_memory_bytes(), direct_mutation_memory);
+        assert_eq!(
+            direct_mutation_memory,
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let mut memory_limited = test_interpreter();
+        memory_limited
+            .write_reg(0, Value::str("http://127.0.0.1:9/"))
+            .expect("request URL");
+        let Value::Object(limited_request) = memory_limited
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("memory-limited client request")
+        else {
+            panic!("expected ClientRequest")
+        };
+        memory_limited
+            .write_reg_with_label(1, Value::str("z"), Label::Secret)
+            .expect("classified chunk");
+        let limited_before = memory_limited.estimated_memory_bytes();
+        let exact_temporary_peak = 2_u64
+            .saturating_add(InterpreterCore::estimate_label_bytes(&Label::Public).saturating_mul(2))
+            .saturating_add(InterpreterCore::estimate_label_bytes(&Label::Secret).saturating_mul(2))
+            .saturating_add(64 * 1024);
+        memory_limited.config.max_total_memory_bytes = limited_before
+            .saturating_add(exact_temporary_peak)
+            .saturating_sub(1);
+        let memory_error = memory_limited
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(limited_request)),
+                None,
+            )
+            .expect_err("temporary append peak must respect the memory budget");
+        assert!(matches!(
+            memory_error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            memory_limited.heap[limited_request.0 as usize]
+                .properties
+                .get("__body"),
+            Some(&Value::str(""))
+        );
+        assert!(
+            !memory_limited
+                .object_mutation_labels
+                .contains_key(&limited_request)
+        );
+        assert_eq!(memory_limited.estimated_memory_bytes(), limited_before);
+        assert_eq!(
+            limited_before,
+            memory_limited.recompute_estimated_memory_bytes()
+        );
+        memory_limited.config.max_total_memory_bytes =
+            limited_before.saturating_add(exact_temporary_peak);
+        assert_eq!(
+            memory_limited.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(limited_request)),
+                None,
+            ),
+            Ok(Value::Bool(true)),
+            "the exact temporary-memory boundary must remain admissible"
+        );
+        assert_eq!(
+            memory_limited.heap[limited_request.0 as usize]
+                .properties
+                .get("__body"),
+            Some(&Value::str("z"))
+        );
+        assert_eq!(
+            memory_limited.object_mutation_labels.get(&limited_request),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            memory_limited.estimated_memory_bytes(),
+            memory_limited.recompute_estimated_memory_bytes()
+        );
+
+        let mut oversized_initial = test_interpreter();
+        let options = oversized_initial
+            .alloc_object_with_properties(&[(
+                "body",
+                Value::str("x".repeat(MAX_HTTP_BODY_BYTES + 1)),
+            )])
+            .expect("oversized options object fits the interpreter budget");
+        oversized_initial
+            .write_reg(0, Value::str("http://127.0.0.1:9/"))
+            .expect("request URL");
+        oversized_initial
+            .write_reg(1, Value::Object(options))
+            .expect("request options");
+        let heap_len_before = oversized_initial.heap.len();
+        let initial_error = oversized_initial
+            .dispatch_client_request_create(RegRange { start: 0, count: 2 })
+            .expect_err("oversized opts.body must fail before request allocation");
+        assert!(matches!(initial_error, InterpreterError::RangeError { .. }));
+        assert_eq!(oversized_initial.heap.len(), heap_len_before);
+        assert_eq!(
+            oversized_initial.estimated_memory_bytes(),
+            oversized_initial.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn legacy_client_request_ifc_denial_is_recorded_before_provider_bd_z1peg_2() {
+        use frankenengine_extension_host::host_io::{
+            HostIoCapability, HostIoRequest, InMemoryHostIoTranscript,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug)]
+        struct NeverNetworkProvider {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl HostIoProvider for NeverNetworkProvider {
+            fn name(&self) -> &str {
+                "never-network-after-ifc-denial"
+            }
+
+            fn perform(
+                &self,
+                _request: &HostIoRequest,
+                _granted: &[HostIoCapability],
+            ) -> HostIoOutcome {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                panic!("IFC-denied deferred request reached the live provider")
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let provider: Arc<dyn HostIoProvider> = Arc::new(NeverNetworkProvider {
+            calls: calls.clone(),
+        });
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        let mut core = test_interpreter();
+        core.set_host_io(provider, Some(recorder_dyn));
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+
+        core.write_reg(0, Value::str("http://127.0.0.1:9/body"))
+            .expect("body request URL");
+        let Value::Object(body_request) = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("body request")
+        else {
+            panic!("expected ClientRequest")
+        };
+        core.write_reg_with_label(1, Value::str("classified"), Label::Secret)
+            .expect("classified body");
+        core.dispatch_builtin_function(
+            &module,
+            &BuiltinFunction::client_request_write(),
+            RegRange { start: 1, count: 1 },
+            Some(Value::Object(body_request)),
+            None,
+        )
+        .expect("buffer classified body before deferred denial");
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_end(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(body_request)),
+                None,
+            ),
+            Ok(Value::Undefined)
+        );
+
+        let captured_headers = core
+            .alloc_object_with_properties(&[("X-Trace", Value::str("public"))])
+            .expect("headers");
+        let options = core
+            .alloc_object_with_properties(&[("headers", Value::Object(captured_headers))])
+            .expect("options");
+        core.write_reg(0, Value::str("http://127.0.0.1:9/header"))
+            .expect("header request URL");
+        core.write_reg(1, Value::Object(options))
+            .expect("header request options");
+        let Value::Object(header_request) = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 2 })
+            .expect("header request")
+        else {
+            panic!("expected ClientRequest")
+        };
+        let captured_headers = match core.heap[header_request.0 as usize]
+            .properties
+            .get("__headers")
+        {
+            Some(Value::Object(headers)) => *headers,
+            other => panic!("expected captured headers object, got {other:?}"),
+        };
+        core.join_object_mutation_label(captured_headers, &Label::Secret)
+            .expect("classified captured header state");
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_end(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(header_request)),
+                None,
+            ),
+            Ok(Value::Undefined)
+        );
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let entries = recorder.recorded_entries();
+        assert_eq!(entries.len(), 2, "both classified requests are evidenced");
+        for (request, outcome) in &entries {
+            assert!(matches!(request, HostIoRequest::NetworkRequest { .. }));
+            assert_eq!(
+                outcome,
+                &Err(HostIoError::Denied {
+                    reason: DEFERRED_NETWORK_FLOW_POLICY_DENIAL.to_string(),
+                })
+            );
+        }
+        let HostIoRequest::NetworkRequest { payload, .. } = &entries[0].0 else {
+            unreachable!()
+        };
+        assert!(
+            payload.ends_with(b"\r\n\r\nclassified"),
+            "denial evidence must bind the exact refused body"
+        );
+        assert_eq!(core.pending_http_tasks.len(), 2);
+        assert!(core.pending_http_tasks.values().all(|task| matches!(
+            task,
+            PendingHttpTask::EmitLegacyEvent { event, label, .. }
+                if event == "error" && label == &Label::Secret
+        )));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let mut missing_evidence = test_interpreter();
+        let missing_evidence_provider: Arc<dyn HostIoProvider> = Arc::new(NeverNetworkProvider {
+            calls: calls.clone(),
+        });
+        missing_evidence.set_host_io(missing_evidence_provider, None);
+        missing_evidence
+            .write_reg(0, Value::str("http://127.0.0.1:9/no-evidence"))
+            .expect("request URL");
+        let Value::Object(missing_evidence_request) = missing_evidence
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("request without evidence sink")
+        else {
+            panic!("expected ClientRequest")
+        };
+        missing_evidence
+            .write_reg_with_label(1, Value::str("classified"), Label::Secret)
+            .expect("classified body");
+        missing_evidence
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(missing_evidence_request)),
+                None,
+            )
+            .expect("buffer classified body");
+        let missing_evidence_error = missing_evidence
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_end(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(missing_evidence_request)),
+                None,
+            )
+            .expect_err("an IFC refusal without an evidence sink must fail closed");
+        assert!(matches!(
+            missing_evidence_error,
+            InterpreterError::InternalError { details }
+                if details.contains("no host-effect evidence sink")
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            missing_evidence.heap[missing_evidence_request.0 as usize]
+                .properties
+                .get("__ended"),
+            Some(&Value::Bool(false)),
+            "a refusal that could not be evidenced must not consume the request"
+        );
+        assert!(missing_evidence.pending_http_tasks.is_empty());
+        assert_eq!(
+            missing_evidence.estimated_memory_bytes(),
+            missing_evidence.recompute_estimated_memory_bytes()
         );
     }
 

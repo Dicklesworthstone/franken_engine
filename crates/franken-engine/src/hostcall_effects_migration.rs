@@ -686,26 +686,12 @@ impl FullCapsHandler {
                             .to_string(),
                     })?;
                 let (url, method, headers, body) = *params;
-                // bd-656a2: turn the semantic http intent (url + method + headers
-                // + body) into the raw wire request the network mechanism sends.
-                // The url is split into a concrete `host:port` connect endpoint
-                // (so `SandboxedHostIo::connect`'s `to_socket_addrs` can resolve
-                // it) and an HTTP/1.1 request line + Host header + body payload.
-                let (endpoint, payload, use_tls) =
-                    http_request_to_wire(&url, &method, &headers, body.as_deref());
-                // bd-3894s slice (4): route the egress as a single-socket
-                // round trip so the guest can observe the real response. The
-                // response read is bounded by the same per-operation byte cap the
-                // provider enforces. (`NetworkSend` would only carry the egress and
-                // close the socket before any reply could be read.)
-                // bd-3894s slice (5): an https URL sets `use_tls` so the network
-                // mechanism performs the round trip inside a real TLS session.
-                Ok(HostIoRequest::NetworkRequest {
-                    endpoint,
-                    payload,
-                    max_len: SANDBOXED_HOST_IO_MAX_BYTES,
-                    use_tls,
-                })
+                Ok(create_network_host_io_request(
+                    &url,
+                    &method,
+                    &headers,
+                    body.as_deref(),
+                ))
             }
             "hostcall:random:read" => {
                 let byte_len = effect.parameters().downcast::<u64>().map_err(|_| {
@@ -1727,6 +1713,28 @@ pub fn create_network_effect(
         headers,
         body,
     })
+}
+
+/// Build the exact typed host-I/O request for a semantic HTTP request.
+///
+/// The ordinary effect handler and any pre-provider refusal path must commit to
+/// identical endpoint, TLS, framing, and response-cap bytes. Keeping this as the
+/// single conversion seam prevents an IFC-denied deferred request from recording
+/// evidence for bytes other than the bytes the live provider would have received.
+#[must_use]
+pub fn create_network_host_io_request(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+) -> HostIoRequest {
+    let (endpoint, payload, use_tls) = http_request_to_wire(url, method, headers, body);
+    HostIoRequest::NetworkRequest {
+        endpoint,
+        payload,
+        max_len: SANDBOXED_HOST_IO_MAX_BYTES,
+        use_tls,
+    }
 }
 
 /// Preserve the complete typed process request when entering the algebraic

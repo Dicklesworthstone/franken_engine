@@ -340,6 +340,8 @@ pub mod moonshot_weekly_report;
 pub mod native_addon_cohort_gate;
 pub mod native_addon_membrane;
 pub mod native_addon_parity_gate;
+#[cfg(feature = "native-capsule-fixed-probe")]
+pub mod native_capsule_fixed_probe;
 pub mod nitrosketch_telemetry;
 pub mod non_use_certificate;
 pub mod northstar_scorecard;

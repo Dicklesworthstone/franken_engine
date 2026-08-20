@@ -1065,6 +1065,15 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     for (alias, surface) in confirmed_crypto_object_aliases(&ir0.tree.body, &binding_lookup) {
         insert_crypto_object_alias_sentinel(&mut binding_lookup, &alias, surface);
     }
+    // bd-nx5cb: Buffer instances are real runtime values, but only immutable
+    // aliases whose complete use stays inside the two finite, private-brand-
+    // checked observation methods receive an authenticated lowering sentinel.
+    // The sentinel is deliberately scope-local: nested capture, mutation,
+    // computed access, detachment, and escape all retain ordinary fail-high
+    // member-call semantics.
+    for alias in confirmed_buffer_object_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(buffer_object_alias_sentinel(&alias), 0);
+    }
     // bd-9p2v3: `cluster` is a finite, engine-owned primary-process facade.
     // Only const aliases whose complete use stays inside the authenticated
     // static surface are materialized; bare possession, escape, reassignment,
@@ -2354,6 +2363,9 @@ fn reserve_and_mark_source_scope_bindings(
     for (alias, surface) in confirmed_crypto_object_aliases(statements, binding_lookup) {
         insert_crypto_object_alias_sentinel(binding_lookup, &alias, surface);
     }
+    for alias in confirmed_buffer_object_aliases(statements, binding_lookup) {
+        binding_lookup.insert(buffer_object_alias_sentinel(&alias), 0);
+    }
 }
 
 fn mark_pre_reserved_source_scope_bindings(
@@ -2377,6 +2389,9 @@ fn mark_pre_reserved_source_scope_bindings(
     }
     for (alias, surface) in confirmed_crypto_object_aliases(statements, binding_lookup) {
         insert_crypto_object_alias_sentinel(binding_lookup, &alias, surface);
+    }
+    for alias in confirmed_buffer_object_aliases(statements, binding_lookup) {
+        binding_lookup.insert(buffer_object_alias_sentinel(&alias), 0);
     }
 }
 
@@ -2447,6 +2462,7 @@ fn binding_entry_snapshot(
             let crypto_hash_object = crypto_hash_object_alias_sentinel(name);
             let crypto_hmac_object = crypto_hmac_object_alias_sentinel(name);
             let crypto_cipher_object = crypto_cipher_object_alias_sentinel(name);
+            let buffer_object = buffer_object_alias_sentinel(name);
             [
                 (name.clone(), binding_lookup.get(name).copied()),
                 (origin.clone(), binding_lookup.get(&origin).copied()),
@@ -2529,6 +2545,10 @@ fn binding_entry_snapshot(
                 (
                     crypto_cipher_object.clone(),
                     binding_lookup.get(&crypto_cipher_object).copied(),
+                ),
+                (
+                    buffer_object.clone(),
+                    binding_lookup.get(&buffer_object).copied(),
                 ),
             ]
         })
@@ -12963,6 +12983,55 @@ fn lower_expression_to_ir1_inner(
                 return Ok(());
             }
             if let Some(capability) =
+                buffer_object_builtin_call_capability(callee, arguments, binding_lookup)
+            {
+                let Expression::Member { object, .. } = callee.as_ref() else {
+                    unreachable!("authenticated Buffer object call has a member callee")
+                };
+                let arg_count = arguments.len().checked_add(1).ok_or(
+                    LoweringPipelineError::TooManyArguments {
+                        count: arguments.len(),
+                        max: (u32::MAX as usize).saturating_sub(1),
+                    },
+                )?;
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                // Slot 0 is the real runtime receiver. The interpreter repeats
+                // the private Buffer-brand and backing-store validation; the
+                // syntactic proof here only selects the finite HostCall path.
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) =
                 crypto_object_builtin_call_capability(callee, arguments, binding_lookup)
             {
                 let Expression::Member { object, .. } = callee.as_ref() else {
@@ -18309,7 +18378,7 @@ fn crypto_object_alias_has_rejected_use(
 
     let rejected = body.iter().enumerate().any(|(statement_index, statement)| {
         let Statement::VariableDeclaration(declaration) = statement else {
-            if surface.is_crypto_object() {
+            if surface.is_authenticated_object() {
                 return crypto_object_control_flow_statement_has_rejected_use(
                     statement,
                     alias,
@@ -19175,6 +19244,10 @@ fn suppress_crypto_module_sentinel(binding_lookup: &mut BTreeMap<String, Binding
     binding_lookup.remove(&crypto_hash_object_alias_sentinel(name));
     binding_lookup.remove(&crypto_hmac_object_alias_sentinel(name));
     binding_lookup.remove(&crypto_cipher_object_alias_sentinel(name));
+    // Buffer object authentication is intentionally not seeded into nested
+    // function bodies, but every lexical-shadow path still removes a
+    // scope-local sentinel before lowering the shadowed name.
+    binding_lookup.remove(&buffer_object_alias_sentinel(name));
 }
 
 fn suppress_crypto_module_sentinels(
@@ -19408,6 +19481,7 @@ enum LoweringOnlyModuleAliasSurface {
     CryptoHashObject,
     CryptoHmacObject,
     CryptoCipherObject,
+    BufferObject,
     Cluster,
     ChildProcess,
     StreamConstructor,
@@ -19426,6 +19500,10 @@ impl LoweringOnlyModuleAliasSurface {
             self,
             Self::CryptoHashObject | Self::CryptoHmacObject | Self::CryptoCipherObject
         )
+    }
+
+    fn is_authenticated_object(self) -> bool {
+        self.is_crypto_object() || self == Self::BufferObject
     }
 }
 
@@ -19534,6 +19612,7 @@ fn is_module_alias_usage(
         | LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
             is_crypto_object_alias_usage(expr, alias, surface)
         }
+        LoweringOnlyModuleAliasSurface::BufferObject => is_buffer_object_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::Cluster => is_cluster_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::ChildProcess => is_child_process_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
@@ -19754,7 +19833,7 @@ fn module_alias_expr_contains_unshadowed_usage(
             {
                 return false;
             }
-            if surface.is_crypto_object() {
+            if surface.is_authenticated_object() {
                 return params.iter().any(|param| {
                     module_alias_binding_pattern_contains_unshadowed_usage(
                         &param.pattern,
@@ -19870,7 +19949,7 @@ fn module_alias_expr_contains_unshadowed_usage(
             super_class,
             body,
         } => {
-            if surface.is_crypto_object()
+            if surface.is_authenticated_object()
                 && name.as_deref() != Some(alias)
                 && body.iter().any(|method| {
                     !net_function_scope_shadows_alias(
@@ -19953,7 +20032,7 @@ fn module_alias_write_target_has_rejected_use(
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
                 || (surface == LoweringOnlyModuleAliasSurface::Crypto
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
-                || (surface.is_crypto_object()
+                || (surface.is_authenticated_object()
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
                 || (surface == LoweringOnlyModuleAliasSurface::Cluster
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
@@ -20026,6 +20105,9 @@ fn module_alias_expr_has_rejected_use(
             | LoweringOnlyModuleAliasSurface::CryptoHmacObject
             | LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
                 is_crypto_object_alias_usage(expr, alias, surface)
+            }
+            LoweringOnlyModuleAliasSurface::BufferObject => {
+                is_buffer_object_alias_usage(expr, alias)
             }
             LoweringOnlyModuleAliasSurface::Cluster => module_alias_member_name(callee, alias)
                 .is_some_and(|method| {
@@ -20187,7 +20269,7 @@ fn module_alias_expr_has_rejected_use(
             {
                 return false;
             }
-            if surface.is_crypto_object() {
+            if surface.is_authenticated_object() {
                 return params.iter().any(|param| {
                     module_alias_binding_pattern_contains_unshadowed_usage(
                         &param.pattern,
@@ -20240,7 +20322,7 @@ fn module_alias_expr_has_rejected_use(
         } => {
             let unshadowed =
                 !net_function_scope_shadows_alias(name.as_deref(), params, &body.body, alias);
-            if surface.is_crypto_object() {
+            if surface.is_authenticated_object() {
                 return crypto_object_params_have_outer_alias_use(
                     name.as_deref(),
                     params,
@@ -20334,7 +20416,7 @@ fn module_alias_expr_has_rejected_use(
             super_class,
             body,
         } => {
-            if surface.is_crypto_object()
+            if surface.is_authenticated_object()
                 && name.as_deref() != Some(alias)
                 && body.iter().any(|method| {
                     crypto_object_params_have_outer_alias_use(None, &method.params, alias, surface)
@@ -20660,7 +20742,7 @@ fn module_alias_statement_has_rejected_use(
                 &function.body.body,
                 alias,
             );
-            if surface.is_crypto_object() {
+            if surface.is_authenticated_object() {
                 return crypto_object_params_have_outer_alias_use(
                     function.name.as_deref(),
                     &function.params,
@@ -20684,7 +20766,7 @@ fn module_alias_statement_has_rejected_use(
                     .any(|inner| module_alias_statement_has_rejected_use(inner, alias, surface)))
         }
         Statement::ClassDeclaration(class) => {
-            if surface.is_crypto_object()
+            if surface.is_authenticated_object()
                 && class.name.as_deref() != Some(alias)
                 && class.body.iter().any(|method| {
                     crypto_object_params_have_outer_alias_use(None, &method.params, alias, surface)
@@ -20904,7 +20986,7 @@ fn module_alias_has_predeclaration_hazard(
     // generic call/new hazard here would reject ordinary setup expressions such
     // as `const bytes = Buffer.from(...); const hash = crypto.createHash(...)`.
     // Direct prefix uses and all rejected/escaped uses remain fail-closed below.
-    let arbitrary_call_can_observe_hoisted_alias = !surface.is_crypto_object();
+    let arbitrary_call_can_observe_hoisted_alias = !surface.is_authenticated_object();
     let statement_prefix_has_hazard = body[..statement_index].iter().any(|statement| {
         module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
             || module_alias_statement_has_rejected_use(statement, alias, surface)
@@ -24117,6 +24199,171 @@ fn buffer_static_builtin_call_capability(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Authenticated Node Buffer instance observations (bd-nx5cb)
+// ---------------------------------------------------------------------------
+
+fn buffer_object_alias_sentinel(name: &str) -> String {
+    format!("\0bufferobj\0{name}")
+}
+
+fn buffer_object_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "toString" => Some("builtin:BufferObjectToString"),
+        "readUInt32LE" => Some("builtin:BufferObjectReadUInt32LE"),
+        _ => None,
+    }
+}
+
+fn buffer_object_argument_is_static_primitive(expression: &Expression) -> bool {
+    matches!(
+        expression,
+        Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral
+            | Expression::UndefinedLiteral
+    )
+}
+
+fn buffer_factory_expression_is_authenticated(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expression
+    else {
+        return false;
+    };
+    if !arguments
+        .iter()
+        .all(buffer_object_argument_is_static_primitive)
+    {
+        return false;
+    }
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee.as_ref()
+    else {
+        return false;
+    };
+    matches!(object.as_ref(), Expression::Identifier(global)
+        if global == "Buffer" && !is_lexically_shadowed(binding_lookup, global))
+        && matches!(well_formed_static_name(property), Some("from" | "alloc"))
+}
+
+fn buffer_object_expression_is_authenticated(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    buffer_factory_expression_is_authenticated(expression, binding_lookup)
+        || matches!(expression, Expression::Identifier(alias)
+            if binding_lookup.contains_key(&buffer_object_alias_sentinel(alias)))
+}
+
+fn buffer_object_builtin_call_capability(
+    callee: &Expression,
+    arguments: &[Expression],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if !arguments
+        .iter()
+        .all(buffer_object_argument_is_static_primitive)
+    {
+        return None;
+    }
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !buffer_object_expression_is_authenticated(object, binding_lookup) {
+        return None;
+    }
+    buffer_object_method_capability(well_formed_static_name(property)?)
+}
+
+fn is_buffer_object_alias_usage(expr: &Expression, alias: &str) -> bool {
+    matches!(
+        expr,
+        Expression::Call {
+            callee,
+            arguments,
+            ..
+        } if module_alias_member_name(callee, alias)
+            .and_then(buffer_object_method_capability)
+            .is_some()
+            && arguments
+                .iter()
+                .all(buffer_object_argument_is_static_primitive)
+    )
+}
+
+fn confirmed_buffer_object_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+            let (BindingPattern::Identifier(alias), Some(initializer)) =
+                (&declarator.pattern, &declarator.initializer)
+            else {
+                continue;
+            };
+            if buffer_factory_expression_is_authenticated(initializer, binding_lookup)
+                && !module_alias_expr_has_rejected_use(
+                    initializer,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::BufferObject,
+                )
+            {
+                candidates.insert(alias.clone(), (statement_index, declarator_index));
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            let surface = LoweringOnlyModuleAliasSurface::BufferObject;
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                surface,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+            }) && !crypto_object_alias_has_rejected_use(
+                body,
+                alias,
+                surface,
+                binding_lookup,
+                &mut BTreeSet::new(),
+            )
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
 fn array_literal_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
     let Expression::Member {
         object,
@@ -24317,6 +24564,7 @@ enum FlowValueShape {
     Primitive,
     Callable,
     ClosedResult,
+    BufferObject,
     FreshAggregate,
 }
 
@@ -24324,7 +24572,7 @@ impl FlowValueShape {
     fn is_closed(self) -> bool {
         matches!(
             self,
-            Self::Primitive | Self::ClosedResult | Self::FreshAggregate
+            Self::Primitive | Self::ClosedResult | Self::BufferObject | Self::FreshAggregate
         )
     }
 }
@@ -24778,6 +25026,18 @@ fn hostcall_exception_is_operand_derived(
         | "builtin:URIError" => inputs
             .iter()
             .all(|value| value.shape == FlowValueShape::Primitive),
+        // These two receiver-aware Buffer observations are finite only when
+        // slot zero came from the dedicated authenticated Buffer shape and
+        // every method argument is statically primitive. `pop_flow_values`
+        // reverses stack order, so the source receiver is the final input.
+        "builtin:BufferObjectToString" | "builtin:BufferObjectReadUInt32LE" => {
+            inputs.split_last().is_some_and(|(receiver, arguments)| {
+                receiver.shape == FlowValueShape::BufferObject
+                    && arguments
+                        .iter()
+                        .all(|value| value.shape == FlowValueShape::Primitive)
+            })
+        }
         // Buffer.from and Buffer.alloc/allocUnsafe have a closed exception
         // contract only for direct primitive arguments. Object arguments can
         // expose mutable array-like or backing-store state whose provenance is
@@ -25526,12 +25786,37 @@ fn simulate_ir2_flow_labels(
                         label = Label::TopSecret;
                     }
                 }
+                if matches!(
+                    capability.as_str(),
+                    "builtin:BufferObjectToString" | "builtin:BufferObjectReadUInt32LE"
+                ) {
+                    let authenticated = inputs.split_last().is_some_and(|(receiver, arguments)| {
+                        receiver.shape == FlowValueShape::BufferObject
+                            && arguments
+                                .iter()
+                                .all(|value| value.shape == FlowValueShape::Primitive)
+                    });
+                    if authenticated && hostcall_is_operand_derived {
+                        result_shape = FlowValueShape::Primitive;
+                    } else {
+                        // Hand-authored or malformed IR must not be able to
+                        // manufacture the source-level Buffer proof.
+                        label = Label::TopSecret;
+                        result_shape = FlowValueShape::Unknown;
+                    }
+                }
                 if hostcall_is_operand_derived
                     && matches!(
                         capability.as_str(),
-                        "builtin:BufferFrom"
-                            | "builtin:BufferAlloc"
-                            | "builtin:BufferAllocUnsafe"
+                        "builtin:BufferFrom" | "builtin:BufferAlloc"
+                    )
+                {
+                    result_shape = FlowValueShape::BufferObject;
+                }
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:BufferAllocUnsafe"
                             | "builtin:BufferConcat"
                             | "builtin:ArrayBuffer"
                             | "builtin:Uint8Array"
@@ -25728,6 +26013,16 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
     // the receiver lifecycle joined with direct operands, so high inputs may
     // flow into the private state but cannot later cross a lower sink.
     if normalized.starts_with("builtin:cryptoobject") {
+        return Label::TopSecret;
+    }
+    // Exact private-brand Buffer observations are internal computation, not
+    // egress. Keep this allowlist finite so a future BufferObject method does
+    // not silently inherit TopSecret clearance without its own provenance
+    // audit.
+    if matches!(
+        normalized.as_str(),
+        "builtin:bufferobjecttostring" | "builtin:bufferobjectreaduint32le"
+    ) {
         return Label::TopSecret;
     }
     if normalized.starts_with("net:")
@@ -28562,6 +28857,23 @@ mod tests {
     }
 
     #[test]
+    fn sink_clearance_buffer_object_allowlist_is_exact_bd_nx5cb() {
+        assert_eq!(
+            sink_clearance_from_capability("builtin:BufferObjectToString"),
+            Label::TopSecret
+        );
+        assert_eq!(
+            sink_clearance_from_capability("builtin:BufferObjectReadUInt32LE"),
+            Label::TopSecret
+        );
+        assert_eq!(
+            sink_clearance_from_capability("builtin:BufferObjectFutureMethod"),
+            Label::Internal,
+            "future Buffer instance methods require their own provenance audit"
+        );
+    }
+
+    #[test]
     fn sink_clearance_network_capabilities() {
         assert_eq!(sink_clearance_from_capability("net.write"), Label::Public);
         assert_eq!(sink_clearance_from_capability("net_connect"), Label::Public);
@@ -29882,6 +30194,311 @@ mod tests {
                 console_flow.declassification_required, expected_declassification,
                 "{case_name}"
             );
+        }
+    }
+
+    #[test]
+    fn authenticated_buffer_object_calls_lower_exact_product_shapes_bd_nx5cb() {
+        for (case_name, source, capability, expected_arg_count) in [
+            (
+                "direct_to_string",
+                "try { Buffer.from('abc').toString('bogus'); } catch (error) { console.log(error); }",
+                "builtin:BufferObjectToString",
+                2,
+            ),
+            (
+                "bound_read_uint32_le",
+                "const b=Buffer.alloc(2); try { b.readUInt32LE(0); } catch (error) { console.log(error); }",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
+            (
+                "zero_arg_read_uint32_le",
+                "const b=Buffer.alloc(2); try { b.readUInt32LE(); } catch (error) { console.log(error); }",
+                "builtin:BufferObjectReadUInt32LE",
+                1,
+            ),
+            (
+                "fractional_offset",
+                "const b=Buffer.alloc(4); try { b.readUInt32LE(0.5); } catch (error) { console.log(error); }",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
+            (
+                "float_factory_length",
+                "const b=Buffer.alloc(4.0); try { b.readUInt32LE(0); } catch (error) { console.log(error); }",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
+            (
+                "function_local_alias",
+                "function read(){ const b=Buffer.alloc(2); try { b.readUInt32LE(0); } catch (error) { console.log(error); } } read();",
+                "builtin:BufferObjectReadUInt32LE",
+                2,
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .expect("parse authenticated Buffer object source");
+            let ir0 =
+                Ir0Module::from_syntax_tree(tree, format!("buffer_object_{case_name}_bd_nx5cb.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .expect("lower authenticated Buffer object source")
+                .module;
+            assert_eq!(
+                count_hostcall_deep(&ir1.ops, capability),
+                1,
+                "{case_name} must emit one authenticated Buffer hostcall"
+            );
+            assert!(ops_deep_match(&ir1.ops, &|op| matches!(
+                op,
+                Ir1Op::HostCall {
+                    capability: observed,
+                    arg_count,
+                } if observed == capability && *arg_count == expected_arg_count
+            )));
+
+            if case_name == "function_local_alias" {
+                // Function bodies remain nested IR1 payloads at this stage;
+                // the checks above are the relevant scope-authentication
+                // proof. The top-level catch-flow assertions below exercise
+                // the same capabilities without pretending nested bodies
+                // carry top-level IR2 annotations.
+                continue;
+            }
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("authenticated Buffer catch must pass finite flow analysis")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("catch console flow annotation");
+            assert_eq!(console_flow.data_label, Label::Internal, "{case_name}");
+            assert!(
+                !console_flow.declassification_required,
+                "{case_name} must keep finite exception provenance"
+            );
+        }
+
+        let block_shadow = lower_script_source_ops(
+            "const b=Buffer.alloc(2); b.readUInt32LE(0); { const b={readUInt32LE(){return 0;}}; b.readUInt32LE(0); } b.readUInt32LE(0);",
+            "buffer_object_block_shadow_bd_nx5cb.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&block_shadow, "builtin:BufferObjectReadUInt32LE"),
+            2,
+            "the outer authenticated alias must be restored after a block-local shadow"
+        );
+        let invocation_routes = block_shadow
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::HostCall { capability, .. }
+                    if capability == "builtin:BufferObjectReadUInt32LE" =>
+                {
+                    Some("authenticated")
+                }
+                Ir1Op::CallMethod { .. } => Some("generic"),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            invocation_routes,
+            ["authenticated", "generic", "authenticated"],
+            "the block-local shadow must stay generic between two exact outer calls"
+        );
+    }
+
+    #[test]
+    fn buffer_object_rejected_uses_stay_generic_and_fail_high_bd_nx5cb() {
+        for (case_name, source) in [
+            (
+                "mutable_binding",
+                "let b=Buffer.alloc(2); b.readUInt32LE(0);",
+            ),
+            (
+                "computed_method",
+                "const b=Buffer.alloc(2); b['readUInt32LE'](0);",
+            ),
+            (
+                "optional_member",
+                "const b=Buffer.alloc(2); b?.readUInt32LE(0);",
+            ),
+            (
+                "optional_call",
+                "const b=Buffer.alloc(2); b.readUInt32LE?.(0);",
+            ),
+            (
+                "detached_method",
+                "const b=Buffer.alloc(2); const read=b.readUInt32LE; read(0);",
+            ),
+            (
+                "own_override",
+                "const b=Buffer.alloc(2); b.readUInt32LE=()=>0; b.readUInt32LE(0);",
+            ),
+            (
+                "indexed_mutation",
+                "const b=Buffer.alloc(4); b[0]=1; b.readUInt32LE(0);",
+            ),
+            (
+                "alias_transfer",
+                "const b=Buffer.alloc(2); const other=b; other.readUInt32LE(0);",
+            ),
+            (
+                "nested_capture",
+                "const b=Buffer.alloc(2); function read(){ return b.readUInt32LE(0); } read();",
+            ),
+            (
+                "arrow_capture",
+                "const b=Buffer.alloc(2); const read=()=>b.readUInt32LE(0); read();",
+            ),
+            (
+                "class_capture",
+                "const b=Buffer.alloc(2); class Reader { read(){ return b.readUInt32LE(0); } } new Reader().read();",
+            ),
+            (
+                "predeclaration",
+                "b.readUInt32LE(0); const b=Buffer.alloc(2);",
+            ),
+            (
+                "self_reference",
+                "const b=Buffer.from(b); b.toString('hex');",
+            ),
+            ("spread", "const b=Buffer.alloc(2); b.readUInt32LE(...[0]);"),
+            (
+                "shadowed_global",
+                "const Buffer={alloc(){return {readUInt32LE(){return 0;}}}}; const b=Buffer.alloc(2); b.readUInt32LE(0);",
+            ),
+            (
+                "computed_factory",
+                "const b=Buffer['alloc'](2); b.readUInt32LE(0);",
+            ),
+            (
+                "factory_object_argument",
+                "const b=Buffer.from({valueOf(){throw 'secret';}}); b.toString('hex');",
+            ),
+            (
+                "forged_object",
+                "const b={readUInt32LE(){return 0;}}; b.readUInt32LE(0);",
+            ),
+            (
+                "uint8_array",
+                "const b=new Uint8Array(2); b.readUInt32LE(0);",
+            ),
+            (
+                "object_encoding",
+                "const b=Buffer.from('a'); b.toString({toString(){throw 'secret';}});",
+            ),
+            (
+                "object_offset",
+                "const b=Buffer.alloc(2); b.readUInt32LE({valueOf(){throw 'secret';}});",
+            ),
+        ] {
+            let ops = lower_script_source_ops(
+                source,
+                &format!("buffer_object_rejected_{case_name}_bd_nx5cb.js"),
+            );
+            for capability in [
+                "builtin:BufferObjectToString",
+                "builtin:BufferObjectReadUInt32LE",
+            ] {
+                assert_eq!(
+                    count_hostcall_deep(&ops, capability),
+                    0,
+                    "{case_name} must not authenticate {capability}"
+                );
+            }
+            assert!(
+                ops_deep_match(&ops, &|op| matches!(
+                    op,
+                    Ir1Op::Call { .. } | Ir1Op::CallMethod { .. }
+                )) || count_hostcall_deep(&ops, "builtin:ReflectApply") > 0,
+                "{case_name} must retain ordinary JavaScript invocation semantics"
+            );
+        }
+
+        for (case_name, receiver_setup) in [
+            ("forged_ir", vec![Ir1Op::NewObject { count: 0 }]),
+            (
+                "mutated_shape",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(2),
+                    },
+                    Ir1Op::HostCall {
+                        capability: "builtin:BufferAlloc".to_string(),
+                        arg_count: 1,
+                    },
+                    Ir1Op::StoreBinding { binding_id: 77 },
+                    Ir1Op::LoadBinding { binding_id: 77 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("readUInt32LE".into()),
+                    },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    },
+                    Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Dynamic,
+                    },
+                    Ir1Op::Pop,
+                    Ir1Op::LoadBinding { binding_id: 77 },
+                ],
+            ),
+        ] {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(case_name.as_bytes()),
+                format!("buffer_object_flow_{case_name}_bd_nx5cb.js"),
+            );
+            ir1.ops.push(Ir1Op::BeginTry {
+                catch_label: 81,
+                finally_label: None,
+            });
+            ir1.ops.extend(receiver_setup);
+            ir1.ops.extend([
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(0),
+                },
+                Ir1Op::HostCall {
+                    capability: "builtin:BufferObjectReadUInt32LE".to_string(),
+                    arg_count: 2,
+                },
+                Ir1Op::Pop,
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 82 },
+                Ir1Op::Label { id: 81 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 82 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ]);
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("forged Buffer object IR remains representable but fail-high")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("forged catch console flow annotation");
+            assert_eq!(console_flow.data_label, Label::TopSecret, "{case_name}");
+            assert!(console_flow.declassification_required, "{case_name}");
         }
     }
 

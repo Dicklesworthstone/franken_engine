@@ -81,7 +81,7 @@ use frankenengine_extension_host::process_spawn::{
 
 use crate::algebraic_effects::EffectError;
 use crate::ast::ParseGoal;
-use crate::capability::{CapabilityProfile, RuntimeCapability};
+use crate::capability::{CapabilityProfile, RuntimeCapability, hostcall_result_contract};
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
 };
@@ -40331,10 +40331,9 @@ impl InterpreterCore {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
                     };
-                    let result_label = self
-                        .take_pending_hostcall_result_label()
-                        .unwrap_or(Label::Public)
-                        .join(&args_label);
+                    let runtime_result_label = self.take_pending_hostcall_result_label();
+                    let result_label = hostcall_result_contract(&capability.0)
+                        .result_label(&args_label, runtime_result_label.as_ref());
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
@@ -59154,10 +59153,11 @@ impl InterpreterCore {
             };
             bytes
         };
+        let output_label = invocation_label.join(&Label::Secret);
         let value = self.crypto_output_value_with_temporary_budget(
             &bytes,
             None,
-            &invocation_label,
+            &output_label,
             callback.is_none(),
             u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         )?;
@@ -59165,7 +59165,7 @@ impl InterpreterCore {
             self.schedule_io_callback_with_label(
                 callback,
                 vec![Value::Null, value],
-                invocation_label,
+                output_label,
             )?;
             Ok(Value::Undefined)
         } else {
@@ -59210,7 +59210,9 @@ impl InterpreterCore {
             bytes[14],
             bytes[15]
         );
-        self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+        self.replace_pending_hostcall_result_label(Some(
+            invocation_label.join(&Label::Secret),
+        ))?;
         Ok(Value::str(uuid))
     }
 
@@ -59317,15 +59319,16 @@ impl InterpreterCore {
             return self.crypto_random_failure(invocation_label, callback);
         };
         let value = Value::Int(min + offset as i64);
+        let output_label = invocation_label.join(&Label::Secret);
         if let Some(callback) = callback {
             self.schedule_io_callback_with_label(
                 callback,
                 vec![Value::Null, value],
-                invocation_label,
+                output_label,
             )?;
             Ok(Value::Undefined)
         } else {
-            self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+            self.replace_pending_hostcall_result_label(Some(output_label))?;
             Ok(value)
         }
     }
@@ -59386,6 +59389,7 @@ impl InterpreterCore {
             };
             bytes
         };
+        let output_label = invocation_label.join(&Label::Secret);
         let absolute_start =
             view_offset
                 .checked_add(offset)
@@ -59409,8 +59413,8 @@ impl InterpreterCore {
             destination.copy_from_slice(&bytes);
             Ok(())
         })??;
-        self.join_binary_storage_label(buffer, &invocation_label)?;
-        self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+        self.join_binary_storage_label(buffer, &output_label)?;
+        self.replace_pending_hostcall_result_label(Some(output_label))?;
         Ok(target)
     }
 

@@ -47,6 +47,7 @@ use crate::ast::{
     ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
     VariableDeclarationKind,
 };
+use crate::capability::hostcall_result_contract;
 use crate::effect_set::{EffectKind, EffectSet};
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -25688,12 +25689,20 @@ fn simulate_ir2_flow_labels(
                 // egress. The runtime process dispatcher performs the exact
                 // request-field join (command/argv/options only) and blocks a
                 // non-Public request before the provider is called.
-                let direct_label = if capability == "process_spawn" {
+                let operation_data_label = if capability == "process_spawn" {
                     process_spawn_request_label(&inputs)
                 } else {
                     join_flow_values(&inputs)
                 };
-                let mut label = direct_label.clone();
+                // A HostCall has two independent IFC edges: operands flowing
+                // into the effect, and the value produced by the host. The old
+                // single-label approximation made every empty-argument source
+                // Public, while applying a source floor to that same label would
+                // incorrectly guard the source operation before it produced a
+                // value. Keep the operation annotation operand-derived and push
+                // the shared result-contract label onto the value stack.
+                let mut result_label = hostcall_result_contract(capability)
+                    .result_label(&operation_data_label, None);
                 let mut result_origin = None;
                 let mut result_shape = FlowValueShape::Unknown;
 
@@ -25710,7 +25719,7 @@ fn simulate_ir2_flow_labels(
                         op_index,
                         CryptoFlowObjectState {
                             kind,
-                            lifecycle_label: label.clone(),
+                            lifecycle_label: result_label.clone(),
                         },
                     );
                     result_origin = Some(op_index);
@@ -25735,14 +25744,14 @@ fn simulate_ir2_flow_labels(
                             crypto_flow_kind_supports_capability(state.kind, capability)
                         })
                     {
-                        label = prior.lifecycle_label.join(&direct_label);
+                        result_label = prior.lifecycle_label.join(&operation_data_label);
                         match capability.as_str() {
                             "builtin:CryptoObjectUpdate" => {
                                 crypto_flow_states.insert(
                                     origin,
                                     CryptoFlowObjectState {
                                         kind: prior.kind,
-                                        lifecycle_label: label.clone(),
+                                        lifecycle_label: result_label.clone(),
                                     },
                                 );
                                 if matches!(
@@ -25760,7 +25769,7 @@ fn simulate_ir2_flow_labels(
                                         op_index,
                                         CryptoFlowObjectState {
                                             kind: CryptoFlowObjectKind::Hash,
-                                            lifecycle_label: label.clone(),
+                                            lifecycle_label: result_label.clone(),
                                         },
                                     );
                                     result_origin = Some(op_index);
@@ -25773,7 +25782,7 @@ fn simulate_ir2_flow_labels(
                                     origin,
                                     CryptoFlowObjectState {
                                         kind: prior.kind,
-                                        lifecycle_label: label.clone(),
+                                        lifecycle_label: result_label.clone(),
                                     },
                                 );
                                 result_shape = FlowValueShape::ClosedResult;
@@ -25783,7 +25792,7 @@ fn simulate_ir2_flow_labels(
                                     origin,
                                     CryptoFlowObjectState {
                                         kind: prior.kind,
-                                        lifecycle_label: label.clone(),
+                                        lifecycle_label: result_label.clone(),
                                     },
                                 );
                                 result_origin = Some(origin);
@@ -25795,7 +25804,7 @@ fn simulate_ir2_flow_labels(
                         // authenticated origin is malformed or crossed an
                         // unsupported escape. Fail high instead of treating its
                         // direct arguments as the complete exception source.
-                        label = Label::TopSecret;
+                        result_label = Label::TopSecret;
                     }
                 }
                 if matches!(
@@ -25813,7 +25822,7 @@ fn simulate_ir2_flow_labels(
                     } else {
                         // Hand-authored or malformed IR must not be able to
                         // manufacture the source-level Buffer proof.
-                        label = Label::TopSecret;
+                        result_label = Label::TopSecret;
                         result_shape = FlowValueShape::Unknown;
                     }
                 }
@@ -25839,11 +25848,14 @@ fn simulate_ir2_flow_labels(
                 {
                     result_shape = FlowValueShape::ClosedResult;
                 }
-                let mut result =
-                    fresh_crypto_flow_value(label.clone(), result_origin, &mut next_identity);
+                let mut result = fresh_crypto_flow_value(
+                    result_label,
+                    result_origin,
+                    &mut next_identity,
+                );
                 result.shape = result_shape;
                 value_stack.push(result);
-                label
+                operation_data_label
             }
         };
         if let Some(exception_label) =
@@ -28172,10 +28184,10 @@ mod tests {
     }
 
     #[test]
-    fn statically_proven_hostcall_skips_runtime_ifc_guard() {
+    fn statically_proven_label_preserving_hostcall_skips_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
         ir1.ops.push(Ir1Op::HostCall {
-            capability: "fs.read".to_string(),
+            capability: "promise:resolve".to_string(),
             arg_count: 0,
         });
         ir1.ops.push(Ir1Op::Return);
@@ -28203,8 +28215,65 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(hostcall_caps.contains(&"fs.read"));
+        assert!(hostcall_caps.contains(&"promise:resolve"));
         assert!(!hostcall_caps.contains(&IFC_RUNTIME_GUARD_CAPABILITY));
+    }
+
+    #[test]
+    fn hostcall_source_contracts_label_results_without_tainting_requests_bd_z1peg() {
+        let lower_source_into_console = |capability: &str| {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(capability.as_bytes()),
+                format!("{capability}_result_flow.js"),
+            );
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: capability.to_string(),
+                arg_count: 0,
+            });
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            });
+            lower_ir1_to_ir2(&ir1)
+                .expect("HostCall result flow should lower")
+                .module
+        };
+
+        for (capability, result_label, requires_declassification) in [
+            ("fs.read", Label::Internal, false),
+            ("builtin:CryptoRandomUUID", Label::Secret, true),
+            ("future:host-source", Label::TopSecret, true),
+        ] {
+            let ir2 = lower_source_into_console(capability);
+            let hostcall = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(&op.inner, Ir1Op::HostCall { capability: tag, .. } if tag == capability)
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("source HostCall flow annotation");
+            assert_eq!(
+                hostcall.data_label,
+                Label::Public,
+                "the source operation itself has no classified input"
+            );
+
+            let console = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(&op.inner, Ir1Op::HostCall { capability, .. } if capability == "console:log")
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("console consumer flow annotation");
+            assert_eq!(console.data_label, result_label, "{capability}");
+            assert_eq!(
+                console.declassification_required,
+                requires_declassification,
+                "{capability}"
+            );
+        }
     }
 
     #[test]

@@ -6508,13 +6508,15 @@ struct CallFrame {
     /// Scope chain depth before entering the callee, restored on return.
     saved_scope_depth: usize,
     /// Full scope chain snapshot saved before a closure call replaces
-    /// the chain with the captured environment. `None` for plain function
-    /// calls where the chain is only extended, not replaced.
+    /// the chain with the captured environment. A verified scope-inert frame
+    /// instead retains the captured environment here while leaving the caller
+    /// active; terminal-error materialization swaps the two representations.
+    /// `None` for plain function calls where the chain is only extended.
     saved_scope_chain: Option<Vec<ScopeFrame>>,
-    /// Logical scope bytes retained by a verified Tier-I leaf activation that
+    /// Logical empty-local-scope bytes retained by a verified Tier-I leaf that
     /// cannot inspect or mutate any lexical environment, create a closure, or
-    /// re-enter guest code. A non-zero value marks the optimized frame while
-    /// preserving the captured-environment plus empty-local-frame budget charge.
+    /// re-enter guest code. The captured environment, when present, lives in
+    /// `saved_scope_chain`; a non-zero value marks the optimized activation.
     scope_inert_virtual_scope_bytes: u64,
     /// Async function object that owns the result promise for this frame.
     async_function_id: Option<u32>,
@@ -7841,6 +7843,10 @@ pub(crate) struct CompactTier1Program {
     /// `None` keeps the canonical full-width reset for hand-authored or
     /// structurally unusual IR without changing module admission.
     verified_function_frame_clear_width: Option<u32>,
+    /// Exact verified width for each function. The interpreter combines the
+    /// selected callee width with its cross-call high-water mark, so a narrow
+    /// callee cannot inherit stale registers from an earlier wider callee.
+    verified_function_frame_clear_widths: Box<[u32]>,
     /// Per-function proof that execution is a non-reentrant register-only leaf
     /// and therefore does not require a fresh lexical scope activation.
     verified_scope_inert_leaf_functions: Box<[bool]>,
@@ -7952,6 +7958,17 @@ impl CompactTier1Program {
     /// admission or execution semantics.
     pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
         let verified_function_frame_clear_width = Self::verified_function_frame_clear_width(module);
+        let verified_function_frame_clear_widths = if verified_function_frame_clear_width.is_some()
+        {
+            module
+                .function_table
+                .iter()
+                .map(|function| function.frame_size)
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+        } else {
+            Box::default()
+        };
         let verified_scope_inert_leaf_functions =
             if verified_function_frame_clear_width.is_some() {
                 Self::verified_scope_inert_leaf_functions(module)
@@ -7989,6 +8006,7 @@ impl CompactTier1Program {
             instructions,
             compact_instruction_count,
             verified_function_frame_clear_width,
+            verified_function_frame_clear_widths,
             verified_scope_inert_leaf_functions,
         })
     }
@@ -8056,15 +8074,15 @@ impl CompactTier1Program {
         )
     }
 
-    /// Derive one conservative clear width for every stacked function frame.
+    /// Validate every function window before trusting descriptor frame widths.
     ///
-    /// A module-wide maximum deliberately trades a few extra stores for a
-    /// simple stale-state proof: every entry clears at least as far as every
-    /// other function in the same immutable module, so alternating wide and
-    /// narrow calls cannot retain a prior value or IFC label. Any malformed
-    /// descriptor, register span, fallthrough edge, or cross-function control
-    /// target disables the optimization and preserves the legacy full-width
-    /// reset.
+    /// The returned module-wide maximum is the admission proof for the exact
+    /// per-function widths stored beside the compact program. Runtime entry
+    /// combines the selected callee width with a monotonic cross-call
+    /// high-water mark, so alternating wide and narrow calls cannot retain a
+    /// prior value or IFC label. Any malformed descriptor, register span,
+    /// fallthrough edge, or cross-function control target disables the
+    /// optimization and preserves the legacy full-width reset.
     fn verified_function_frame_clear_width(module: &Ir3Module) -> Option<u32> {
         let instruction_count = u32::try_from(module.instructions.len()).ok()?;
         let main = module.function_table.first()?;
@@ -8326,6 +8344,14 @@ impl CompactTier1Program {
 
     fn function_frame_clear_width(&self, max_registers: u32) -> Option<usize> {
         self.verified_function_frame_clear_width
+            .filter(|width| *width > 0 && *width <= max_registers)
+            .map(|width| width as usize)
+    }
+
+    fn callee_frame_clear_width(&self, function_index: u32, max_registers: u32) -> Option<usize> {
+        self.verified_function_frame_clear_widths
+            .get(function_index as usize)
+            .copied()
             .filter(|width| *width > 0 && *width <= max_registers)
             .map(|width| width as usize)
     }
@@ -30423,6 +30449,13 @@ impl InterpreterCore {
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<LabeledReturn, InterpreterError> {
         let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
+        if result.is_err() {
+            // Tier-R leaves the failing callee's captured environment and
+            // fresh local scope installed while checkpoints drain. Reify the
+            // otherwise virtual leaf activation at the same boundary so
+            // callbacks observe identical scope and snapshot-budget state.
+            self.materialize_scope_inert_terminal_frame()?;
+        }
         let suspended_at_top_level_await = !self.top_level_await_resumption_contexts.is_empty();
 
         // Writable completion callbacks occupy Node's internal stream-tick
@@ -38332,6 +38365,12 @@ impl InterpreterCore {
     }
 
     fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
+        if frame.scope_inert_virtual_scope_bytes > 0 {
+            // The optimized activation never replaced the caller's active
+            // chain. Its saved chain is the retained captured environment,
+            // not a caller snapshot, and is released with the frame.
+            return;
+        }
         // Closure and caller scope snapshots share lexical binding cells, so
         // assignments are already visible in the saved chain. Restoring the
         // caller is therefore a structural frame swap, not a value merge.
@@ -38342,6 +38381,55 @@ impl InterpreterCore {
                 self.scope_chain.pop();
             }
         }
+    }
+
+    fn materialize_scope_inert_terminal_frame(&mut self) -> Result<(), InterpreterError> {
+        let Some(frame) = self.call_stack.last() else {
+            return Ok(());
+        };
+        if frame.scope_inert_virtual_scope_bytes == 0 {
+            return Ok(());
+        }
+
+        let materialized_depth = self
+            .call_stack
+            .last()
+            .expect("scope-inert frame was checked")
+            .saved_scope_chain
+            .as_ref()
+            .map_or(self.scope_chain.depth(), |environment| environment.len());
+        ScopeChain::preflight_push_depth(materialized_depth, self.config.max_scope_depth)?;
+        let captured_env = self
+            .call_stack
+            .last_mut()
+            .expect("scope-inert frame was checked")
+            .saved_scope_chain
+            .take();
+
+        if let Some(captured_env) = captured_env {
+            // Move the already-owned caller structure into the frame. A
+            // terminal failure may occur after the leaf consumed all remaining
+            // guest memory; cloning here would add an unaccounted transient
+            // allocation at a boundary where Tier-R performs none.
+            let caller_scope = std::mem::replace(&mut self.scope_chain.frames, captured_env);
+            self.call_stack
+                .last_mut()
+                .expect("scope-inert frame was checked")
+                .saved_scope_chain = Some(caller_scope);
+        }
+        self.scope_chain
+            .push(self.config.max_scope_depth)
+            .expect("scope-inert entry preflight already admitted this exact depth");
+        self.call_stack
+            .last_mut()
+            .expect("scope-inert frame was checked")
+            .scope_inert_virtual_scope_bytes = 0;
+        debug_assert_eq!(
+            self.estimated_memory_bytes(),
+            self.recompute_estimated_memory_bytes(),
+            "materializing a virtual leaf frame must preserve logical ownership"
+        );
+        Ok(())
     }
 
     fn unwind_call_stack_to(
@@ -39550,7 +39638,7 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        self.enter_stacked_register_frame(compact_tier1);
+        self.enter_stacked_register_frame_for_function(compact_tier1, function_index);
         for (index, (value, label)) in argument_values.into_iter().zip(argument_labels).enumerate()
         {
             let register = index as u32;
@@ -41860,7 +41948,7 @@ impl InterpreterCore {
                     }
 
                     // Resolve function index and optional captured environment.
-                    let (func_idx, captured_env) = match &callee_val {
+                    let (func_idx, mut captured_env) = match &callee_val {
                         Value::Function(idx) => (*idx, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
@@ -42196,6 +42284,7 @@ impl InterpreterCore {
                             };
                             let scope_inert_activation = compact_tier1
                                 .is_some_and(|plan| plan.scope_inert_leaf_function(func_idx));
+                            let has_captured_env = captured_env.is_some();
 
                             let effective_depth = self.effective_call_depth();
                             if effective_depth >= self.config.max_call_depth {
@@ -42251,7 +42340,7 @@ impl InterpreterCore {
                                 binding
                             } else if is_concise_method {
                                 (Value::Undefined, Label::Public)
-                            } else if captured_env.is_some() {
+                            } else if has_captured_env {
                                 self.clone_inherited_this_binding(binding_temporary_bytes)?
                             } else {
                                 (Value::Undefined, Label::Public)
@@ -42259,13 +42348,21 @@ impl InterpreterCore {
                             let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
                                 .saturating_add(Self::estimate_label_bytes(&call_this_label));
                             let scope_depth = self.scope_chain.depth();
-                            let saved_chain = if captured_env.is_some() {
+                            let virtual_scope_depth = captured_env
+                                .as_ref()
+                                .map_or(scope_depth, |environment| environment.len());
+                            let saved_chain = if has_captured_env {
                                 if scope_inert_activation {
                                     self.preflight_scope_chain_snapshot_with_temporary_budget(
                                         binding_temporary_bytes
                                             .saturating_add(call_this_temporary_bytes),
                                     )?;
-                                    None
+                                    // Retain the already-budgeted captured
+                                    // structure in the frame. It is not active
+                                    // on the hot path, but its shallow snapshot
+                                    // projection exactly replaces the captured
+                                    // chain that Tier-R would have installed.
+                                    captured_env.take()
                                 } else {
                                     Some(
                                         self.snapshot_scope_chain_with_temporary_budget(
@@ -42278,9 +42375,6 @@ impl InterpreterCore {
                                 None
                             };
                             if scope_inert_activation {
-                                let virtual_scope_depth = captured_env
-                                    .as_ref()
-                                    .map_or(scope_depth, |environment| environment.len());
                                 ScopeChain::preflight_push_depth(
                                     virtual_scope_depth,
                                     self.config.max_scope_depth,
@@ -42321,8 +42415,7 @@ impl InterpreterCore {
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 scope_inert_virtual_scope_bytes: if scope_inert_activation {
-                                    captured_env_bytes
-                                        .saturating_add(MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES)
+                                    MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
                                 } else {
                                     0
                                 },
@@ -42358,7 +42451,7 @@ impl InterpreterCore {
                                 }
                             }
 
-                            self.enter_stacked_register_frame(compact_tier1);
+                            self.enter_stacked_register_frame_for_function(compact_tier1, func_idx);
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
@@ -42814,7 +42907,7 @@ impl InterpreterCore {
                         return Err(err);
                     }
 
-                    self.enter_stacked_register_frame(compact_tier1);
+                    self.enter_stacked_register_frame_for_function(compact_tier1, func_idx);
 
                     for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                         let reg = i as u32;
@@ -44281,7 +44374,7 @@ impl InterpreterCore {
                                 return Err(err);
                             }
 
-                            self.enter_stacked_register_frame(compact_tier1);
+                            self.enter_stacked_register_frame_for_function(compact_tier1, func_idx);
 
                             // Arguments occupy r0..rN-1, matching the IR3
                             // lowering's parameter-register allocation
@@ -45566,7 +45659,7 @@ impl InterpreterCore {
 
     /// Return copied integer operands only when the entire label/write path is
     /// statically equivalent to the generic Tier-R transaction. Any dynamic
-    /// value, non-Public input label, active execution context, call frame,
+    /// value, non-Public input label, active labeled execution context,
     /// destination growth, dynamic destination ownership, or over-budget base
     /// state falls back before mutation to the canonical helpers.
     #[inline(always)]
@@ -75118,7 +75211,9 @@ impl InterpreterCore {
     }
 
     /// True when replacing an existing register can neither change logical
-    /// memory ownership nor inherit an execution-context label.
+    /// memory ownership nor inherit an execution-context label. Ordinary call
+    /// frames do not by themselves carry a PC-style label; inline callbacks
+    /// and HomeObject-bound method frames remain on the accounted path.
     ///
     /// This is deliberately exhaustive over `Value`: adding a value kind
     /// forces its ownership model to be classified before it can enter the
@@ -75170,8 +75265,7 @@ impl InterpreterCore {
         value: &Value,
         next_label: &Label,
     ) -> bool {
-        self.active_inline_callback_context_label.is_none()
-            && self.call_stack.is_empty()
+        self.active_execution_context_label().is_none()
             && self
                 .registers
                 .get(actual_reg)
@@ -75368,10 +75462,30 @@ impl InterpreterCore {
 
     /// Advance to and reset one stacked register frame as a value+label unit.
     fn enter_stacked_register_frame(&mut self, compact_tier1: Option<&CompactTier1Program>) {
-        self.register_base += self.config.max_registers as usize;
         let requested_clear_width = compact_tier1
             .and_then(|program| program.function_frame_clear_width(self.config.max_registers))
             .unwrap_or(self.config.max_registers as usize);
+        self.enter_stacked_register_frame_width(requested_clear_width);
+    }
+
+    /// Advance to one exact verified callee frame. The shared high-water mark
+    /// keeps this safe when a wider function previously occupied the same
+    /// fixed-stride physical frame.
+    fn enter_stacked_register_frame_for_function(
+        &mut self,
+        compact_tier1: Option<&CompactTier1Program>,
+        function_index: u32,
+    ) {
+        let requested_clear_width = compact_tier1
+            .and_then(|program| {
+                program.callee_frame_clear_width(function_index, self.config.max_registers)
+            })
+            .unwrap_or(self.config.max_registers as usize);
+        self.enter_stacked_register_frame_width(requested_clear_width);
+    }
+
+    fn enter_stacked_register_frame_width(&mut self, requested_clear_width: usize) {
+        self.register_base += self.config.max_registers as usize;
         self.stacked_register_frame_clear_width_high_water = self
             .stacked_register_frame_clear_width_high_water
             .max(requested_clear_width);
@@ -75392,6 +75506,11 @@ impl InterpreterCore {
     fn clear_current_register_frame_width(&mut self, clear_width: usize) {
         let frame_start = self.register_base;
         let frame_end = frame_start + clear_width;
+        // Preserve the legacy fixed-stride physical extent even when only a
+        // verified active prefix needs repeated clearing. Snapshot preflights
+        // deliberately charge Vec length, so shortening the backing vectors
+        // would change a later callback's memory-budget refusal boundary.
+        let physical_frame_end = frame_start + self.config.max_registers as usize;
         let released_value_bytes = self
             .registers
             .get(frame_start..frame_end.min(self.registers.len()))
@@ -75401,11 +75520,10 @@ impl InterpreterCore {
                 total.saturating_add(Self::estimate_value_bytes(value))
             });
         self.mutate_registers(|registers| {
-            if frame_end > registers.len() {
-                registers.resize(frame_end, Value::Undefined);
-            } else {
-                registers[frame_start..frame_end].fill(Value::Undefined);
+            if physical_frame_end > registers.len() {
+                registers.resize(physical_frame_end, Value::Undefined);
             }
+            registers[frame_start..frame_end].fill(Value::Undefined);
         });
         let released_label_bytes = Self::saturating_sum(
             self.register_labels
@@ -75414,11 +75532,11 @@ impl InterpreterCore {
                 .iter()
                 .map(Self::estimate_label_bytes),
         );
-        if frame_end > self.register_labels.len() {
-            self.register_labels.resize(frame_end, Label::Public);
-        } else {
-            self.register_labels[frame_start..frame_end].fill(Label::Public);
+        if physical_frame_end > self.register_labels.len() {
+            self.register_labels
+                .resize(physical_frame_end, Label::Public);
         }
+        self.register_labels[frame_start..frame_end].fill(Label::Public);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_value_bytes)
@@ -77910,7 +78028,11 @@ impl InterpreterCore {
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
             self.finally_frames.truncate(frame.saved_finally_mode_depth);
-            if let Some(saved) = frame.saved_scope_chain {
+            if frame.scope_inert_virtual_scope_bytes > 0 {
+                while self.scope_chain.depth() > frame.saved_scope_depth {
+                    self.scope_chain.pop();
+                }
+            } else if let Some(saved) = frame.saved_scope_chain {
                 self.scope_chain.frames = saved;
             } else {
                 while self.scope_chain.depth() > frame.saved_scope_depth {
@@ -114863,9 +114985,20 @@ mod tests {
         );
         let plan = CompactTier1Program::compile(&module).expect("compact function plan");
         assert_eq!(plan.verified_function_frame_clear_width, Some(8));
+        assert_eq!(&*plan.verified_function_frame_clear_widths, &[4, 8, 1]);
 
         let config = test_quickjs_config();
         let max_registers = config.max_registers as usize;
+        let mut narrow_only_core =
+            InterpreterCore::new(config.clone(), "tier-i-exact-narrow-frame");
+        narrow_only_core.enter_stacked_register_frame_for_function(Some(&plan), 2);
+        assert_eq!(
+            narrow_only_core.stacked_register_frame_clear_width_high_water,
+            1
+        );
+        assert_eq!(narrow_only_core.registers.len(), max_registers * 2);
+        assert_eq!(narrow_only_core.register_labels.len(), max_registers * 2);
+
         let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-frame-width");
         let compact = compact_core
             .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
@@ -114877,14 +115010,38 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert_eq!(compact.value, Value::Int(7));
-        assert_eq!(compact_core.registers.len(), max_registers + 8);
-        assert_eq!(compact_core.register_labels.len(), max_registers + 8);
+        assert_eq!(compact_core.registers.len(), max_registers * 2);
+        assert_eq!(compact_core.register_labels.len(), max_registers * 2);
         assert_eq!(baseline_core.registers.len(), max_registers * 2);
         assert_eq!(baseline_core.register_labels.len(), max_registers * 2);
         assert_eq!(compact_core.registers[max_registers + 7], Value::Undefined);
         assert_eq!(
             compact_core.register_labels[max_registers + 7],
             Label::Public
+        );
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            baseline_core.estimated_memory_bytes()
+        );
+        let snapshot_bytes = compact_core.module_execution_snapshot_memory_bytes();
+        assert_eq!(
+            snapshot_bytes,
+            baseline_core.module_execution_snapshot_memory_bytes(),
+            "active-width clearing must preserve the later snapshot preflight boundary"
+        );
+        let one_byte_short = compact_core
+            .estimated_memory_bytes()
+            .saturating_add(snapshot_bytes)
+            .saturating_sub(1);
+        compact_core.config.max_total_memory_bytes = one_byte_short;
+        baseline_core.config.max_total_memory_bytes = one_byte_short;
+        assert_eq!(
+            compact_core
+                .check_temporary_memory_budget(snapshot_bytes)
+                .expect_err("compact snapshot must refuse one byte below its exact peak"),
+            baseline_core
+                .check_temporary_memory_budget(snapshot_bytes)
+                .expect_err("baseline snapshot must refuse at the same exact peak")
         );
         assert_eq!(
             compact_core.estimated_memory_bytes(),
@@ -114940,6 +115097,92 @@ mod tests {
         )
     }
 
+    fn seed_scope_inert_captured_binding(core: &mut InterpreterCore) {
+        core.scope_chain
+            .current_mut()
+            .expect("global scope")
+            .bindings
+            .insert(
+                "unused_capture".to_string(),
+                ScopeBinding::with_labeled_state(
+                    BindingKind::Let,
+                    Value::Str(JsString::from("captured-payload")),
+                    Label::Secret,
+                    true,
+                ),
+            );
+        core.sync_estimated_memory_bytes()
+            .expect("captured binding fixture must fit");
+    }
+
+    fn assert_scope_inert_terminal_state_equal(
+        compact_core: &mut InterpreterCore,
+        baseline_core: &mut InterpreterCore,
+        module: &Ir3Module,
+    ) {
+        assert_eq!(
+            compact_core.call_stack.len(),
+            baseline_core.call_stack.len()
+        );
+        assert_eq!(compact_core.register_base, baseline_core.register_base);
+        assert_eq!(
+            compact_core.scope_chain.depth(),
+            baseline_core.scope_chain.depth()
+        );
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            baseline_core.estimated_memory_bytes()
+        );
+        assert_eq!(
+            compact_core.module_execution_snapshot_memory_bytes(),
+            baseline_core.module_execution_snapshot_memory_bytes(),
+            "terminal callback snapshot preflight must be Tier-I/Tier-R exact"
+        );
+        assert_eq!(
+            compact_core
+                .scope_chain
+                .resolve("unused_capture")
+                .expect("compact captured binding")
+                .1
+                .value()
+                .expect("compact captured value"),
+            baseline_core
+                .scope_chain
+                .resolve("unused_capture")
+                .expect("baseline captured binding")
+                .1
+                .value()
+                .expect("baseline captured value")
+        );
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            baseline_core.estimated_memory_bytes(),
+            baseline_core.recompute_estimated_memory_bytes()
+        );
+
+        let callback_temporary_bytes = InterpreterCore::transient_module_wrapper_bytes(module)
+            .saturating_add(compact_core.module_execution_snapshot_memory_bytes());
+        let one_byte_short = compact_core
+            .estimated_memory_bytes()
+            .saturating_add(callback_temporary_bytes)
+            .saturating_sub(1);
+        compact_core.config.max_total_memory_bytes = one_byte_short;
+        baseline_core.config.max_total_memory_bytes = one_byte_short;
+        let callback = Value::Function(1);
+        assert_eq!(
+            compact_core
+                .preflight_inline_method_call_with_argument_label(Some(module), &callback, 0, None,)
+                .expect_err("compact terminal callback snapshot must refuse one byte short"),
+            baseline_core
+                .preflight_inline_method_call_with_argument_label(Some(module), &callback, 0, None,)
+                .expect_err("baseline terminal callback snapshot must refuse one byte short"),
+            "terminal callback admission must retain the exact Tier-R budget boundary"
+        );
+    }
+
     #[test]
     fn compact_tier1_scope_inert_leaf_matches_full_activation_bd_bridge_5_3() {
         let module = scope_inert_leaf_call_module();
@@ -114958,6 +115201,7 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert_eq!(compact.value, Value::Int(42));
+        assert_eq!(compact.tier_i_specialized_instructions_executed, 1);
         assert_eq!(
             compact_core.scope_chain.frames.len(),
             baseline_core.scope_chain.frames.len()
@@ -114971,6 +115215,195 @@ mod tests {
         assert_eq!(
             baseline_core.estimated_memory_bytes(),
             baseline_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_preserves_error_state_bd_bridge_5_3() {
+        let mut module = scope_inert_leaf_call_module();
+        module.instructions[0] = Ir3Instruction::LoadBigInt {
+            dst: 1,
+            value: "20".to_string(),
+        };
+        let plan = CompactTier1Program::compile(&module).expect("compact leaf plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, true]);
+
+        let config = test_quickjs_config();
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-scope-inert-error");
+        seed_scope_inert_captured_binding(&mut compact_core);
+        let compact_error = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("mixed BigInt/Number add must fail");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-scope-inert-error");
+        seed_scope_inert_captured_binding(&mut baseline_core);
+        let baseline_error = baseline_core
+            .execute(&module)
+            .expect_err("full scope activation must fail identically");
+
+        assert_eq!(compact_error, baseline_error);
+        assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_preserves_budget_exit_state_bd_bridge_5_3() {
+        let module = scope_inert_leaf_call_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact leaf plan");
+        let mut config = test_quickjs_config();
+        config.instruction_budget = 5;
+
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-scope-inert-budget");
+        seed_scope_inert_captured_binding(&mut compact_core);
+        let compact_error = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("compact leaf must exhaust before return");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-scope-inert-budget");
+        seed_scope_inert_captured_binding(&mut baseline_core);
+        let baseline_error = baseline_core
+            .execute(&module)
+            .expect_err("baseline leaf must exhaust before return");
+
+        assert_eq!(compact_error, baseline_error);
+        assert!(matches!(
+            compact_error,
+            InterpreterError::BudgetExhausted {
+                executed: 5,
+                budget: 5
+            }
+        ));
+        assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_preserves_cancellation_exit_state_bd_bridge_5_3() {
+        let module = scope_inert_leaf_call_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact leaf plan");
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut config = test_quickjs_config();
+        config.instruction_budget = 100;
+        config.checkpoint_density = 5;
+        config.cancellation_token = Some(token);
+        let checkpoint_density = config.checkpoint_density;
+
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-scope-inert-cancel");
+        seed_scope_inert_captured_binding(&mut compact_core);
+        let compact_error = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect_err("compact leaf must observe cancellation inside the active call");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-scope-inert-cancel");
+        seed_scope_inert_captured_binding(&mut baseline_core);
+        let baseline_error = baseline_core
+            .execute(&module)
+            .expect_err("baseline leaf must observe cancellation at the same boundary");
+
+        assert_eq!(compact_error, baseline_error);
+        assert_eq!(compact_error, InterpreterError::Cancelled);
+        assert_eq!(
+            compact_core.instructions_executed,
+            baseline_core.instructions_executed,
+            "scope-inert Tier-I and Tier-R must retain the same terminal instruction boundary"
+        );
+        assert!(compact_core.instructions_executed >= checkpoint_density);
+        assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_leaf_preserves_caught_error_unwind_bd_bridge_5_3() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::LoadBigInt {
+                    dst: 1,
+                    value: "20".to_string(),
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 22 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Jump { target: 9 },
+                Ir3Instruction::EnterCatch { dst: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 99 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 3,
+                    name: Some("main".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 10,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("caught_add".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let plan = CompactTier1Program::compile(&module).expect("compact caught-error plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, true]);
+
+        let config = test_quickjs_config();
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-scope-inert-catch");
+        seed_scope_inert_captured_binding(&mut compact_core);
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact caller must catch the leaf error");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-scope-inert-catch");
+        seed_scope_inert_captured_binding(&mut baseline_core);
+        let baseline = baseline_core
+            .execute(&module)
+            .expect("baseline caller must catch the leaf error");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(99));
+        assert!(compact_core.call_stack.is_empty());
+        assert_eq!(compact_core.register_base, 0);
+        assert_eq!(compact_core.scope_chain.depth(), 1);
+        assert_eq!(
+            compact_core
+                .scope_chain
+                .resolve("unused_capture")
+                .expect("restored compact caller binding")
+                .1
+                .value()
+                .expect("restored compact caller value"),
+            baseline_core
+                .scope_chain
+                .resolve("unused_capture")
+                .expect("restored baseline caller binding")
+                .1
+                .value()
+                .expect("restored baseline caller value")
+        );
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            baseline_core.estimated_memory_bytes()
+        );
+        assert_eq!(
+            compact_core.estimated_memory_bytes(),
+            compact_core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -115096,8 +115529,8 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert_eq!(compact.value, Value::Int(77));
-        assert_eq!(compact_core.registers.len(), max_registers + 4);
-        assert_eq!(compact_core.register_labels.len(), max_registers + 4);
+        assert_eq!(compact_core.registers.len(), max_registers * 2);
+        assert_eq!(compact_core.register_labels.len(), max_registers * 2);
         assert_eq!(baseline_core.registers.len(), max_registers * 2);
         assert_eq!(baseline_core.register_labels.len(), max_registers * 2);
     }
@@ -115154,8 +115587,8 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert!(matches!(compact.value, Value::Object(_)));
-        assert_eq!(compact_core.registers.len(), max_registers + 4);
-        assert_eq!(compact_core.register_labels.len(), max_registers + 4);
+        assert_eq!(compact_core.registers.len(), max_registers * 2);
+        assert_eq!(compact_core.register_labels.len(), max_registers * 2);
         assert_eq!(baseline_core.registers.len(), max_registers * 2);
         assert_eq!(baseline_core.register_labels.len(), max_registers * 2);
         assert_eq!(
@@ -115346,7 +115779,7 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert_eq!(compact.value, Value::Int(42));
-        assert_eq!(compact_core.registers.len(), max_registers * 2 + 2);
+        assert_eq!(compact_core.registers.len(), max_registers * 3);
         assert_eq!(baseline_core.registers.len(), max_registers * 3);
     }
 
@@ -115410,7 +115843,7 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert_eq!(compact.value, Value::Int(9));
-        assert_eq!(compact_core.registers.len(), max_registers + 1);
+        assert_eq!(compact_core.registers.len(), max_registers * 2);
         assert_eq!(baseline_core.registers.len(), max_registers * 2);
     }
 
@@ -133129,6 +133562,41 @@ mod lazy_seed_tests {
         core
     }
 
+    fn push_plain_test_call_frame(core: &mut InterpreterCore) {
+        let saved_scope_depth = core.scope_chain.depth();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("plain call-frame local scope must fit");
+        core.call_stack.push(CallFrame {
+            return_ip: 1,
+            return_reg: 0,
+            register_base: 0,
+            function_index: Some(1),
+            this_value: Value::Undefined,
+            this_label: Label::Public,
+            new_target_value: Value::Undefined,
+            new_target_label: Label::Public,
+            super_value: Value::Undefined,
+            super_label: Label::Public,
+            super_home_object: None,
+            construct_this: None,
+            derived_constructor: false,
+            this_initialized: true,
+            initialize_derived_this_on_return: false,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth,
+            saved_scope_chain: None,
+            scope_inert_virtual_scope_bytes: 0,
+            async_function_id: None,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("plain call-frame fixture must fit");
+    }
+
     fn capture_execution_seed_eager_for_test(core: &mut InterpreterCore) -> ExecutionSeedHandle {
         let seed = core
             .capture_execution_seed()
@@ -133189,6 +133657,45 @@ mod lazy_seed_tests {
                 }
             });
         }
+    }
+
+    #[test]
+    fn static_register_write_inside_plain_call_matches_accounted_path() {
+        let mut fast = static_register_write_core();
+        let mut accounted = static_register_write_core();
+        push_plain_test_call_frame(&mut fast);
+        push_plain_test_call_frame(&mut accounted);
+
+        assert!(fast.static_register_write_eligible(0, &Value::Int(9), &Label::Secret));
+        fast.write_reg_with_label(0, Value::Int(9), Label::Secret)
+            .expect("plain call-frame static write must succeed");
+        accounted
+            .write_reg_with_label_accounted(0, Value::Int(9), Label::Secret)
+            .expect("plain call-frame accounted reference must succeed");
+
+        assert_eq!(fast.registers.value, accounted.registers.value);
+        assert_eq!(fast.register_labels, accounted.register_labels);
+        assert_eq!(fast.seed_epoch, accounted.seed_epoch);
+        assert_eq!(
+            fast.estimated_memory_bytes,
+            accounted.estimated_memory_bytes
+        );
+        assert_eq!(
+            fast.estimated_memory_bytes(),
+            fast.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            accounted.estimated_memory_bytes(),
+            accounted.recompute_estimated_memory_bytes()
+        );
+
+        let frame = fast.call_stack.last_mut().expect("plain call frame");
+        frame.super_home_object = Some(ObjectId(0));
+        frame.super_label = Label::Secret;
+        assert!(
+            !fast.static_register_write_eligible(0, &Value::Int(10), &Label::Public),
+            "HomeObject-bound execution context must retain the IFC-aware path"
+        );
     }
 
     #[test]

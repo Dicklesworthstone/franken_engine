@@ -801,16 +801,15 @@ fn unrecognized_method_does_not_confirm_the_aliases() {
 }
 
 #[test]
-fn shadowed_require_is_not_recognized_as_module_initializer() {
+fn shadowed_require_remains_ordinary_lexical_user_code() {
     // A user binding named `require` must not be treated as the CJS loader:
-    // the recognizers decline (fail-closed) and the engine's pre-existing
-    // bare-identifier ambient gate denies the reference regardless.
-    let err = eval_err(
-        "const require = (name) => ({ escape: () => 'shadowed:' + name });\nconst qs = require('querystring');\nconsole.log(qs.escape('a'));",
-    );
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected the pre-existing ambient denial for shadowed require, got: {err}"
+    // the module recognizers decline, then the ordinary lexical closure and
+    // property-call semantics remain available to the program.
+    assert_eq!(
+        eval_console(
+            "const require = (name) => ({ escape: () => 'shadowed:' + name });\nconst qs = require('querystring');\nconsole.log(qs.escape('a'));",
+        ),
+        "shadowed:querystring"
     );
 }
 

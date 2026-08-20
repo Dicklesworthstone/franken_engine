@@ -81,7 +81,9 @@ use frankenengine_extension_host::process_spawn::{
 
 use crate::algebraic_effects::EffectError;
 use crate::ast::ParseGoal;
-use crate::capability::{CapabilityProfile, RuntimeCapability, hostcall_result_contract};
+use crate::capability::{
+    APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, RuntimeCapability, hostcall_result_contract,
+};
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
 };
@@ -8970,6 +8972,7 @@ struct PendingChildProcessTask {
     child: ObjectId,
     handle: String,
     callback: Option<u32>,
+    callback_label: Label,
     callback_encoding: Option<String>,
     options: ProcessCallOptions,
 }
@@ -10988,7 +10991,7 @@ impl InterpreterCore {
         &self,
         args: RegRange,
     ) -> Result<Label, InterpreterError> {
-        let mut label = Label::Public;
+        let mut label = self.clone_active_execution_context_label()?;
         for offset in 0..args.count {
             let register =
                 args.start
@@ -11325,7 +11328,13 @@ impl InterpreterCore {
         bytes: &[u8],
         encoding: Option<&str>,
     ) -> Result<Value, InterpreterError> {
-        self.decode_fs_read_result(bytes, encoding)
+        let value = self.decode_fs_read_result(bytes, encoding)?;
+        if let Value::Object(object_id) = &value {
+            let output_label =
+                hostcall_result_contract("process_spawn").result_label(&Label::Public, None);
+            self.join_binary_storage_label(*object_id, &output_label)?;
+        }
+        Ok(value)
     }
 
     fn process_run_error(exit: ProcessExit, stdout: Vec<u8>, stderr: Vec<u8>) -> InterpreterError {
@@ -11612,7 +11621,7 @@ impl InterpreterCore {
             event: event.to_string(),
             arguments,
             leading_callback: None,
-            label: Label::Public,
+            label: hostcall_result_contract("process_spawn").result_label(&Label::Public, None),
         }) {
             Ok(sequence) => Ok(Some(sequence)),
             Err(error) => {
@@ -11704,13 +11713,21 @@ impl InterpreterCore {
             .is_some_and(|state| state.error.is_some());
         if failed {
             if let Some(callback) = task.callback {
-                self.schedule_child_process_callback(callback, callback_arguments)?;
+                self.schedule_child_process_callback(
+                    callback,
+                    callback_arguments,
+                    &task.callback_label,
+                )?;
             }
             self.activate_completed_child_process_event(task.child, "error")?;
         } else {
             self.activate_completed_child_process_event(task.child, "exit")?;
             if let Some(callback) = task.callback {
-                self.schedule_child_process_callback(callback, callback_arguments)?;
+                self.schedule_child_process_callback(
+                    callback,
+                    callback_arguments,
+                    &task.callback_label,
+                )?;
             }
         }
         self.activate_completed_child_process_event(task.child, "close")?;
@@ -11737,76 +11754,95 @@ impl InterpreterCore {
         let discriminator = self.process_string_argument(values.first(), "operation")?;
         let logical = values.get(1..).unwrap_or_default();
         let command = self.process_string_argument(logical.first(), "command")?;
-        let (argv, options_value, callback, request_argument_count) = match discriminator.as_str() {
-            "\0processop:spawn_sync" | "\0processop:spawn" | "\0processop:exec_file_sync" => {
-                if self.process_is_array(logical.get(1)) {
-                    (
-                        self.process_argv(logical.get(1))?,
-                        logical.get(2),
-                        None,
-                        logical.len().min(3),
-                    )
-                } else {
-                    (Vec::new(), logical.get(1), None, logical.len().min(2))
+        let (argv, options_value, callback, callback_argument_index, request_argument_count) =
+            match discriminator.as_str() {
+                "\0processop:spawn_sync" | "\0processop:spawn" | "\0processop:exec_file_sync" => {
+                    if self.process_is_array(logical.get(1)) {
+                        (
+                            self.process_argv(logical.get(1))?,
+                            logical.get(2),
+                            None,
+                            None,
+                            logical.len().min(3),
+                        )
+                    } else {
+                        (Vec::new(), logical.get(1), None, None, logical.len().min(2))
+                    }
                 }
-            }
-            "\0processop:exec_sync" => (Vec::new(), logical.get(1), None, 2),
-            "\0processop:exec" => {
-                let (options, callback_value) = if logical.get(1).is_some_and(Value::is_callable) {
-                    (None, logical.get(1))
-                } else {
-                    (logical.get(1), logical.get(2))
-                };
-                let request_argument_count = if options.is_some() { 2 } else { 1 };
-                (Vec::new(), options, callback_value, request_argument_count)
-            }
-            "\0processop:exec_file" => {
-                if self.process_is_array(logical.get(1)) {
-                    let callback_value = if logical.get(2).is_some_and(Value::is_callable) {
-                        logical.get(2)
-                    } else {
-                        logical.get(3)
-                    };
-                    let options = if logical.get(2).is_some_and(Value::is_callable) {
-                        None
-                    } else {
-                        logical.get(2)
-                    };
-                    let request_argument_count = if options.is_some() { 3 } else { 2 };
+                "\0processop:exec_sync" => (Vec::new(), logical.get(1), None, None, 2),
+                "\0processop:exec" => {
+                    let (options, callback_value, callback_argument_index) =
+                        if logical.get(1).is_some_and(Value::is_callable) {
+                            (None, logical.get(1), Some(1))
+                        } else {
+                            (logical.get(1), logical.get(2), Some(2))
+                        };
+                    let request_argument_count = if options.is_some() { 2 } else { 1 };
                     (
-                        self.process_argv(logical.get(1))?,
+                        Vec::new(),
                         options,
                         callback_value,
+                        callback_argument_index,
                         request_argument_count,
                     )
-                } else {
-                    let callback_value = if logical.get(1).is_some_and(Value::is_callable) {
-                        logical.get(1)
-                    } else {
-                        logical.get(2)
-                    };
-                    let options = if logical.get(1).is_some_and(Value::is_callable) {
-                        None
-                    } else {
-                        logical.get(1)
-                    };
-                    let request_argument_count = if options.is_some() { 2 } else { 1 };
-                    (Vec::new(), options, callback_value, request_argument_count)
                 }
-            }
-            _ => {
-                return Err(InterpreterError::InternalError {
-                    details: "unrecognized authenticated child_process operation".to_string(),
-                });
-            }
-        };
+                "\0processop:exec_file" => {
+                    if self.process_is_array(logical.get(1)) {
+                        let (callback_value, callback_argument_index) =
+                            if logical.get(2).is_some_and(Value::is_callable) {
+                                (logical.get(2), Some(2))
+                            } else {
+                                (logical.get(3), Some(3))
+                            };
+                        let options = if logical.get(2).is_some_and(Value::is_callable) {
+                            None
+                        } else {
+                            logical.get(2)
+                        };
+                        let request_argument_count = if options.is_some() { 3 } else { 2 };
+                        (
+                            self.process_argv(logical.get(1))?,
+                            options,
+                            callback_value,
+                            callback_argument_index,
+                            request_argument_count,
+                        )
+                    } else {
+                        let (callback_value, callback_argument_index) =
+                            if logical.get(1).is_some_and(Value::is_callable) {
+                                (logical.get(1), Some(1))
+                            } else {
+                                (logical.get(2), Some(2))
+                            };
+                        let options = if logical.get(1).is_some_and(Value::is_callable) {
+                            None
+                        } else {
+                            logical.get(1)
+                        };
+                        let request_argument_count = if options.is_some() { 2 } else { 1 };
+                        (
+                            Vec::new(),
+                            options,
+                            callback_value,
+                            callback_argument_index,
+                            request_argument_count,
+                        )
+                    }
+                }
+                _ => {
+                    return Err(InterpreterError::InternalError {
+                        details: "unrecognized authenticated child_process operation".to_string(),
+                    });
+                }
+            };
+        let request_label_seed = self.clone_active_execution_context_label()?;
         let request_label = labels
             .get(1..)
             .unwrap_or_default()
             .iter()
             .zip(logical.iter())
             .take(request_argument_count)
-            .fold(Label::Public, |joined, (label, value)| {
+            .fold(request_label_seed, |joined, (label, value)| {
                 joined
                     .join(label)
                     .join(&self.process_dynamic_value_label(value, &mut BTreeSet::new()))
@@ -11831,6 +11867,12 @@ impl InterpreterCore {
                 });
             }
         };
+        let callback_label = callback_id
+            .and(callback_argument_index)
+            .and_then(|index: usize| index.checked_add(1))
+            .and_then(|index| labels.get(index))
+            .cloned()
+            .unwrap_or(Label::Public);
         if async_operation {
             if !options.input.is_empty() {
                 return Err(InterpreterError::TypeError {
@@ -11869,6 +11911,7 @@ impl InterpreterCore {
                         child,
                         handle: handle.clone(),
                         callback: callback_id,
+                        callback_label: callback_label.clone(),
                         callback_encoding: callback_id.map(|_| {
                             options
                                 .encoding
@@ -11905,6 +11948,7 @@ impl InterpreterCore {
                         self.schedule_child_process_callback(
                             callback,
                             vec![thrown, Value::str(""), Value::str("")],
+                            &callback_label,
                         )?;
                     }
                     // Spawn failures are lifecycle events in their own right.
@@ -11931,9 +11975,11 @@ impl InterpreterCore {
             Err(error) => {
                 if let Some(Value::Closure(callback)) = callback {
                     let thrown = self.native_error_to_thrown_value(&error)?;
-                    self.schedule_io_callback(
+                    self.schedule_io_callback_with_label(
                         *callback,
                         vec![thrown, Value::str(""), Value::str("")],
+                        hostcall_result_contract("process_spawn")
+                            .result_label(&callback_label, None),
                     )?;
                     return Ok(Value::Undefined);
                 }
@@ -11960,7 +12006,11 @@ impl InterpreterCore {
             }
             if let Some(Value::Closure(callback)) = callback {
                 let thrown = self.native_error_to_thrown_value(&error)?;
-                self.schedule_io_callback(*callback, vec![thrown, Value::str(""), Value::str("")])?;
+                self.schedule_io_callback_with_label(
+                    *callback,
+                    vec![thrown, Value::str(""), Value::str("")],
+                    hostcall_result_contract("process_spawn").result_label(&callback_label, None),
+                )?;
             }
             return Err(error);
         }
@@ -12191,6 +12241,9 @@ impl InterpreterCore {
         // ClientRequest-CREATION tag, is intercepted earlier in the IR3 HostCall
         // dispatch and never reaches this function.)
         if capability.starts_with("net:") {
+            let args_label = self.join_arg_range_label(args)?;
+            let response_label =
+                hostcall_result_contract(capability).result_label(&args_label, None);
             let url = if args.count >= 1 {
                 match self.read_reg(args.start)? {
                     Value::Str(s) => s.to_string(),
@@ -12239,7 +12292,11 @@ impl InterpreterCore {
             // we simply do not invoke the callback.
             let result = match response_callback {
                 Some(cid) if response_obj.is_some() => {
-                    self.schedule_io_callback(cid, vec![response])?;
+                    self.schedule_io_callback_with_label(
+                        cid,
+                        vec![response],
+                        response_label.clone(),
+                    )?;
                     Value::Undefined
                 }
                 _ => response,
@@ -12251,7 +12308,7 @@ impl InterpreterCore {
             // http.get(url)`. The emission is scheduled after the callback (higher
             // registration seq), so it lands on a turn where the listeners exist.
             if let Some(rid) = response_obj {
-                self.schedule_stream_emission(rid, StreamEventPhase::Data)?;
+                self.schedule_stream_emission(rid, StreamEventPhase::Data, response_label)?;
             }
             return Ok(result);
         }
@@ -12269,12 +12326,15 @@ impl InterpreterCore {
             },
             |journal| journal.filesystem_exception_provenance(),
         );
+        let args_label = self.join_arg_range_label(args)?;
+        let filesystem_result_label =
+            hostcall_result_contract(capability).result_label(&args_label, None);
         let filesystem_exception_label =
             match provider_exception_provenance.combine(effect_source_exception_provenance) {
                 HostIoExceptionProvenance::ProviderInternal => Label::Internal,
                 HostIoExceptionProvenance::Unknown => Label::TopSecret,
             }
-            .join(&self.join_arg_range_label(args)?);
+            .join(&args_label);
         let mut raw_args = Vec::with_capacity(args.count as usize);
         for offset in 0..args.count {
             raw_args.push(self.read_reg(args.start + offset)?);
@@ -12420,6 +12480,9 @@ impl InterpreterCore {
                     Ok(bytes) => self.decode_fs_read_result(&bytes, fs_read_encoding.as_deref())?,
                     Err(_) => Value::Undefined,
                 };
+                if let Value::Object(object_id) = &value {
+                    self.join_binary_storage_label(*object_id, &filesystem_result_label)?;
+                }
                 if let Some(closure_id) = callback_closure {
                     // bd-201vt: async `fs.readFile(path[, enc], cb)`. The read effect
                     // already ran and was recorded above; defer the err-first
@@ -12430,7 +12493,7 @@ impl InterpreterCore {
                     self.schedule_io_callback_with_label(
                         closure_id,
                         vec![Value::Null, value],
-                        filesystem_exception_label.clone(),
+                        filesystem_result_label.clone(),
                     )?;
                     Value::Undefined
                 } else {
@@ -12447,7 +12510,11 @@ impl InterpreterCore {
                     // and was recorded above; defer the err-first `cb(null)` to the
                     // next event-loop turn. (Node's writeFile callback takes only the
                     // error argument.)
-                    self.schedule_io_callback(closure_id, vec![Value::Null])?;
+                    self.schedule_io_callback_with_label(
+                        closure_id,
+                        vec![Value::Null],
+                        filesystem_result_label.clone(),
+                    )?;
                 }
                 Value::Undefined
             }
@@ -12566,6 +12633,7 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        let lifecycle_label = self.join_arg_range_with_object_mutation_label(args)?;
         let url = if args.count >= 1 {
             match self.read_reg(args.start)? {
                 Value::Str(s) => s.to_string(),
@@ -12621,6 +12689,7 @@ impl InterpreterCore {
             ("__ended", Value::Bool(false)),
             ("__response_cb", response_callback),
         ])?;
+        self.join_object_mutation_label(request_id, &lifecycle_label)?;
         Ok(Value::Object(request_id))
     }
 
@@ -12634,19 +12703,10 @@ impl InterpreterCore {
     /// scheduling. `callback_args` is whatever the caller delivers to the closure; it
     /// is stashed by the macrotask's registration sequence and drained when the
     /// macrotask fires in `execute_macrotask_callback`.
-    fn schedule_io_callback(
-        &mut self,
-        closure_id: u32,
-        callback_args: Vec<Value>,
-    ) -> Result<(), InterpreterError> {
-        self.schedule_io_callback_with_label(closure_id, callback_args, Label::Public)
-    }
-
     /// Schedule an I/O-lane callback under the aggregate label of the data
-    /// delivered to it. Success-only host-I/O callers use the public wrapper;
-    /// filesystem errors pass provider plus request provenance, and pure zlib
-    /// callbacks pass their input/dictionary label, so deferred execution
-    /// cannot launder classified state.
+    /// delivered to it. Callers must provide the exact result/source or error
+    /// provenance for the deferred payload so callback execution cannot launder
+    /// classified state.
     fn schedule_io_callback_with_label(
         &mut self,
         closure_id: u32,
@@ -12660,8 +12720,11 @@ impl InterpreterCore {
         &mut self,
         closure_id: u32,
         callback_args: Vec<Value>,
+        callback_label: &Label,
     ) -> Result<(), InterpreterError> {
-        self.schedule_callback_in_lane(closure_id, callback_args, Label::Public, true)
+        let output_label =
+            hostcall_result_contract("process_spawn").result_label(callback_label, None);
+        self.schedule_callback_in_lane(closure_id, callback_args, output_label, true)
     }
 
     fn schedule_callback_in_lane(
@@ -12717,6 +12780,7 @@ impl InterpreterCore {
                     .map(Self::estimate_string_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::estimate_label_bytes(&task.callback_label))
             .saturating_add(options.input.len() as u64)
             .saturating_add(Self::saturating_sum(options.env.iter().map(
                 |(key, value)| {
@@ -13041,8 +13105,11 @@ impl InterpreterCore {
             PendingHttpTask::DeliverExternalResponse { request, .. } => self
                 .http_client_requests
                 .get(request)
-                .map(|state| state.lifecycle_label.clone())
-                .unwrap_or(Label::Public),
+                .map(|state| {
+                    hostcall_result_contract("net:request")
+                        .result_label(&state.lifecycle_label, None)
+                })
+                .unwrap_or(Label::TopSecret),
             PendingHttpTask::MessageData { message }
             | PendingHttpTask::MessageEnd { message }
             | PendingHttpTask::MessageClose { message } => self
@@ -13165,7 +13232,7 @@ impl InterpreterCore {
         args: RegRange,
         tls: Option<HermeticTlsServerState>,
     ) -> Result<Value, InterpreterError> {
-        let lifecycle_label = self.writable_invocation_label(args)?;
+        let lifecycle_label = self.join_arg_range_with_object_mutation_label(args)?;
         let is_tls = tls.is_some();
         let object_id = self.alloc_object_with_properties(&[
             (
@@ -15816,7 +15883,7 @@ impl InterpreterCore {
         auto_end: bool,
     ) -> Result<Value, InterpreterError> {
         let resolved = self.resolve_http_request(args, auto_end)?;
-        let lifecycle_label = self.writable_invocation_label(args)?;
+        let lifecycle_label = self.join_arg_range_with_object_mutation_label(args)?;
         let state = HttpClientRequestState {
             host: resolved.host,
             port: resolved.port,
@@ -16039,6 +16106,32 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn join_http_client_request_lifecycle_label(
+        &mut self,
+        request: ObjectId,
+        invocation_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let state = self
+            .http_client_requests
+            .get(&request)
+            .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+        let previous_bytes = Self::estimate_http_client_request_state_bytes(state);
+        let previous_label = state.lifecycle_label.clone();
+        let next_label = previous_label.join(invocation_label);
+        if next_label == previous_label {
+            return Ok(());
+        }
+        let next_bytes = previous_bytes
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.http_client_requests
+            .get_mut(&request)
+            .expect("HTTP request existed before lifecycle-label commit")
+            .lifecycle_label = next_label;
+        Ok(())
+    }
+
     fn http_append_response_body(
         &mut self,
         response: ObjectId,
@@ -16133,6 +16226,7 @@ impl InterpreterCore {
         receiver: Option<Value>,
         args: RegRange,
         client_request: bool,
+        receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         let object_id = if client_request {
             self.http_client_request_receiver(receiver)?
@@ -16184,7 +16278,8 @@ impl InterpreterCore {
             array_values,
             value: rendered,
         };
-        let invocation_label = self.writable_invocation_label(args)?;
+        let invocation_label =
+            self.writable_invocation_label_with_receiver(args, receiver_register)?;
         if client_request {
             let (previous_bytes, replaced_header_bytes, previous_label) = {
                 let state = &self.http_client_requests[&object_id];
@@ -16682,11 +16777,14 @@ impl InterpreterCore {
         &mut self,
         receiver: Option<Value>,
         args: RegRange,
+        receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         let request = self.http_client_request_receiver(receiver)?;
+        let label = self.writable_invocation_label_with_receiver(args, receiver_register)?;
         if let Some(value) = self.builtin_arg(args, 0)? {
-            let label = self.writable_invocation_label(args)?;
             self.http_append_client_body(request, &value, label)?;
+        } else {
+            self.join_http_client_request_lifecycle_label(request, &label)?;
         }
         Ok(Value::Bool(true))
     }
@@ -16695,15 +16793,18 @@ impl InterpreterCore {
         &mut self,
         receiver: Option<Value>,
         args: RegRange,
+        receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         let request = self.http_client_request_receiver(receiver)?;
+        let label = self.writable_invocation_label_with_receiver(args, receiver_register)?;
         let first = self.builtin_arg(args, 0)?;
         let second = self.builtin_arg(args, 1)?;
         if let Some(value) = first.as_ref()
             && !matches!(value, Value::Closure(_) | Value::Undefined)
         {
-            let label = self.writable_invocation_label(args)?;
             self.http_append_client_body(request, value, label)?;
+        } else {
+            self.join_http_client_request_lifecycle_label(request, &label)?;
         }
         let finish_callback = match second.or(first) {
             Some(Value::Closure(callback)) => Some(callback),
@@ -17292,6 +17393,8 @@ impl InterpreterCore {
                     .get(&request)
                     .map(|state| (state.response_callback, state.lifecycle_label.clone()))
                     .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+                let response_label =
+                    hostcall_result_contract("net:request").result_label(&lifecycle_label, None);
                 let Some(response) = response else {
                     let error = self.http_error_value("ERR_NETWORK")?;
                     let _ = self.emit_loopback_event(
@@ -17299,18 +17402,22 @@ impl InterpreterCore {
                         request,
                         "error",
                         vec![error],
-                        lifecycle_label,
+                        response_label,
                     )?;
                     return Ok(());
                 };
-                self.schedule_stream_emission(response, StreamEventPhase::Data)?;
+                self.schedule_stream_emission(
+                    response,
+                    StreamEventPhase::Data,
+                    response_label.clone(),
+                )?;
                 if let (Some(module), Some(callback)) = (module, response_callback) {
                     self.invoke_inline_method_call_with_argument_label(
                         Some(module),
                         Value::Closure(callback),
                         Value::Undefined,
                         vec![Value::Object(response)],
-                        Some(lifecycle_label.clone()),
+                        Some(response_label.clone()),
                     )?;
                 }
                 let _ = self.emit_loopback_event(
@@ -17318,7 +17425,7 @@ impl InterpreterCore {
                     request,
                     "response",
                     vec![Value::Object(response)],
-                    lifecycle_label,
+                    response_label,
                 )?;
             }
             PendingHttpTask::MessageData { message } => {
@@ -19896,6 +20003,21 @@ impl InterpreterCore {
             return self.join_owned_label_with_temporary_budget(label, context);
         }
         Ok(label)
+    }
+
+    fn writable_invocation_label_with_receiver(
+        &self,
+        args: RegRange,
+        receiver_register: Option<u32>,
+    ) -> Result<Label, InterpreterError> {
+        let label = self.writable_invocation_label(args)?;
+        let Some(receiver_register) = receiver_register else {
+            return Ok(label);
+        };
+        self.join_owned_label_with_temporary_budget(
+            label,
+            self.get_register_label(receiver_register)?,
+        )
     }
 
     fn writable_cork(
@@ -26869,12 +26991,12 @@ impl InterpreterCore {
         &mut self,
         object_id: ObjectId,
         phase: StreamEventPhase,
+        label: Label,
     ) -> Result<(), InterpreterError> {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let seq = self.event_loop.schedule_io_completion(
-            crate::closure_model::ClosureHandle(0),
-            crate::ifc_artifacts::Label::Public,
-        );
+        let seq = self
+            .event_loop
+            .schedule_io_completion(crate::closure_model::ClosureHandle(0), label);
         let next_component_bytes = self
             .promise_runtime_memory_bytes()
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
@@ -26922,6 +27044,7 @@ impl InterpreterCore {
         &mut self,
         emission: PendingStreamEmission,
         module: Option<&Ir3Module>,
+        label: Label,
     ) -> Result<(), InterpreterError> {
         let PendingStreamEmission { object_id, phase } = emission;
         match phase {
@@ -26936,14 +27059,14 @@ impl InterpreterCore {
                 // Admit the terminal phase before exposing data callbacks so a
                 // memory refusal cannot publish a response stream that never
                 // reaches `end`.
-                self.schedule_stream_emission(object_id, StreamEventPhase::End)?;
+                self.schedule_stream_emission(object_id, StreamEventPhase::End, label.clone())?;
                 if has_body && let Some(module) = module {
                     let _ = self.emit_event_listener_records(
                         module,
                         object_id,
                         "data",
                         vec![chunk],
-                        Label::Public,
+                        label,
                     )?;
                 }
                 Ok(())
@@ -26955,7 +27078,7 @@ impl InterpreterCore {
                         object_id,
                         "end",
                         Vec::new(),
-                        Label::Public,
+                        label,
                     )?;
                 }
                 // The response stream is fully consumed; drop its listener table so
@@ -32271,6 +32394,7 @@ impl InterpreterCore {
         match builtin.kind {
             BuiltinFunctionKind::Require => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
+                let args_label = self.join_arg_range_label(args)?;
                 let previous_module_specifier = self.current_module_specifier.clone();
                 if !builtin.module_specifier.is_empty() {
                     self.current_module_specifier = Some(builtin.module_specifier.to_string());
@@ -32286,6 +32410,11 @@ impl InterpreterCore {
                 );
                 let result = self.dispatch_require_hostcall(args, Some(module));
                 self.current_module_specifier = previous_module_specifier;
+                if result.is_ok() {
+                    let result_label = hostcall_result_contract("module_load")
+                        .result_label(&args_label, None);
+                    self.replace_pending_hostcall_result_label(Some(result_label))?;
+                }
                 result
             }
             BuiltinFunctionKind::FunctionConstructor => {
@@ -34175,11 +34304,13 @@ impl InterpreterCore {
                 Ok(Value::Bool(value))
             }
             BuiltinFunctionKind::HttpClientRequestWrite => {
-                self.http_client_write(receiver, args)
+                self.http_client_write(receiver, args, receiver_register)
             }
-            BuiltinFunctionKind::HttpClientRequestEnd => self.http_client_end(receiver, args),
+            BuiltinFunctionKind::HttpClientRequestEnd => {
+                self.http_client_end(receiver, args, receiver_register)
+            }
             BuiltinFunctionKind::HttpClientRequestSetHeader => {
-                self.http_set_header(receiver, args, true)
+                self.http_set_header(receiver, args, true, receiver_register)
             }
             BuiltinFunctionKind::HttpIncomingMessageSetEncoding => {
                 self.http_incoming_set_encoding(receiver, args)
@@ -34188,7 +34319,7 @@ impl InterpreterCore {
                 self.http_incoming_resume(receiver)
             }
             BuiltinFunctionKind::HttpServerResponseSetHeader => {
-                self.http_set_header(receiver, args, false)
+                self.http_set_header(receiver, args, false, receiver_register)
             }
             BuiltinFunctionKind::HttpServerResponseGetHeader => {
                 self.http_get_header(receiver, args)
@@ -34223,9 +34354,12 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
+                let chunk_label =
+                    self.writable_invocation_label_with_receiver(args, receiver_register)?;
                 let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let chunk_str = Self::client_request_chunk_string(&chunk);
                 if !chunk_str.is_empty() {
+                    self.join_object_mutation_label(req_id, &chunk_label)?;
                     let req_index = req_id.0 as usize;
                     self.mutate_heap(|heap| {
                         if let Some(req) = heap.get_mut(req_index)
@@ -34259,6 +34393,8 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
+                let end_label =
+                    self.writable_invocation_label_with_receiver(args, receiver_register)?;
                 // bd-3894s slice (2d): `req.end([data][, cb])` — a trailing closure is
                 // the `end(cb)` FINISH callback (fired once the request is sent), NOT a
                 // body chunk; a leading non-closure arg is the final body chunk
@@ -34288,6 +34424,14 @@ impl InterpreterCore {
                         });
                     }
                 }
+                self.join_object_mutation_label(req_id, &end_label)?;
+                let request_label = match self.object_mutation_labels.get(&req_id) {
+                    Some(lifecycle_label) => self
+                        .join_owned_label_with_temporary_budget(end_label, lifecycle_label)?,
+                    None => end_label,
+                };
+                let response_label = hostcall_result_contract("net:request")
+                    .result_label(&request_label, None);
                 // Capture the request state (immutable reads) before the mutable
                 // egress. `None` => already ended (idempotent no-op).
                 let req_index = req_id.0 as usize;
@@ -34367,14 +34511,18 @@ impl InterpreterCore {
                         // `req.on('response', …)` listener on the next event-loop turn.
                         // The `end(cb)` finish callback (request sent) fires first.
                         if let Some(cid) = finish_cb {
-                            self.schedule_io_callback(cid, Vec::new())?;
+                            self.schedule_io_callback_with_label(
+                                cid,
+                                Vec::new(),
+                                response_label.clone(),
+                            )?;
                         }
                         self.schedule_http_task(PendingHttpTask::EmitLegacyEvent {
                             target: req_id,
                             event: "response".to_string(),
                             arguments: vec![Value::Object(rid)],
                             leading_callback: response_cb,
-                            label: Label::Public,
+                            label: response_label.clone(),
                         })?;
                         // Drive the `IncomingMessage` readable stream (`'data'`/`'end'`)
                         // after those deliveries (higher registration seq => later turn
@@ -34382,7 +34530,11 @@ impl InterpreterCore {
                         // exist). Scheduled unconditionally for a real response so a
                         // synchronous `const res = http.request(url).end(); res.on(...)`
                         // also streams.
-                        self.schedule_stream_emission(rid, StreamEventPhase::Data)?;
+                        self.schedule_stream_emission(
+                            rid,
+                            StreamEventPhase::Data,
+                            response_label.clone(),
+                        )?;
                         // An async consumer (response callback / `'response'` listener /
                         // finish callback) makes `.end()` evaluate to `undefined`; with
                         // none, the response is returned synchronously (slice-4 model).
@@ -34392,6 +34544,7 @@ impl InterpreterCore {
                         {
                             Ok(Value::Undefined)
                         } else {
+                            self.replace_pending_hostcall_result_label(Some(response_label))?;
                             Ok(Value::Object(rid))
                         }
                     }
@@ -34405,7 +34558,7 @@ impl InterpreterCore {
                             event: "error".to_string(),
                             arguments: vec![err],
                             leading_callback: None,
-                            label: Label::Public,
+                            label: response_label,
                         })?;
                         Ok(Value::Undefined)
                     }
@@ -40253,7 +40406,13 @@ impl InterpreterCore {
                     // bd-n2mjy: capture the join of arg labels BEFORE dispatch so
                     // hostcalls that mutate their arg slots don't strip the
                     // input taint we owe to the dst register.
-                    let args_label = self.join_arg_range_label(args)?;
+                    let args_label = if capability.0 == "builtin:ApplyHostCall"
+                        || capability.0.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
+                    {
+                        self.join_arg_range_with_object_mutation_label(args)?
+                    } else {
+                        self.join_arg_range_label(args)?
+                    };
 
                     // Dispatch promise hostcalls to the promise subsystem.
                     let is_promise_cap = capability.0.starts_with("promise:");
@@ -40343,6 +40502,10 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
                     check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
+                    let specifier_label = self.join_arg_range_label(RegRange {
+                        start: specifier,
+                        count: 1,
+                    })?;
                     self.emit_witness(
                         WitnessEventKind::HostcallDispatched,
                         Some("cap:module_load"),
@@ -40355,7 +40518,9 @@ impl InterpreterCore {
                         },
                         Some(module),
                     )?;
-                    self.write_reg(dst, namespace)?;
+                    let result_label = hostcall_result_contract("module_load")
+                        .result_label(&specifier_label, None);
+                    self.write_reg_with_label(dst, namespace, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ExportBinding {
@@ -48140,7 +48305,7 @@ impl InterpreterCore {
         args: RegRange,
         _module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
+        let label = self.clone_active_execution_context_label()?;
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
@@ -49019,7 +49184,7 @@ impl InterpreterCore {
                 if let Some(emission) =
                     self.remove_pending_stream_emission(macrotask.registration_seq)
                 {
-                    return self.drive_stream_emission(emission, module);
+                    return self.drive_stream_emission(emission, module, macrotask.label.clone());
                 }
                 // bd-201vt / bd-3894s slice (2c): an async host-I/O callback — a fs
                 // callback (`fs.readFile`/`fs.writeFile`, err-first `cb(err[, data])`)
@@ -60516,6 +60681,7 @@ impl InterpreterCore {
         cap: &str,
         values: Vec<Value>,
         module: Option<&Ir3Module>,
+        delegation_inputs: &Label,
     ) -> Result<Value, InterpreterError> {
         let count =
             u32::try_from(values.len()).map_err(|_| InterpreterError::RegisterOutOfBounds {
@@ -60568,6 +60734,106 @@ impl InterpreterCore {
             }
             registers[register_base..required_len].clone_from_slice(&saved);
         });
+        match outcome {
+            Ok(value) => {
+                let runtime_result_label = self.take_pending_hostcall_result_label();
+                let inner_result_label = hostcall_result_contract(cap)
+                    .result_label(&Label::Public, runtime_result_label.as_ref());
+                let result_label = delegation_inputs.join(&inner_result_label);
+                self.replace_pending_hostcall_result_label(Some(result_label))?;
+                Ok(value)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn dispatch_apply_hostcall(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+        authenticated_target: Option<&str>,
+    ) -> Result<Value, InterpreterError> {
+        if args.count < 2 {
+            return Err(InterpreterError::TypeError {
+                expected: "target capability and argumentsList".to_string(),
+                got: "missing argument".to_string(),
+            });
+        }
+        let target_cap = match self.read_reg(args.start)? {
+            Value::Str(capability) => capability.to_string(),
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "hostcall capability string".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if target_cap == "builtin:ApplyHostCall"
+            || target_cap.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "non-recursive hostcall capability".to_string(),
+                got: target_cap,
+            });
+        }
+        if let Some(expected_target) = authenticated_target
+            && expected_target != target_cap
+        {
+            return Err(InterpreterError::TypeError {
+                expected: format!("lowering-authenticated hostcall target {expected_target}"),
+                got: target_cap,
+            });
+        }
+        check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
+        let recordable_target = recordable_capability_tag(capability_gate_key(&target_cap));
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched,
+            Some(&format!("cap:{recordable_target}")),
+        );
+        let delegation_inputs = self.join_arg_range_with_object_mutation_label(args)?;
+        let delegation_input_bytes = Self::estimate_label_bytes(&delegation_inputs);
+        self.apply_memory_component_delta(0, delegation_input_bytes)?;
+        let values = match self.array_like_argument_values(self.read_reg(args.start + 1)?) {
+            Ok(values) => values,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(delegation_input_bytes);
+                return Err(error);
+            }
+        };
+        let previous_context = self.active_inline_callback_context_label.take();
+        let context_winner = previous_context
+            .as_ref()
+            .filter(|current| *current >= &delegation_inputs)
+            .unwrap_or(&delegation_inputs);
+        let next_context_bytes = Self::estimate_label_bytes(context_winner);
+        if let Err(error) = self.apply_memory_component_delta(0, next_context_bytes) {
+            self.active_inline_callback_context_label = previous_context;
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(delegation_input_bytes);
+            return Err(error);
+        }
+        let next_context = context_winner.clone();
+        self.active_inline_callback_context_label = Some(next_context);
+        let mut outcome =
+            self.dispatch_hostcall_with_value_args(&target_cap, values, module, &delegation_inputs);
+        if matches!(outcome, Err(InterpreterError::UncaughtException { .. }))
+            && let Err(error) = self.join_pending_exception_label(&delegation_inputs)
+        {
+            outcome = Err(error);
+        }
+        let current_context_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.active_inline_callback_context_label = previous_context;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(current_context_bytes)
+            .saturating_sub(delegation_input_bytes);
         outcome
     }
 
@@ -61537,37 +61803,13 @@ impl InterpreterCore {
                 }
                 self.alloc_import_meta_object()
             }
-            "builtin:ApplyHostCall" => {
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "target capability and argumentsList".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let target_cap = match self.read_reg(args.start)? {
-                    Value::Str(capability) => capability.to_string(),
-                    other => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "hostcall capability string".to_string(),
-                            got: other.type_name().to_string(),
-                        });
-                    }
-                };
-                if target_cap == "builtin:ApplyHostCall" {
-                    return Err(InterpreterError::TypeError {
-                        expected: "non-recursive hostcall capability".to_string(),
-                        got: target_cap,
-                    });
-                }
-                check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
-                let recordable_target = recordable_capability_tag(capability_gate_key(&target_cap));
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("cap:{recordable_target}")),
-                );
-                let values = self.array_like_argument_values(self.read_reg(args.start + 1)?)?;
-                self.dispatch_hostcall_with_value_args(&target_cap, values, module)
-            }
+            "builtin:ApplyHostCall" => self.dispatch_apply_hostcall(args, module, None),
+            capability if capability.starts_with(APPLY_HOSTCALL_TARGET_PREFIX) => self
+                .dispatch_apply_hostcall(
+                    args,
+                    module,
+                    capability.strip_prefix(APPLY_HOSTCALL_TARGET_PREFIX),
+                ),
             // Array methods
             "builtin:ArrayPrototypePush" => {
                 // Array.prototype.push implementation - adds elements to end of array and returns new length
@@ -81736,6 +81978,42 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn unmatched_engine_local_hostcall_families_return_undefined_bd_z1peg() {
+        let mut core = test_interpreter();
+        let no_args = RegRange { start: 0, count: 0 };
+
+        assert_eq!(
+            core.dispatch_builtin_hostcall_inner(
+                "builtin:FutureDeterministicOperation",
+                no_args,
+                None,
+            )
+            .expect("unknown builtin family route"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.dispatch_number_hostcall_inner("number:future-deterministic-operation", no_args,)
+                .expect("unknown number family route"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.dispatch_console_hostcall_inner("console:future-acknowledgement", no_args)
+                .expect("unknown console family route"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.dispatch_timer_hostcall_inner("timer:future-local-handle", no_args)
+                .expect("unknown timer family route"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "unmatched engine-local routes must not retain hidden state"
+        );
+    }
+
+    #[test]
     fn zero_argument_entropy_hostcall_result_is_secret_bd_z1peg() {
         use frankenengine_extension_host::host_io::{
             FsMetaResult, HostIoCapability, HostIoError, HostIoOutcome, HostIoRequest,
@@ -81789,6 +82067,9 @@ mod async_runtime_tests_current {
             Vec::new(),
         );
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::RandomRead);
         core.set_host_io(Arc::new(DeterministicEntropy), None);
         core.set_register_label(1, Label::Public)
             .expect("destination label seed");
@@ -81804,6 +82085,773 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+
+        // The outer HostCall destination is not the only entropy-bearing
+        // surface. Deferred callbacks must execute under the source floor,
+        // and randomBytes must retain that floor on its Buffer backing.
+        let mut bytes_core = test_interpreter();
+        bytes_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::RandomRead);
+        bytes_core.set_host_io(Arc::new(DeterministicEntropy), None);
+        bytes_core
+            .write_reg_with_label(4, Value::Int(4), Label::Public)
+            .expect("randomBytes size");
+        bytes_core
+            .write_reg_with_label(5, Value::Closure(77), Label::Public)
+            .expect("randomBytes callback");
+        assert_eq!(
+            bytes_core
+                .crypto_random_bytes(RegRange { start: 4, count: 2 })
+                .expect("callback randomBytes"),
+            Value::Undefined
+        );
+        assert_eq!(bytes_core.pending_hostcall_result_label, None);
+        assert_eq!(
+            bytes_core.estimated_memory_bytes(),
+            bytes_core.recompute_estimated_memory_bytes()
+        );
+        let bytes_task = bytes_core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("randomBytes callback task");
+        assert_eq!(bytes_task.label, Label::Secret);
+        let bytes_args = bytes_core
+            .pending_io_callbacks
+            .get(&bytes_task.registration_seq)
+            .expect("randomBytes callback arguments");
+        let Some(Value::Object(bytes_buffer)) = bytes_args.get(1) else {
+            panic!("randomBytes callback must receive a Buffer")
+        };
+        assert_eq!(
+            bytes_core.binary_storage_label(*bytes_buffer),
+            Label::Secret
+        );
+
+        // Use a separate core because manually dequeuing the callback task is
+        // an inspection seam, not the normal interpreter callback-drain path.
+        // This keeps that probe from contaminating the randomInt accounting.
+        let mut int_core = test_interpreter();
+        int_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::RandomRead);
+        int_core.set_host_io(Arc::new(DeterministicEntropy), None);
+        int_core
+            .write_reg_with_label(6, Value::Int(3), Label::Public)
+            .expect("randomInt bound");
+        int_core
+            .write_reg_with_label(7, Value::Closure(78), Label::Public)
+            .expect("randomInt callback");
+        assert_eq!(
+            int_core
+                .crypto_random_int(RegRange { start: 6, count: 2 })
+                .expect("callback randomInt"),
+            Value::Undefined
+        );
+        assert_eq!(int_core.pending_hostcall_result_label, None);
+        assert_eq!(
+            int_core.estimated_memory_bytes(),
+            int_core.recompute_estimated_memory_bytes()
+        );
+        let int_task = int_core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("randomInt callback task");
+        assert_eq!(int_task.label, Label::Secret);
+
+        // The synchronous form returns the sampled value through the HostCall
+        // destination rather than a callback. Freeze the deterministic sample
+        // and its source floor here so the public integration test does
+        // not need to leak entropy through console merely to inspect shape.
+        let mut sync_int_core = test_interpreter();
+        sync_int_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::RandomRead);
+        sync_int_core.set_host_io(Arc::new(DeterministicEntropy), None);
+        sync_int_core
+            .write_reg_with_label(6, Value::Int(10), Label::Public)
+            .expect("synchronous randomInt bound");
+        assert_eq!(
+            sync_int_core
+                .crypto_random_int(RegRange { start: 6, count: 1 })
+                .expect("synchronous randomInt"),
+            Value::Int(5)
+        );
+        assert_eq!(
+            sync_int_core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(
+            sync_int_core.estimated_memory_bytes(),
+            sync_int_core.recompute_estimated_memory_bytes()
+        );
+
+        // randomFillSync mutates an existing Buffer. Both the returned alias
+        // and the backing storage must retain the entropy source floor.
+        let mut fill_core = test_interpreter();
+        fill_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::RandomRead);
+        fill_core.set_host_io(Arc::new(DeterministicEntropy), None);
+        let fill_buffer = fill_core
+            .alloc_buffer_from_bytes(&[0; 4])
+            .expect("randomFillSync Buffer");
+        fill_core
+            .write_reg_with_label(8, Value::Object(fill_buffer), Label::Public)
+            .expect("randomFillSync target");
+        assert_eq!(
+            fill_core
+                .crypto_random_fill_sync(RegRange { start: 8, count: 1 })
+                .expect("randomFillSync"),
+            Value::Object(fill_buffer)
+        );
+        assert_eq!(fill_core.binary_storage_label(fill_buffer), Label::Secret);
+        assert_eq!(
+            fill_core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(
+            fill_core.estimated_memory_bytes(),
+            fill_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn external_source_callbacks_and_backings_keep_contract_floors_bd_z1peg() {
+        use frankenengine_extension_host::host_io::{
+            FsMetaResult, HostIoCapability, HostIoOutcome, HostIoRequest, HostIoResponse,
+        };
+
+        #[derive(Debug)]
+        struct SuccessfulUnknownFs;
+
+        impl HostIoProvider for SuccessfulUnknownFs {
+            fn name(&self) -> &str {
+                "bd-z1peg-successful-unknown-fs"
+            }
+
+            fn perform(
+                &self,
+                request: &HostIoRequest,
+                _granted: &[HostIoCapability],
+            ) -> HostIoOutcome {
+                match request {
+                    HostIoRequest::FsRead { .. } => Ok(HostIoResponse::FsRead {
+                        bytes: b"host bytes".to_vec(),
+                    }),
+                    HostIoRequest::FsWrite { data, .. } => Ok(HostIoResponse::FsWrite {
+                        bytes_written: data.len() as u64,
+                    }),
+                    HostIoRequest::FsMeta { .. } => Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Unit,
+                    }),
+                    HostIoRequest::RandomRead { byte_len } => Ok(HostIoResponse::RandomRead {
+                        bytes: vec![0; *byte_len as usize],
+                    }),
+                    HostIoRequest::NetworkSend { payload, .. } => Ok(HostIoResponse::NetworkSend {
+                        bytes_sent: payload.len() as u64,
+                    }),
+                    HostIoRequest::NetworkRecv { .. } => {
+                        Ok(HostIoResponse::NetworkRecv { bytes: Vec::new() })
+                    }
+                    HostIoRequest::NetworkRequest { .. } => Ok(HostIoResponse::NetworkRequest {
+                        response: Vec::new(),
+                    }),
+                }
+            }
+        }
+
+        // A successful read from a provider with fail-high exception
+        // provenance is still an Internal result, not a TopSecret exception.
+        let mut read_core = test_interpreter();
+        read_core.set_host_io(Arc::new(SuccessfulUnknownFs), None);
+        read_core
+            .write_reg_with_label(0, Value::str("read.txt"), Label::Public)
+            .expect("read path");
+        read_core
+            .write_reg_with_label(1, Value::Closure(41), Label::Public)
+            .expect("read callback");
+        assert_eq!(
+            read_core
+                .dispatch_host_io_hostcall("fs:read", RegRange { start: 0, count: 2 })
+                .expect("successful asynchronous fs read"),
+            Value::Undefined
+        );
+        assert_eq!(
+            read_core.estimated_memory_bytes(),
+            read_core.recompute_estimated_memory_bytes()
+        );
+        let read_task = read_core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("fs read callback task");
+        assert_eq!(read_task.label, Label::Internal);
+        let read_args = read_core
+            .pending_io_callbacks
+            .get(&read_task.registration_seq)
+            .expect("fs read callback arguments");
+        let Some(Value::Object(read_buffer)) = read_args.get(1) else {
+            panic!("fs read callback must receive a Buffer")
+        };
+        assert_eq!(
+            read_core.binary_storage_label(*read_buffer),
+            Label::Internal
+        );
+
+        // A write acknowledgement introduces no host source above its inputs.
+        let mut write_core = test_interpreter();
+        write_core.set_host_io(Arc::new(SuccessfulUnknownFs), None);
+        write_core
+            .write_reg_with_label(0, Value::str("write.txt"), Label::Public)
+            .expect("write path");
+        write_core
+            .write_reg_with_label(1, Value::str("classified"), Label::Secret)
+            .expect("write content");
+        write_core
+            .write_reg_with_label(2, Value::Closure(42), Label::Public)
+            .expect("write callback");
+        assert_eq!(
+            write_core
+                .dispatch_host_io_hostcall("fs:write", RegRange { start: 0, count: 3 })
+                .expect("successful asynchronous fs write"),
+            Value::Undefined
+        );
+        assert_eq!(
+            write_core.estimated_memory_bytes(),
+            write_core.recompute_estimated_memory_bytes()
+        );
+        let write_task = write_core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("fs write callback task");
+        assert_eq!(write_task.label, Label::Secret);
+
+        // Process-provider outputs have an Internal floor on callback context,
+        // stream events, and any returned Buffer backing.
+        let mut process_core = test_interpreter();
+        process_core
+            .schedule_child_process_callback(43, Vec::new(), &Label::Public)
+            .expect("process callback scheduling");
+        process_core
+            .schedule_child_process_callback(44, Vec::new(), &Label::Secret)
+            .expect("classified process callback scheduling");
+        assert_eq!(
+            process_core.estimated_memory_bytes(),
+            process_core.recompute_estimated_memory_bytes()
+        );
+        let process_task = process_core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("process callback task");
+        assert_eq!(process_task.label, Label::Internal);
+        let classified_process_task = process_core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("classified process callback task");
+        assert_eq!(classified_process_task.label, Label::Secret);
+
+        #[derive(Debug)]
+        struct DenyingLifecycleProcess {
+            seen: Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl ProcessSpawnProvider for DenyingLifecycleProcess {
+            fn name(&self) -> &str {
+                "bd-z1peg-lifecycle-process"
+            }
+
+            fn preflight_request(
+                &self,
+                request: &ProcessSpawnRequest,
+            ) -> Result<(), ProcessSpawnError> {
+                assert!(matches!(request, ProcessSpawnRequest::Spawn { .. }));
+                self.seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                Err(ProcessSpawnError::Denied {
+                    reason: "deliberate callback-provenance fixture denial".to_string(),
+                })
+            }
+
+            fn perform(
+                &self,
+                _request: &ProcessSpawnRequest,
+                _granted: &[frankenengine_extension_host::process_spawn::ProcessSpawnCapability],
+            ) -> Result<ProcessSpawnResponse, ProcessSpawnError> {
+                panic!("preflight denial must prevent live process dispatch")
+            }
+
+            fn cleanup_handle(
+                &self,
+                _handle: &str,
+            ) -> Result<ProcessSpawnResponse, ProcessSpawnError> {
+                Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+            }
+        }
+
+        let mut callback_registration_core = test_interpreter();
+        let provider_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        callback_registration_core.set_process_spawn(
+            Arc::new(DenyingLifecycleProcess {
+                seen: provider_seen.clone(),
+            }),
+            Arc::new(InMemoryHostEffectJournal::recording()),
+        );
+        callback_registration_core
+            .write_reg_with_label(0, Value::str("\0processop:exec"), Label::Public)
+            .expect("process operation");
+        callback_registration_core
+            .write_reg_with_label(1, Value::str("public-command"), Label::Public)
+            .expect("public process command");
+        callback_registration_core
+            .write_reg_with_label(2, Value::Closure(45), Label::Secret)
+            .expect("classified process callback");
+        assert!(matches!(
+            callback_registration_core
+                .dispatch_process_spawn_hostcall(RegRange { start: 0, count: 3 })
+                .expect("Public request with classified callback remains admissible"),
+            Value::Object(_)
+        ));
+        assert!(
+            provider_seen.load(std::sync::atomic::Ordering::SeqCst),
+            "the Secret callback must stay outside Public provider preflight admission"
+        );
+        let mut denied_callback_label = None;
+        for _ in 0..4 {
+            let Some(macrotask) = callback_registration_core.event_loop.turn().macrotask else {
+                break;
+            };
+            if macrotask.handler == crate::closure_model::ClosureHandle(45) {
+                denied_callback_label = Some(macrotask.label);
+                break;
+            }
+        }
+        assert_eq!(
+            denied_callback_label,
+            Some(Label::Secret),
+            "provider-denial callback must retain its independent registration label"
+        );
+
+        let mut retained_callback_core = test_interpreter();
+        retained_callback_core
+            .schedule_child_process_wait(PendingChildProcessTask {
+                child: ObjectId(0),
+                handle: "bd-z1peg-pending".to_string(),
+                callback: Some(46),
+                callback_label: Label::Secret,
+                callback_encoding: Some("utf8".to_string()),
+                options: ProcessCallOptions::default(),
+            })
+            .expect("retain classified callback across lifecycle wait");
+        let retained_callback_label = &retained_callback_core
+            .pending_child_process_tasks
+            .values()
+            .next()
+            .expect("pending process wait")
+            .callback_label;
+        assert_eq!(
+            retained_callback_label,
+            &Label::Secret,
+            "callback registration provenance must not enter egress admission or disappear"
+        );
+        assert_eq!(
+            retained_callback_core.estimated_memory_bytes(),
+            retained_callback_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut event_core = test_interpreter();
+        let child = event_core
+            .allocate_child_process_facade(&ProcessCallOptions::default())
+            .expect("child process facade");
+        event_core
+            .settle_child_process(
+                child,
+                Ok((
+                    ProcessExit {
+                        success: true,
+                        code: Some(0),
+                        signal: None,
+                    },
+                    b"stdout".to_vec(),
+                    Vec::new(),
+                )),
+            )
+            .expect("settled process output");
+        let stdout_stream = match event_core.heap[child.0 as usize].properties.get("stdout") {
+            Some(Value::Object(stream)) => *stream,
+            other => panic!("child stdout stream is missing: {other:?}"),
+        };
+        let sequence = event_core
+            .activate_completed_child_process_event(stdout_stream, "data")
+            .expect("process data event scheduling")
+            .expect("process data event must exist");
+        let PendingHttpTask::EmitLegacyEvent {
+            arguments, label, ..
+        } = event_core
+            .pending_http_tasks
+            .get(&sequence)
+            .expect("process data event task")
+        else {
+            panic!("process data event must use the legacy event task")
+        };
+        assert_eq!(label, &Label::Internal);
+        let Some(Value::Object(stdout_buffer)) = arguments.first() else {
+            panic!("process data event must carry a Buffer")
+        };
+        assert_eq!(
+            event_core.binary_storage_label(*stdout_buffer),
+            Label::Internal
+        );
+        assert_eq!(
+            event_core.estimated_memory_bytes(),
+            event_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn module_load_paths_apply_source_floor_bd_z1peg() {
+        let temp = tempfile::tempdir().expect("module source root");
+        let entry = temp.path().join("entry.mjs");
+        let dependency = temp.path().join("dependency.mjs");
+        std::fs::write(&entry, "import './dependency.mjs';").expect("write importing entry module");
+        std::fs::write(&dependency, "export const answer = 42;").expect("write imported module");
+
+        let mut import_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::ImportModule {
+                    specifier: 0,
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        import_module.header.source_label = entry.display().to_string();
+        import_module.constant_pool = vec![JsString::from("./dependency.mjs")];
+
+        let mut import_core = test_interpreter();
+        import_core
+            .config
+            .set_module_root(temp.path().display().to_string())
+            .expect("set import root");
+        import_core.current_module_specifier = Some(entry.display().to_string());
+        import_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::ModuleLoad);
+        import_core
+            .execute(&import_module)
+            .expect("direct ImportModule execution");
+        assert!(matches!(import_core.read_reg(1), Ok(Value::Object(_))));
+        assert_eq!(
+            import_core
+                .get_register_label(1)
+                .expect("import result label"),
+            &Label::Internal
+        );
+
+        let mut require_core = test_interpreter();
+        require_core
+            .config
+            .set_module_root(temp.path().display().to_string())
+            .expect("set require root");
+        require_core.current_module_specifier = Some(entry.display().to_string());
+        require_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::ModuleLoad);
+        require_core
+            .write_reg_with_label(0, Value::str("./dependency.mjs"), Label::Public)
+            .expect("require specifier");
+        let required = require_core
+            .dispatch_builtin_function(
+                &import_module,
+                &BuiltinFunction::require(entry.display().to_string()),
+                RegRange { start: 0, count: 1 },
+                None,
+                None,
+            )
+            .expect("first-class require");
+        assert!(matches!(required, Value::Object(_)));
+        assert_eq!(
+            require_core.take_pending_hostcall_result_label(),
+            Some(Label::Internal)
+        );
+
+        let mut delegated_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::NewArray { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 1,
+                },
+                Ir3Instruction::ArrayPush {
+                    array: 1,
+                    element: 2,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ApplyHostCall".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        delegated_module.header.source_label = entry.display().to_string();
+        delegated_module.constant_pool = vec![
+            JsString::from("module_load"),
+            JsString::from("./dependency.mjs"),
+        ];
+        let mut delegated_core = test_interpreter();
+        delegated_core
+            .config
+            .set_module_root(temp.path().display().to_string())
+            .expect("set delegated module root");
+        delegated_core.current_module_specifier = Some(entry.display().to_string());
+        delegated_core
+            .config
+            .granted_capabilities
+            .extend([RuntimeCapability::Builtin, RuntimeCapability::ModuleLoad]);
+        delegated_core
+            .execute(&delegated_module)
+            .expect("ApplyHostCall delegated module load");
+        assert!(matches!(delegated_core.read_reg(3), Ok(Value::Object(_))));
+        assert_eq!(
+            delegated_core
+                .get_register_label(3)
+                .expect("delegated module result label"),
+            &Label::Internal,
+            "the outer ApplyHostCall contract must retain the delegated source floor"
+        );
+        assert_eq!(
+            delegated_core.estimated_memory_bytes(),
+            delegated_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut label_preserving_core = test_interpreter();
+        label_preserving_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let arguments = label_preserving_core
+            .alloc_array_from_values(&[Value::Int(7)])
+            .expect("delegated arguments array");
+        label_preserving_core
+            .join_object_mutation_label(arguments, &Label::Secret)
+            .expect("classify delegated array contents");
+        label_preserving_core
+            .write_reg_with_label(0, Value::str("promise:resolve"), Label::Public)
+            .expect("delegated target");
+        label_preserving_core
+            .write_reg_with_label(1, Value::Object(arguments), Label::Public)
+            .expect("public register carrying classified arguments");
+        let delegated_promise = label_preserving_core
+            .dispatch_builtin_hostcall(
+                "builtin:ApplyHostCall:promise:resolve",
+                RegRange { start: 0, count: 2 },
+                Some(&delegated_module),
+            )
+            .expect("lowering-authenticated delegated Promise.resolve");
+        let Value::Promise(delegated_promise) = delegated_promise else {
+            panic!("delegated Promise.resolve must return a Promise")
+        };
+        assert_eq!(
+            label_preserving_core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(delegated_promise))
+                .expect("delegated Promise record")
+                .label,
+            Label::Secret,
+            "delegated async state must observe reachable argument provenance"
+        );
+        assert_eq!(
+            label_preserving_core.take_pending_hostcall_result_label(),
+            Some(Label::Secret),
+            "reachable argument-array provenance must survive JoinInputs delegation"
+        );
+        assert_eq!(
+            label_preserving_core.estimated_memory_bytes(),
+            label_preserving_core.recompute_estimated_memory_bytes()
+        );
+
+        label_preserving_core
+            .write_reg_with_label(0, Value::str("promise:reject"), Label::Public)
+            .expect("mismatched delegated target");
+        let mismatch = label_preserving_core
+            .dispatch_builtin_hostcall(
+                "builtin:ApplyHostCall:promise:resolve",
+                RegRange { start: 0, count: 2 },
+                Some(&delegated_module),
+            )
+            .expect_err("encoded and runtime targets must match");
+        assert!(matches!(mismatch, InterpreterError::TypeError { .. }));
+        assert_eq!(
+            label_preserving_core.take_pending_hostcall_result_label(),
+            None
+        );
+
+        label_preserving_core
+            .write_reg_with_label(0, Value::str("builtin:PathJoin"), Label::Public)
+            .expect("throwing delegated target");
+        let throwing_arguments = label_preserving_core
+            .alloc_array_from_values(&[Value::Int(7)])
+            .expect("throwing arguments array");
+        label_preserving_core
+            .join_object_mutation_label(throwing_arguments, &Label::Secret)
+            .expect("classify throwing delegated arguments");
+        label_preserving_core
+            .write_reg_with_label(1, Value::Object(throwing_arguments), Label::Public)
+            .expect("public register carrying throwing arguments");
+        let thrown = label_preserving_core
+            .dispatch_builtin_hostcall(
+                "builtin:ApplyHostCall:builtin:PathJoin",
+                RegRange { start: 0, count: 2 },
+                Some(&delegated_module),
+            )
+            .expect_err("delegated invalid path input must throw");
+        assert!(matches!(thrown, InterpreterError::UncaughtException { .. }));
+        assert_eq!(
+            label_preserving_core.pending_exception_label,
+            Label::Secret,
+            "delegated explicit throws must retain reachable argument provenance"
+        );
+        assert_eq!(
+            label_preserving_core.estimated_memory_bytes(),
+            label_preserving_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn modern_http_lifecycle_retains_dynamic_and_receiver_provenance_bd_z1peg() {
+        let mut construction_core = test_interpreter();
+        let classified_options = construction_core
+            .alloc_object_with_properties(&[
+                ("host", Value::str("127.0.0.1")),
+                ("port", Value::Int(42_321)),
+                ("path", Value::str("/classified-options")),
+            ])
+            .expect("classified request options");
+        construction_core
+            .join_object_mutation_label(classified_options, &Label::Secret)
+            .expect("classify request options");
+        construction_core
+            .write_reg_with_label(0, Value::Object(classified_options), Label::Public)
+            .expect("public register carrying classified options");
+        let Value::Object(classified_request) = construction_core
+            .construct_http_client_request(RegRange { start: 0, count: 1 }, false)
+            .expect("request from dynamically classified options")
+        else {
+            panic!("expected classified request object")
+        };
+        assert_eq!(
+            construction_core.http_client_requests[&classified_request].lifecycle_label,
+            Label::Secret,
+            "reachable options provenance must seed the request lifecycle"
+        );
+        assert_eq!(
+            construction_core.estimated_memory_bytes(),
+            construction_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut alias_core = test_interpreter();
+        alias_core
+            .loopback_ports
+            .insert(42_322, LoopbackPortState::Closed { generation: 1 });
+        alias_core
+            .sync_estimated_memory_bytes()
+            .expect("account closed loopback fixture");
+        let public_options = alias_core
+            .alloc_object_with_properties(&[
+                ("host", Value::str("127.0.0.1")),
+                ("port", Value::Int(42_322)),
+                ("path", Value::str("/classified-alias")),
+            ])
+            .expect("public request options");
+        alias_core
+            .write_reg_with_label(0, Value::Object(public_options), Label::Public)
+            .expect("public request options register");
+        let Value::Object(request) = alias_core
+            .construct_http_client_request(RegRange { start: 0, count: 1 }, false)
+            .expect("public request")
+        else {
+            panic!("expected public request object")
+        };
+        assert_eq!(
+            alias_core.http_client_requests[&request].lifecycle_label,
+            Label::Public
+        );
+
+        alias_core
+            .write_reg_with_label(3, Value::Object(request), Label::Secret)
+            .expect("classified request alias");
+        alias_core
+            .write_reg_with_label(1, Value::str("X-Provenance"), Label::Public)
+            .expect("public header name");
+        alias_core
+            .write_reg_with_label(2, Value::str("public"), Label::Public)
+            .expect("public header value");
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        alias_core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(BuiltinFunctionKind::HttpClientRequestSetHeader),
+                RegRange { start: 1, count: 2 },
+                Some(Value::Object(request)),
+                Some(3),
+            )
+            .expect("dispatch setHeader through classified alias");
+        assert_eq!(
+            alias_core.http_client_requests[&request].lifecycle_label,
+            Label::Secret,
+            "receiver provenance must survive a public setHeader mutation"
+        );
+
+        alias_core
+            .write_reg_with_label(4, Value::Object(request), Label::Public)
+            .expect("public request alias");
+        alias_core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(BuiltinFunctionKind::HttpClientRequestEnd),
+                RegRange { start: 5, count: 0 },
+                Some(Value::Object(request)),
+                Some(4),
+            )
+            .expect("dispatch end through public alias");
+        let queued_error_label = alias_core
+            .pending_http_tasks
+            .values()
+            .find_map(|task| match task {
+                PendingHttpTask::ClientError {
+                    request: queued,
+                    label,
+                    ..
+                } if *queued == request => Some(label),
+                _ => None,
+            })
+            .expect("closed loopback request must schedule a client error");
+        assert_eq!(queued_error_label, &Label::Secret);
+        assert_eq!(
+            alias_core.estimated_memory_bytes(),
+            alias_core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -81996,6 +83044,10 @@ mod async_runtime_tests_current {
             Vec::new(),
         );
         let mut labeled = test_interpreter();
+        labeled
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::FsRead);
         labeled.set_host_io(
             Arc::new(SandboxedHostIo::with_root(&root).expect("source-label provider")),
             None,
@@ -82640,12 +83692,8 @@ mod async_runtime_tests_current {
         let write = BuiltinFunction::client_request_write();
 
         // req.write('Hello, ')
-        core.mutate_registers(|r| {
-            if r.is_empty() {
-                r.resize(1, Value::Undefined);
-            }
-            r[0] = Value::str("Hello, ");
-        });
+        core.write_reg_with_label(0, Value::str("Hello, "), Label::Secret)
+            .expect("classified first request chunk");
         let w1 = core
             .dispatch_builtin_function(
                 &module,
@@ -82658,9 +83706,8 @@ mod async_runtime_tests_current {
         assert_eq!(w1, Value::Bool(true), "req.write returns the boolean true");
 
         // req.write('world')
-        core.mutate_registers(|r| {
-            r[0] = Value::str("world");
-        });
+        core.write_reg_with_label(0, Value::str("world"), Label::Public)
+            .expect("public second request chunk");
         core.dispatch_builtin_function(
             &module,
             &write,
@@ -82677,9 +83724,8 @@ mod async_runtime_tests_current {
 
         // req.end('!') — append the final chunk and perform the egress.
         let end = BuiltinFunction::client_request_end();
-        core.mutate_registers(|r| {
-            r[0] = Value::str("!");
-        });
+        core.write_reg_with_label(0, Value::str("!"), Label::Public)
+            .expect("public final request chunk");
         let response = core
             .dispatch_builtin_function(
                 &module,
@@ -82692,6 +83738,11 @@ mod async_runtime_tests_current {
         let Value::Object(response_id) = response else {
             panic!("req.end() must return the parsed response object, got {response:?}");
         };
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret),
+            "a synchronous response must retain the earlier classified write"
+        );
         let resp = core
             .heap
             .get(response_id.0 as usize)
@@ -82874,6 +83925,23 @@ mod async_runtime_tests_current {
             Some(&Value::str("ok")),
             "cb(res) receives the parsed response body"
         );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "labeled callback and stream tasks must be fully accounted"
+        );
+        let callback_task = core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("response callback task");
+        assert_eq!(callback_task.label, Label::Internal);
+        let stream_task = core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("response stream task");
+        assert_eq!(stream_task.label, Label::Internal);
 
         let _ = server.join().expect("server thread");
         let _ = std::fs::remove_dir_all(&root);
@@ -82963,6 +84031,25 @@ mod async_runtime_tests_current {
         );
 
         let module = test_module_with_functions(vec![], vec![]);
+        core.write_reg_with_label(3, Value::str("classified body"), Label::Secret)
+            .expect("write classified request body register");
+        let write = BuiltinFunction::client_request_write();
+        let written = core
+            .dispatch_builtin_function(
+                &module,
+                &write,
+                RegRange { start: 3, count: 1 },
+                Some(Value::Object(req_id)),
+                None,
+            )
+            .expect("req.write with a classified body");
+        assert_eq!(written, Value::Bool(true));
+        assert_eq!(
+            core.object_mutation_labels.get(&req_id),
+            Some(&Label::Secret),
+            "the request lifecycle must retain prior write provenance until end"
+        );
+
         let end = BuiltinFunction::client_request_end();
         let ended = core
             .dispatch_builtin_function(
@@ -83009,7 +84096,24 @@ mod async_runtime_tests_current {
         assert_eq!(*target, req_id);
         assert_eq!(event, "response");
         assert_eq!(*leading_callback, Some(0));
-        assert_eq!(label, &Label::Public);
+        assert_eq!(label, &Label::Secret);
+        let stream_registration = *core
+            .pending_stream_emissions
+            .keys()
+            .next()
+            .expect("a deferred response stream task");
+        let mut saw_secret_stream = false;
+        while let Some(macrotask) = core.event_loop.turn().macrotask {
+            if macrotask.registration_seq == stream_registration {
+                assert_eq!(macrotask.label, Label::Secret);
+                saw_secret_stream = true;
+                break;
+            }
+        }
+        assert!(
+            saw_secret_stream,
+            "response stream task must retain prior request-write provenance"
+        );
         assert_eq!(
             args.len(),
             1,
@@ -83032,6 +84136,52 @@ mod async_runtime_tests_current {
 
         let _ = server.join().expect("server thread");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn client_request_receiver_label_reaches_deferred_error_bd_z1peg() {
+        let mut core = test_interpreter();
+        core.write_reg_with_label(0, Value::str("http://127.0.0.1:9/"), Label::Public)
+            .expect("request URL");
+        let request = core
+            .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+            .expect("client request creation");
+        let Value::Object(request_id) = request else {
+            panic!("http.request must return a ClientRequest object, got {request:?}");
+        };
+        core.write_reg_with_label(1, Value::Object(request_id), Label::Secret)
+            .expect("classified request alias");
+
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let ended = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_end(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(request_id)),
+                Some(1),
+            )
+            .expect("classified request alias end");
+        assert_eq!(ended, Value::Undefined);
+        assert_eq!(
+            core.object_mutation_labels.get(&request_id),
+            Some(&Label::Secret),
+            "the receiver register must join the retained request lifecycle"
+        );
+        let task = core
+            .pending_http_tasks
+            .values()
+            .next()
+            .expect("provider-free end must schedule a deferred error event");
+        let PendingHttpTask::EmitLegacyEvent { event, label, .. } = task else {
+            panic!("expected a deferred request error, got {task:?}");
+        };
+        assert_eq!(event, "error");
+        assert_eq!(label, &Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     /// bd-656a2 (http leg, denied path): when the installed host-I/O provider
@@ -87232,7 +88382,7 @@ mod async_runtime_tests_current {
             .sync_estimated_memory_bytes()
             .expect("I/O callback probe baseline");
         io_probe
-            .schedule_io_callback(77, callback_args.clone())
+            .schedule_io_callback_with_label(77, callback_args.clone(), Label::Public)
             .expect("unbounded I/O callback probe");
         let io_delta = io_probe
             .estimated_memory_bytes()
@@ -87249,7 +88399,7 @@ mod async_runtime_tests_current {
             .expect("I/O callback refusal baseline");
         io_one_short.config.max_total_memory_bytes = io_one_short_baseline + io_delta - 1;
         assert!(matches!(
-            io_one_short.schedule_io_callback(77, callback_args.clone()),
+            io_one_short.schedule_io_callback_with_label(77, callback_args.clone(), Label::Public,),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert!(io_one_short.pending_io_callbacks.is_empty());
@@ -87262,7 +88412,7 @@ mod async_runtime_tests_current {
             .expect("I/O callback exact baseline");
         io_exact.config.max_total_memory_bytes = io_exact_baseline + io_delta;
         io_exact
-            .schedule_io_callback(77, callback_args)
+            .schedule_io_callback_with_label(77, callback_args, Label::Public)
             .expect("I/O callback fits exact ceiling");
         assert_eq!(
             io_exact.estimated_memory_bytes(),
@@ -96987,7 +98137,7 @@ mod async_runtime_tests_current {
         )
         .expect("cross-registered raw wrapper");
 
-        core.schedule_io_callback(0, Vec::new())
+        core.schedule_io_callback_with_label(0, Vec::new(), Label::Public)
             .expect("finish callback turn");
         let finish_sequence = *core
             .pending_io_callbacks
@@ -97156,7 +98306,7 @@ mod async_runtime_tests_current {
             .saturating_add(retained_bytes)
             .saturating_sub(1);
         assert!(matches!(
-            core.schedule_stream_emission(first, StreamEventPhase::Data),
+            core.schedule_stream_emission(first, StreamEventPhase::Data, Label::Public),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert!(core.pending_stream_emissions.is_empty());
@@ -97168,9 +98318,9 @@ mod async_runtime_tests_current {
 
         core.config.max_total_memory_bytes =
             baseline_bytes.saturating_add(retained_bytes.saturating_mul(2));
-        core.schedule_stream_emission(first, StreamEventPhase::Data)
+        core.schedule_stream_emission(first, StreamEventPhase::Data, Label::Public)
             .expect("first exact stream emission charge");
-        core.schedule_stream_emission(second, StreamEventPhase::Data)
+        core.schedule_stream_emission(second, StreamEventPhase::Data, Label::Public)
             .expect("second exact stream emission charge");
         let registrations: Vec<u64> = core.pending_stream_emissions.keys().copied().collect();
         assert_eq!(registrations.len(), 2);
@@ -97228,7 +98378,7 @@ mod async_runtime_tests_current {
             false,
         )
         .expect("stale response listener");
-        core.schedule_stream_emission(stale_target, StreamEventPhase::Data)
+        core.schedule_stream_emission(stale_target, StreamEventPhase::Data, Label::Public)
             .expect("stale response emission");
         let registration = *core
             .pending_stream_emissions
@@ -97290,7 +98440,7 @@ mod async_runtime_tests_current {
         core.register_event_listener(obj_id, "data", 12);
         core.register_event_listener(obj_id, "end", 13);
 
-        core.schedule_stream_emission(obj_id, StreamEventPhase::Data)
+        core.schedule_stream_emission(obj_id, StreamEventPhase::Data, Label::Public)
             .expect("stream emission scheduling fits test budget");
         assert_eq!(
             core.pending_stream_emissions.len(),
@@ -126487,6 +127637,7 @@ mod memory_accounting_tests {
             .http_client_write(
                 Some(Value::Object(request)),
                 RegRange { start: 1, count: 1 },
+                None,
             )
             .expect_err("body ceiling");
         assert!(matches!(error, InterpreterError::RangeError { .. }));
@@ -126509,6 +127660,7 @@ mod memory_accounting_tests {
                 Some(Value::Object(request)),
                 RegRange { start: 2, count: 2 },
                 true,
+                None,
             )
             .expect_err("Buffer header coercion must stay outside the bounded subset");
         assert!(matches!(error, InterpreterError::TypeError { .. }));

@@ -25,6 +25,7 @@ use frankenengine_engine::execution_orchestrator::{
 use frankenengine_engine::ifc_artifacts::{
     DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
+use frankenengine_engine::lowering_pipeline::LoweringPipelineError;
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
@@ -845,17 +846,12 @@ fn asymmetric_inline_and_escaped_uses_remain_fail_closed() {
 fn authenticated_entropy_apis_use_typed_ordered_host_effects_bd_opsnv() {
     let source = r#"
         const crypto = require('crypto');
-        const bytes = crypto.randomBytes(16);
-        console.log(Buffer.isBuffer(bytes), bytes.length, crypto.randomBytes(0).length);
-        const uuid = crypto.randomUUID();
-        console.log(typeof uuid, uuid.length, uuid[14] === '4');
-        console.log(['8', '9', 'a', 'b'].includes(uuid[19]));
-        const first = crypto.randomInt(10);
-        console.log(Number.isInteger(first), first >= 0 && first < 10);
-        console.log(crypto.randomInt(5, 8));
-        const target = Buffer.alloc(8);
-        const filled = crypto.randomFillSync(target);
-        console.log(filled === target, filled.length, filled.toString('hex'));
+        crypto.randomBytes(16);
+        crypto.randomBytes(0);
+        crypto.randomUUID();
+        crypto.randomInt(10);
+        crypto.randomInt(5, 8);
+        crypto.randomFillSync(Buffer.alloc(8));
     "#;
     let provider = Arc::new(ScriptedRandomHostIo::bytes([
         vec![0x11; 16],
@@ -868,10 +864,7 @@ fn authenticated_entropy_apis_use_typed_ordered_host_effects_bd_opsnv() {
     let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
     let result = execute_crypto(source, provider.clone(), recorder_dyn);
 
-    assert_eq!(
-        orchestrated_console(&result),
-        "true 16 0\nstring 36 true\ntrue\ntrue true\n5\ntrue 8 5a5a5a5a5a5a5a5a"
-    );
+    assert_eq!(orchestrated_console(&result), "");
     assert_eq!(provider.calls.load(Ordering::Acquire), 5);
     assert_eq!(result.host_effect_transcript, recorder.recorded_entries());
     let lengths = result
@@ -889,12 +882,49 @@ fn authenticated_entropy_apis_use_typed_ordered_host_effects_bd_opsnv() {
 }
 
 #[test]
+fn entropy_egress_requires_declassification_before_host_effect_bd_z1peg() {
+    let provider = Arc::new(ScriptedRandomHostIo::never());
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider.clone(), Some(recorder_dyn));
+
+    let error = orchestrator
+        .execute(&crypto_package(
+            "const crypto = require('crypto'); console.log(crypto.randomUUID());",
+            true,
+        ))
+        .expect_err("Secret entropy must not flow directly to an Internal console sink");
+    let primary_error = error.primary_error();
+    assert!(
+        matches!(
+            primary_error,
+            OrchestratorError::Lowering(lowering_error)
+                if matches!(
+                    lowering_error.as_ref(),
+                    LoweringPipelineError::UnauthorizedFlow {
+                        source_label: Label::Secret,
+                        sink_clearance: Label::Internal,
+                        ..
+                    }
+                )
+        ),
+        "entropy egress must retain its typed IFC denial, got {primary_error:?}"
+    );
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+    assert!(
+        recorder.recorded_entries().is_empty(),
+        "static IFC denial must happen before a host entropy request exists"
+    );
+}
+
+#[test]
 fn random_int_rejection_sampling_discards_biased_tail_bd_opsnv() {
-    let source = "const crypto = require('crypto'); console.log(crypto.randomInt(10));";
+    let source = "const crypto = require('crypto'); crypto.randomInt(10);";
     let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0xff; 6], vec![0; 6]]));
     let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
     let result = execute_crypto(source, provider.clone(), recorder);
-    assert_eq!(orchestrated_console(&result), "0");
+    assert_eq!(orchestrated_console(&result), "");
     assert_eq!(provider.calls.load(Ordering::Acquire), 2);
     assert_eq!(result.host_effect_transcript.len(), 2);
 }
@@ -905,21 +935,43 @@ fn entropy_callbacks_are_err_first_and_deferred_bd_opsnv() {
         const crypto = require('crypto');
         const order = [];
         crypto.randomBytes(4, (error, bytes) => {
-          order.push(`bytes:${error === null}:${bytes.length}`);
+          if (error !== null || !Buffer.isBuffer(bytes) || bytes.length !== 4) {
+            throw new Error('invalid randomBytes callback');
+          }
+          order.push('bytes');
         });
         crypto.randomInt(3, (error, value) => {
-          order.push(`int:${error === null}:${value}`);
+          if (error !== null || !Number.isInteger(value) || value < 0 || value >= 3) {
+            throw new Error('invalid randomInt callback');
+          }
+          order.push('int');
         });
         order.push('sync');
-        setTimeout(() => console.log(order.join(',')), 1);
+        crypto.randomBytes(0, (error, bytes) => {
+          if (error !== null || !Buffer.isBuffer(bytes) || bytes.length !== 0) {
+            throw new Error('invalid zero-length randomBytes callback');
+          }
+          if (order.join(',') !== 'sync,bytes,int') {
+            throw new Error(`unexpected callback order: ${order.join(',')}`);
+          }
+          throw new Error('bd-z1peg entropy callbacks completed in order');
+        });
     "#;
     let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![1, 2, 3, 4], vec![0; 6]]));
-    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
-    let result = execute_crypto(source, provider, recorder);
-    assert_eq!(
-        orchestrated_console(&result),
-        "sync,bytes:true:4,int:true:0"
-    );
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider.clone(), Some(recorder_dyn));
+    let error = orchestrator
+        .execute(&crypto_package(source, true))
+        .expect_err("the final I/O callback must publish its success sentinel");
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+            if value == "Error: bd-z1peg entropy callbacks completed in order"
+    ));
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+    assert_eq!(recorder.recorded_entries().len(), 2);
 }
 
 #[test]
@@ -971,8 +1023,8 @@ fn entropy_provider_failures_are_redacted_and_err_first_bd_opsnv() {
 fn entropy_recording_replays_exact_bytes_without_live_provider_bd_opsnv() {
     let source = r#"
         const crypto = require('crypto');
-        console.log(crypto.randomBytes(4).toString('hex'));
-        console.log(crypto.randomInt(100));
+        crypto.randomBytes(4);
+        crypto.randomInt(100);
     "#;
     let provider = Arc::new(ScriptedRandomHostIo::bytes([
         vec![0xde, 0xad, 0xbe, 0xef],
@@ -980,15 +1032,35 @@ fn entropy_recording_replays_exact_bytes_without_live_provider_bd_opsnv() {
     ]));
     let recorder = Arc::new(InMemoryHostIoTranscript::recording());
     let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
-    let recorded = execute_crypto(source, provider, recorder_dyn);
-    assert_eq!(orchestrated_console(&recorded), "deadbeef\n42");
+    let recorded = execute_crypto(source, provider.clone(), recorder_dyn);
+    assert_eq!(orchestrated_console(&recorded), "");
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+    assert_eq!(
+        recorded.host_effect_transcript,
+        vec![
+            (
+                HostIoRequest::RandomRead { byte_len: 4 },
+                Ok(HostIoResponse::RandomRead {
+                    bytes: vec![0xde, 0xad, 0xbe, 0xef],
+                }),
+            ),
+            (
+                HostIoRequest::RandomRead { byte_len: 6 },
+                Ok(HostIoResponse::RandomRead {
+                    bytes: vec![0, 0, 0, 0, 0, 42],
+                }),
+            ),
+        ]
+    );
 
     let replay = Arc::new(InMemoryHostIoTranscript::replaying(
         recorded.host_effect_transcript.clone(),
     ));
     let replay_dyn: Arc<dyn HostIoRecorder> = replay.clone();
-    let replayed = execute_crypto(source, Arc::new(ScriptedRandomHostIo::never()), replay_dyn);
-    assert_eq!(orchestrated_console(&replayed), "deadbeef\n42");
+    let never_provider = Arc::new(ScriptedRandomHostIo::never());
+    let replayed = execute_crypto(source, never_provider.clone(), replay_dyn);
+    assert_eq!(orchestrated_console(&replayed), "");
+    assert_eq!(never_provider.calls.load(Ordering::Acquire), 0);
     assert_eq!(
         replayed.host_effect_transcript,
         recorded.host_effect_transcript

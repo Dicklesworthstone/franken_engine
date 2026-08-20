@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ifc_artifacts::Label;
 
+/// Prefix carried only by lowering-authenticated `ApplyHostCall` wrappers.
+/// The suffix is the exact inner capability whose result contract is reused.
+pub const APPLY_HOSTCALL_TARGET_PREFIX: &str = "builtin:ApplyHostCall:";
+
 pub mod trust_zone;
 
 // ---------------------------------------------------------------------------
@@ -247,11 +251,20 @@ impl RuntimeCapability {
 /// independently inventing result provenance (bd-z1peg).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostcallResultContract {
-    /// The result is a label-preserving transform of the direct operands.
-    PreserveInputs,
+    /// The implementation introduces no source above `Public`; direct
+    /// operands and any precise runtime-published provenance may only raise
+    /// the result. This covers pure transforms, constants, acknowledgements,
+    /// and engine-local handles without claiming they are value-derived from
+    /// every operand.
+    JoinInputs,
     /// The host introduces data at this minimum label; operands and any
     /// runtime-published hidden-state provenance may only raise it.
     SourceFloor(Label),
+    /// The outer capability delegates to a runtime-selected inner HostCall.
+    /// Static analysis has no authenticated inner result contract, so absence
+    /// of a runtime publication fails high. A publication is rejoined with the
+    /// outer operands so delegation cannot become an implicit release.
+    RuntimeDelegated,
     /// A receipt-authenticated runtime path owns the effective result label.
     /// Without an explicit runtime publication, the result fails high.
     AuthenticatedRelease,
@@ -269,13 +282,16 @@ impl HostcallResultContract {
     /// high instead of silently treating an authority grant as declassification.
     pub fn result_label(&self, inputs: &Label, runtime: Option<&Label>) -> Label {
         match self {
-            Self::PreserveInputs => {
+            Self::JoinInputs => {
                 runtime.map_or_else(|| inputs.clone(), |runtime| inputs.join(runtime))
             }
             Self::SourceFloor(floor) => runtime.map_or_else(
                 || floor.join(inputs),
                 |runtime| floor.join(inputs).join(runtime),
             ),
+            Self::RuntimeDelegated => runtime
+                .map(|runtime| inputs.join(runtime))
+                .unwrap_or(Label::TopSecret),
             Self::AuthenticatedRelease => runtime.cloned().unwrap_or(Label::TopSecret),
             Self::FailClosed => Label::TopSecret,
         }
@@ -291,7 +307,31 @@ impl HostcallResultContract {
 /// authority tags fail high. Declassification-shaped tags remain unusable as
 /// releases unless their runtime implementation publishes a receipt-validated
 /// effective label.
+///
+/// `Builtin`, `Console`, and `Timer` are closed semantic families in the
+/// current dispatcher: their unmatched routes return deterministic
+/// `undefined`, while matched routes are engine-contained transforms,
+/// acknowledgements, or local handles. A future route that introduces fresh
+/// host data must therefore receive a dedicated typed capability and contract,
+/// as `RandomRead` does. `builtin:ApplyHostCall` is classified first as a
+/// runtime-authenticated delegation boundary because it can target those
+/// source-producing capabilities. The exhaustive typed match below makes new
+/// capability variants compile-fail until their result provenance is
+/// classified; an exact-tag dispatch registry remains the stronger mechanical
+/// follow-up for enforcing the family invariant itself.
 pub fn hostcall_result_contract(tag: &str) -> HostcallResultContract {
+    if let Some(target) = tag.strip_prefix(APPLY_HOSTCALL_TARGET_PREFIX) {
+        if target.is_empty()
+            || target == "builtin:ApplyHostCall"
+            || target.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
+        {
+            return HostcallResultContract::FailClosed;
+        }
+        return hostcall_result_contract(target);
+    }
+    if tag == "builtin:ApplyHostCall" {
+        return HostcallResultContract::RuntimeDelegated;
+    }
     if matches!(
         tag,
         "promise:constructor"
@@ -306,7 +346,7 @@ pub fn hostcall_result_contract(tag: &str) -> HostcallResultContract {
             | "promise:any"
             | "promise:create"
     ) {
-        return HostcallResultContract::PreserveInputs;
+        return HostcallResultContract::JoinInputs;
     }
     if tag.starts_with("declassify.") || tag.starts_with("declassify:") {
         return HostcallResultContract::AuthenticatedRelease;
@@ -328,7 +368,20 @@ pub fn hostcall_result_contract(tag: &str) -> HostcallResultContract {
             | RuntimeCapability::ExtensionLifecycle,
         ) => HostcallResultContract::SourceFloor(Label::Internal),
         Some(RuntimeCapability::Declassify) => HostcallResultContract::AuthenticatedRelease,
-        Some(_) => HostcallResultContract::PreserveInputs,
+        Some(
+            RuntimeCapability::VmDispatch
+            | RuntimeCapability::GcInvoke
+            | RuntimeCapability::IrLowering
+            | RuntimeCapability::PolicyWrite
+            | RuntimeCapability::EvidenceEmit
+            | RuntimeCapability::DecisionInvoke
+            | RuntimeCapability::IdempotencyDerive
+            | RuntimeCapability::HeapAllocate
+            | RuntimeCapability::FsWrite
+            | RuntimeCapability::Console
+            | RuntimeCapability::Timer
+            | RuntimeCapability::Builtin,
+        ) => HostcallResultContract::JoinInputs,
         None => HostcallResultContract::FailClosed,
     }
 }
@@ -2033,8 +2086,36 @@ mod tests {
         }
         assert_eq!(
             hostcall_result_contract("promise:resolve"),
-            HostcallResultContract::PreserveInputs
+            HostcallResultContract::JoinInputs
         );
+        assert_eq!(
+            hostcall_result_contract("builtin:ApplyHostCall"),
+            HostcallResultContract::RuntimeDelegated
+        );
+        assert_eq!(
+            hostcall_result_contract("builtin:ApplyHostCall:fs.read"),
+            HostcallResultContract::SourceFloor(Label::Internal)
+        );
+        assert_eq!(
+            hostcall_result_contract("builtin:ApplyHostCall:promise:resolve"),
+            HostcallResultContract::JoinInputs
+        );
+        assert_eq!(
+            hostcall_result_contract("builtin:ApplyHostCall:builtin:ApplyHostCall"),
+            HostcallResultContract::FailClosed
+        );
+        for tag in [
+            "builtin:FutureDeterministicOperation",
+            "number:future-deterministic-operation",
+            "console:future-acknowledgement",
+            "timer:future-local-handle",
+        ] {
+            assert_eq!(
+                hostcall_result_contract(tag),
+                HostcallResultContract::JoinInputs,
+                "{tag} belongs to a no-higher-source-than-inputs dispatcher family"
+            );
+        }
         assert_eq!(
             hostcall_result_contract("declassify.audit"),
             HostcallResultContract::AuthenticatedRelease
@@ -2050,6 +2131,12 @@ mod tests {
         let preserved =
             hostcall_result_contract("promise:resolve").result_label(&Label::Secret, None);
         assert_eq!(preserved, Label::Secret);
+        let delegated_without_runtime =
+            hostcall_result_contract("builtin:ApplyHostCall").result_label(&Label::Public, None);
+        assert_eq!(delegated_without_runtime, Label::TopSecret);
+        let delegated_with_runtime = hostcall_result_contract("builtin:ApplyHostCall")
+            .result_label(&Label::Secret, Some(&Label::Internal));
+        assert_eq!(delegated_with_runtime, Label::Secret);
         let raised_source = hostcall_result_contract("builtin:CryptoRandomBytes")
             .result_label(&Label::Public, Some(&Label::TopSecret));
         assert_eq!(raised_source, Label::TopSecret);

@@ -47,7 +47,7 @@ use crate::ast::{
     ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
     VariableDeclarationKind,
 };
-use crate::capability::hostcall_result_contract;
+use crate::capability::{APPLY_HOSTCALL_TARGET_PREFIX, hostcall_result_contract};
 use crate::effect_set::{EffectKind, EffectSet};
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -11068,7 +11068,7 @@ fn lower_spread_apply_hostcall_to_ir1(
         span_table,
     )?;
     ops.push(Ir1Op::HostCall {
-        capability: "builtin:ApplyHostCall".to_string(),
+        capability: format!("{APPLY_HOSTCALL_TARGET_PREFIX}{capability}"),
         arg_count: 2,
     });
     Ok(())
@@ -25003,6 +25003,7 @@ fn hostcall_exception_is_operand_derived(
         // arguments. Object inputs remain fail-high because their coercion or
         // transitive state does not yet have a complete static summary.
         "builtin:PathJoin"
+        | "builtin:OsGetPriority"
         | "builtin:OsSetPriority"
         | "builtin:Url"
         | "builtin:UrlFileUrlToPath"
@@ -25173,6 +25174,7 @@ fn simulate_ir2_flow_labels(
             active_catch_regions.extend(starting.iter().copied());
         }
         let mut operation_exception_is_operand_derived = false;
+        let mut operation_exception_label_override = None;
         let inferred = match &op.inner {
             Ir1Op::LoadLiteral { value } => {
                 let label = infer_data_label_for_op(&op.inner, binding_labels, Label::Public);
@@ -25805,6 +25807,7 @@ fn simulate_ir2_flow_labels(
                         // unsupported escape. Fail high instead of treating its
                         // direct arguments as the complete exception source.
                         result_label = Label::TopSecret;
+                        operation_exception_label_override = Some(Label::TopSecret);
                     }
                 }
                 if matches!(
@@ -25824,6 +25827,7 @@ fn simulate_ir2_flow_labels(
                         // manufacture the source-level Buffer proof.
                         result_label = Label::TopSecret;
                         result_shape = FlowValueShape::Unknown;
+                        operation_exception_label_override = Some(Label::TopSecret);
                     }
                 }
                 if hostcall_is_operand_derived
@@ -25855,9 +25859,14 @@ fn simulate_ir2_flow_labels(
                 operation_data_label
             }
         };
-        if let Some(exception_label) =
-            ir1_exception_flow_label(&op.inner, &inferred, operation_exception_is_operand_derived)
-        {
+        let exception_input_label = operation_exception_label_override
+            .as_ref()
+            .unwrap_or(&inferred);
+        if let Some(exception_label) = ir1_exception_flow_label(
+            &op.inner,
+            exception_input_label,
+            operation_exception_is_operand_derived,
+        ) {
             // The runtime routes an exception to the innermost active handler.
             // An enclosing handler is tainted only if the inner handler later
             // rethrows while the enclosing protected region remains active.
@@ -28239,6 +28248,12 @@ mod tests {
         for (capability, result_label, requires_declassification) in [
             ("fs.read", Label::Internal, false),
             ("builtin:CryptoRandomUUID", Label::Secret, true),
+            ("builtin:ApplyHostCall", Label::TopSecret, true),
+            (
+                "builtin:ApplyHostCall:promise:resolve",
+                Label::Public,
+                false,
+            ),
             ("future:host-source", Label::TopSecret, true),
         ] {
             let ir2 = lower_source_into_console(capability);

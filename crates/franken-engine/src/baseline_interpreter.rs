@@ -5947,6 +5947,16 @@ struct LabeledReturn {
     label: Label,
 }
 
+/// One fully accounted argument carrier owned by `ApplyHostCall` while it
+/// transfers an array-like guest value into the interpreter's scratch
+/// register window. The charge is converted into live-register plus saved
+/// frame accounting before the delegated dispatch begins.
+struct DelegatedHostcallArguments {
+    values: Vec<Value>,
+    labels: Vec<Label>,
+    carrier_bytes: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Scope chain — closure environment support (bd-6a61n.1.1)
 // ---------------------------------------------------------------------------
@@ -53807,6 +53817,129 @@ impl InterpreterCore {
         }
     }
 
+    /// Clone an `ApplyHostCall` arguments list only after reserving the full
+    /// physical value+label carrier. Every delegated operand inherits the
+    /// invocation join: selecting the target and observing the complete
+    /// arguments list are control dependencies of the inner hostcall, while
+    /// the active callback context preserves the same join for deferred work.
+    fn prepare_delegated_hostcall_arguments(
+        &mut self,
+        value: Value,
+        invocation_label: &Label,
+    ) -> Result<DelegatedHostcallArguments, InterpreterError> {
+        let (length, dynamic_value_bytes) = match &value {
+            Value::Undefined | Value::Null => (0usize, 0u64),
+            Value::Object(object_id) => {
+                let length = self.array_like_length(*object_id)?;
+                let count =
+                    u32::try_from(length).map_err(|_| InterpreterError::RegisterOutOfBounds {
+                        register: u32::MAX,
+                        max: self.config.max_registers,
+                    })?;
+                if count > self.config.max_registers {
+                    return Err(InterpreterError::RegisterOutOfBounds {
+                        register: count,
+                        max: self.config.max_registers,
+                    });
+                }
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                let dynamic_value_bytes = if object.typed_array.is_some() {
+                    // Every currently supported typed-array element materializes
+                    // as an allocation-free Int/Undefined value.
+                    0
+                } else {
+                    Self::saturating_sum((0..length).map(|index| {
+                        object
+                            .properties
+                            .get(&index.to_string())
+                            .map(Self::estimate_value_bytes)
+                            .unwrap_or(0)
+                    }))
+                };
+                (length, dynamic_value_bytes)
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "array-like object or null/undefined".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+
+        let carrier_bytes = u64::try_from(length)
+            .unwrap_or(u64::MAX)
+            .saturating_mul((std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64)
+            .saturating_add(dynamic_value_bytes)
+            .saturating_add(
+                u64::try_from(length)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(Self::estimate_label_bytes(invocation_label)),
+            );
+        self.apply_memory_component_delta(0, carrier_bytes)?;
+
+        let extracted = (|| {
+            let mut values = Vec::with_capacity(length);
+            match value {
+                Value::Undefined | Value::Null => {}
+                Value::Object(object_id) => {
+                    for element_index in 0..length {
+                        values.push(
+                            self.array_index_value(object_id, element_index)?
+                                .unwrap_or(Value::Undefined),
+                        );
+                    }
+                }
+                other => {
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "delegated argument-list shape changed after validation: {}",
+                            other.type_name()
+                        ),
+                    });
+                }
+            }
+            let labels = vec![invocation_label.clone(); length];
+            Ok::<_, InterpreterError>((values, labels))
+        })();
+
+        match extracted {
+            Ok((values, labels)) => {
+                let actual_carrier_bytes = Self::estimate_value_vec_bytes(&values)
+                    .saturating_add(Self::estimate_label_vec_bytes(&labels));
+                if actual_carrier_bytes != carrier_bytes {
+                    drop(values);
+                    drop(labels);
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(carrier_bytes);
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "delegated argument carrier estimate drifted: reserved {carrier_bytes}, actual {actual_carrier_bytes}"
+                        ),
+                    });
+                }
+                Ok(DelegatedHostcallArguments {
+                    values,
+                    labels,
+                    carrier_bytes,
+                })
+            }
+            Err(error) => {
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(carrier_bytes);
+                Err(error)
+            }
+        }
+    }
+
+    fn release_delegated_hostcall_arguments(&mut self, arguments: DelegatedHostcallArguments) {
+        let carrier_bytes = arguments.carrier_bytes;
+        drop(arguments);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(carrier_bytes);
+    }
+
     fn array_prototype_iterator(
         &mut self,
         args: RegRange,
@@ -60877,35 +61010,116 @@ impl InterpreterCore {
     fn dispatch_hostcall_with_value_args(
         &mut self,
         cap: &str,
-        values: Vec<Value>,
+        arguments: DelegatedHostcallArguments,
         module: Option<&Ir3Module>,
         delegation_inputs: &Label,
     ) -> Result<Value, InterpreterError> {
-        let count =
-            u32::try_from(values.len()).map_err(|_| InterpreterError::RegisterOutOfBounds {
+        let count = u32::try_from(arguments.values.len()).map_err(|_| {
+            InterpreterError::RegisterOutOfBounds {
                 register: u32::MAX,
                 max: self.config.max_registers,
-            })?;
-        if count > self.config.max_registers {
-            return Err(InterpreterError::RegisterOutOfBounds {
-                register: count,
-                max: self.config.max_registers,
-            });
-        }
+            }
+        });
+        let count = match count {
+            Ok(count)
+                if count <= self.config.max_registers
+                    && arguments.values.len() == arguments.labels.len() =>
+            {
+                count
+            }
+            Ok(count) if count > self.config.max_registers => {
+                self.release_delegated_hostcall_arguments(arguments);
+                return Err(InterpreterError::RegisterOutOfBounds {
+                    register: count,
+                    max: self.config.max_registers,
+                });
+            }
+            Ok(_) => {
+                self.release_delegated_hostcall_arguments(arguments);
+                return Err(InterpreterError::InternalError {
+                    details: "delegated hostcall value/label arity diverged".to_string(),
+                });
+            }
+            Err(error) => {
+                self.release_delegated_hostcall_arguments(arguments);
+                return Err(error);
+            }
+        };
+
+        let DelegatedHostcallArguments {
+            values,
+            labels,
+            carrier_bytes,
+        } = arguments;
 
         let register_base = self.register_base;
         let value_count = count as usize;
         let required_len = register_base.saturating_add(value_count);
-        let saved = self.mutate_registers(|registers| {
+        let original_register_len = self.registers.len();
+        let original_label_len = self.register_labels.len();
+        let previous_register_bytes = Self::saturating_sum(
+            self.registers
+                .get(register_base..required_len.min(original_register_len))
+                .unwrap_or(&[])
+                .iter()
+                .map(Self::estimate_value_bytes),
+        )
+        .saturating_add(Self::saturating_sum(
+            self.register_labels
+                .get(register_base..required_len.min(original_label_len))
+                .unwrap_or(&[])
+                .iter()
+                .map(Self::estimate_label_bytes),
+        ));
+        let next_register_bytes =
+            Self::saturating_sum(values.iter().map(Self::estimate_value_bytes)).saturating_add(
+                Self::saturating_sum(labels.iter().map(Self::estimate_label_bytes)),
+            );
+        let saved_carrier_bytes = u64::try_from(value_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul((std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64)
+            .saturating_add(previous_register_bytes);
+        let saved_structure_bytes = u64::try_from(value_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul((std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64);
+        if let Err(error) = self.check_temporary_memory_budget(saved_structure_bytes) {
+            drop(values);
+            drop(labels);
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(carrier_bytes);
+            return Err(error);
+        }
+        if let Err(error) = self.apply_memory_component_delta(
+            previous_register_bytes.saturating_add(carrier_bytes),
+            next_register_bytes.saturating_add(saved_carrier_bytes),
+        ) {
+            drop(values);
+            drop(labels);
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(carrier_bytes);
+            return Err(error);
+        }
+
+        let mut saved_values = Vec::with_capacity(value_count);
+        self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
             }
-            let saved = registers[register_base..required_len].to_vec();
             for (offset, value) in values.into_iter().enumerate() {
-                registers[register_base + offset] = value;
+                saved_values.push(std::mem::replace(
+                    &mut registers[register_base + offset],
+                    value,
+                ));
             }
-            saved
         });
+        if self.register_labels.len() < required_len {
+            self.register_labels.resize(required_len, Label::Public);
+        }
+        let mut saved_labels = Vec::with_capacity(value_count);
+        for (offset, label) in labels.into_iter().enumerate() {
+            saved_labels.push(std::mem::replace(
+                &mut self.register_labels[register_base + offset],
+                label,
+            ));
+        }
 
         let delegated_args = RegRange { start: 0, count };
         let outcome = if cap.starts_with("promise:") {
@@ -60926,14 +61140,44 @@ impl InterpreterCore {
             Ok(Value::Undefined)
         };
 
+        let current_register_bytes = Self::saturating_sum(
+            self.registers[register_base..required_len]
+                .iter()
+                .map(Self::estimate_value_bytes),
+        )
+        .saturating_add(Self::saturating_sum(
+            self.register_labels[register_base..required_len]
+                .iter()
+                .map(Self::estimate_label_bytes),
+        ));
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(current_register_bytes)
+            .saturating_sub(saved_carrier_bytes)
+            .saturating_add(previous_register_bytes);
         self.mutate_registers(|registers| {
-            if registers.len() < required_len {
-                registers.resize(required_len, Value::Undefined);
+            for (offset, value) in saved_values.into_iter().enumerate() {
+                registers[register_base + offset] = value;
             }
-            registers[register_base..required_len].clone_from_slice(&saved);
+            registers.truncate(original_register_len);
         });
+        for (offset, label) in saved_labels.into_iter().enumerate() {
+            self.register_labels[register_base + offset] = label;
+        }
+        self.register_labels.truncate(original_label_len);
+
         match outcome {
             Ok(value) => {
+                let runtime_label_bytes = self
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0);
+                self.check_temporary_memory_budget(
+                    runtime_label_bytes
+                        .saturating_add(Self::estimate_label_bytes(delegation_inputs))
+                        .saturating_mul(2),
+                )?;
                 let runtime_result_label = self.take_pending_hostcall_result_label();
                 let inner_result_label = hostcall_result_contract(cap)
                     .result_label(&Label::Public, runtime_result_label.as_ref());
@@ -60941,7 +61185,10 @@ impl InterpreterCore {
                 self.replace_pending_hostcall_result_label(Some(result_label))?;
                 Ok(value)
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                self.clear_pending_hostcall_result_label();
+                Err(error)
+            }
         }
     }
 
@@ -60951,6 +61198,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         authenticated_target: Option<&str>,
     ) -> Result<Value, InterpreterError> {
+        self.clear_pending_hostcall_result_label();
         if args.count < 2 {
             return Err(InterpreterError::TypeError {
                 expected: "target capability and argumentsList".to_string(),
@@ -60991,8 +61239,8 @@ impl InterpreterCore {
         let delegation_inputs = self.join_arg_range_with_object_mutation_label(args)?;
         let delegation_input_bytes = Self::estimate_label_bytes(&delegation_inputs);
         self.apply_memory_component_delta(0, delegation_input_bytes)?;
-        let values = match self.array_like_argument_values(self.read_reg(args.start + 1)?) {
-            Ok(values) => values,
+        let arguments_list = match self.read_reg(args.start + 1) {
+            Ok(arguments_list) => arguments_list,
             Err(error) => {
                 self.estimated_memory_bytes = self
                     .estimated_memory_bytes
@@ -61000,6 +61248,16 @@ impl InterpreterCore {
                 return Err(error);
             }
         };
+        let arguments =
+            match self.prepare_delegated_hostcall_arguments(arguments_list, &delegation_inputs) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(delegation_input_bytes);
+                    return Err(error);
+                }
+            };
         let previous_context = self.active_inline_callback_context_label.take();
         let context_winner = previous_context
             .as_ref()
@@ -61008,6 +61266,7 @@ impl InterpreterCore {
         let next_context_bytes = Self::estimate_label_bytes(context_winner);
         if let Err(error) = self.apply_memory_component_delta(0, next_context_bytes) {
             self.active_inline_callback_context_label = previous_context;
+            self.release_delegated_hostcall_arguments(arguments);
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
                 .saturating_sub(delegation_input_bytes);
@@ -61015,8 +61274,12 @@ impl InterpreterCore {
         }
         let next_context = context_winner.clone();
         self.active_inline_callback_context_label = Some(next_context);
-        let mut outcome =
-            self.dispatch_hostcall_with_value_args(&target_cap, values, module, &delegation_inputs);
+        let mut outcome = self.dispatch_hostcall_with_value_args(
+            &target_cap,
+            arguments,
+            module,
+            &delegation_inputs,
+        );
         if matches!(outcome, Err(InterpreterError::UncaughtException { .. }))
             && let Err(error) = self.join_pending_exception_label(&delegation_inputs)
         {
@@ -82934,6 +83197,137 @@ mod async_runtime_tests_current {
         assert_eq!(
             label_preserving_core.estimated_memory_bytes(),
             label_preserving_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn apply_hostcall_scratch_frame_is_label_exact_and_failure_atomic_bd_z1peg_3() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let scratch_value = Value::str("saved-scratch-value".repeat(19));
+        let scratch_label = Label::Custom {
+            name: "saved-scratch-label".repeat(23),
+            level: 2,
+        };
+
+        let mut success = test_interpreter();
+        success
+            .write_reg_with_label(0, scratch_value.clone(), scratch_label.clone())
+            .expect("classified scratch register");
+        let arguments = success
+            .alloc_array_from_values(&[Value::Int(7)])
+            .expect("delegated arguments");
+        let prepared = success
+            .prepare_delegated_hostcall_arguments(Value::Object(arguments), &Label::Secret)
+            .expect("account delegated argument carrier");
+        let delegated = success
+            .dispatch_hostcall_with_value_args(
+                "promise:resolve",
+                prepared,
+                Some(&module),
+                &Label::Secret,
+            )
+            .expect("delegate Promise.resolve");
+        let Value::Promise(promise) = delegated else {
+            panic!("delegated Promise.resolve must return a Promise")
+        };
+        assert_eq!(
+            success
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(promise))
+                .expect("delegated promise record")
+                .label,
+            Label::Secret,
+            "the inner dispatch must observe the installed argument label"
+        );
+        assert_eq!(success.read_reg(0), Ok(scratch_value.clone()));
+        assert_eq!(success.get_register_label(0), Ok(&scratch_label));
+        assert_eq!(
+            success.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(
+            success.estimated_memory_bytes(),
+            success.recompute_estimated_memory_bytes()
+        );
+
+        let mut throwing = test_interpreter();
+        throwing
+            .write_reg_with_label(0, scratch_value.clone(), scratch_label.clone())
+            .expect("throwing scratch register");
+        let throwing_arguments = throwing
+            .alloc_array_from_values(&[Value::Int(7)])
+            .expect("throwing delegated arguments");
+        let prepared = throwing
+            .prepare_delegated_hostcall_arguments(Value::Object(throwing_arguments), &Label::Secret)
+            .expect("account throwing arguments");
+        throwing
+            .replace_pending_hostcall_result_label(Some(Label::Custom {
+                name: "stale-inner-publication".repeat(17),
+                level: 4,
+            }))
+            .expect("seed stale inner publication");
+        let error = throwing
+            .dispatch_hostcall_with_value_args(
+                "builtin:PathJoin",
+                prepared,
+                Some(&module),
+                &Label::Secret,
+            )
+            .expect_err("invalid delegated path input must throw");
+        assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+        assert_eq!(throwing.read_reg(0), Ok(scratch_value.clone()));
+        assert_eq!(throwing.get_register_label(0), Ok(&scratch_label));
+        assert!(
+            throwing.pending_hostcall_result_label.is_none(),
+            "an inner error must not leak a stale result publication"
+        );
+        assert_eq!(
+            throwing.estimated_memory_bytes(),
+            throwing.recompute_estimated_memory_bytes()
+        );
+
+        let mut one_short = test_interpreter();
+        one_short
+            .write_reg_with_label(0, scratch_value.clone(), scratch_label.clone())
+            .expect("one-short scratch register");
+        let one_short_arguments = one_short
+            .alloc_array_from_values(&[Value::Int(7)])
+            .expect("one-short delegated arguments");
+        let before_prepare = one_short.estimated_memory_bytes();
+        let invocation_label = Label::Custom {
+            name: "delegated-invocation-label".repeat(31),
+            level: 3,
+        };
+        let prepared = one_short
+            .prepare_delegated_hostcall_arguments(
+                Value::Object(one_short_arguments),
+                &invocation_label,
+            )
+            .expect("reserve one-short argument carrier");
+        let saved_structure_bytes =
+            (std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64;
+        one_short.config.max_total_memory_bytes = one_short
+            .estimated_memory_bytes()
+            .saturating_add(saved_structure_bytes)
+            .saturating_sub(1);
+        let refusal = one_short
+            .dispatch_hostcall_with_value_args(
+                "promise:resolve",
+                prepared,
+                Some(&module),
+                &invocation_label,
+            )
+            .expect_err("saved scratch carrier must fit before delegation");
+        assert!(matches!(
+            refusal,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(one_short.read_reg(0), Ok(scratch_value));
+        assert_eq!(one_short.get_register_label(0), Ok(&scratch_label));
+        assert_eq!(one_short.estimated_memory_bytes(), before_prepare);
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short.recompute_estimated_memory_bytes()
         );
     }
 

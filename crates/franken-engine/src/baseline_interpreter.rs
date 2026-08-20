@@ -12427,7 +12427,11 @@ impl InterpreterCore {
                     // callbacks off the current call stack), and the call itself
                     // evaluates to `undefined`. The encoding still steers `data`'s
                     // Buffer-vs-string shape via the resolver above.
-                    self.schedule_io_callback(closure_id, vec![Value::Null, value])?;
+                    self.schedule_io_callback_with_label(
+                        closure_id,
+                        vec![Value::Null, value],
+                        filesystem_exception_label.clone(),
+                    )?;
                     Value::Undefined
                 } else {
                     value
@@ -59162,11 +59166,7 @@ impl InterpreterCore {
             u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         )?;
         if let Some(callback) = callback {
-            self.schedule_io_callback_with_label(
-                callback,
-                vec![Value::Null, value],
-                output_label,
-            )?;
+            self.schedule_io_callback_with_label(callback, vec![Value::Null, value], output_label)?;
             Ok(Value::Undefined)
         } else {
             Ok(value)
@@ -59210,9 +59210,7 @@ impl InterpreterCore {
             bytes[14],
             bytes[15]
         );
-        self.replace_pending_hostcall_result_label(Some(
-            invocation_label.join(&Label::Secret),
-        ))?;
+        self.replace_pending_hostcall_result_label(Some(invocation_label.join(&Label::Secret)))?;
         Ok(Value::str(uuid))
     }
 
@@ -59321,11 +59319,7 @@ impl InterpreterCore {
         let value = Value::Int(min + offset as i64);
         let output_label = invocation_label.join(&Label::Secret);
         if let Some(callback) = callback {
-            self.schedule_io_callback_with_label(
-                callback,
-                vec![Value::Null, value],
-                output_label,
-            )?;
+            self.schedule_io_callback_with_label(callback, vec![Value::Null, value], output_label)?;
             Ok(Value::Undefined)
         } else {
             self.replace_pending_hostcall_result_label(Some(output_label))?;
@@ -81707,13 +81701,11 @@ mod async_runtime_tests_current {
         );
     }
 
-    /// bd-n2mjy: a HostCall with zero args resets the dst register's label to
-    /// `Public`. The dst can carry no operand-derived taint because no
-    /// operand was read; leaving a stale (possibly higher) prior label there
-    /// would over-taint subsequent flows (availability hazard called out in
-    /// the bead).
+    /// An explicitly label-preserving HostCall with zero operands resets stale
+    /// destination provenance to `Public`. Source-producing capabilities use
+    /// their own contract floor instead (bd-z1peg).
     #[test]
-    fn hostcall_with_zero_args_resets_dst_label_to_public() {
+    fn label_preserving_hostcall_with_zero_args_resets_dst_to_public() {
         let module = test_module_with_functions(
             vec![
                 Ir3Instruction::HostCall {
@@ -81727,9 +81719,8 @@ mod async_runtime_tests_current {
         );
 
         let mut core = test_interpreter();
-        // Prior content of dst was Confidential. After a zero-arg hostcall
-        // the dst's label must reflect the new value's provenance (none of
-        // the prior taint), so it should drop to Public.
+        // Prior content of dst was Confidential. promise:resolve is an exact
+        // operand-preserving route, so an empty operand set is Public.
         core.set_register_label(1, crate::ifc_artifacts::Label::Confidential)
             .expect("dst label should be settable");
 
@@ -81740,7 +81731,79 @@ mod async_runtime_tests_current {
             core.get_register_label(1)
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Public,
-            "zero-arg hostcall dst must reset to Public"
+            "zero-arg label-preserving result must reset to Public"
+        );
+    }
+
+    #[test]
+    fn zero_argument_entropy_hostcall_result_is_secret_bd_z1peg() {
+        use frankenengine_extension_host::host_io::{
+            FsMetaResult, HostIoCapability, HostIoError, HostIoOutcome, HostIoRequest,
+            HostIoResponse,
+        };
+
+        #[derive(Debug)]
+        struct DeterministicEntropy;
+
+        impl HostIoProvider for DeterministicEntropy {
+            fn name(&self) -> &str {
+                "bd-z1peg-deterministic-entropy"
+            }
+
+            fn perform(
+                &self,
+                request: &HostIoRequest,
+                _granted: &[HostIoCapability],
+            ) -> HostIoOutcome {
+                match request {
+                    HostIoRequest::RandomRead { byte_len } => Ok(HostIoResponse::RandomRead {
+                        bytes: (0..*byte_len).map(|index| index as u8).collect(),
+                    }),
+                    HostIoRequest::FsRead { .. } => {
+                        Ok(HostIoResponse::FsRead { bytes: Vec::new() })
+                    }
+                    HostIoRequest::FsWrite { .. } => {
+                        Ok(HostIoResponse::FsWrite { bytes_written: 0 })
+                    }
+                    HostIoRequest::FsMeta { .. } => Ok(HostIoResponse::FsMeta {
+                        result: FsMetaResult::Unit,
+                    }),
+                    HostIoRequest::NetworkSend { .. }
+                    | HostIoRequest::NetworkRecv { .. }
+                    | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
+                        reason: "network is outside the entropy fixture".to_string(),
+                    }),
+                }
+            }
+        }
+
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:CryptoRandomUUID".to_string()),
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut core = test_interpreter();
+        core.set_host_io(Arc::new(DeterministicEntropy), None);
+        core.set_register_label(1, Label::Public)
+            .expect("destination label seed");
+
+        core.execute(&module)
+            .expect("zero-argument randomUUID should dispatch");
+
+        assert!(matches!(core.read_reg(1), Ok(Value::Str(value)) if value.len() == 36));
+        assert_eq!(
+            core.get_register_label(1).expect("randomUUID result label"),
+            &Label::Secret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -81916,6 +81979,39 @@ mod async_runtime_tests_current {
             bare_result,
             Value::Undefined,
             "no provider installed => fail-closed undefined"
+        );
+
+        // bd-z1peg: the real HostCall instruction applies the shared
+        // filesystem source floor after provider dispatch. A Public path does
+        // not make provider-originated file contents Public.
+        let source_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("fs:read".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut labeled = test_interpreter();
+        labeled.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(&root).expect("source-label provider")),
+            None,
+        );
+        labeled
+            .write_reg_with_label(0, Value::str("report.txt"), Label::Public)
+            .expect("public read path");
+        labeled
+            .write_reg_with_label(1, Value::str("utf8"), Label::Public)
+            .expect("public read encoding");
+        labeled
+            .execute(&source_module)
+            .expect("source-labeled fs read");
+        assert_eq!(
+            labeled.get_register_label(3).expect("fs read result label"),
+            &Label::Internal
         );
 
         let _ = std::fs::remove_dir_all(&root);

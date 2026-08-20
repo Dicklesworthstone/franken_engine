@@ -269,10 +269,9 @@ impl HostcallResultContract {
     /// high instead of silently treating an authority grant as declassification.
     pub fn result_label(&self, inputs: &Label, runtime: Option<&Label>) -> Label {
         match self {
-            Self::PreserveInputs => runtime.map_or_else(
-                || inputs.clone(),
-                |runtime| inputs.join(runtime),
-            ),
+            Self::PreserveInputs => {
+                runtime.map_or_else(|| inputs.clone(), |runtime| inputs.join(runtime))
+            }
             Self::SourceFloor(floor) => runtime.map_or_else(
                 || floor.join(inputs),
                 |runtime| floor.join(inputs).join(runtime),
@@ -2045,23 +2044,21 @@ mod tests {
             HostcallResultContract::FailClosed
         );
 
-        let secret_source = hostcall_result_contract("builtin:CryptoRandomUUID")
-            .result_label(&Label::Public, None);
+        let secret_source =
+            hostcall_result_contract("builtin:CryptoRandomUUID").result_label(&Label::Public, None);
         assert_eq!(secret_source, Label::Secret);
-        let preserved = hostcall_result_contract("promise:resolve")
-            .result_label(&Label::Secret, None);
+        let preserved =
+            hostcall_result_contract("promise:resolve").result_label(&Label::Secret, None);
         assert_eq!(preserved, Label::Secret);
         let raised_source = hostcall_result_contract("builtin:CryptoRandomBytes")
             .result_label(&Label::Public, Some(&Label::TopSecret));
         assert_eq!(raised_source, Label::TopSecret);
         assert_eq!(
-            hostcall_result_contract("future:host-source")
-                .result_label(&Label::Public, None),
+            hostcall_result_contract("future:host-source").result_label(&Label::Public, None),
             Label::TopSecret
         );
         assert_eq!(
-            hostcall_result_contract("declassify.audit")
-                .result_label(&Label::Secret, None),
+            hostcall_result_contract("declassify.audit").result_label(&Label::Secret, None),
             Label::TopSecret,
             "a capability grant alone must not authenticate a release"
         );

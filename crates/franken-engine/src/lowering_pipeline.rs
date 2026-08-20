@@ -25701,8 +25701,8 @@ fn simulate_ir2_flow_labels(
                 // incorrectly guard the source operation before it produced a
                 // value. Keep the operation annotation operand-derived and push
                 // the shared result-contract label onto the value stack.
-                let mut result_label = hostcall_result_contract(capability)
-                    .result_label(&operation_data_label, None);
+                let mut result_label =
+                    hostcall_result_contract(capability).result_label(&operation_data_label, None);
                 let mut result_origin = None;
                 let mut result_shape = FlowValueShape::Unknown;
 
@@ -25848,11 +25848,8 @@ fn simulate_ir2_flow_labels(
                 {
                     result_shape = FlowValueShape::ClosedResult;
                 }
-                let mut result = fresh_crypto_flow_value(
-                    result_label,
-                    result_origin,
-                    &mut next_identity,
-                );
+                let mut result =
+                    fresh_crypto_flow_value(result_label, result_origin, &mut next_identity);
                 result.shape = result_shape;
                 value_stack.push(result);
                 operation_data_label
@@ -28269,8 +28266,7 @@ mod tests {
                 .expect("console consumer flow annotation");
             assert_eq!(console.data_label, result_label, "{capability}");
             assert_eq!(
-                console.declassification_required,
-                requires_declassification,
+                console.declassification_required, requires_declassification,
                 "{capability}"
             );
         }

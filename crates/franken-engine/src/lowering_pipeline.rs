@@ -20273,10 +20273,12 @@ fn module_alias_expr_has_rejected_use(
         // is an engine-consumed use, not an escape: the fd dispatch mutates
         // or reads the bytes in place and never observes or re-exposes the
         // object. This acceptance is syntactic only — the flow layer remains
-        // the enforcement point, because any intervening non-operand-derived
-        // call clears the BufferObject proof and the rewritten
-        // `builtin:BufferObjectToString` hostcall then takes its fail-closed
-        // TopSecret arm.
+        // the enforcement point. BufferObject is preserved through the
+        // generic GetProperty/CallMethod invalidation (so intervening
+        // `fs.*` / `console.log` keep the engine receiver for
+        // `buf.toString`); StoreBinding of a new value still overwrites.
+        // A rewritten `builtin:BufferObjectToString` whose receiver is not
+        // BufferObject takes the fail-closed TopSecret arm.
         Expression::Call {
             callee, arguments, ..
         } if surface == LoweringOnlyModuleAliasSurface::BufferObject
@@ -24885,9 +24887,9 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
                 | FlowValueShape::Callable
                 | FlowValueShape::EventEmitterObject
                 // bd-zco6t: BufferObject must survive GetProperty/CallMethod
-                // on unrelated `fs.*` members so `buf.toString` still sees
-                // the engine receiver. StoreBinding of a new value still
-                // overwrites the binding shape.
+                // on unrelated `fs.*` members and `console.log` so
+                // `buf.toString` still sees the engine receiver. StoreBinding
+                // of a new value still overwrites the binding shape.
                 | FlowValueShape::BufferObject
         ) {
             value.shape = FlowValueShape::Unknown;
@@ -24904,6 +24906,9 @@ fn invalidate_nonprimitive_binding_flow_shapes(
             FlowValueShape::Primitive
                 | FlowValueShape::Callable
                 | FlowValueShape::EventEmitterObject
+                // Named `buf` must still be BufferObject after `fs.readSync`
+                // / `fs.closeSync` so the later `buf.toString` hostcall
+                // authenticates (bd-zco6t).
                 | FlowValueShape::BufferObject
         ) {
             *shape = FlowValueShape::Unknown;
@@ -26246,10 +26251,10 @@ fn simulate_ir2_flow_labels(
                         // bd-zco6t: the authenticated Buffer is a dedicated
                         // finite-method receiver (`toString`/`readUInt32LE`);
                         // this stack-copy preserve is the same synthetic-
-                        // receiver seam OwnKeyArray's `.join` uses —
-                        // GetProperty still invalidates the binding map
-                        // immediately after, so no named-binding proof
-                        // outlives a mutation or escape.
+                        // receiver seam OwnKeyArray's `.join` uses. Named
+                        // BufferObject bindings also survive the subsequent
+                        // GetProperty/CallMethod invalidation so `buf.toString`
+                        // after `fs.readSync` still sees the engine receiver.
                         | FlowValueShape::BufferObject
                 ) {
                     invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
@@ -28657,6 +28662,8 @@ mod tests {
     /// every later writeSync/readSync non-operand-derived: their TopSecret
     /// exception contract poisoned the catch, and the shape invalidation
     /// destroyed the Buffer proof `buf.toString('utf8')` depends on.
+    /// BufferObject is now retained through that invalidation so the
+    /// rewritten toString hostcall still authenticates after `fs.readSync`.
     #[test]
     fn fd_lifecycle_fixtures_lower_without_unauthorized_flow_bd_zco6t() {
         fn assert_flow_clean(name: &str, source: &str) {
@@ -28666,6 +28673,13 @@ mod tests {
             let ir1 = lower_ir0_to_ir1(&ir0)
                 .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
                 .module;
+            if name == "fixture_0022_readsync" {
+                assert_eq!(
+                    count_hostcall_deep(&ir1.ops, "builtin:BufferObjectToString"),
+                    1,
+                    "0022 must rewrite buf.toString after the intervening fd ops"
+                );
+            }
             let ir2 = lower_ir1_to_ir2_with_host_io_exception_provenance(
                 &ir1,
                 HostIoExceptionProvenance::ProviderInternal,
@@ -28697,9 +28711,9 @@ mod tests {
             }
         }
 
-        // Corpus fixture 0022: the positional read's fd must be a closed
-        // primitive so the readSync stays operand-derived and the Buffer
-        // proof behind buf.toString survives.
+        // Corpus fixture 0022: BufferObject must survive intervening
+        // GetProperty/CallMethod of `fs.readSync`/`closeSync`/`console.log`
+        // so the rewritten `buf.toString` hostcall still authenticates.
         assert_flow_clean(
             "fixture_0022_readsync",
             "const fs = require('fs');\n\

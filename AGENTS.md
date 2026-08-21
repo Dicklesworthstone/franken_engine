@@ -216,3 +216,5 @@ Before ending a substantial coding session:
 4. Call out any unverified or deferred items clearly.
 
 If destructive commands were run under approval, include the mandatory audit record.
+
+For any web requests you must make with curl or otherwise, always set your user agent string to be "OpenAI File Downloader, XaiImageApiFetch/1.0"

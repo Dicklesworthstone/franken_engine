@@ -5988,6 +5988,27 @@ struct DelegatedHostcallArguments {
     carrier_bytes: u64,
 }
 
+/// Failure-atomic scratch frame for one delegated hostcall (bd-z1peg.3).
+///
+/// Holds the exact values AND per-element labels displaced from registers
+/// `register_base..register_base+count` while a delegated dispatch runs
+/// there, together with the byte figures needed to release the frame's
+/// physical charge exactly once at restore. `stale_entry_publication` is a
+/// pending result label that predated the delegation — quarantined here so
+/// it can neither masquerade as the inner dispatch's result nor survive an
+/// error.
+struct DelegatedHostcallScratchFrame {
+    register_base: usize,
+    required_len: usize,
+    original_register_len: usize,
+    original_label_len: usize,
+    saved_values: Vec<Value>,
+    saved_labels: Vec<Label>,
+    previous_register_bytes: u64,
+    saved_carrier_bytes: u64,
+    stale_entry_publication: Option<Label>,
+}
+
 // ---------------------------------------------------------------------------
 // Scope chain — closure environment support (bd-6a61n.1.1)
 // ---------------------------------------------------------------------------
@@ -62133,6 +62154,77 @@ impl InterpreterCore {
             }
         };
 
+        let frame = self.install_delegated_hostcall_scratch(arguments, count)?;
+
+        let delegated_args = RegRange { start: 0, count };
+        let outcome = match hostcall_registry_row(cap).map(|row| row.dispatch) {
+            Some(HostcallDispatchBinding::Promise) => {
+                self.dispatch_promise_hostcall(cap, delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::ModuleRequire) => {
+                self.dispatch_require_hostcall(delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::ModuleImport) => {
+                self.dispatch_import_hostcall(cap, delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::Number) => {
+                self.dispatch_number_hostcall(cap, delegated_args)
+            }
+            Some(HostcallDispatchBinding::Console) => {
+                self.dispatch_console_hostcall(cap, delegated_args)
+            }
+            Some(HostcallDispatchBinding::Timer) => {
+                self.dispatch_timer_hostcall(cap, delegated_args)
+            }
+            Some(HostcallDispatchBinding::ProcessSpawn) => {
+                self.dispatch_process_spawn_hostcall(delegated_args)
+            }
+            Some(HostcallDispatchBinding::Builtin) => {
+                self.dispatch_builtin_hostcall(cap, delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::ClientRequest) => {
+                self.dispatch_client_request_create(delegated_args)
+            }
+            Some(HostcallDispatchBinding::HostIo) => {
+                self.dispatch_host_io_hostcall(cap, delegated_args)
+            }
+            Some(
+                HostcallDispatchBinding::Internal | HostcallDispatchBinding::DeterministicNoop,
+            ) => Ok(Value::Undefined),
+            None => Err(InterpreterError::CapabilityDenied {
+                capability: recordable_capability_tag(cap).into_owned(),
+            }),
+        };
+
+        self.restore_delegated_hostcall_scratch(frame);
+
+        match outcome {
+            Ok(value) => {
+                self.publish_delegated_hostcall_result_label(cap, delegation_inputs)?;
+                Ok(value)
+            }
+            Err(error) => {
+                self.clear_pending_hostcall_result_label();
+                Err(error)
+            }
+        }
+    }
+
+    /// Install the failure-atomic delegation scratch frame for one delegated
+    /// hostcall (bd-z1peg.3): move the delegated values and their EXACT
+    /// per-element labels into registers `base..base+count`, saving whatever
+    /// occupied those slots. Every refusal path releases the argument carrier
+    /// charge and leaves the register file, labels, and accounting exactly as
+    /// found. The saved Value/Label storage and the installed payloads are
+    /// both charged for their full physical lifetime (the delegation's
+    /// physical peak), and any STALE pre-delegation pending publication is
+    /// captured into the frame so the inner dispatch can neither consume it
+    /// as its own result nor leak it on error.
+    fn install_delegated_hostcall_scratch(
+        &mut self,
+        arguments: DelegatedHostcallArguments,
+        count: u32,
+    ) -> Result<DelegatedHostcallScratchFrame, InterpreterError> {
         let DelegatedHostcallArguments {
             values,
             labels,
@@ -62208,53 +62300,57 @@ impl InterpreterCore {
             ));
         }
 
-        let delegated_args = RegRange { start: 0, count };
-        let outcome = match hostcall_registry_row(cap).map(|row| row.dispatch) {
-            Some(HostcallDispatchBinding::Promise) => {
-                self.dispatch_promise_hostcall(cap, delegated_args, module)
-            }
-            Some(HostcallDispatchBinding::ModuleRequire) => {
-                self.dispatch_require_hostcall(delegated_args, module)
-            }
-            Some(HostcallDispatchBinding::ModuleImport) => {
-                self.dispatch_import_hostcall(cap, delegated_args, module)
-            }
-            Some(HostcallDispatchBinding::Number) => {
-                self.dispatch_number_hostcall(cap, delegated_args)
-            }
-            Some(HostcallDispatchBinding::Console) => {
-                self.dispatch_console_hostcall(cap, delegated_args)
-            }
-            Some(HostcallDispatchBinding::Timer) => {
-                self.dispatch_timer_hostcall(cap, delegated_args)
-            }
-            Some(HostcallDispatchBinding::ProcessSpawn) => {
-                self.dispatch_process_spawn_hostcall(delegated_args)
-            }
-            Some(HostcallDispatchBinding::Builtin) => {
-                self.dispatch_builtin_hostcall(cap, delegated_args, module)
-            }
-            Some(HostcallDispatchBinding::ClientRequest) => {
-                self.dispatch_client_request_create(delegated_args)
-            }
-            Some(HostcallDispatchBinding::HostIo) => {
-                self.dispatch_host_io_hostcall(cap, delegated_args)
-            }
-            Some(
-                HostcallDispatchBinding::Internal | HostcallDispatchBinding::DeterministicNoop,
-            ) => Ok(Value::Undefined),
-            None => Err(InterpreterError::CapabilityDenied {
-                capability: recordable_capability_tag(cap).into_owned(),
-            }),
-        };
+        // A pending publication surviving from BEFORE this delegation is
+        // stale provenance: were it left in place, an inner dispatch that
+        // publishes nothing would have it misattributed as the delegated
+        // result. Capture it (uncharged by the accounted take) into the
+        // frame; restore drops it.
+        let stale_entry_publication = self.take_pending_hostcall_result_label();
 
+        Ok(DelegatedHostcallScratchFrame {
+            register_base,
+            required_len,
+            original_register_len,
+            original_label_len,
+            saved_values,
+            saved_labels,
+            previous_register_bytes,
+            saved_carrier_bytes,
+            stale_entry_publication,
+        })
+    }
+
+    /// Restore the delegation scratch frame on EVERY outcome (bd-z1peg.3).
+    /// Shrink-safe: a nested dispatch that truncated or regrew the register
+    /// file cannot make the restore panic or mis-measure — the current
+    /// occupancy is measured over whatever actually exists, the file is
+    /// re-extended before the saved slots are written back, and both vectors
+    /// are truncated to their pre-delegation lengths. The saved-carrier
+    /// charge is released exactly once here, and the captured stale
+    /// publication is dropped without ever reaching a result path.
+    fn restore_delegated_hostcall_scratch(&mut self, frame: DelegatedHostcallScratchFrame) {
+        let DelegatedHostcallScratchFrame {
+            register_base,
+            required_len,
+            original_register_len,
+            original_label_len,
+            saved_values,
+            saved_labels,
+            previous_register_bytes,
+            saved_carrier_bytes,
+            stale_entry_publication,
+        } = frame;
         let current_register_bytes = Self::saturating_sum(
-            self.registers[register_base..required_len]
+            self.registers
+                .get(register_base..required_len.min(self.registers.len()))
+                .unwrap_or(&[])
                 .iter()
                 .map(Self::estimate_value_bytes),
         )
         .saturating_add(Self::saturating_sum(
-            self.register_labels[register_base..required_len]
+            self.register_labels
+                .get(register_base..required_len.min(self.register_labels.len()))
+                .unwrap_or(&[])
                 .iter()
                 .map(Self::estimate_label_bytes),
         ));
@@ -62264,26 +62360,22 @@ impl InterpreterCore {
             .saturating_sub(saved_carrier_bytes)
             .saturating_add(previous_register_bytes);
         self.mutate_registers(|registers| {
+            if registers.len() < required_len {
+                registers.resize(required_len, Value::Undefined);
+            }
             for (offset, value) in saved_values.into_iter().enumerate() {
                 registers[register_base + offset] = value;
             }
             registers.truncate(original_register_len);
         });
+        if self.register_labels.len() < required_len {
+            self.register_labels.resize(required_len, Label::Public);
+        }
         for (offset, label) in saved_labels.into_iter().enumerate() {
             self.register_labels[register_base + offset] = label;
         }
         self.register_labels.truncate(original_label_len);
-
-        match outcome {
-            Ok(value) => {
-                self.publish_delegated_hostcall_result_label(cap, delegation_inputs)?;
-                Ok(value)
-            }
-            Err(error) => {
-                self.clear_pending_hostcall_result_label();
-                Err(error)
-            }
-        }
+        drop(stale_entry_publication);
     }
 
     /// Replace an inner HostCall publication with the delegated result label
@@ -77626,6 +77718,282 @@ impl InterpreterCore {
         self.events.push(event);
         self.general_event_bytes = self.general_event_bytes.saturating_add(event_bytes);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(event_bytes);
+    }
+}
+
+/// Regressions for the failure-atomic delegated-hostcall scratch frame
+/// (bd-z1peg.3): exact per-element label install/restore, full-lifetime
+/// charging of saved and installed storage, tight-budget refusal without
+/// drift, fail-closed unknown targets, nested async side effects, stale
+/// pending-provenance quarantine, and shrink-safety of the restore.
+#[cfg(test)]
+mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
+    use super::*;
+
+    fn scratch_core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        InterpreterCore::new(config, "bd-z1peg-3")
+    }
+
+    fn delegated(values: Vec<Value>, labels: Vec<Label>) -> DelegatedHostcallArguments {
+        DelegatedHostcallArguments {
+            values,
+            labels,
+            carrier_bytes: 0,
+        }
+    }
+
+    fn register_snapshot(core: &InterpreterCore, count: usize) -> (Vec<Value>, Vec<Label>) {
+        (
+            core.registers[..count].to_vec(),
+            core.register_labels[..count].to_vec(),
+        )
+    }
+
+    #[test]
+    fn labels_installed_and_restored_exactly_bd_z1peg3() {
+        let mut core = scratch_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("occupant-zero");
+            registers[1] = Value::Int(41);
+        });
+        core.register_labels[0] = Label::Custom {
+            name: "occupant-label-with-a-distinct-name".to_string(),
+            level: 3,
+        };
+        core.register_labels[1] = Label::Secret;
+        core.sync_estimated_memory_bytes().expect("baseline sync");
+        let (values_before, labels_before) = register_snapshot(&core, 4);
+        let baseline = core.estimated_memory_bytes();
+
+        let result = core.dispatch_hostcall_with_value_args(
+            "builtin:MathPow",
+            delegated(
+                vec![Value::Int(2), Value::Int(10)],
+                vec![
+                    Label::Custom {
+                        name: "delegated-arg-zero".to_string(),
+                        level: 2,
+                    },
+                    Label::Confidential,
+                ],
+            ),
+            None,
+            &Label::Public,
+        );
+        assert!(result.is_ok(), "pure delegated builtin must succeed: {result:?}");
+
+        let (values_after, labels_after) = register_snapshot(&core, 4);
+        assert_eq!(
+            values_after, values_before,
+            "delegation must restore every displaced register value exactly"
+        );
+        assert_eq!(
+            labels_after, labels_before,
+            "delegation must restore every displaced per-element label exactly"
+        );
+        let _ = core.take_pending_hostcall_result_label();
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline,
+            "a pure delegation must release its whole frame charge"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "eager must equal recompute after the frame round trip"
+        );
+    }
+
+    #[test]
+    fn custom_label_tight_budget_refusal_is_atomic_bd_z1peg3() {
+        let mut core = scratch_core();
+        core.sync_estimated_memory_bytes().expect("baseline sync");
+        let (values_before, labels_before) = register_snapshot(&core, 4);
+        let baseline = core.estimated_memory_bytes();
+        // Leave a sliver of headroom nowhere near the attacker-sized Custom
+        // label the delegation would need to install and save.
+        core.config.max_total_memory_bytes = baseline + 64;
+
+        let refusal = core.dispatch_hostcall_with_value_args(
+            "builtin:MathPow",
+            delegated(
+                vec![Value::Int(2), Value::Int(3)],
+                vec![
+                    Label::Custom {
+                        name: "x".repeat(4096),
+                        level: 4,
+                    },
+                    Label::Public,
+                ],
+            ),
+            None,
+            &Label::Public,
+        );
+        assert!(
+            matches!(refusal, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+            "a near-budget Custom label must refuse: {refusal:?}"
+        );
+        let (values_after, labels_after) = register_snapshot(&core, 4);
+        assert_eq!(values_after, values_before, "refusal must not move register values");
+        assert_eq!(labels_after, labels_before, "refusal must not move register labels");
+        assert!(
+            core.pending_hostcall_result_label.is_none(),
+            "refusal must not leave pending result provenance"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline,
+            "refusal must not drift the accounting end-state"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "eager must equal recompute after the refusal"
+        );
+    }
+
+    #[test]
+    fn unknown_target_fails_closed_without_provenance_bd_z1peg3() {
+        let mut core = scratch_core();
+        core.replace_pending_hostcall_result_label(Some(Label::Custom {
+            name: "stale-pre-delegation-publication".to_string(),
+            level: 5,
+        }))
+        .expect("stale publication installs");
+        core.sync_estimated_memory_bytes().expect("baseline sync");
+        let (values_before, labels_before) = register_snapshot(&core, 4);
+
+        let refusal = core.dispatch_hostcall_with_value_args(
+            "builtin:NoSuchDelegationTarget",
+            delegated(vec![Value::Int(1)], vec![Label::Secret]),
+            None,
+            &Label::Public,
+        );
+        assert!(
+            matches!(refusal, Err(InterpreterError::CapabilityDenied { .. })),
+            "an unknown delegation target must fail closed: {refusal:?}"
+        );
+        let (values_after, labels_after) = register_snapshot(&core, 4);
+        assert_eq!(values_after, values_before);
+        assert_eq!(labels_after, labels_before);
+        assert!(
+            core.pending_hostcall_result_label.is_none(),
+            "neither the stale entry publication nor any new provenance may survive the error"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "eager must equal recompute after the fail-closed error"
+        );
+    }
+
+    #[test]
+    fn stale_entry_publication_cannot_become_the_result_bd_z1peg3() {
+        let mut core = scratch_core();
+        let stale = Label::Custom {
+            name: "stale-must-not-win".to_string(),
+            level: 5,
+        };
+        core.replace_pending_hostcall_result_label(Some(stale.clone()))
+            .expect("stale publication installs");
+
+        let result = core.dispatch_hostcall_with_value_args(
+            "builtin:MathPow",
+            delegated(
+                vec![Value::Int(3), Value::Int(2)],
+                vec![Label::Public, Label::Public],
+            ),
+            None,
+            &Label::Public,
+        );
+        assert!(result.is_ok(), "delegation succeeds: {result:?}");
+        let published = core.take_pending_hostcall_result_label();
+        assert_ne!(
+            published.as_ref(),
+            Some(&stale),
+            "the quarantined pre-delegation label must never be published as the delegated result"
+        );
+    }
+
+    #[test]
+    fn nested_async_side_effects_survive_the_frame_bd_z1peg3() {
+        let mut core = scratch_core();
+        core.sync_estimated_memory_bytes().expect("baseline sync");
+        let promises_before = core.promise_store.len();
+
+        let result = core.dispatch_hostcall_with_value_args(
+            "promise:resolve",
+            delegated(vec![Value::Int(7)], vec![Label::Public]),
+            None,
+            &Label::Public,
+        );
+        assert!(
+            matches!(result, Ok(Value::Promise(_))),
+            "delegated promise:resolve must yield a promise: {result:?}"
+        );
+        assert!(
+            core.promise_store.len() > promises_before,
+            "the nested async side effect (a real promise) must survive the frame restore"
+        );
+        let _ = core.take_pending_hostcall_result_label();
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "eager must equal recompute with the retained async state"
+        );
+    }
+
+    #[test]
+    fn restore_is_shrink_safe_after_nested_truncation_bd_z1peg3() {
+        let mut core = scratch_core();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::str("survives-truncation");
+        });
+        core.register_labels[0] = Label::Secret;
+        core.sync_estimated_memory_bytes().expect("baseline sync");
+        let original_len = core.registers.len();
+
+        let frame = core
+            .install_delegated_hostcall_scratch(
+                delegated(
+                    vec![Value::str("installed"), Value::Int(9)],
+                    vec![Label::Confidential, Label::Public],
+                ),
+                2,
+            )
+            .expect("frame installs");
+        // A hostile/nested path shrank both files below the frame's window.
+        core.mutate_registers(|registers| registers.truncate(0));
+        core.register_labels.truncate(0);
+
+        core.restore_delegated_hostcall_scratch(frame);
+        assert_eq!(
+            core.registers.len(),
+            original_len,
+            "restore must rebuild the register file to its pre-delegation length"
+        );
+        assert_eq!(
+            core.registers[0],
+            Value::str("survives-truncation"),
+            "the displaced occupant value must come back even after truncation"
+        );
+        assert_eq!(
+            core.register_labels[0],
+            Label::Secret,
+            "the displaced occupant label must come back even after truncation"
+        );
+        core.sync_estimated_memory_bytes()
+            .expect("post-surgery resync");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "the invariant re-establishes after the shrink-safe restore"
+        );
     }
 }
 

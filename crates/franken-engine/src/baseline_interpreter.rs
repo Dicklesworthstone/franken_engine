@@ -97888,6 +97888,7 @@ mod async_runtime_tests_current {
         assert_eq!(writable.final_status, WritableFinalStatus::Done);
         assert_eq!(writable.deferred_final_tick_sequence, None);
         assert_eq!(writable.tick_sequence, Some(91));
+        assert_eq!(writable.tick_phase, WritableTickPhase::Error);
         assert_eq!(writable.terminal_error_origin, Some(WritableErrorOrigin::Write));
         assert_eq!(writable.lifecycle_label, Label::Secret);
         let (Value::Object(error_id), error_label) = writable
@@ -97907,6 +97908,10 @@ mod async_runtime_tests_current {
         assert!(readable.paused);
         assert!(!readable.flowing);
         assert_eq!(readable.lifecycle_label, Label::Secret);
+        assert_eq!(
+            core.fs_object_property(&Value::Object(passthrough), "readableFlowing"),
+            Some(Value::Bool(false))
+        );
         assert_eq!(core.next_writable_tick_sequence, 92);
         assert_eq!(
             core.estimated_memory_bytes(),

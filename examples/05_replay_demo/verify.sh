@@ -3,76 +3,75 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-RCH_BIN="${RCH_BIN:-rch}"
-RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-CARGO_TARGET_DIR="${REPLAY_DEMO_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_replay_demo_$(date +%s)_$$}"
+frankenctl_bin="${FRANKENCTL_BIN:-${repo_root}/target/release/frankenctl}"
 sample_trace="${script_dir}/sample_trace.json"
-output1="${script_dir}/output1.json"
-output2="${script_dir}/output2.json"
+source_file="${script_dir}/replay_input.js"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/franken-replay-demo.XXXXXX")"
+run_report="${work_dir}/run_report.json"
+replay_report="${work_dir}/replay_report.json"
+changed_source_report="${work_dir}/changed_source_report.json"
+changed_policy_report="${work_dir}/changed_policy_report.json"
 
-if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
-    echo "Required rch binary not found: $RCH_BIN" >&2
+if [[ ! -x "$frankenctl_bin" ]]; then
+    echo "frankenctl binary is not executable: $frankenctl_bin" >&2
     exit 2
 fi
-
-run_frankenctl() {
-    local step_name="$1"
-    shift
-    local log_path
-    log_path="$(mktemp "${TMPDIR:-/tmp}/franken-replay-demo-${step_name}.XXXXXX.log")"
-
-    if ! (
-        cd "$repo_root"
-        "$RCH_BIN" exec -- env \
-            "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
-            "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
-            "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
-            cargo run --bin frankenctl -- "$@"
-    ) >"$log_path" 2>&1; then
-        cat "$log_path" >&2
-        rm -f "$log_path"
-        return 1
-    fi
-
-    if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$log_path"; then
-        cat "$log_path" >&2
-        echo "rch reported local fallback for $step_name; refusing local execution" >&2
-        rm -f "$log_path"
-        return 125
-    fi
-
-    rm -f "$log_path"
-}
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Required jq binary not found" >&2
+    exit 2
+fi
 
 echo "FrankenEngine Deterministic Replay Verification"
 echo "=============================================="
 
-# Clean up any existing output files
-rm -f "$output1" "$output2"
+echo "Producing a live frankenctl run report..."
+"$frankenctl_bin" run \
+    --input "$source_file" \
+    --extension-id replay-demo \
+    --out "$run_report"
 
-echo "Running replay #1..."
-run_frankenctl replay1 replay run --trace "$sample_trace" --mode strict --out "$output1"
+echo "Re-executing the embedded JavaScript in strict mode..."
+"$frankenctl_bin" replay run \
+    --trace "$run_report" \
+    --mode strict \
+    --out "$replay_report"
 
-echo "Running replay #2..."
-run_frankenctl replay2 replay run --trace "$sample_trace" --mode strict --out "$output2"
+jq -e '
+    .replay_kind == "reexecution" and
+    .ir3_hash_match == true and
+    .unsigned_execution_content_match == true and
+    .randomness_transcript_match == true and
+    .divergence_count == 0 and
+    .complete == true
+' "$replay_report" >/dev/null
 
-echo "Comparing outputs..."
-if diff "$output1" "$output2" > /dev/null 2>&1; then
-    echo "✅ SUCCESS: Replay outputs are byte-identical!"
-    echo ""
-    echo "Sample output:"
-    head -15 "$output1"
-    echo "..."
-    echo ""
-    echo "Key metrics:"
-    grep -E "(session_id|event_count|replayed_events|divergence_count|complete)" "$output1"
-else
-    echo "❌ FAILURE: Replay outputs differ!"
-    echo "Showing differences:"
-    diff "$output1" "$output2"
+echo "Checking that a changed source diverges..."
+jq '.replay_input.source = "const answer = 40 + 3;\n"' \
+    "$run_report" >"$changed_source_report"
+if "$frankenctl_bin" replay run --trace "$changed_source_report" --mode strict; then
+    echo "FAILURE: strict replay accepted changed JavaScript source" >&2
     exit 1
 fi
 
-echo ""
-echo "Verification complete. Deterministic replay is working correctly."
+echo "Checking that a changed policy diverges..."
+jq '.replay_input.policy_id = "frankenctl.replay.changed-policy"' \
+    "$run_report" >"$changed_policy_report"
+if "$frankenctl_bin" replay run --trace "$changed_policy_report" --mode strict; then
+    echo "FAILURE: strict replay accepted changed policy" >&2
+    exit 1
+fi
+
+echo "Checking that the synthetic one-event trace cannot self-certify..."
+if "$frankenctl_bin" replay run --trace "$sample_trace" --mode strict; then
+    echo "FAILURE: synthetic trace self-comparison was accepted" >&2
+    exit 1
+fi
+
+echo "Checking the explicit two-trace comparison mode..."
+"$frankenctl_bin" replay run \
+    --trace "$sample_trace" \
+    --compare-trace "$sample_trace" \
+    --mode strict >/dev/null
+
+echo "SUCCESS: live JavaScript re-execution matched IR3 and unsigned execution content."
+echo "Artifacts retained at: $work_dir"

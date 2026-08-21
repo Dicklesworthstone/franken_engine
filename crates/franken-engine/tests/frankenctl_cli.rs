@@ -2218,7 +2218,7 @@ fn frankenctl_run_preserves_exception_completion_values() {
 }
 
 #[test]
-fn frankenctl_replay_run_replays_trace_without_divergence() {
+fn frankenctl_replay_run_explicitly_compares_traces_without_divergence() {
     let trace_path = temp_path("frankenctl_replay_trace", "json");
     let replay_report_path = temp_path("frankenctl_replay_report", "json");
 
@@ -2245,6 +2245,10 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
             "replay",
             "run",
             "--trace",
+            trace_path
+                .to_str()
+                .expect("trace path should be valid utf8"),
+            "--compare-trace",
             trace_path
                 .to_str()
                 .expect("trace path should be valid utf8"),
@@ -2286,6 +2290,7 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
     assert_eq!(stdout_json["divergence_count"].as_u64(), Some(0));
     assert_eq!(stdout_json["critical_divergences"].as_u64(), Some(0));
     assert_eq!(stdout_json["complete"].as_bool(), Some(true));
+    assert_eq!(stdout_json["replay_kind"].as_str(), Some("trace_compare"));
     assert_eq!(
         stdout_json["observability_mode"]["mode_id"].as_str(),
         Some("default_capture")
@@ -2308,7 +2313,143 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
 }
 
 #[test]
-fn frankenctl_replay_validate_mode_requires_compare_trace() {
+fn frankenctl_run_report_reexecutes_javascript_and_detects_source_and_policy_divergence() {
+    let source_path = temp_path("frankenctl_reexecution_source", "js");
+    let run_report_path = temp_path("frankenctl_reexecution_run", "json");
+    let replay_report_path = temp_path("frankenctl_reexecution_replay", "json");
+    let changed_source_report_path = temp_path("frankenctl_reexecution_changed_source", "json");
+    let changed_policy_report_path = temp_path("frankenctl_reexecution_changed_policy", "json");
+    write_source(&source_path, "const answer = 40 + 2;\n");
+
+    let run = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path.to_str().expect("source path should be utf8"),
+            "--extension-id",
+            "reexecution-integration",
+            "--out",
+            run_report_path
+                .to_str()
+                .expect("run report path should be utf8"),
+        ])
+        .output()
+        .expect("run command should execute");
+    assert!(
+        run.status.success(),
+        "run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let run_report_bytes = fs::read(&run_report_path).expect("run report should be written");
+    let run_report: serde_json::Value =
+        serde_json::from_slice(&run_report_bytes).expect("run report should be valid json");
+    assert_eq!(
+        run_report["replay_input"]["source"].as_str(),
+        Some("const answer = 40 + 2;\n")
+    );
+    assert_eq!(
+        run_report["replay_input"]["ir3_hash"],
+        run_report["ir4_witness"]["executed_ir3_hash"]
+    );
+    assert!(run_report["replay_input"]["randomness_transcript"].is_object());
+
+    let replay = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            run_report_path
+                .to_str()
+                .expect("run report path should be utf8"),
+            "--mode",
+            "strict",
+            "--out",
+            replay_report_path
+                .to_str()
+                .expect("replay report path should be utf8"),
+        ])
+        .output()
+        .expect("replay command should execute");
+    assert!(
+        replay.status.success(),
+        "re-execution failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&replay.stdout),
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay_json = parse_stdout_json(&replay);
+    assert_eq!(replay_json["replay_kind"].as_str(), Some("reexecution"));
+    assert_eq!(replay_json["ir3_hash_match"].as_bool(), Some(true));
+    assert_eq!(
+        replay_json["unsigned_execution_content_match"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        replay_json["randomness_transcript_match"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(replay_json["divergence_count"].as_u64(), Some(0));
+
+    let mut changed_source = run_report.clone();
+    changed_source["replay_input"]["source"] =
+        serde_json::Value::String("const answer = 40 + 3;\n".to_string());
+    fs::write(
+        &changed_source_report_path,
+        serde_json::to_vec_pretty(&changed_source).unwrap(),
+    )
+    .expect("changed-source report should write");
+    let changed_source_replay = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            changed_source_report_path.to_str().unwrap(),
+            "--mode",
+            "strict",
+        ])
+        .output()
+        .expect("changed-source replay should execute");
+    assert!(!changed_source_replay.status.success());
+    assert!(
+        String::from_utf8_lossy(&changed_source_replay.stderr)
+            .contains("strict re-execution divergence")
+    );
+
+    let mut changed_policy = run_report;
+    changed_policy["replay_input"]["policy_id"] =
+        serde_json::Value::String("different-policy".to_string());
+    fs::write(
+        &changed_policy_report_path,
+        serde_json::to_vec_pretty(&changed_policy).unwrap(),
+    )
+    .expect("changed-policy report should write");
+    let changed_policy_replay = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            changed_policy_report_path.to_str().unwrap(),
+            "--mode",
+            "strict",
+        ])
+        .output()
+        .expect("changed-policy replay should execute");
+    assert!(!changed_policy_replay.status.success());
+    assert!(
+        String::from_utf8_lossy(&changed_policy_replay.stderr)
+            .contains("policy_id differs between report and replay input")
+    );
+
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(run_report_path);
+    let _ = fs::remove_file(replay_report_path);
+    let _ = fs::remove_file(changed_source_report_path);
+    let _ = fs::remove_file(changed_policy_report_path);
+}
+
+#[test]
+fn frankenctl_replay_trace_without_compare_is_not_a_run_report() {
     let trace_path = temp_path("frankenctl_replay_validate_requires_compare", "json");
 
     let mut trace = NondeterminismTrace::new("session-validate-requires-compare");
@@ -2337,12 +2478,12 @@ fn frankenctl_replay_validate_mode_requires_compare_trace() {
 
     assert!(
         !output.status.success(),
-        "validate replay should fail closed"
+        "synthetic trace replay should fail closed"
     );
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     assert!(
-        stderr.contains("requires --compare-trace <path>"),
-        "stderr should explain validate-mode compare requirement: {stderr}"
+        stderr.contains("requires a replayable frankenctl run report"),
+        "stderr should explain the run-report requirement: {stderr}"
     );
 
     let _ = fs::remove_file(trace_path);
@@ -3191,6 +3332,8 @@ fn frankenctl_replay_best_effort_mode() {
             "replay",
             "run",
             "--trace",
+            trace_path.to_str().unwrap(),
+            "--compare-trace",
             trace_path.to_str().unwrap(),
             "--mode",
             "best-effort",

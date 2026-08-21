@@ -970,8 +970,51 @@ struct RunCommandOutput {
     // against the receipt path.
     ir4_witness_hash: String,
     ir4_witness: Ir4Module,
+    replay_input: RunReplayInput,
     console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
+}
+
+/// Self-contained, unsigned material needed to reproduce a successful
+/// `frankenctl run`. Runtime evidence signatures are intentionally excluded:
+/// every replay invocation owns a fresh signing key, while the IR3 linkage,
+/// IR4 witness, result, console transcript, and nondeterminism transcript are
+/// deterministic execution content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RunReplayInput {
+    source: String,
+    source_label: String,
+    extension_id: String,
+    parse_goal: String,
+    policy_id: String,
+    policy_epoch: u64,
+    cell_close_budget_ms: u64,
+    ir3_hash: String,
+    randomness_transcript: NondeterminismTrace,
+    unsigned_execution_content: UnsignedExecutionContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct UnsignedExecutionContent {
+    ir4_witness_hash: String,
+    ir4_witness: Ir4Module,
+    execution_value: String,
+    instructions_executed: u64,
+    console_output: Vec<ConsoleEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayableRunReport {
+    schema_version: String,
+    extension_id: String,
+    policy_id: String,
+    parse_goal: String,
+    ir4_witness_hash: String,
+    ir4_witness: Ir4Module,
+    execution_value: String,
+    instructions_executed: u64,
+    console_output: Vec<ConsoleEntry>,
+    replay_input: RunReplayInput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1366,6 +1409,13 @@ struct ReplayCommandOutput {
     divergence_count: usize,
     critical_divergences: usize,
     complete: bool,
+    replay_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ir3_hash_match: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unsigned_execution_content_match: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    randomness_transcript_match: Option<bool>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -4280,6 +4330,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
         orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
     }
+    let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
         orchestrator_config.epoch,
@@ -4378,6 +4429,25 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         _ => None,
     };
 
+    let unsigned_execution_content = UnsignedExecutionContent {
+        ir4_witness_hash: result.ir4_witness.content_hash().to_hex(),
+        ir4_witness: result.ir4_witness.clone(),
+        execution_value: result.execution_value.clone(),
+        instructions_executed: result.instructions_executed,
+        console_output: result.console_output.clone(),
+    };
+    let replay_input = RunReplayInput {
+        source: package.source.clone(),
+        source_label: source_label.clone(),
+        extension_id: package.extension_id.clone(),
+        parse_goal: args.parse_goal.as_str().to_string(),
+        policy_id: policy_id.clone(),
+        policy_epoch: result.epoch.as_u64(),
+        cell_close_budget_ms: replay_cell_close_budget_ms,
+        ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
+        randomness_transcript: result.nondeterminism_trace.clone(),
+        unsigned_execution_content,
+    };
     let output = RunCommandOutput {
         schema_version: RUN_COMMAND_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
@@ -4404,6 +4474,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         evidence_chain_artifact,
         ir4_witness_hash: result.ir4_witness.content_hash().to_hex(),
         ir4_witness: result.ir4_witness.clone(),
+        replay_input,
         console_output: result.console_output.clone(),
         observability_mode: default_capture_observability_mode(),
     };
@@ -8678,6 +8749,16 @@ fn load_fleet_node(path: &std::path::Path) -> Result<FleetTraceNode, String> {
 }
 
 fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
+    if args.compare_trace.is_none() {
+        if args.fleet_trace.is_some() {
+            return Err(
+                "re-execution replay does not accept --fleet-trace; use --compare-trace for explicit trace comparison"
+                    .to_string(),
+            );
+        }
+        return execute_run_report_replay(args);
+    }
+
     let mut trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
     trace
         .validate_for_replay()
@@ -8724,23 +8805,15 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     let (trace_id, decision_id, policy_id) = cli_replay_ids(&trace.session_id, args.mode);
     let session_id = trace.session_id.clone();
     let event_count = trace.events.len();
-    let replay_events = match args.compare_trace.as_ref() {
-        Some(path) => {
-            let compare_trace = load_json_file::<NondeterminismTrace>(path)?;
-            compare_trace
-                .validate_for_replay()
-                .map_err(|error| format!("replay comparison failed before sequence 0: {error}"))?;
-            compare_trace.events
-        }
-        None => {
-            if args.mode == ReplayMode::Validate {
-                return Err(
-                    "replay run in validate mode requires --compare-trace <path>".to_string(),
-                );
-            }
-            trace.events.clone()
-        }
-    };
+    let compare_path = args
+        .compare_trace
+        .as_ref()
+        .expect("explicit trace comparison checked above");
+    let compare_trace = load_json_file::<NondeterminismTrace>(compare_path)?;
+    compare_trace
+        .validate_for_replay()
+        .map_err(|error| format!("replay comparison failed before sequence 0: {error}"))?;
+    let replay_events = compare_trace.events;
 
     let mut engine = ReplayEngine::new(trace, args.mode);
     for event in replay_events {
@@ -8768,9 +8841,155 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         divergence_count: engine.divergence_count(),
         critical_divergences: engine.critical_divergences(),
         complete: engine.is_complete(),
+        replay_kind: "trace_compare".to_string(),
+        ir3_hash_match: None,
+        unsigned_execution_content_match: None,
+        randomness_transcript_match: None,
         observability_mode: default_capture_observability_mode(),
     };
 
+    if let Some(path) = args.out {
+        write_json_file(&path, &output)?;
+    }
+    print_json(&output)?;
+    Ok(0)
+}
+
+fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
+    let report = load_json_file::<ReplayableRunReport>(&args.trace).map_err(|error| {
+        format!(
+            "replay without --compare-trace requires a replayable frankenctl run report: {error}"
+        )
+    })?;
+    if report.schema_version != RUN_COMMAND_SCHEMA_VERSION {
+        return Err(format!(
+            "replayable run report schema mismatch: expected `{RUN_COMMAND_SCHEMA_VERSION}`, got `{}`",
+            report.schema_version
+        ));
+    }
+
+    let input = &report.replay_input;
+    let expected_unsigned = UnsignedExecutionContent {
+        ir4_witness_hash: report.ir4_witness_hash.clone(),
+        ir4_witness: report.ir4_witness.clone(),
+        execution_value: report.execution_value.clone(),
+        instructions_executed: report.instructions_executed,
+        console_output: report.console_output.clone(),
+    };
+    let mut divergences = Vec::new();
+    if report.extension_id != input.extension_id {
+        divergences.push("extension_id differs between report and replay input".to_string());
+    }
+    if report.parse_goal != input.parse_goal {
+        divergences.push("parse_goal differs between report and replay input".to_string());
+    }
+    if report.policy_id != input.policy_id {
+        divergences.push("policy_id differs between report and replay input".to_string());
+    }
+    if input.ir3_hash != report.ir4_witness.executed_ir3_hash.to_hex() {
+        divergences.push("recorded IR3 hash does not link to the report IR4 witness".to_string());
+    }
+    if input.unsigned_execution_content != expected_unsigned {
+        divergences
+            .push("unsigned execution content differs between report and replay input".to_string());
+    }
+    input
+        .randomness_transcript
+        .validate_for_replay()
+        .map_err(|error| format!("run report randomness transcript is invalid: {error}"))?;
+
+    if args.mode == ReplayMode::Strict {
+        if let Some(divergence) = divergences.first() {
+            return Err(format!("strict re-execution divergence: {divergence}"));
+        }
+    }
+
+    let parse_goal = parse_goal(&input.parse_goal)?;
+    let capabilities = run_cli_capabilities(parse_goal);
+    let package = ExtensionPackage {
+        extension_id: input.extension_id.clone(),
+        source: input.source.clone(),
+        source_file: Some(input.source_label.clone()),
+        module_root: None,
+        capabilities,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        metadata: BTreeMap::new(),
+    };
+    let source_hash = ContentHash::compute(input.source.as_bytes());
+    let orchestrator_config = OrchestratorConfig {
+        parse_goal,
+        trace_id_prefix: "frankenctl-run".to_string(),
+        policy_id: input.policy_id.clone(),
+        epoch: SecurityEpoch::from_raw(input.policy_epoch),
+        cell_close_budget_ms: input.cell_close_budget_ms,
+        ..OrchestratorConfig::default()
+    };
+    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id("frankenctl.replay", &source_hash.to_hex())?,
+        orchestrator_config.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize replay evidence authority: {error}"))?;
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        orchestrator_config,
+        evidence_authority,
+    )
+    .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
+    let replayed = orchestrator
+        .execute(&package)
+        .map_err(|error| format!("re-execution failed: {error}"))?;
+
+    let actual_unsigned = UnsignedExecutionContent {
+        ir4_witness_hash: replayed.ir4_witness.content_hash().to_hex(),
+        ir4_witness: replayed.ir4_witness.clone(),
+        execution_value: replayed.execution_value.clone(),
+        instructions_executed: replayed.instructions_executed,
+        console_output: replayed.console_output.clone(),
+    };
+    let ir3_hash_match = input.ir3_hash == replayed.ir4_witness.executed_ir3_hash.to_hex();
+    let unsigned_execution_content_match = input.unsigned_execution_content == actual_unsigned;
+    let randomness_transcript_match = input.randomness_transcript == replayed.nondeterminism_trace;
+    if !ir3_hash_match {
+        divergences.push("re-executed IR3 hash differs from the recorded IR3 hash".to_string());
+    }
+    if !unsigned_execution_content_match {
+        divergences.push("re-executed unsigned execution content differs".to_string());
+    }
+    if !randomness_transcript_match {
+        divergences.push("re-executed randomness transcript differs".to_string());
+    }
+    if args.mode == ReplayMode::Strict {
+        if let Some(divergence) = divergences.first() {
+            return Err(format!("strict re-execution divergence: {divergence}"));
+        }
+    }
+
+    let session_id = input.randomness_transcript.session_id.clone();
+    let (trace_id, decision_id, policy_id) = cli_replay_ids(&session_id, args.mode);
+    let output = ReplayCommandOutput {
+        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        trace_id,
+        decision_id,
+        policy_id,
+        trace_path: args.trace.display().to_string(),
+        mode: replay_mode_name(args.mode).to_string(),
+        session_id,
+        event_count: input.randomness_transcript.events.len(),
+        replayed_events: replayed.nondeterminism_trace.events.len() as u64,
+        divergence_count: divergences.len(),
+        critical_divergences: if args.mode == ReplayMode::Strict {
+            divergences.len()
+        } else {
+            0
+        },
+        complete: divergences.is_empty(),
+        replay_kind: "reexecution".to_string(),
+        ir3_hash_match: Some(ir3_hash_match),
+        unsigned_execution_content_match: Some(unsigned_execution_content_match),
+        randomness_transcript_match: Some(randomness_transcript_match),
+        observability_mode: default_capture_observability_mode(),
+    };
     if let Some(path) = args.out {
         write_json_file(&path, &output)?;
     }
@@ -12216,6 +12435,11 @@ fn replay_run_usage() -> String {
         "      [--fleet-trace <dir|trace.json>]",
         "",
         "notes:",
+        "  Without --compare-trace, --trace must be a frankenctl run report;",
+        "  replay re-parses, re-lowers, and re-executes its embedded source and",
+        "  compares the IR3 hash, unsigned IR4 execution content, and recorded",
+        "  nondeterminism transcript. Synthetic trace self-comparison is refused.",
+        "  --compare-trace explicitly compares two nondeterminism trace files.",
         "  --fleet-trace stitches per-node traces into one globally-consistent",
         "  replay order using a Lamport total-order merge (clock asc, node id,",
         "  payload hash). Pass a directory of per-node traces (one file == one",

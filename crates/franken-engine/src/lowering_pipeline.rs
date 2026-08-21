@@ -25746,6 +25746,13 @@ fn ir1_exception_flow_label(
         Ir1Op::UnaryOp { .. } if operation_exception_is_operand_derived => {
             Some(Label::Internal.join(inferred_label))
         }
+        // bd-pafik: an Await whose operand carries an authenticated pipeline
+        // rejection summary throws at most that summary (routed here through
+        // the exception-label override); every other Await stays fail-high
+        // below.
+        Ir1Op::Await if operation_exception_is_operand_derived => {
+            Some(Label::Internal.join(inferred_label))
+        }
         // Named builtins are fail-high unless their exception contract is
         // explicitly audited above. Some finite hostcalls synchronously run
         // guest callbacks, whose thrown values are not summarized by their
@@ -25992,6 +25999,17 @@ fn simulate_ir2_flow_labels(
             }
             Ir1Op::Await | Ir1Op::Yield { .. } => {
                 let value = pop_flow_value(&mut value_stack)?;
+                // bd-pafik: Await transfers static settlement provenance. A
+                // pipeline promise with an authenticated rejection summary
+                // bounds what this Await can throw into the enclosing catch;
+                // every other awaited value keeps the fail-high default.
+                if matches!(op.inner, Ir1Op::Await)
+                    && let Some(StreamFlowInfo::PipelinePromise { origin }) = &value.stream
+                    && let Some(rejection) = pipeline_rejections.get(origin)
+                {
+                    operation_exception_is_operand_derived = true;
+                    operation_exception_label_override = Some(rejection.join(&value.label));
+                }
                 // Await resumes with a Promise settlement and Yield resumes
                 // with a caller-supplied value. Neither output is an identity
                 // transform of the suspended operand, so retain the historic

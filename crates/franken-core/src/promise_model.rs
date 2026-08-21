@@ -25,6 +25,87 @@ use crate::ifc_artifacts::Label;
 use crate::object_model::JsValue;
 
 // ---------------------------------------------------------------------------
+// Resident-memory estimation (bd-ur3tk.21, ported from the engine twin)
+// ---------------------------------------------------------------------------
+
+/// Approximate allocation header carried by every retained string. Keep this
+/// aligned with the baseline interpreter's logical-owner accounting algebra.
+const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
+
+fn saturating_sum(values: impl Iterator<Item = u64>) -> u64 {
+    values.fold(0u64, u64::saturating_add)
+}
+
+fn estimate_vector_slot_bytes<T>(len: usize) -> u64 {
+    u64::try_from(len)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::try_from(std::mem::size_of::<T>()).unwrap_or(u64::MAX))
+}
+
+fn estimate_string_memory_bytes(text: &str) -> u64 {
+    MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
+}
+
+/// Dynamic payload retained by an object-model value.
+///
+/// Handles and numeric variants are inline identifiers/scalars and therefore
+/// have no additional dynamic charge. Strings own a separate allocation.
+pub(crate) fn estimate_js_value_memory_bytes(value: &JsValue) -> u64 {
+    match value {
+        JsValue::Str(text) => estimate_string_memory_bytes(text),
+        _ => 0,
+    }
+}
+
+/// Dynamic payload retained by an IFC label.
+pub(crate) fn estimate_label_memory_bytes(label: &Label) -> u64 {
+    match label {
+        Label::Custom { name, .. } => estimate_string_memory_bytes(name),
+        _ => 0,
+    }
+}
+
+/// Dynamic payload retained by one replay witness event.
+pub(crate) fn estimate_witness_event_memory_bytes(event: &WitnessEvent) -> u64 {
+    match event {
+        WitnessEvent::PromiseFulfilled { value, label, .. } => {
+            estimate_js_value_memory_bytes(value).saturating_add(estimate_label_memory_bytes(label))
+        }
+        WitnessEvent::PromiseRejected { reason, label, .. } => {
+            estimate_js_value_memory_bytes(reason)
+                .saturating_add(estimate_label_memory_bytes(label))
+        }
+        WitnessEvent::PromiseCreated { .. }
+        | WitnessEvent::MicrotaskEnqueued { .. }
+        | WitnessEvent::MicrotaskDequeued { .. }
+        | WitnessEvent::MacrotaskExecuted { .. }
+        | WitnessEvent::ClockAdvanced { .. } => 0,
+    }
+}
+
+fn estimate_witness_log_memory_bytes(witness: &[WitnessEvent]) -> u64 {
+    estimate_vector_slot_bytes::<WitnessEvent>(witness.len()).saturating_add(saturating_sum(
+        witness.iter().map(estimate_witness_event_memory_bytes),
+    ))
+}
+
+/// Dynamic payload retained by one queued microtask.
+pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
+    match task {
+        Microtask::PromiseReaction {
+            argument, label, ..
+        } => estimate_js_value_memory_bytes(argument)
+            .saturating_add(estimate_label_memory_bytes(label)),
+        Microtask::PromiseRejection { reason, label, .. } => estimate_js_value_memory_bytes(reason)
+            .saturating_add(estimate_label_memory_bytes(label)),
+        Microtask::ResolveThenable {
+            thenable, label, ..
+        } => estimate_js_value_memory_bytes(thenable)
+            .saturating_add(estimate_label_memory_bytes(label)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Promise handle
 // ---------------------------------------------------------------------------
 
@@ -372,6 +453,32 @@ impl PromiseStore {
         self.witness
             .push(WitnessEvent::PromiseCreated { handle, seq });
         handle
+    }
+
+    /// Deterministic resident-memory estimate for every Promise-owned record,
+    /// reaction, label, settled payload, and replay witness (bd-ur3tk.21).
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        estimate_vector_slot_bytes::<PromiseRecord>(self.promises.len())
+            .saturating_add(saturating_sum(self.promises.iter().map(|record| {
+                let state_bytes = match &record.state {
+                    PromiseState::Pending => 0,
+                    PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
+                        estimate_js_value_memory_bytes(value)
+                    }
+                };
+                state_bytes
+                    .saturating_add(estimate_label_memory_bytes(&record.label))
+                    .saturating_add(estimate_vector_slot_bytes::<PromiseReaction>(
+                        record.reactions.len(),
+                    ))
+                    .saturating_add(saturating_sum(
+                        record
+                            .reactions
+                            .iter()
+                            .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
+                    ))
+            })))
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
     /// Roll back the most recent still-pending creation when an enclosing
@@ -766,6 +873,47 @@ impl MicrotaskQueue {
             self.cursor = 0;
         }
     }
+
+    /// Deterministic resident-memory estimate for the physically retained
+    /// task buffer (dequeued entries stay resident until [`Self::compact`])
+    /// and the enqueue/dequeue witness log (bd-ur3tk.21).
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        estimate_vector_slot_bytes::<Microtask>(self.tasks.len())
+            .saturating_add(saturating_sum(
+                self.tasks.iter().map(estimate_microtask_payload_memory_bytes),
+            ))
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+    }
+
+    /// Roll back the most recent dequeue when an enclosing interpreter
+    /// transaction refuses the dequeue witness charge: the cursor rewinds and
+    /// the matching witness event is dropped (bd-ur3tk.21).
+    pub(crate) fn rollback_last_dequeued(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            if matches!(
+                self.witness.last(),
+                Some(WitnessEvent::MicrotaskDequeued { .. })
+            ) {
+                self.witness.pop();
+            }
+        }
+    }
+
+    /// Roll back the most recent enqueue when an enclosing interpreter
+    /// transaction refuses its resident charge. Returns the removed task, or
+    /// `None` if the tail entry was already consumed by the cursor.
+    pub(crate) fn rollback_last_enqueued(&mut self) -> Option<Microtask> {
+        if self.cursor >= self.tasks.len() {
+            return None;
+        }
+        let task = self.tasks.pop()?;
+        self.enqueue_count = self.enqueue_count.saturating_sub(1);
+        if matches!(self.witness.last(), Some(WitnessEvent::MicrotaskEnqueued { .. })) {
+            self.witness.pop();
+        }
+        Some(task)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -846,6 +994,61 @@ impl MacrotaskQueue {
         Self::pop_ready_from(&mut self.message_channel_tasks, current_time_ms)
             .or_else(|| Self::pop_ready_from(&mut self.timer_tasks, current_time_ms))
             .or_else(|| Self::pop_ready_from(&mut self.io_completion_tasks, current_time_ms))
+    }
+
+    /// Deterministic resident-memory estimate for every scheduled macrotask
+    /// slot and its retained label payload (bd-ur3tk.21).
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        let heap_bytes = |heap: &BinaryHeap<MacrotaskHeapEntry>| {
+            estimate_vector_slot_bytes::<MacrotaskHeapEntry>(heap.len()).saturating_add(
+                saturating_sum(
+                    heap.iter()
+                        .map(|entry| estimate_label_memory_bytes(&entry.task.label)),
+                ),
+            )
+        };
+        heap_bytes(&self.message_channel_tasks)
+            .saturating_add(heap_bytes(&self.timer_tasks))
+            .saturating_add(heap_bytes(&self.io_completion_tasks))
+    }
+
+    /// Roll back the most recent schedule when an enclosing interpreter
+    /// transaction refuses its resident charge. Only the exact entry carrying
+    /// `registration_seq` is removed; the monotonic counter rewinds only when
+    /// that entry was the newest registration.
+    pub(crate) fn rollback_last_scheduled(&mut self, registration_seq: u64) -> Option<Macrotask> {
+        if self
+            .next_registration_seq
+            .checked_sub(1)
+            .is_none_or(|latest| latest != registration_seq)
+        {
+            return None;
+        }
+        let mut removed = None;
+        for heap in [
+            &mut self.message_channel_tasks,
+            &mut self.timer_tasks,
+            &mut self.io_completion_tasks,
+        ] {
+            if heap
+                .iter()
+                .any(|entry| entry.task.registration_seq == registration_seq)
+            {
+                let mut retained: Vec<MacrotaskHeapEntry> = std::mem::take(heap).into_vec();
+                if let Some(position) = retained
+                    .iter()
+                    .position(|entry| entry.task.registration_seq == registration_seq)
+                {
+                    removed = Some(retained.swap_remove(position).task);
+                }
+                *heap = retained.into();
+                break;
+            }
+        }
+        if removed.is_some() {
+            self.next_registration_seq = registration_seq;
+        }
+        removed
     }
 
     /// Find the earliest scheduled time of any pending macrotask.
@@ -937,6 +1140,16 @@ impl EventLoop {
             witness: Vec::new(),
             max_microtasks_per_turn: 100_000,
         }
+    }
+
+    /// Deterministic resident-memory estimate for both queues plus the
+    /// event-loop-level witness log (bd-ur3tk.21). The virtual clock is a
+    /// fixed-size scalar with no dynamic payload.
+    pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        self.microtasks
+            .estimated_memory_bytes()
+            .saturating_add(self.macrotasks.estimated_memory_bytes())
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
     /// Select the next macrotask for execution.

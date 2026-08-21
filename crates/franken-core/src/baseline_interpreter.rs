@@ -3659,6 +3659,11 @@ pub struct InterpreterCore {
         BTreeMap<crate::promise_model::PromiseHandle, Vec<PromiseCombinatorWatcher>>,
     /// Monotonic combinator id generator.
     next_promise_combinator_id: u64,
+    /// Macrotask payload ownership moved to a stack-local action during an
+    /// event-loop turn remains physically live until the handler returns.
+    /// Keep the released queue bytes charged during the transfer so nested
+    /// Promise mutations observe one coherent runtime component (bd-ur3tk.21).
+    promise_in_flight_task_bytes: u64,
     /// Module registry/cache for ImportModule execution.
     module_state: ModuleState,
     /// Active CommonJS module context, if currently evaluating a CJS module.
@@ -3764,6 +3769,7 @@ impl InterpreterCore {
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
             next_promise_combinator_id: 0,
+            promise_in_flight_task_bytes: 0,
             module_state: ModuleState::new(),
             active_cjs_context: None,
             current_module_specifier: None,
@@ -3993,6 +3999,7 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        self.promise_in_flight_task_bytes = 0;
         self.async_resumption_contexts.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
@@ -4118,6 +4125,7 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        self.promise_in_flight_task_bytes = 0;
         self.async_resumption_contexts.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
@@ -5446,6 +5454,13 @@ impl InterpreterCore {
         let saved_registers = self.registers[self.register_base..].to_vec();
         let saved_register_labels =
             self.register_labels_in_range(self.register_base, self.registers.len());
+        // Transactional await registration (bd-ur3tk.21): the reaction slots
+        // and any settled-path microtask are charged atomically, with the
+        // pre-registration store/queue restored on a ceiling refusal.
+        let previous_promise_runtime_bytes = self.promise_runtime_memory_bytes();
+        self.check_temporary_memory_budget(previous_promise_runtime_bytes)?;
+        let promise_store_snapshot = self.promise_store.clone();
+        let microtask_queue_snapshot = self.event_loop.microtasks.clone();
         let result_promise = self
             .promise_store
             .then_for_await(promise_handle, await_label, &mut self.event_loop.microtasks)
@@ -5453,6 +5468,13 @@ impl InterpreterCore {
                 expected: "valid pending promise for await".to_string(),
                 got: error.to_string(),
             })?;
+        if let Err(error) =
+            self.apply_promise_runtime_memory_delta(previous_promise_runtime_bytes)
+        {
+            self.promise_store = promise_store_snapshot;
+            self.event_loop.microtasks = microtask_queue_snapshot;
+            return Err(error);
+        }
 
         let async_function = self
             .async_functions
@@ -7118,19 +7140,13 @@ impl InterpreterCore {
 
         match phase {
             AsyncGeneratorPhase::Completed => {
-                let result_promise = self.promise_store.create().0;
+                let result_promise = self.create_promise_accounted()?.0;
                 let result = self.generator_result_object(Value::Undefined, true)?;
-                self.promise_store
-                    .fulfill(
-                        crate::promise_model::PromiseHandle(result_promise),
-                        Self::value_to_js_value(&result),
-                        crate::ifc_artifacts::Label::Public,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "promise fulfillment".into(),
-                        got: format!("failed to fulfill promise: {e:?}"),
-                    })?;
+                self.fulfill_promise(
+                    crate::promise_model::PromiseHandle(result_promise),
+                    Self::value_to_js_value(&result),
+                    crate::ifc_artifacts::Label::Public,
+                )?;
                 return Ok(Value::Promise(result_promise));
             }
             AsyncGeneratorPhase::Executing => {
@@ -7162,7 +7178,7 @@ impl InterpreterCore {
             });
         }
 
-        let result_promise = self.promise_store.create().0;
+        let result_promise = self.create_promise_accounted()?.0;
         let (activation, resume_dst) =
             {
                 let async_generator = &mut self.async_generators[generator_index];
@@ -10057,7 +10073,7 @@ impl InterpreterCore {
                             // `await thenable` adopts the thenable's eventual state
                             // (ES await → PromiseResolve). Non-thenables fulfill
                             // synchronously, unchanged.
-                            let handle = self.promise_store.create();
+                            let handle = self.create_promise_accounted()?;
                             self.resolve_promise_with_value(
                                 handle,
                                 awaited_value,
@@ -12496,14 +12512,20 @@ impl InterpreterCore {
         &mut self,
         state: LabeledPromiseCombinatorState,
     ) -> Result<u64, InterpreterError> {
-        let retained_label_bytes = Self::estimate_label_bytes(&state.accumulated_label);
-        self.check_temporary_memory_budget(retained_label_bytes)?;
+        // Full transactional charge: map entry + tracker payload + label
+        // (bd-ur3tk.21; supersedes the bd-ur3tk.8 label-only charge without
+        // double-counting — the label is part of the state estimate).
+        let retained_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_promise_combinator_state_bytes(&state));
+        self.check_temporary_memory_budget(retained_bytes)?;
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(retained_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
         let id = self.next_promise_combinator_id;
         self.next_promise_combinator_id = self.next_promise_combinator_id.saturating_add(1);
         self.promise_combinators.insert(id, state);
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(retained_label_bytes);
+        self.estimated_memory_bytes = requested_bytes;
         Ok(id)
     }
 
@@ -12562,9 +12584,10 @@ impl InterpreterCore {
         combinator_id: u64,
     ) -> Option<LabeledPromiseCombinatorState> {
         let state = self.promise_combinators.remove(&combinator_id)?;
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(Self::estimate_label_bytes(&state.accumulated_label));
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_promise_combinator_state_bytes(&state)),
+        );
         Some(state)
     }
 
@@ -12572,11 +12595,76 @@ impl InterpreterCore {
         &mut self,
         handle: crate::promise_model::PromiseHandle,
         watcher: PromiseCombinatorWatcher,
-    ) {
+    ) -> Result<(), InterpreterError> {
+        // Map entry (for a fresh key) plus one watcher slot (bd-ur3tk.21).
+        let entry_bytes = if self.promise_combinator_watchers.contains_key(&handle) {
+            0
+        } else {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+        };
+        let retained_bytes = entry_bytes
+            .saturating_add(std::mem::size_of::<PromiseCombinatorWatcher>() as u64);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(retained_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
         self.promise_combinator_watchers
             .entry(handle)
             .or_default()
             .push(watcher);
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
+    }
+
+    /// Create a pending Promise with its record and witness event charged
+    /// transactionally; a ceiling refusal rolls the fresh handle back
+    /// (bd-ur3tk.21).
+    fn create_promise_accounted(
+        &mut self,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let previous_bytes = self.promise_runtime_memory_bytes();
+        let handle = self.promise_store.create();
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+            self.promise_store.rollback_last_created(handle);
+            return Err(error);
+        }
+        Ok(handle)
+    }
+
+    /// Register a `.then` reaction with the derived promise, reaction slots,
+    /// and any immediate settled-path microtask charged transactionally; a
+    /// ceiling refusal restores the pre-registration store and queue
+    /// (bd-ur3tk.21).
+    fn register_promise_then_accounted(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        on_fulfilled: Option<crate::closure_model::ClosureHandle>,
+        on_rejected: Option<crate::closure_model::ClosureHandle>,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let previous_bytes = self.promise_runtime_memory_bytes();
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let store_snapshot = self.promise_store.clone();
+        let queue_snapshot = self.event_loop.microtasks.clone();
+        let result = self
+            .promise_store
+            .then(
+                handle,
+                on_fulfilled,
+                on_rejected,
+                label,
+                &mut self.event_loop.microtasks,
+            )
+            .map_err(|e| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: e.to_string(),
+            })?;
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+            self.promise_store = store_snapshot;
+            self.event_loop.microtasks = queue_snapshot;
+            return Err(error);
+        }
+        Ok(result)
     }
 
     fn fulfill_promise(
@@ -12585,6 +12673,14 @@ impl InterpreterCore {
         value: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        // Transactional settlement (bd-ur3tk.21): the settled payload, replay
+        // witness, and every reaction microtask are charged atomically; a
+        // ceiling refusal restores the pre-settlement store and queue. The
+        // rollback clones are transient double-residency, preflighted first.
+        let previous_bytes = self.promise_runtime_memory_bytes();
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let store_snapshot = self.promise_store.clone();
+        let queue_snapshot = self.event_loop.microtasks.clone();
         self.promise_store
             .fulfill(
                 handle,
@@ -12596,6 +12692,11 @@ impl InterpreterCore {
                 expected: "pending promise".to_string(),
                 got: e.to_string(),
             })?;
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+            self.promise_store = store_snapshot;
+            self.event_loop.microtasks = queue_snapshot;
+            return Err(error);
+        }
         self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)?;
         Ok(())
     }
@@ -12606,6 +12707,11 @@ impl InterpreterCore {
         reason: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        // Mirrors `fulfill_promise` (bd-ur3tk.21).
+        let previous_bytes = self.promise_runtime_memory_bytes();
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let store_snapshot = self.promise_store.clone();
+        let queue_snapshot = self.event_loop.microtasks.clone();
         self.promise_store
             .reject(
                 handle,
@@ -12617,6 +12723,11 @@ impl InterpreterCore {
                 expected: "pending promise".to_string(),
                 got: e.to_string(),
             })?;
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+            self.promise_store = store_snapshot;
+            self.event_loop.microtasks = queue_snapshot;
+            return Err(error);
+        }
         self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)?;
         Ok(())
     }
@@ -12656,7 +12767,13 @@ impl InterpreterCore {
                     thenable: Self::value_to_js_value(&value),
                     label,
                 };
+                // Transactional thenable-job enqueue (bd-ur3tk.21).
+                let previous_bytes = self.promise_runtime_memory_bytes();
                 self.event_loop.microtasks.enqueue(task);
+                if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+                    self.event_loop.microtasks.rollback_last_enqueued();
+                    return Err(error);
+                }
                 return Ok(());
             }
         }
@@ -12696,6 +12813,14 @@ impl InterpreterCore {
             Some(watchers) => watchers,
             None => return Ok(()),
         };
+        // Release the removed key's map entry and watcher slots (bd-ur3tk.21).
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                u64::try_from(watchers.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
+            ),
+        );
         for watcher in watchers {
             match &settlement {
                 PromiseSettlement::Fulfilled(value) => self.update_combinator_fulfillment(
@@ -12740,6 +12865,16 @@ impl InterpreterCore {
 
         let mut resolution: Option<ResolutionData> = None;
         self.join_promise_combinator_label(combinator_id, &label)?;
+        // Tracker growth (recorded values/outcomes) is charged transactionally:
+        // a ceiling refusal restores the single mutated state (bd-ur3tk.21).
+        // The rollback clone is transient double-residency, preflighted first.
+        if let Some(state) = self.promise_combinators.get(&combinator_id) {
+            self.check_temporary_memory_budget(Self::estimate_promise_combinator_state_bytes(
+                state,
+            ))?;
+        }
+        let state_snapshot = self.promise_combinators.get(&combinator_id).cloned();
+        let previous_runtime_bytes = self.promise_runtime_memory_bytes();
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
@@ -12777,6 +12912,15 @@ impl InterpreterCore {
                     resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
                 }
             }
+        }
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_runtime_bytes) {
+            if let (Some(snapshot), Some(slot)) = (
+                state_snapshot,
+                self.promise_combinators.get_mut(&combinator_id),
+            ) {
+                *slot = snapshot;
+            }
+            return Err(error);
         }
 
         if let Some(resolution) = resolution {
@@ -12825,6 +12969,14 @@ impl InterpreterCore {
 
         let mut resolution: Option<ResolutionData> = None;
         self.join_promise_combinator_label(combinator_id, &label)?;
+        // Mirrors `update_combinator_fulfillment` (bd-ur3tk.21).
+        if let Some(state) = self.promise_combinators.get(&combinator_id) {
+            self.check_temporary_memory_budget(Self::estimate_promise_combinator_state_bytes(
+                state,
+            ))?;
+        }
+        let state_snapshot = self.promise_combinators.get(&combinator_id).cloned();
+        let previous_runtime_bytes = self.promise_runtime_memory_bytes();
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
@@ -12860,6 +13012,15 @@ impl InterpreterCore {
                     }
                 }
             }
+        }
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_runtime_bytes) {
+            if let (Some(snapshot), Some(slot)) = (
+                state_snapshot,
+                self.promise_combinators.get_mut(&combinator_id),
+            ) {
+                *slot = snapshot;
+            }
+            return Err(error);
         }
 
         if let Some(resolution) = resolution {
@@ -12905,7 +13066,7 @@ impl InterpreterCore {
             }
         }
         let total = inputs.len() as u32;
-        let result_promise = self.promise_store.create();
+        let result_promise = self.create_promise_accounted()?;
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
@@ -13006,7 +13167,7 @@ impl InterpreterCore {
                                     combinator_id,
                                     index,
                                 },
-                            );
+                            )?;
                         }
                         crate::promise_model::PromiseState::Fulfilled(value) => {
                             self.update_combinator_fulfillment(
@@ -13062,7 +13223,7 @@ impl InterpreterCore {
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
-                let handle = self.promise_store.create();
+                let handle = self.create_promise_accounted()?;
                 Ok((
                     Value::Promise(handle.0),
                     crate::ifc_artifacts::Label::Public,
@@ -13089,7 +13250,7 @@ impl InterpreterCore {
                         // through a PromiseResolveThenableJob rather than
                         // fulfilling with the object itself (bd-3ose7); a
                         // non-thenable fulfills synchronously, unchanged.
-                        let handle = self.promise_store.create();
+                        let handle = self.create_promise_accounted()?;
                         self.resolve_promise_with_value(handle, arg0, arg0_label.clone())?;
                         Ok((Value::Promise(handle.0), arg0_label))
                     }
@@ -13109,7 +13270,7 @@ impl InterpreterCore {
                     _ => {
                         // Promise.reject(reason) — create a pre-rejected promise.
                         let js_reason = Self::value_to_js_value(&arg0);
-                        let handle = self.promise_store.create();
+                        let handle = self.create_promise_accounted()?;
                         self.reject_promise(handle, js_reason, arg0_label.clone())?;
                         Ok((Value::Promise(handle.0), arg0_label))
                     }
@@ -13131,19 +13292,12 @@ impl InterpreterCore {
                 let registration_label = self.promise_hostcall_registration_label(args)?;
                 // In the baseline interpreter, .then() callbacks are simplified:
                 // we register reactions with no closure handlers (identity propagation).
-                let result = self
-                    .promise_store
-                    .then(
-                        handle,
-                        None,
-                        None,
-                        registration_label.clone(),
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "valid promise handle".to_string(),
-                        got: e.to_string(),
-                    })?;
+                let result = self.register_promise_then_accounted(
+                    handle,
+                    None,
+                    None,
+                    registration_label.clone(),
+                )?;
                 Ok((Value::Promise(result.0), registration_label))
             }
             "promise:catch" => {
@@ -13159,19 +13313,12 @@ impl InterpreterCore {
                     }
                 };
                 let registration_label = self.promise_hostcall_registration_label(args)?;
-                let result = self
-                    .promise_store
-                    .then(
-                        handle,
-                        None,
-                        None,
-                        registration_label.clone(),
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "valid promise handle".to_string(),
-                        got: e.to_string(),
-                    })?;
+                let result = self.register_promise_then_accounted(
+                    handle,
+                    None,
+                    None,
+                    registration_label.clone(),
+                )?;
                 Ok((Value::Promise(result.0), registration_label))
             }
             "promise:finally" => {
@@ -13187,19 +13334,12 @@ impl InterpreterCore {
                     }
                 };
                 let registration_label = self.promise_hostcall_registration_label(args)?;
-                let result = self
-                    .promise_store
-                    .then(
-                        handle,
-                        None,
-                        None,
-                        registration_label.clone(),
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "valid promise handle".to_string(),
-                        got: e.to_string(),
-                    })?;
+                let result = self.register_promise_then_accounted(
+                    handle,
+                    None,
+                    None,
+                    registration_label.clone(),
+                )?;
                 Ok((Value::Promise(result.0), registration_label))
             }
             "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
@@ -13231,11 +13371,30 @@ impl InterpreterCore {
         while self.event_loop.has_pending_work() && turns < MAX_TURNS {
             turns += 1;
 
-            // Phase 1: Execute one macrotask (if ready)
+            // Phase 1: Execute one macrotask (if ready). The dequeued task's
+            // bytes leave the queue but remain physically live on this stack
+            // until the handler returns; keep them charged through the
+            // in-flight transfer so nested Promise work observes one coherent
+            // runtime component (bd-ur3tk.21).
+            let previous_turn_bytes = self.promise_runtime_memory_bytes();
             let turn_result = self.event_loop.turn();
-            if let Some(macrotask) = turn_result.macrotask {
-                self.execute_macrotask_callback(module, &macrotask)?;
-            }
+            let released_bytes =
+                previous_turn_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+            self.promise_in_flight_task_bytes = self
+                .promise_in_flight_task_bytes
+                .saturating_add(released_bytes);
+            self.apply_promise_runtime_memory_delta(previous_turn_bytes)?;
+            let callback_result = if let Some(macrotask) = turn_result.macrotask {
+                self.execute_macrotask_callback(module, &macrotask)
+            } else {
+                Ok(())
+            };
+            self.promise_in_flight_task_bytes = self
+                .promise_in_flight_task_bytes
+                .saturating_sub(released_bytes);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(released_bytes);
+            callback_result?;
 
             // Phase 2: Drain all microtasks enqueued during macrotask execution
             self.drain_microtasks(Some(module))?;
@@ -13408,9 +13567,17 @@ impl InterpreterCore {
         let mut drained = 0u32;
 
         while drained < max_drain {
+            // The dequeue itself appends a replay witness event; charge it
+            // transactionally (bd-ur3tk.21). The task payload stays resident
+            // (and charged) in the queue buffer until the post-drain compact.
+            let previous_queue_bytes = self.promise_runtime_memory_bytes();
             let Some(task) = self.event_loop.microtasks.dequeue() else {
                 break;
             };
+            if let Err(error) = self.apply_promise_runtime_memory_delta(previous_queue_bytes) {
+                self.event_loop.microtasks.rollback_last_dequeued();
+                return Err(error);
+            }
             drained += 1;
             match task {
                 crate::promise_model::Microtask::PromiseReaction {
@@ -13544,7 +13711,12 @@ impl InterpreterCore {
                 }
             }
         }
+        // Compaction releases the consumed task slots and payloads retained
+        // by the cursor-based buffer (bd-ur3tk.21). A release cannot exceed
+        // the ceiling, so the delta application is infallible here.
+        let previous_queue_bytes = self.promise_runtime_memory_bytes();
         self.event_loop.microtasks.compact();
+        self.apply_promise_runtime_memory_delta(previous_queue_bytes)?;
         Ok(())
     }
 
@@ -13893,6 +14065,10 @@ impl InterpreterCore {
                     _ => None,
                 };
 
+                // Transactional macrotask schedule (bd-ur3tk.21): the heap
+                // slot is charged eagerly; a ceiling refusal removes both the
+                // timer record and the scheduled entry.
+                let previous_promise_runtime_bytes = self.promise_runtime_memory_bytes();
                 self.active_timers.insert(
                     timer_id,
                     ActiveTimer {
@@ -13908,6 +14084,16 @@ impl InterpreterCore {
                         }),
                     },
                 );
+                if let Err(error) =
+                    self.apply_promise_runtime_memory_delta(previous_promise_runtime_bytes)
+                {
+                    if let Some(timer) = self.active_timers.remove(&timer_id)
+                        && let Some(seq) = timer.registration_seq
+                    {
+                        self.event_loop.macrotasks.rollback_last_scheduled(seq);
+                    }
+                    return Err(error);
+                }
 
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
@@ -16199,11 +16385,98 @@ impl InterpreterCore {
             .sum::<u64>()
     }
 
-    fn promise_combinator_labels_memory_bytes(&self) -> u64 {
+    /// Payload retained by one combinator tracker plus its accumulated IFC
+    /// label. Supersedes the bd-ur3tk.8 label-only slice — the label stays
+    /// counted exactly once here, never in a second component (bd-ur3tk.21).
+    fn estimate_promise_combinator_state_bytes(state: &LabeledPromiseCombinatorState) -> u64 {
+        let tracker_bytes = match &state.tracker {
+            PromiseCombinatorState::All(tracker) => tracker
+                .values
+                .values()
+                .map(|value| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                        crate::promise_model::estimate_js_value_memory_bytes(value),
+                    )
+                })
+                .fold(0u64, u64::saturating_add),
+            PromiseCombinatorState::AllSettled(tracker) => tracker
+                .outcomes
+                .values()
+                .map(|outcome| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_string_bytes(&outcome.status))
+                        .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(
+                            &outcome.value,
+                        ))
+                })
+                .fold(0u64, u64::saturating_add),
+            PromiseCombinatorState::Race(_) => 0,
+            PromiseCombinatorState::Any(tracker) => tracker
+                .errors
+                .values()
+                .map(|reason| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                        crate::promise_model::estimate_js_value_memory_bytes(reason),
+                    )
+                })
+                .fold(0u64, u64::saturating_add),
+        };
+        tracker_bytes.saturating_add(Self::estimate_label_bytes(&state.accumulated_label))
+    }
+
+    fn promise_combinators_memory_bytes(&self) -> u64 {
         self.promise_combinators
             .values()
-            .map(|state| Self::estimate_label_bytes(&state.accumulated_label))
-            .sum::<u64>()
+            .map(|state| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_promise_combinator_state_bytes(state))
+            })
+            .fold(0u64, u64::saturating_add)
+    }
+
+    fn promise_combinator_watchers_memory_bytes(&self) -> u64 {
+        self.promise_combinator_watchers
+            .values()
+            .map(|watchers| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                    u64::try_from(watchers.len())
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
+                )
+            })
+            .fold(0u64, u64::saturating_add)
+    }
+
+    /// Resident bytes of the whole Promise runtime: store records/witness,
+    /// event-loop queues and witness, combinator trackers with their
+    /// accumulated labels, watcher vectors, and any in-flight macrotask
+    /// transfer (bd-ur3tk.21).
+    fn promise_runtime_memory_bytes(&self) -> u64 {
+        self.promise_store
+            .estimated_memory_bytes()
+            .saturating_add(self.event_loop.estimated_memory_bytes())
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes)
+    }
+
+    /// Reprice the Promise runtime after a bracketed mutation, refusing
+    /// atomically at the configured ceiling. Callers roll back their local
+    /// mutation when this refuses.
+    fn apply_promise_runtime_memory_delta(
+        &mut self,
+        previous_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        let next_bytes = self.promise_runtime_memory_bytes();
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
     }
 
     fn estimate_module_execution_bytes(execution: &ModuleExecutionSnapshot) -> u64 {
@@ -16421,7 +16694,7 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(self.async_function_snapshots_memory_bytes())
-            .saturating_add(self.promise_combinator_labels_memory_bytes())
+            .saturating_add(self.promise_runtime_memory_bytes())
             .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
@@ -19009,6 +19282,259 @@ mod recordable_capability_tag_tests {
         assert!(matches!(escaped_short, std::borrow::Cow::Owned(_)));
         assert_ne!(escaped_short.as_ref(), encoded_long);
         assert!(escaped_short.starts_with(&digest_marker(&encoded_long)));
+    }
+}
+
+/// Regressions for transactional Promise-runtime memory accounting
+/// (bd-ur3tk.21): PromiseStore records/witness, event-loop queues, combinator
+/// trackers, and watcher vectors are charged eagerly at every mutation and
+/// stay byte-equal to the recomputed estimate, with one-byte-short refusals
+/// rolling every owner back.
+#[cfg(test)]
+mod promise_runtime_accounting_tests_bd_ur3tk_21 {
+    use super::*;
+    use crate::capability::RuntimeCapability;
+    use crate::ifc_artifacts::Label;
+    use crate::object_model::JsValue;
+    use std::collections::BTreeSet;
+
+    fn accounting_core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        InterpreterCore::new(config, "bd-ur3tk-21")
+    }
+
+    fn assert_eager_matches_recompute(core: &InterpreterCore, context: &str) {
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "eager estimate must equal recompute {context}"
+        );
+    }
+
+    #[test]
+    fn create_then_settle_drain_stay_byte_equal_bd_ur3tk_21() {
+        let mut core = accounting_core();
+        assert_eager_matches_recompute(&core, "on a fresh core");
+        let baseline = core.estimated_memory_bytes();
+
+        let promise = core.create_promise_accounted().expect("create fits");
+        assert_eager_matches_recompute(&core, "after create");
+        assert!(
+            core.estimated_memory_bytes() > baseline,
+            "the record and creation witness must be charged"
+        );
+
+        let derived = core
+            .register_promise_then_accounted(promise, None, None, Label::Public)
+            .expect("then fits");
+        assert_eager_matches_recompute(&core, "after pending .then registration");
+
+        core.fulfill_promise(promise, JsValue::Str("x".repeat(4096)), Label::Public)
+            .expect("fulfill fits");
+        assert_eager_matches_recompute(&core, "after settlement with a 4KB payload");
+        assert!(
+            core.promise_store
+                .get(derived)
+                .expect("derived promise")
+                .state
+                == crate::promise_model::PromiseState::Pending,
+            "derived promise settles only after the drain"
+        );
+
+        core.drain_microtasks(None)
+            .expect("drain executes the identity reaction");
+        assert_eager_matches_recompute(&core, "after drain + compact");
+        assert!(
+            core.promise_store
+                .get(derived)
+                .expect("derived promise")
+                .state
+                .is_settled(),
+            "identity reaction must settle the derived promise"
+        );
+        assert_eq!(
+            core.promise_in_flight_task_bytes, 0,
+            "no in-flight transfer may survive the drain"
+        );
+    }
+
+    #[test]
+    fn settled_then_enqueues_transactionally_bd_ur3tk_21() {
+        let mut core = accounting_core();
+        let promise = core.create_promise_accounted().expect("create fits");
+        core.fulfill_promise(promise, JsValue::Str("value".into()), Label::Public)
+            .expect("fulfill fits");
+        assert_eager_matches_recompute(&core, "after pre-settlement");
+
+        // .then on an already-settled promise takes the immediate-enqueue path.
+        core.register_promise_then_accounted(promise, None, None, Label::Public)
+            .expect("settled then fits");
+        assert_eager_matches_recompute(&core, "after settled-path .then");
+        assert!(
+            !core.event_loop.microtasks.is_empty(),
+            "settled-path then must enqueue the reaction"
+        );
+    }
+
+    #[test]
+    fn one_byte_short_create_refuses_atomically_bd_ur3tk_21() {
+        // Learn the exact growth of one create on a probe core.
+        let mut probe = accounting_core();
+        let before = probe.estimated_memory_bytes();
+        probe.create_promise_accounted().expect("probe create");
+        let growth = probe.estimated_memory_bytes() - before;
+        assert!(growth > 0, "create must have a positive charge");
+
+        let mut core = accounting_core();
+        let baseline = core.estimated_memory_bytes();
+        let record_count = core.promise_store.len();
+        core.config.max_total_memory_bytes = baseline + growth - 1;
+        let refusal = core.create_promise_accounted();
+        assert!(
+            matches!(refusal, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+            "one byte short must refuse: {refusal:?}"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline,
+            "a refused create must not leak charge"
+        );
+        assert_eq!(
+            core.promise_store.len(),
+            record_count,
+            "a refused create must roll the fresh record back"
+        );
+        assert_eager_matches_recompute(&core, "after refused create");
+
+        // The exact ceiling admits the same create.
+        core.config.max_total_memory_bytes = baseline + growth;
+        core.create_promise_accounted()
+            .expect("exact ceiling must admit the create");
+        assert_eager_matches_recompute(&core, "after exact-ceiling create");
+    }
+
+    #[test]
+    fn refused_then_restores_store_and_queue_bd_ur3tk_21() {
+        let mut core = accounting_core();
+        let promise = core.create_promise_accounted().expect("create fits");
+        assert_eager_matches_recompute(&core, "before clamped then");
+        let baseline = core.estimated_memory_bytes();
+        let record_count = core.promise_store.len();
+
+        // No headroom at all: the derived promise + reaction slots must refuse
+        // and restore the pre-registration store and queue exactly.
+        core.config.max_total_memory_bytes = baseline;
+        let refusal = core.register_promise_then_accounted(promise, None, None, Label::Public);
+        assert!(
+            matches!(refusal, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+            "clamped then must refuse: {refusal:?}"
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(core.promise_store.len(), record_count);
+        assert!(core.event_loop.microtasks.is_empty());
+        assert_eager_matches_recompute(&core, "after refused then");
+    }
+
+    #[test]
+    fn combinator_completion_stays_byte_equal_bd_ur3tk_21() {
+        let mut core = accounting_core();
+        let first = core.create_promise_accounted().expect("first input");
+        let second = core.create_promise_accounted().expect("second input");
+        let result = core.create_promise_accounted().expect("result promise");
+
+        let combinator_id = core
+            .register_combinator(LabeledPromiseCombinatorState {
+                tracker: PromiseCombinatorState::All(crate::promise_model::PromiseAllTracker {
+                    result_promise: result,
+                    values: std::collections::BTreeMap::new(),
+                    total: 2,
+                    resolved_count: 0,
+                    settled: false,
+                }),
+                accumulated_label: Label::Public,
+            })
+            .expect("combinator fits");
+        core.add_combinator_watcher(
+            first,
+            PromiseCombinatorWatcher {
+                combinator_id,
+                index: 0,
+            },
+        )
+        .expect("first watcher fits");
+        core.add_combinator_watcher(
+            second,
+            PromiseCombinatorWatcher {
+                combinator_id,
+                index: 1,
+            },
+        )
+        .expect("second watcher fits");
+        assert_eager_matches_recompute(&core, "after combinator registration");
+
+        core.fulfill_promise(first, JsValue::Str("a".repeat(512)), Label::Public)
+            .expect("first fulfillment");
+        assert_eager_matches_recompute(&core, "after first tracked fulfillment");
+
+        core.fulfill_promise(second, JsValue::Str("b".repeat(512)), Label::Public)
+            .expect("second fulfillment completes the aggregate");
+        assert_eager_matches_recompute(&core, "after aggregate completion");
+        assert!(
+            core.promise_combinators.is_empty(),
+            "a completed combinator must be removed"
+        );
+        assert!(
+            core.promise_combinator_watchers.is_empty(),
+            "settled inputs must release their watcher slots"
+        );
+        assert!(
+            core.promise_store
+                .get(result)
+                .expect("result promise")
+                .state
+                .is_settled(),
+            "aggregate result must settle"
+        );
+    }
+
+    #[test]
+    fn timer_schedule_and_idle_loop_stay_byte_equal_bd_ur3tk_21() {
+        let mut core = accounting_core();
+        // Schedule directly on the queue, then resynchronize — the loop's
+        // turn/in-flight bookkeeping is what this test pins.
+        core.event_loop.set_timeout(
+            crate::closure_model::ClosureHandle(0),
+            0,
+            Label::Public,
+        );
+        core.sync_estimated_memory_bytes()
+            .expect("resync after direct schedule");
+        assert_eager_matches_recompute(&core, "after scheduled macrotask");
+
+        let module = Ir3Module {
+            header: crate::ir_contract::IrHeader {
+                schema_version: crate::ir_contract::IrSchemaVersion::CURRENT,
+                level: crate::ir_contract::IrLevel::Ir3,
+                source_hash: None,
+                source_label: "bd-ur3tk-21".to_string(),
+            },
+            instructions: vec![Ir3Instruction::Halt],
+            constant_pool: Vec::new(),
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+        };
+        core.run_event_loop_until_idle(&module)
+            .expect("idle loop drains the scheduled turn");
+        assert_eq!(
+            core.promise_in_flight_task_bytes, 0,
+            "the in-flight transfer must be returned after the handler"
+        );
+        assert_eager_matches_recompute(&core, "after the event loop went idle");
     }
 }
 

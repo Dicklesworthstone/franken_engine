@@ -57448,7 +57448,18 @@ impl InterpreterCore {
                         format!("[{}]", items.join(","))
                     } else {
                         let mut members = Vec::new();
-                        for (key, val) in object.properties.exact_entries() {
+                        // DISC-013 / bd-n8eta: consume HeapObject's canonical
+                        // [[OwnPropertyKeys]] sequence rather than iterating a
+                        // lookup carrier directly. This keeps JSON.stringify
+                        // aligned with Object.keys: array indices first, then
+                        // ordinary strings in creation order, with Symbols
+                        // excluded from JSON object members.
+                        for key in object.own_runtime_property_keys().into_iter().filter_map(
+                            |key| match key {
+                                RuntimePropertyKey::String(key) => Some(key),
+                                RuntimePropertyKey::Symbol(_) => None,
+                            },
+                        ) {
                             // Engine-internal metadata (e.g. Symbol __type/__key)
                             // is not a real enumerable JS property.
                             if key.as_str().is_some_and(|key| key.starts_with("__"))
@@ -57456,8 +57467,13 @@ impl InterpreterCore {
                             {
                                 continue;
                             }
+                            let Some(val) = object.own_runtime_property_value(
+                                &RuntimePropertyKey::String(key.clone()),
+                            ) else {
+                                continue;
+                            };
                             if let Some(rendered_val) =
-                                self.json_stringify_value(module, val, visited)?
+                                self.json_stringify_value(module, &val, visited)?
                             {
                                 members.push(format!(
                                     "{}:{rendered_val}",

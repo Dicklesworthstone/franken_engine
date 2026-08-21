@@ -2,12 +2,35 @@
 
 #![forbid(unsafe_code)]
 
+use frankenengine_engine::HybridRouter;
 use frankenengine_engine::json_capabilities::{
     JSON_PARSE_CAPABILITY, JSON_STRINGIFY_CAPABILITY, JsonBuiltinAbi, JsonBuiltinKind,
     canonical_json_capability_for_function_index, canonical_json_capability_name,
     json_builtin_abi_for_capability, json_builtin_kind_for_capability,
     json_builtin_kind_for_function_index,
 };
+
+#[test]
+fn json_stringify_executable_baseline_preserves_own_key_insertion_order_bd_n8eta() {
+    let mut engine = HybridRouter::default();
+    let outcome = engine
+        .eval(
+            r#"
+                const value = { foo: 'bar', baz: 'qux' };
+                console.log(JSON.stringify(value));
+            "#,
+        )
+        .expect("JSON.stringify own-key fixture should execute");
+
+    assert_eq!(
+        outcome
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        vec![r#"{"foo":"bar","baz":"qux"}"#]
+    );
+}
 
 #[test]
 fn json_capability_aliases_normalize_to_canonical_names() {

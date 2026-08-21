@@ -2534,6 +2534,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::InstanceOf { dst, .. }
         | Ir3Instruction::InOp { dst, .. }
         | Ir3Instruction::Construct { dst, .. }
+        | Ir3Instruction::ConstructWithNewTarget { dst, .. }
         | Ir3Instruction::ConstructSuper { dst, .. }
         | Ir3Instruction::TemplateLiteral { dst, .. }
         | Ir3Instruction::Call { dst, .. }

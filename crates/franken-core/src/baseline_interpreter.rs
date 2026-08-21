@@ -9278,6 +9278,50 @@ impl InterpreterCore {
                         }
                     }
                 }
+                Ir3Instruction::ConstructWithNewTarget {
+                    callee,
+                    new_target,
+                    args,
+                    dst,
+                } => {
+                    let callee_value = self.read_reg(callee)?;
+                    let callee_label = self.read_reg_label(callee)?;
+                    let new_target_value = self.read_reg(new_target)?;
+                    let new_target_label = self.read_reg_label(new_target)?;
+
+                    if self.function_prototype_for_value(&callee_value)?.is_none() {
+                        return Err(InterpreterError::TypeError {
+                            expected: "constructible Reflect.construct target".to_string(),
+                            got: callee_value.type_name().to_string(),
+                        });
+                    }
+                    if self
+                        .function_prototype_for_value(&new_target_value)?
+                        .is_none()
+                    {
+                        return Err(InterpreterError::TypeError {
+                            expected: "constructible Reflect.construct newTarget".to_string(),
+                            got: new_target_value.type_name().to_string(),
+                        });
+                    }
+
+                    if let Err(error) = self.enter_constructor_call(
+                        module,
+                        callee_value,
+                        callee_label,
+                        args,
+                        self.ip + 1,
+                        Some(dst),
+                        new_target_value,
+                        new_target_label,
+                        false,
+                    ) {
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        }
+                    }
+                }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
                     let callee_label = self.read_reg_label(callee)?;

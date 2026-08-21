@@ -1668,6 +1668,14 @@ pub enum Ir3Instruction {
         args: RegRange,
         dst: Reg,
     },
+    /// Construct `callee` while exposing and allocating from an explicit
+    /// `new.target`, as required by `Reflect.construct`'s third argument.
+    ConstructWithNewTarget {
+        callee: Reg,
+        new_target: Reg,
+        args: RegRange,
+        dst: Reg,
+    },
     /// Construct the current derived frame's parent with the frame's
     /// `new.target`, then bind the resulting object as this frame's `this`.
     ConstructSuper { args: RegRange, dst: Reg },
@@ -2512,6 +2520,27 @@ impl Ir3Instruction {
                 map.insert(
                     "callee".to_string(),
                     CanonicalValue::U64(u64::from(*callee)),
+                );
+                map.insert("args".to_string(), args.canonical_value());
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::ConstructWithNewTarget {
+                callee,
+                new_target,
+                args,
+                dst,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("construct_with_new_target".to_string()),
+                );
+                map.insert(
+                    "callee".to_string(),
+                    CanonicalValue::U64(u64::from(*callee)),
+                );
+                map.insert(
+                    "new_target".to_string(),
+                    CanonicalValue::U64(u64::from(*new_target)),
                 );
                 map.insert("args".to_string(), args.canonical_value());
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));

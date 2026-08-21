@@ -244,6 +244,15 @@ const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FrankenEngine.DecisionReceipt.Signatur
 
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
+/// Native stack reserved before baseline execution begins. The interpreter's
+/// debug dispatch frame is intentionally large; cross-module wrappers re-enter
+/// it recursively while preserving the logical depth in
+/// `module_reentrant_call_depth`.
+const INTERPRETER_EXECUTION_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
+/// Conservative native-stack allowance for each configured logical call
+/// depth. Stack pages remain demand-paged, so the reservation bounds address
+/// space without eagerly committing the full default-depth allowance.
+const INTERPRETER_EXECUTION_STACK_PER_CALL_DEPTH_BYTES: usize = 512 * 1024;
 /// Deterministic bound for baseline prototype-chain walks.
 const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
 const PROXY_TYPE_TAG: &str = "Proxy";
@@ -77740,42 +77749,18 @@ impl QuickJsLane {
         hook: Option<Arc<dyn InterpreterHook>>,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<ExecutionResult, InterpreterError> {
-        let mut core = InterpreterCore::new(self.config.clone(), trace_id);
-        if let Some(hook) = hook {
-            core.set_hook(hook);
-        }
-        if let Some(provider) = self.host_io.clone() {
-            core.set_host_io(provider, self.host_io_recorder.clone());
-        }
-        if let (Some(provider), Some(journal)) =
-            (self.process_spawn.clone(), self.host_effect_journal.clone())
-        {
-            core.set_process_spawn(provider, journal);
-        }
-        if let Some(authority) = self.timer_effect_authority.clone() {
-            core.set_timer_effect_authority(authority);
-        }
-        let execution = match compact_tier1 {
-            Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
-            None => core.execute_ephemeral(module),
-        };
-        match execution {
-            Ok(result) => Ok(result),
-            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
-                let requested_hook_action =
-                    requested_hook_action_from_error(action.as_str(), reason.clone())
-                        .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result_with_trace_handoff(
-                    LabeledReturn {
-                        value: Value::Undefined,
-                        label: Label::Public,
-                    },
-                    Some(requested_hook_action),
-                    TraceHandoff::DrainEphemeralCore,
-                ))
-            }
-            Err(err) => Err(err),
-        }
+        execute_lane_with_provisioned_stack(
+            self.config.clone(),
+            self.host_io.clone(),
+            self.host_io_recorder.clone(),
+            self.process_spawn.clone(),
+            self.host_effect_journal.clone(),
+            self.timer_effect_authority.clone(),
+            module,
+            trace_id,
+            hook,
+            compact_tier1,
+        )
     }
 }
 
@@ -77829,6 +77814,88 @@ fn execution_profile_config(mut config: InterpreterConfig) -> InterpreterConfig 
         RuntimeCapability::HeapAllocate,
     ]);
     config
+}
+
+fn interpreter_execution_stack_bytes(max_call_depth: usize) -> Result<usize, InterpreterError> {
+    max_call_depth
+        .checked_mul(INTERPRETER_EXECUTION_STACK_PER_CALL_DEPTH_BYTES)
+        .and_then(|depth_bytes| {
+            INTERPRETER_EXECUTION_STACK_BASE_BYTES.checked_add(depth_bytes)
+        })
+        .ok_or_else(|| InterpreterError::InternalError {
+            details: format!(
+                "configured max_call_depth {max_call_depth} overflows the native execution-stack reservation"
+            ),
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_lane_with_provisioned_stack(
+    config: InterpreterConfig,
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
+    module: &Ir3Module,
+    trace_id: &str,
+    hook: Option<Arc<dyn InterpreterHook>>,
+    compact_tier1: Option<&CompactTier1Program>,
+) -> Result<ExecutionResult, InterpreterError> {
+    let stack_bytes = interpreter_execution_stack_bytes(config.max_call_depth)?;
+    std::thread::scope(|scope| {
+        let execution = std::thread::Builder::new()
+            .name("frankenengine-baseline".to_string())
+            .stack_size(stack_bytes)
+            .spawn_scoped(scope, move || {
+                let mut core = InterpreterCore::new(config, trace_id);
+                if let Some(hook) = hook {
+                    core.set_hook(hook);
+                }
+                if let Some(provider) = host_io {
+                    core.set_host_io(provider, host_io_recorder);
+                }
+                if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
+                    core.set_process_spawn(provider, journal);
+                }
+                if let Some(authority) = timer_effect_authority {
+                    core.set_timer_effect_authority(authority);
+                }
+                let execution = match compact_tier1 {
+                    Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
+                    None => core.execute_ephemeral(module),
+                };
+                match execution {
+                    Ok(result) => Ok(result),
+                    Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                        let requested_hook_action =
+                            requested_hook_action_from_error(action.as_str(), reason.clone())
+                                .ok_or(InterpreterError::ContainmentActionRequested {
+                                    action,
+                                    reason,
+                                })?;
+                        Ok(core.take_execution_result_with_trace_handoff(
+                            LabeledReturn {
+                                value: Value::Undefined,
+                                label: Label::Public,
+                            },
+                            Some(requested_hook_action),
+                            TraceHandoff::DrainEphemeralCore,
+                        ))
+                    }
+                    Err(error) => Err(error),
+                }
+            })
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!(
+                    "failed to provision {stack_bytes}-byte baseline execution stack: {error}"
+                ),
+            })?;
+        match execution.join() {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
 }
 
 impl V8Lane {
@@ -77897,42 +77964,18 @@ impl V8Lane {
         hook: Option<Arc<dyn InterpreterHook>>,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<ExecutionResult, InterpreterError> {
-        let mut core = InterpreterCore::new(self.config.clone(), trace_id);
-        if let Some(hook) = hook {
-            core.set_hook(hook);
-        }
-        if let Some(provider) = self.host_io.clone() {
-            core.set_host_io(provider, self.host_io_recorder.clone());
-        }
-        if let (Some(provider), Some(journal)) =
-            (self.process_spawn.clone(), self.host_effect_journal.clone())
-        {
-            core.set_process_spawn(provider, journal);
-        }
-        if let Some(authority) = self.timer_effect_authority.clone() {
-            core.set_timer_effect_authority(authority);
-        }
-        let execution = match compact_tier1 {
-            Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
-            None => core.execute_ephemeral(module),
-        };
-        match execution {
-            Ok(result) => Ok(result),
-            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
-                let requested_hook_action =
-                    requested_hook_action_from_error(action.as_str(), reason.clone())
-                        .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result_with_trace_handoff(
-                    LabeledReturn {
-                        value: Value::Undefined,
-                        label: Label::Public,
-                    },
-                    Some(requested_hook_action),
-                    TraceHandoff::DrainEphemeralCore,
-                ))
-            }
-            Err(err) => Err(err),
-        }
+        execute_lane_with_provisioned_stack(
+            self.config.clone(),
+            self.host_io.clone(),
+            self.host_io_recorder.clone(),
+            self.process_spawn.clone(),
+            self.host_effect_journal.clone(),
+            self.timer_effect_authority.clone(),
+            module,
+            trace_id,
+            hook,
+            compact_tier1,
+        )
     }
 }
 

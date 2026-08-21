@@ -3071,9 +3071,14 @@ fn generated_nested_closure_keeps_artifact_program_after_wrapper_unwinds_bd_fw7z
     );
 }
 
-#[test]
-fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
-    let root = temp_module_dir("module_import_cross_recursion_depth");
+fn alternating_cross_module_recursion_result(
+    countdown: i64,
+    method_callback: bool,
+) -> Result<Value, InterpreterError> {
+    let case = if method_callback { "method" } else { "direct" };
+    let root = temp_module_dir(&format!(
+        "module_import_cross_recursion_depth_{case}_{countdown}"
+    ));
     fs::create_dir_all(&root).expect("create module root");
     fs::write(
         root.join("a.mjs"),
@@ -3084,11 +3089,15 @@ fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
          }",
     )
     .expect("write recursive module a");
-    fs::write(
-        root.join("b.mjs"),
-        "export function bounce(n, callback) { return callback(n - 1); }",
-    )
-    .expect("write recursive module b");
+    let bounce_source = if method_callback {
+        "export function bounce(n, callback) {\n\
+           const holder = { invoke: callback };\n\
+           return holder.invoke(n - 1);\n\
+         }"
+    } else {
+        "export function bounce(n, callback) { return callback(n - 1); }"
+    };
+    fs::write(root.join("b.mjs"), bounce_source).expect("write recursive module b");
 
     let mut module = test_module_with_pool(
         vec![
@@ -3109,7 +3118,10 @@ fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
                 key: 2,
                 dst: 3,
             },
-            Ir3Instruction::LoadInt { dst: 4, value: 20 },
+            Ir3Instruction::LoadInt {
+                dst: 4,
+                value: countdown,
+            },
             Ir3Instruction::Call {
                 callee: 3,
                 args: RegRange { start: 4, count: 1 },
@@ -3125,13 +3137,33 @@ fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
     config.module_root = Some(root.display().to_string());
     config.max_call_depth = 8;
     config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
-    let error = QuickJsLane::with_config(config)
-        .execute(&module, "module-import-cross-recursion-depth-trace")
-        .expect_err("alternating module recursion must remain depth-bounded");
-    assert!(
-        matches!(error, InterpreterError::StackOverflow { max: 8, .. }),
-        "unexpected recursion containment error: {error:?}"
-    );
+    QuickJsLane::with_config(config)
+        .execute(
+            &module,
+            &format!("module-import-cross-recursion-depth-{case}-{countdown}-trace"),
+        )
+        .map(|result| result.value)
+}
+
+#[test]
+fn alternating_cross_module_recursion_one_below_effective_depth_limit_bd_hwjbi() {
+    let value = alternating_cross_module_recursion_result(3, false)
+        .expect("one-below-limit direct/callback recursion must complete");
+    assert_eq!(value, Value::Int(0));
+}
+
+#[test]
+fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
+    let error = alternating_cross_module_recursion_result(4, false)
+        .expect_err("exact-limit direct/callback recursion must fail closed");
+    assert_eq!(error, InterpreterError::StackOverflow { depth: 8, max: 8 });
+}
+
+#[test]
+fn alternating_cross_module_method_callback_hits_exact_depth_limit_bd_hwjbi() {
+    let error = alternating_cross_module_recursion_result(4, true)
+        .expect_err("exact-limit method callback recursion must fail closed");
+    assert_eq!(error, InterpreterError::StackOverflow { depth: 8, max: 8 });
 }
 
 #[test]

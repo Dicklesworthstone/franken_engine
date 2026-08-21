@@ -11296,6 +11296,13 @@ fn lower_expression_to_ir1(
         root_scope_id,
         label_counter,
         span_table,
+    )? || try_lower_arrow_expression_to_ir1(
+        expression,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
     )? || try_lower_logical_expression_to_ir1(
         expression,
         ops,
@@ -11329,6 +11336,182 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+/// Keep nested arrow bodies out of the generic expression lowerer's large
+/// recursive frame. A callback can retain several local bindings while its
+/// body creates more callbacks; lowering those children through the same
+/// monolithic match kept every parent's large frame live and could exhaust a
+/// normal test-thread stack for otherwise shallow source.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn try_lower_arrow_expression_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+) -> Result<bool, LoweringPipelineError> {
+    let Expression::ArrowFunction {
+        params,
+        body,
+        is_async,
+    } = expression
+    else {
+        return Ok(false);
+    };
+
+    let mut body_ops = Vec::new();
+    let mut body_bindings = Vec::new();
+    let mut body_lookup = BTreeMap::new();
+    seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    seed_events_module_sentinels(&mut body_lookup, binding_lookup);
+    seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
+    seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    seed_tls_module_alias_sentinels(&mut body_lookup, binding_lookup);
+    let mut body_binding_index: BindingId = 0;
+    let body_scope = ScopeId { depth: 0, index: 0 };
+    let mut body_label_counter: u32 = 0;
+    let mut param_names: Vec<String> = Vec::with_capacity(params.len());
+    let mut destructure_params: Vec<(String, &BindingPattern)> =
+        Vec::with_capacity(params.len());
+    for (index, param) in params.iter().enumerate() {
+        push_param_slot(index, param, &mut param_names, &mut destructure_params);
+    }
+    let rest_param_index = rest_param_index_of(params);
+    for pname in &param_names {
+        let _ = alloc_binding(
+            &mut body_bindings,
+            &mut body_lookup,
+            &mut body_binding_index,
+            body_scope,
+            pname,
+            BindingKind::Parameter,
+        )
+        .map_err(LoweringPipelineError::SemanticViolation)?;
+        suppress_stream_module_sentinel(&mut body_lookup, pname);
+        suppress_net_module_sentinel(&mut body_lookup, pname);
+        suppress_zlib_module_sentinel(&mut body_lookup, pname);
+        suppress_cluster_module_sentinel(&mut body_lookup, pname);
+        suppress_child_process_module_sentinel(&mut body_lookup, pname);
+        suppress_events_module_sentinel(&mut body_lookup, pname);
+    }
+    allocate_destructure_param_bindings(
+        &destructure_params,
+        &mut body_bindings,
+        &mut body_lookup,
+        &mut body_binding_index,
+        body_scope,
+    )?;
+    let parameter_prologue = lower_function_parameter_prologue(
+        &destructure_params,
+        None,
+        binding_lookup,
+        &mut body_ops,
+        &mut body_bindings,
+        &body_lookup,
+        &mut body_binding_index,
+        body_scope,
+        &mut body_label_counter,
+    )?;
+    let body_statements = match body {
+        ArrowBody::Block(block) => Some(block.body.as_slice()),
+        ArrowBody::Expression(_) => None,
+    };
+    let pre_lower_names = prepare_function_body_bindings(
+        body_statements,
+        None,
+        binding_lookup,
+        &mut body_lookup,
+        &mut body_binding_index,
+    );
+    merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+    match body {
+        ArrowBody::Expression(expr) => lower_expression_to_ir1(
+            expr,
+            &mut body_ops,
+            &mut body_bindings,
+            &mut body_lookup,
+            &mut body_binding_index,
+            body_scope,
+            &mut body_label_counter,
+            &mut Vec::new(),
+        )?,
+        ArrowBody::Block(block) => {
+            for stmt in &block.body {
+                lower_statement_to_ir1(
+                    stmt,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                    &mut Vec::new(),
+                )?;
+            }
+        }
+    }
+    if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+        if matches!(body, ArrowBody::Block(_)) {
+            body_ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+        }
+        body_ops.push(Ir1Op::Return);
+    }
+    let (mut arrow_free_vars, mut arrow_free_var_ids) = collect_free_vars(
+        &body_lookup,
+        &pre_lower_names,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+    );
+    append_parameter_prologue_captures(
+        &parameter_prologue,
+        None,
+        &mut arrow_free_vars,
+        &mut arrow_free_var_ids,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+    );
+    let arrow_runtime_global_loads = rewrite_unresolved_function_body_loads(
+        &mut body_ops,
+        &body_lookup,
+        &pre_lower_names,
+        binding_lookup,
+        &parameter_prologue,
+        None,
+    );
+    let arrow_child_captured_locals =
+        collect_child_captured_locals(&body_lookup, &arrow_free_vars, &arrow_free_var_ids);
+    let arrow_local_lexical_bindings = collect_function_local_lexical_bindings(
+        &body_bindings,
+        &arrow_free_var_ids,
+        &arrow_runtime_global_loads,
+    );
+    ops.push(Ir1Op::CreateFunction {
+        name: None,
+        param_names,
+        body_ops,
+        free_vars: arrow_free_vars,
+        free_var_ids: arrow_free_var_ids,
+        runtime_global_loads: arrow_runtime_global_loads,
+        child_captured_locals: arrow_child_captured_locals,
+        local_lexical_bindings: arrow_local_lexical_bindings,
+        is_generator: false,
+        is_async: *is_async,
+        rest_param_index,
+    });
+    Ok(true)
 }
 
 /// bd-7qwej / bd-d0n7u: keep net/http call/constructor branches out of
@@ -14979,175 +15162,16 @@ fn lower_expression_to_ir1_inner(
                 });
             }
         }
-        Expression::ArrowFunction {
-            params,
-            body,
-            is_async,
-        } => {
-            // Lower arrow function body with its own fresh scope.
-            let mut body_ops = Vec::new();
-            let mut body_bindings = Vec::new();
-            let mut body_lookup = BTreeMap::new();
-            // bd-suwvw: keep timers-module alias recognition working inside
-            // this function body (sentinel keys only; see
-            // `seed_timers_module_alias_sentinels`).
-            seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            seed_events_module_sentinels(&mut body_lookup, binding_lookup);
-            seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
-            seed_net_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            seed_tls_module_alias_sentinels(&mut body_lookup, binding_lookup);
-            let mut body_binding_index: BindingId = 0;
-            let body_scope = ScopeId { depth: 0, index: 0 };
-            let mut body_label_counter: u32 = 0;
-            // Build param names: simple identifiers keep their name; non-identifier
-            // patterns (default `x = v` / destructuring) get a synthetic slot that is
-            // destructured at body entry. WITHOUT this, `p.name()` returns None and a
-            // plain `filter_map` silently DROPPED such params — the arrow ended up
-            // arity 0 with the value lost, so `((x = 5) => x)()` (and even `(9)`)
-            // returned undefined (bd-f2iw8). Mirrors the function-declaration path.
-            let mut param_names: Vec<String> = Vec::with_capacity(params.len());
-            let mut destructure_params: Vec<(String, &BindingPattern)> =
-                Vec::with_capacity(params.len());
-            for (index, param) in params.iter().enumerate() {
-                push_param_slot(index, param, &mut param_names, &mut destructure_params);
-            }
-            let rest_param_index = rest_param_index_of(params);
-            // Allocate parameter bindings in the body scope.
-            for pname in &param_names {
-                let _ = alloc_binding(
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    pname,
-                    BindingKind::Parameter,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
-                suppress_stream_module_sentinel(&mut body_lookup, pname);
-                suppress_net_module_sentinel(&mut body_lookup, pname);
-                suppress_zlib_module_sentinel(&mut body_lookup, pname);
-                suppress_cluster_module_sentinel(&mut body_lookup, pname);
-                suppress_child_process_module_sentinel(&mut body_lookup, pname);
-                suppress_events_module_sentinel(&mut body_lookup, pname);
-            }
-            // Destructure non-identifier params (applies defaults) before the body.
-            allocate_destructure_param_bindings(
-                &destructure_params,
-                &mut body_bindings,
-                &mut body_lookup,
-                &mut body_binding_index,
-                body_scope,
-            )?;
-            let parameter_prologue = lower_function_parameter_prologue(
-                &destructure_params,
-                None,
-                binding_lookup,
-                &mut body_ops,
-                &mut body_bindings,
-                &body_lookup,
-                &mut body_binding_index,
-                body_scope,
-                &mut body_label_counter,
-            )?;
-            let body_statements = match body {
-                ArrowBody::Block(block) => Some(block.body.as_slice()),
-                ArrowBody::Expression(_) => None,
-            };
-            let pre_lower_names = prepare_function_body_bindings(
-                body_statements,
-                None,
-                binding_lookup,
-                &mut body_lookup,
-                &mut body_binding_index,
-            );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
-            match body {
-                ArrowBody::Expression(expr) => {
-                    lower_expression_to_ir1(
-                        expr,
-                        &mut body_ops,
-                        &mut body_bindings,
-                        &mut body_lookup,
-                        &mut body_binding_index,
-                        body_scope,
-                        &mut body_label_counter,
-                        &mut Vec::new(),
-                    )?;
-                }
-                ArrowBody::Block(block) => {
-                    for stmt in &block.body {
-                        lower_statement_to_ir1(
-                            stmt,
-                            &mut body_ops,
-                            &mut body_bindings,
-                            &mut body_lookup,
-                            &mut body_binding_index,
-                            body_scope,
-                            &mut body_label_counter,
-                            &mut Vec::new(),
-                        )?;
-                    }
-                }
-            }
-            // Ensure body ends with a return.
-            if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
-                if matches!(body, ArrowBody::Block(_)) {
-                    body_ops.push(Ir1Op::LoadLiteral {
-                        value: Ir1Literal::Undefined,
-                    });
-                }
-                body_ops.push(Ir1Op::Return);
-            }
-            let (mut arrow_free_vars, mut arrow_free_var_ids) = collect_free_vars(
-                &body_lookup,
-                &pre_lower_names,
+        Expression::ArrowFunction { .. } => {
+            let lowered = try_lower_arrow_expression_to_ir1(
+                expression,
+                ops,
                 bindings,
                 binding_lookup,
                 binding_index,
                 root_scope_id,
-            );
-            append_parameter_prologue_captures(
-                &parameter_prologue,
-                None,
-                &mut arrow_free_vars,
-                &mut arrow_free_var_ids,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-            );
-            let arrow_runtime_global_loads = rewrite_unresolved_function_body_loads(
-                &mut body_ops,
-                &body_lookup,
-                &pre_lower_names,
-                binding_lookup,
-                &parameter_prologue,
-                None,
-            );
-            let arrow_child_captured_locals =
-                collect_child_captured_locals(&body_lookup, &arrow_free_vars, &arrow_free_var_ids);
-            let arrow_local_lexical_bindings = collect_function_local_lexical_bindings(
-                &body_bindings,
-                &arrow_free_var_ids,
-                &arrow_runtime_global_loads,
-            );
-            ops.push(Ir1Op::CreateFunction {
-                name: None,
-                param_names,
-                body_ops,
-                free_vars: arrow_free_vars,
-                free_var_ids: arrow_free_var_ids,
-                runtime_global_loads: arrow_runtime_global_loads,
-                child_captured_locals: arrow_child_captured_locals,
-                local_lexical_bindings: arrow_local_lexical_bindings,
-                is_generator: false,
-                is_async: *is_async,
-                rest_param_index,
-            });
+            )?;
+            debug_assert!(lowered, "ArrowFunction must use the stack-bounded lowering helper");
         }
         Expression::Function {
             name,

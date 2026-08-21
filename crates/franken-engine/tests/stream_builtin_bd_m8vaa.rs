@@ -1174,6 +1174,27 @@ const WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2: &[EvalCase] = &[
         expected: "undefined:undefined:true",
     },
     EvalCase {
+        ids: &["bd-fw7zd.9"],
+        description: "fused post-close observations preserve returns and callback FIFO",
+        source: r#"
+                const { Writable } = require('stream');
+                const events = [];
+                const message = (error) => error && error.message || String(error);
+                const writable = new Writable({ write(chunk, encoding, callback) { callback(); } });
+                writable.on('close', () => setImmediate(() => {
+                  const writeResult = writable.write('late', (error) => events.push('write:' + message(error)));
+                  const endResult = writable.end((error) => events.push('end:' + message(error)));
+                  const corkResult = writable.cork();
+                  const uncorkResult = writable.uncork();
+                  const destroyResult = writable.destroy();
+                  events.push('returns:' + writeResult + ':' + (endResult === writable) + ':' + String(corkResult) + ':' + String(uncorkResult) + ':' + (destroyResult === writable));
+                  setImmediate(() => console.log(events.join(',')));
+                }));
+                writable.end();
+            "#,
+        expected: "returns:false:true:undefined:undefined:true,write:write after end,end:Cannot call end after a stream was finished",
+    },
+    EvalCase {
         ids: &["bd-fw7zd.2"],
         description: "destroyed tombstones retain branding and ignore a no-error late end callback",
         source: r#"
@@ -1278,13 +1299,18 @@ fn writable_terminal_controls_are_stable_bd_fw7zd_2() {
 }
 
 #[test]
-fn writable_destroyed_tombstone_is_authoritative_bd_fw7zd_2() {
+fn fused_post_close_writable_observations_terminate_bd_fw7zd_9() {
     assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[5..6]);
 }
 
 #[test]
-fn writable_state_reflection_is_authoritative_bd_fw7zd_2() {
+fn writable_destroyed_tombstone_is_authoritative_bd_fw7zd_2() {
     assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[6..7]);
+}
+
+#[test]
+fn writable_state_reflection_is_authoritative_bd_fw7zd_2() {
+    assert_cases(&WRITABLE_TOMBSTONE_CASES_BD_FW7ZD_2[7..8]);
 }
 
 #[test]

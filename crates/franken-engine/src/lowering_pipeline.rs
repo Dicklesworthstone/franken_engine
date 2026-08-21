@@ -24884,6 +24884,11 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
             FlowValueShape::Primitive
                 | FlowValueShape::Callable
                 | FlowValueShape::EventEmitterObject
+                // bd-zco6t: BufferObject must survive GetProperty/CallMethod
+                // on unrelated `fs.*` members so `buf.toString` still sees
+                // the engine receiver. StoreBinding of a new value still
+                // overwrites the binding shape.
+                | FlowValueShape::BufferObject
         ) {
             value.shape = FlowValueShape::Unknown;
         }
@@ -24899,6 +24904,7 @@ fn invalidate_nonprimitive_binding_flow_shapes(
             FlowValueShape::Primitive
                 | FlowValueShape::Callable
                 | FlowValueShape::EventEmitterObject
+                | FlowValueShape::BufferObject
         ) {
             *shape = FlowValueShape::Unknown;
         }

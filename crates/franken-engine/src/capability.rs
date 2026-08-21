@@ -148,102 +148,290 @@ impl RuntimeCapability {
     /// Returns `None` for internal-only tags (e.g. `"promise:*"`) that are
     /// not security capabilities.
     pub fn from_tag_str(tag: &str) -> Option<Self> {
-        match tag {
-            // Canonical snake_case names (from Display)
-            "vm_dispatch" => Some(Self::VmDispatch),
-            "gc_invoke" => Some(Self::GcInvoke),
-            "ir_lowering" => Some(Self::IrLowering),
-            "policy_read" => Some(Self::PolicyRead),
-            "policy_write" => Some(Self::PolicyWrite),
-            "evidence_emit" => Some(Self::EvidenceEmit),
-            "decision_invoke" => Some(Self::DecisionInvoke),
-            "network_egress" => Some(Self::NetworkEgress),
-            "lease_management" => Some(Self::LeaseManagement),
-            "idempotency_derive" => Some(Self::IdempotencyDerive),
-            "extension_lifecycle" => Some(Self::ExtensionLifecycle),
-            "heap_allocate" => Some(Self::HeapAllocate),
-            "env_read" => Some(Self::EnvRead),
-            "process_spawn" => Some(Self::ProcessSpawn),
-            "fs_read" => Some(Self::FsRead),
-            "fs_write" => Some(Self::FsWrite),
-            "module_load" => Some(Self::ModuleLoad),
-            "console" => Some(Self::Console),
-            "timer" => Some(Self::Timer),
-            "builtin" => Some(Self::Builtin),
-            "declassify" => Some(Self::Declassify),
-            "random_read" => Some(Self::RandomRead),
-
-            // Short aliases used in IR / tests
-            // bd-656a2: `net:request` is the tag emitted by the JS http.get/
-            // http.request lowering (the http leg of the proof-carrying host
-            // effect producer); it maps to the same NetworkEgress capability as
-            // the other short network aliases so the hostcall gate authorizes it
-            // only when network egress was granted on the run path.
-            // bd-3894s slice (2b): `net:client_request` is the tag emitted by the
-            // `http.request(url[, opts])` lowering. It does NOT egress at the call
-            // site — it builds a `ClientRequest` writable-stream object whose
-            // `.end()` performs the egress later, through the same SSRF-gated
-            // provider. It maps to `NetworkEgress` here so the hostcall capability
-            // gate fires at CREATION time: a ClientRequest cannot even be
-            // constructed unless network egress was granted, closing the bypass
-            // where the deferred `.end()` egress would otherwise skip the engine
-            // capability gate (`.end()` runs as a builtin, not a HostCall IR op).
-            "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net:request"
-            | "net:client_request" | "net.write" | "network.write" => Some(Self::NetworkEgress),
-            "fs" | "fs:read" | "fs.read" => Some(Self::FsRead),
-            "fs:write" | "fs.write" => Some(Self::FsWrite),
-            "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),
-
-            // Timer builtins emitted directly by source lowering retain Timer
-            // authority even though their dispatch tag uses the builtin namespace.
-            // Keep this list exact so unrelated or attacker-invented builtin tags
-            // continue to require Builtin authority through the generic rule below.
-            "builtin:SetTimeout"
-            | "builtin:ClearTimeout"
-            | "builtin:SetInterval"
-            | "builtin:ClearInterval"
-            | "builtin:SetImmediate"
-            | "builtin:ClearImmediate"
-            // `process.nextTick` is the same deterministic job-scheduling
-            // authority family as `queueMicrotask` — it never carries process
-            // control (spawn/exit/env stay denied) (bd-8nrud).
-            | "builtin:QueueMicrotask"
-            | "builtin:ProcessNextTick" => Some(Self::Timer),
-
-            // Successful Node crypto entropy never inherits generic Builtin
-            // authority. These exact authenticated lowering tags require the
-            // dedicated RandomRead grant and a live/replaying host provider.
-            "builtin:CryptoRandomBytes"
-            | "builtin:CryptoRandomUUID"
-            | "builtin:CryptoRandomInt"
-            | "builtin:CryptoRandomFillSync" => Some(Self::RandomRead),
-
-            // Map console hostcalls to Console capability
-            tag if tag.starts_with("console:") => Some(Self::Console),
-
-            // Map timer hostcalls to Timer capability
-            tag if tag.starts_with("timer:") => Some(Self::Timer),
-
-            // Map builtin hostcalls to Builtin capability
-            tag if tag.starts_with("builtin:") => Some(Self::Builtin),
-
-            // Map number hostcalls to Builtin capability (number operations are built-ins)
-            tag if tag.starts_with("number:") => Some(Self::Builtin),
-
-            // Map declassification-routed hostcalls (`declassify.audit`,
-            // `declassify:route-x`, …) to the Declassify capability. The route
-            // suffix is obligation routing, not a distinct capability; per-route
-            // receipt semantics are enforced by the orchestrator's runtime flow
-            // guards (bd-lduxz). Before the typed-capability migration these
-            // tags were granted as raw strings from the package manifest.
-            tag if tag.starts_with("declassify.") || tag.starts_with("declassify:") => {
-                Some(Self::Declassify)
-            }
-
-            // Unknown / internal tags — not mapped
-            _ => None,
-        }
+        hostcall_registry_row(tag).and_then(|row| row.authority)
     }
+}
+
+/// Production dispatcher selected by the canonical HostCall registry.
+///
+/// The variants name existing implementation families rather than duplicating
+/// their (large) method tables. Recognition, authority, and IFC provenance are
+/// nevertheless resolved together by [`hostcall_registry_row`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostcallDispatchBinding {
+    Internal,
+    Promise,
+    ModuleRequire,
+    ModuleImport,
+    Number,
+    Console,
+    Timer,
+    ProcessSpawn,
+    Builtin,
+    ClientRequest,
+    HostIo,
+    DeterministicNoop,
+}
+
+/// One canonical HostCall registry decision for an exact incoming tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostcallRegistryRow<'a> {
+    pub tag: &'a str,
+    pub authority: Option<RuntimeCapability>,
+    pub result_contract: HostcallResultContract,
+    pub dispatch: HostcallDispatchBinding,
+}
+
+fn result_contract_for_authority(authority: RuntimeCapability) -> HostcallResultContract {
+    match authority {
+        RuntimeCapability::RandomRead | RuntimeCapability::EnvRead => {
+            HostcallResultContract::SourceFloor(Label::Secret)
+        }
+        RuntimeCapability::PolicyRead => HostcallResultContract::SourceFloor(Label::Confidential),
+        RuntimeCapability::FsRead
+        | RuntimeCapability::NetworkEgress
+        | RuntimeCapability::ProcessSpawn
+        | RuntimeCapability::ModuleLoad
+        | RuntimeCapability::LeaseManagement
+        | RuntimeCapability::ExtensionLifecycle => {
+            HostcallResultContract::SourceFloor(Label::Internal)
+        }
+        RuntimeCapability::Declassify => HostcallResultContract::AuthenticatedRelease,
+        RuntimeCapability::VmDispatch
+        | RuntimeCapability::GcInvoke
+        | RuntimeCapability::IrLowering
+        | RuntimeCapability::PolicyWrite
+        | RuntimeCapability::EvidenceEmit
+        | RuntimeCapability::DecisionInvoke
+        | RuntimeCapability::IdempotencyDerive
+        | RuntimeCapability::HeapAllocate
+        | RuntimeCapability::FsWrite
+        | RuntimeCapability::Console
+        | RuntimeCapability::Timer
+        | RuntimeCapability::Builtin => HostcallResultContract::JoinInputs,
+    }
+}
+
+fn internal_builtin_meta_tag(tag: &str) -> bool {
+    let Some((kind, name)) = tag
+        .strip_prefix("builtin:")
+        .and_then(|tail| tail.split_once(':'))
+    else {
+        return false;
+    };
+    matches!(kind, "proto" | "instanceof")
+        && matches!(
+            name,
+            "Array"
+                | "Map"
+                | "Set"
+                | "Error"
+                | "TypeError"
+                | "RangeError"
+                | "ReferenceError"
+                | "SyntaxError"
+                | "EvalError"
+                | "URIError"
+                | "EventEmitter"
+        )
+}
+
+/// Resolve one exact HostCall tag to its authority, IFC result contract, and
+/// production dispatcher. Unknown tags return `None`, which makes both the
+/// capability gate and provenance analysis fail high.
+///
+/// Builtin/console/timer/number are intentionally registered as closed
+/// dispatcher families: their existing implementations have deterministic
+/// unknown-member behavior. Security-sensitive exceptions (timer scheduling
+/// and entropy) are exact rows selected before the family binding.
+pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
+    let (authority, result_contract, dispatch) = match tag {
+        "promise:constructor"
+        | "promise:resolve"
+        | "promise:reject"
+        | "promise:then"
+        | "promise:catch"
+        | "promise:finally"
+        | "promise:all"
+        | "promise:race"
+        | "promise:allSettled"
+        | "promise:any"
+        | "promise:create" => (
+            None,
+            HostcallResultContract::JoinInputs,
+            HostcallDispatchBinding::Promise,
+        ),
+        "ifc.check_flow" => (
+            None,
+            HostcallResultContract::JoinInputs,
+            HostcallDispatchBinding::Internal,
+        ),
+        tag if internal_builtin_meta_tag(tag) => (
+            None,
+            HostcallResultContract::JoinInputs,
+            HostcallDispatchBinding::Builtin,
+        ),
+        "module:require" => (
+            Some(RuntimeCapability::ModuleLoad),
+            result_contract_for_authority(RuntimeCapability::ModuleLoad),
+            HostcallDispatchBinding::ModuleRequire,
+        ),
+        "module:import" | "module.import" | "module_load" => (
+            Some(RuntimeCapability::ModuleLoad),
+            result_contract_for_authority(RuntimeCapability::ModuleLoad),
+            HostcallDispatchBinding::ModuleImport,
+        ),
+        "process_spawn" => (
+            Some(RuntimeCapability::ProcessSpawn),
+            result_contract_for_authority(RuntimeCapability::ProcessSpawn),
+            HostcallDispatchBinding::ProcessSpawn,
+        ),
+        "net:client_request" => (
+            Some(RuntimeCapability::NetworkEgress),
+            result_contract_for_authority(RuntimeCapability::NetworkEgress),
+            HostcallDispatchBinding::ClientRequest,
+        ),
+        "fs:read" | "fs:write" | "net:connect" | "net:fetch" | "net:outbound" | "net:request" => {
+            let authority = if tag == "fs:read" {
+                RuntimeCapability::FsRead
+            } else if tag == "fs:write" {
+                RuntimeCapability::FsWrite
+            } else {
+                RuntimeCapability::NetworkEgress
+            };
+            (
+                Some(authority),
+                result_contract_for_authority(authority),
+                HostcallDispatchBinding::HostIo,
+            )
+        }
+        "builtin:SetTimeout"
+        | "builtin:ClearTimeout"
+        | "builtin:SetInterval"
+        | "builtin:ClearInterval"
+        | "builtin:SetImmediate"
+        | "builtin:ClearImmediate"
+        | "builtin:QueueMicrotask"
+        | "builtin:ProcessNextTick" => (
+            Some(RuntimeCapability::Timer),
+            result_contract_for_authority(RuntimeCapability::Timer),
+            HostcallDispatchBinding::Builtin,
+        ),
+        "builtin:CryptoRandomBytes"
+        | "builtin:CryptoRandomUUID"
+        | "builtin:CryptoRandomInt"
+        | "builtin:CryptoRandomFillSync" => (
+            Some(RuntimeCapability::RandomRead),
+            result_contract_for_authority(RuntimeCapability::RandomRead),
+            HostcallDispatchBinding::Builtin,
+        ),
+        tag if tag.starts_with("declassify.") || tag.starts_with("declassify:") => (
+            Some(RuntimeCapability::Declassify),
+            HostcallResultContract::AuthenticatedRelease,
+            HostcallDispatchBinding::DeterministicNoop,
+        ),
+        tag if tag.starts_with("number:") => (
+            Some(RuntimeCapability::Builtin),
+            result_contract_for_authority(RuntimeCapability::Builtin),
+            HostcallDispatchBinding::Number,
+        ),
+        tag if tag.starts_with("console:") => (
+            Some(RuntimeCapability::Console),
+            result_contract_for_authority(RuntimeCapability::Console),
+            HostcallDispatchBinding::Console,
+        ),
+        tag if tag.starts_with("timer:") => (
+            Some(RuntimeCapability::Timer),
+            result_contract_for_authority(RuntimeCapability::Timer),
+            HostcallDispatchBinding::Timer,
+        ),
+        "builtin:ApplyHostCall" => (
+            Some(RuntimeCapability::Builtin),
+            HostcallResultContract::RuntimeDelegated,
+            HostcallDispatchBinding::Builtin,
+        ),
+        tag if tag.starts_with(APPLY_HOSTCALL_TARGET_PREFIX) => {
+            let target = tag.strip_prefix(APPLY_HOSTCALL_TARGET_PREFIX)?;
+            if target.is_empty()
+                || target == "builtin:ApplyHostCall"
+                || target.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
+            {
+                return None;
+            }
+            let target_row = hostcall_registry_row(target)?;
+            (
+                Some(RuntimeCapability::Builtin),
+                target_row.result_contract,
+                HostcallDispatchBinding::Builtin,
+            )
+        }
+        tag if tag.starts_with("builtin:proto:") || tag.starts_with("builtin:instanceof:") => {
+            return None;
+        }
+        tag if tag.starts_with("builtin:") => (
+            Some(RuntimeCapability::Builtin),
+            result_contract_for_authority(RuntimeCapability::Builtin),
+            HostcallDispatchBinding::Builtin,
+        ),
+        tag => {
+            let authority = match tag {
+                // Canonical snake_case names (from Display)
+                "vm_dispatch" => RuntimeCapability::VmDispatch,
+                "gc_invoke" => RuntimeCapability::GcInvoke,
+                "ir_lowering" => RuntimeCapability::IrLowering,
+                "policy_read" => RuntimeCapability::PolicyRead,
+                "policy_write" => RuntimeCapability::PolicyWrite,
+                "evidence_emit" => RuntimeCapability::EvidenceEmit,
+                "decision_invoke" => RuntimeCapability::DecisionInvoke,
+                "network_egress" => RuntimeCapability::NetworkEgress,
+                "lease_management" => RuntimeCapability::LeaseManagement,
+                "idempotency_derive" => RuntimeCapability::IdempotencyDerive,
+                "extension_lifecycle" => RuntimeCapability::ExtensionLifecycle,
+                "heap_allocate" => RuntimeCapability::HeapAllocate,
+                "env_read" => RuntimeCapability::EnvRead,
+                "fs_read" => RuntimeCapability::FsRead,
+                "fs_write" => RuntimeCapability::FsWrite,
+                "console" => RuntimeCapability::Console,
+                "timer" => RuntimeCapability::Timer,
+                "builtin" => RuntimeCapability::Builtin,
+                "declassify" => RuntimeCapability::Declassify,
+                "random_read" => RuntimeCapability::RandomRead,
+
+                // Short aliases used in IR / tests
+                // bd-656a2: `net:request` is the tag emitted by the JS http.get/
+                // http.request lowering (the http leg of the proof-carrying host
+                // effect producer); it maps to the same NetworkEgress capability as
+                // the other short network aliases so the hostcall gate authorizes it
+                // only when network egress was granted on the run path.
+                // bd-3894s slice (2b): `net:client_request` is the tag emitted by the
+                // `http.request(url[, opts])` lowering. It does NOT egress at the call
+                // site — it builds a `ClientRequest` writable-stream object whose
+                // `.end()` performs the egress later, through the same SSRF-gated
+                // provider. It maps to `NetworkEgress` here so the hostcall capability
+                // gate fires at CREATION time: a ClientRequest cannot even be
+                // constructed unless network egress was granted, closing the bypass
+                // where the deferred `.end()` egress would otherwise skip the engine
+                // capability gate (`.end()` runs as a builtin, not a HostCall IR op).
+                "network" | "net" | "net.write" | "network.write" => {
+                    RuntimeCapability::NetworkEgress
+                }
+                "fs" | "fs.read" => RuntimeCapability::FsRead,
+                "fs.write" => RuntimeCapability::FsWrite,
+                _ => return None,
+            };
+            (
+                Some(authority),
+                result_contract_for_authority(authority),
+                HostcallDispatchBinding::DeterministicNoop,
+            )
+        }
+    };
+    Some(HostcallRegistryRow {
+        tag,
+        authority,
+        result_contract,
+        dispatch,
+    })
 }
 
 /// Canonical IFC contract for the value returned by a HostCall capability.
@@ -319,75 +507,12 @@ impl HostcallResultContract {
 /// host data must therefore receive a dedicated typed capability and contract,
 /// as `RandomRead` does. `builtin:ApplyHostCall` is classified first as a
 /// runtime-authenticated delegation boundary because it can target those
-/// source-producing capabilities. The exhaustive typed match below makes new
-/// capability variants compile-fail until their result provenance is
-/// classified; an exact-tag dispatch registry remains the stronger mechanical
-/// follow-up for enforcing the family invariant itself.
+/// source-producing capabilities. This accessor intentionally contains no
+/// classifier of its own: it projects the contract from the exact-tag registry.
 pub fn hostcall_result_contract(tag: &str) -> HostcallResultContract {
-    if let Some(target) = tag.strip_prefix(APPLY_HOSTCALL_TARGET_PREFIX) {
-        if target.is_empty()
-            || target == "builtin:ApplyHostCall"
-            || target.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
-        {
-            return HostcallResultContract::FailClosed;
-        }
-        return hostcall_result_contract(target);
-    }
-    if tag == "builtin:ApplyHostCall" {
-        return HostcallResultContract::RuntimeDelegated;
-    }
-    if matches!(
-        tag,
-        "promise:constructor"
-            | "promise:resolve"
-            | "promise:reject"
-            | "promise:then"
-            | "promise:catch"
-            | "promise:finally"
-            | "promise:all"
-            | "promise:race"
-            | "promise:allSettled"
-            | "promise:any"
-            | "promise:create"
-    ) {
-        return HostcallResultContract::JoinInputs;
-    }
-    if tag.starts_with("declassify.") || tag.starts_with("declassify:") {
-        return HostcallResultContract::AuthenticatedRelease;
-    }
-
-    match RuntimeCapability::from_tag_str(tag) {
-        Some(RuntimeCapability::RandomRead | RuntimeCapability::EnvRead) => {
-            HostcallResultContract::SourceFloor(Label::Secret)
-        }
-        Some(RuntimeCapability::PolicyRead) => {
-            HostcallResultContract::SourceFloor(Label::Confidential)
-        }
-        Some(
-            RuntimeCapability::FsRead
-            | RuntimeCapability::NetworkEgress
-            | RuntimeCapability::ProcessSpawn
-            | RuntimeCapability::ModuleLoad
-            | RuntimeCapability::LeaseManagement
-            | RuntimeCapability::ExtensionLifecycle,
-        ) => HostcallResultContract::SourceFloor(Label::Internal),
-        Some(RuntimeCapability::Declassify) => HostcallResultContract::AuthenticatedRelease,
-        Some(
-            RuntimeCapability::VmDispatch
-            | RuntimeCapability::GcInvoke
-            | RuntimeCapability::IrLowering
-            | RuntimeCapability::PolicyWrite
-            | RuntimeCapability::EvidenceEmit
-            | RuntimeCapability::DecisionInvoke
-            | RuntimeCapability::IdempotencyDerive
-            | RuntimeCapability::HeapAllocate
-            | RuntimeCapability::FsWrite
-            | RuntimeCapability::Console
-            | RuntimeCapability::Timer
-            | RuntimeCapability::Builtin,
-        ) => HostcallResultContract::JoinInputs,
-        None => HostcallResultContract::FailClosed,
-    }
+    hostcall_registry_row(tag).map_or(HostcallResultContract::FailClosed, |row| {
+        row.result_contract
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2160,6 +2285,88 @@ mod tests {
             Label::Public,
             "a proof-bearing runtime publication owns an authenticated release label"
         );
+    }
+
+    #[test]
+    fn exact_tag_registry_drives_authority_ifc_and_dispatch_bd_z1peg_1() {
+        let cases = [
+            (
+                "fs:read",
+                Some(RuntimeCapability::FsRead),
+                HostcallResultContract::SourceFloor(Label::Internal),
+                HostcallDispatchBinding::HostIo,
+            ),
+            (
+                "builtin:CryptoRandomBytes",
+                Some(RuntimeCapability::RandomRead),
+                HostcallResultContract::SourceFloor(Label::Secret),
+                HostcallDispatchBinding::Builtin,
+            ),
+            (
+                "module:require",
+                Some(RuntimeCapability::ModuleLoad),
+                HostcallResultContract::SourceFloor(Label::Internal),
+                HostcallDispatchBinding::ModuleRequire,
+            ),
+            (
+                "promise:then",
+                None,
+                HostcallResultContract::JoinInputs,
+                HostcallDispatchBinding::Promise,
+            ),
+            (
+                "console:log",
+                Some(RuntimeCapability::Console),
+                HostcallResultContract::JoinInputs,
+                HostcallDispatchBinding::Console,
+            ),
+            (
+                "timer:setTimeout",
+                Some(RuntimeCapability::Timer),
+                HostcallResultContract::JoinInputs,
+                HostcallDispatchBinding::Timer,
+            ),
+            (
+                "number:isFinite",
+                Some(RuntimeCapability::Builtin),
+                HostcallResultContract::JoinInputs,
+                HostcallDispatchBinding::Number,
+            ),
+        ];
+
+        for (tag, authority, result_contract, dispatch) in cases {
+            let row = hostcall_registry_row(tag).expect("representative tag must be registered");
+            assert_eq!(row.tag, tag);
+            assert_eq!(row.authority, authority);
+            assert_eq!(row.result_contract, result_contract);
+            assert_eq!(row.dispatch, dispatch);
+            assert_eq!(RuntimeCapability::from_tag_str(tag), authority);
+            assert_eq!(hostcall_result_contract(tag), result_contract);
+        }
+    }
+
+    #[test]
+    fn exact_tag_registry_unknowns_fail_high_bd_z1peg_1() {
+        for tag in [
+            "promise:thenLater",
+            "builtin:proto:DefinitelyNotAConstructor",
+            "unknown:hostcall",
+            "",
+        ] {
+            assert!(
+                hostcall_registry_row(tag).is_none(),
+                "{tag} must be unknown"
+            );
+            assert_eq!(RuntimeCapability::from_tag_str(tag), None);
+            assert_eq!(
+                hostcall_result_contract(tag),
+                HostcallResultContract::FailClosed
+            );
+            assert_eq!(
+                hostcall_result_contract(tag).result_label(&Label::Public, None),
+                Label::TopSecret
+            );
+        }
     }
 
     #[test]

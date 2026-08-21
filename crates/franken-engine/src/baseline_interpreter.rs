@@ -82,8 +82,8 @@ use frankenengine_extension_host::process_spawn::{
 use crate::algebraic_effects::EffectError;
 use crate::ast::ParseGoal;
 use crate::capability::{
-    APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, HostcallResultContract, RuntimeCapability,
-    hostcall_result_contract,
+    APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, HostcallDispatchBinding,
+    HostcallResultContract, RuntimeCapability, hostcall_registry_row, hostcall_result_contract,
 };
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
@@ -627,31 +627,6 @@ impl CryptoObjectState {
     }
 }
 
-/// Closed allowlist of `promise:*` sub-capabilities recognised by
-/// [`InterpreterCore::dispatch_promise_hostcall_inner`]. Any other
-/// `promise:*` tag is classified [`HostcallCapabilityClass::Unknown`]
-/// (fail-closed) instead of [`HostcallCapabilityClass::InternalAllowed`].
-///
-/// The audit (bd-hxukn) showed that the previous prefix-match
-/// (`tag.starts_with("promise:")`) let a malicious IR3 module write
-/// attacker-chosen strings into `hostcall_decisions` and `emit_witness`
-/// payloads — every entry tagged `allowed: true`, polluting the signed
-/// evidence chain with capabilities the runtime had no concept of and
-/// inflating witness-log entries to arbitrary length.
-const KNOWN_PROMISE_SUBCAPS: &[&str] = &[
-    "promise:constructor",
-    "promise:resolve",
-    "promise:reject",
-    "promise:then",
-    "promise:catch",
-    "promise:finally",
-    "promise:all",
-    "promise:race",
-    "promise:allSettled",
-    "promise:any",
-    "promise:create",
-];
-
 /// Maximum length of a `capability_tag` byte slice that the witness /
 /// decision log will record verbatim. Tags longer than this are still
 /// gate-decided fail-closed (they cannot satisfy any known classifier),
@@ -668,25 +643,12 @@ const IMPORT_META_URL_VALUE: &str = "frankenengine://module/import-meta";
 const IMPORT_META_DIRNAME_VALUE: &str = "frankenengine://module/";
 
 fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
-    if tag.starts_with("promise:") {
-        if KNOWN_PROMISE_SUBCAPS.contains(&tag) {
-            HostcallCapabilityClass::InternalAllowed
-        } else {
-            // bd-hxukn: refuse unknown `promise:*` tags at the gate
-            // instead of treating them as `InternalAllowed`. Unknown
-            // sub-capabilities now flow through `Unknown` and fail
-            // closed at the gate.
-            HostcallCapabilityClass::Unknown
-        }
-    } else if tag == "ifc.check_flow"
-        || builtin_prototype_capability_name(tag).is_some()
-        || builtin_instanceof_capability_name(tag).is_some()
-    {
-        HostcallCapabilityClass::InternalAllowed
-    } else if let Some(capability) = RuntimeCapability::from_tag_str(tag) {
-        HostcallCapabilityClass::Runtime(capability)
-    } else {
-        HostcallCapabilityClass::Unknown
+    match hostcall_registry_row(tag) {
+        Some(row) => row.authority.map_or(
+            HostcallCapabilityClass::InternalAllowed,
+            HostcallCapabilityClass::Runtime,
+        ),
+        None => HostcallCapabilityClass::Unknown,
     }
 }
 
@@ -41051,85 +41013,98 @@ impl InterpreterCore {
                         self.join_arg_range_label(args)?
                     };
 
-                    // Dispatch promise hostcalls to the promise subsystem.
-                    let is_promise_cap = capability.0.starts_with("promise:");
                     self.clear_pending_hostcall_result_label();
-                    let result = if is_promise_cap {
-                        self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
-                    } else if capability.0 == "module:require" {
-                        self.dispatch_require_hostcall(args, Some(module))?
-                    } else if matches!(
-                        capability.0.as_str(),
-                        "module:import" | "module.import" | "module_load"
-                    ) {
-                        self.dispatch_import_hostcall(&capability.0, args, Some(module))?
-                    } else if capability.0.starts_with("number:") {
-                        self.dispatch_number_hostcall(&capability.0, args)?
-                    } else if capability.0.starts_with("console:") {
-                        self.dispatch_console_hostcall(&capability.0, args)?
-                    } else if capability.0.starts_with("timer:") {
-                        self.dispatch_timer_hostcall(&capability.0, args)?
-                    } else if capability.0 == "process_spawn" {
-                        self.dispatch_process_spawn_hostcall(args)?
-                    } else if capability.0.starts_with("builtin:") {
-                        // bd-8enww.4.10: a `builtin:` hostcall can run a user
-                        // callback whose explicit `throw` escapes its isolated
-                        // lane as `UncaughtException` with the thrown value
-                        // preserved — e.g. `Array.from(xs, x => { throw v })` via
-                        // the `builtin:ArrayFrom` mapper mini-lane, or an
-                        // array-literal `[…].some(x => { throw v })` via the
-                        // `builtin:ArrayPrototypeSome` fast-path. Route it into
-                        // THIS frame's catch handler exactly like the `Call` /
-                        // `CallMethod` builtin arms, rather than letting `?` escape
-                        // an enclosing `try`/`catch` — the AC#3 catchability
-                        // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
-                        // (Non-throw hostcall errors are a no-op through the
-                        // router and propagate unchanged.)
-                        match self.dispatch_builtin_hostcall(&capability.0, args, Some(module)) {
-                            Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
-                                None => {
-                                    // IFC (bd-8enww.4.8 throw-path mirror): the
-                                    // escaping value is seeded from the arg
-                                    // registers (which include the receiver array /
-                                    // source as arg 0), so join their labels onto
-                                    // the re-armed exception label — mirrors the
-                                    // success-path `dst` join below so a Secret
-                                    // receiver/arg cannot launder to a Public catch
-                                    // binding now that the mini-lane preserves the
-                                    // original thrown value.
-                                    self.join_pending_exception_label(&args_label)?;
-                                    continue;
-                                }
-                                Some(err) => return Err(err),
-                            },
+                    let dispatch = hostcall_registry_row(&capability.0)
+                        .map(|row| row.dispatch)
+                        .ok_or_else(|| InterpreterError::CapabilityDenied {
+                            capability: recordable_capability_tag(&capability.0).into_owned(),
+                        })?;
+                    let result = match dispatch {
+                        HostcallDispatchBinding::Promise => {
+                            self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
                         }
-                    } else if capability.0 == "net:client_request" {
-                        // bd-3894s slice (2b): `http.request(url[, opts])` builds a
-                        // writable `ClientRequest` object here WITHOUT egressing —
-                        // the body is accumulated via `req.write`/`req.end` and the
-                        // deferred egress fires from `.end()`. The capability gate
-                        // above already authorized NetworkEgress at creation time
-                        // (`net:client_request` maps to NetworkEgress), so the
-                        // deferred `.end()` egress is pre-authorized at the engine
-                        // capability layer; the per-endpoint SSRF policy still
-                        // applies at `.end()` via the sandboxed provider.
-                        self.dispatch_client_request_create(args)?
-                    } else if capability.0.starts_with("fs:") || capability.0.starts_with("net:") {
-                        // bd-f5b04.2.7: when a sandboxed host-I/O provider is
-                        // installed, dispatch the (already-authorized) fs hostcall
-                        // through the algebraic-effects stack to perform a real,
-                        // recorded host effect; otherwise it returns undefined.
-                        // bd-656a2: the http leg routes `net:request` (emitted by
-                        // the JS http.get/http.request lowering) through the SAME
-                        // seam — it performs+records a real NetworkSend host effect
-                        // via the sandboxed provider's network mechanism. The gate
-                        // above (`check_hostcall_capability_gate`) has already
-                        // authorized it against the granted NetworkEgress capability.
-                        self.dispatch_host_io_hostcall(&capability.0, args)?
-                    } else {
-                        // Non-promise hostcalls return undefined in baseline.
-                        Value::Undefined
+                        HostcallDispatchBinding::ModuleRequire => {
+                            self.dispatch_require_hostcall(args, Some(module))?
+                        }
+                        HostcallDispatchBinding::ModuleImport => {
+                            self.dispatch_import_hostcall(&capability.0, args, Some(module))?
+                        }
+                        HostcallDispatchBinding::Number => {
+                            self.dispatch_number_hostcall(&capability.0, args)?
+                        }
+                        HostcallDispatchBinding::Console => {
+                            self.dispatch_console_hostcall(&capability.0, args)?
+                        }
+                        HostcallDispatchBinding::Timer => {
+                            self.dispatch_timer_hostcall(&capability.0, args)?
+                        }
+                        HostcallDispatchBinding::ProcessSpawn => {
+                            self.dispatch_process_spawn_hostcall(args)?
+                        }
+                        HostcallDispatchBinding::Builtin => {
+                            // bd-8enww.4.10: a `builtin:` hostcall can run a user
+                            // callback whose explicit `throw` escapes its isolated
+                            // lane as `UncaughtException` with the thrown value
+                            // preserved — e.g. `Array.from(xs, x => { throw v })` via
+                            // the `builtin:ArrayFrom` mapper mini-lane, or an
+                            // array-literal `[…].some(x => { throw v })` via the
+                            // `builtin:ArrayPrototypeSome` fast-path. Route it into
+                            // THIS frame's catch handler exactly like the `Call` /
+                            // `CallMethod` builtin arms, rather than letting `?` escape
+                            // an enclosing `try`/`catch` — the AC#3 catchability
+                            // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
+                            // (Non-throw hostcall errors are a no-op through the
+                            // router and propagate unchanged.)
+                            match self.dispatch_builtin_hostcall(&capability.0, args, Some(module))
+                            {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    match self.route_isolated_explicit_throw(module, err)? {
+                                        None => {
+                                            // IFC (bd-8enww.4.8 throw-path mirror): the
+                                            // escaping value is seeded from the arg
+                                            // registers (which include the receiver array /
+                                            // source as arg 0), so join their labels onto
+                                            // the re-armed exception label — mirrors the
+                                            // success-path `dst` join below so a Secret
+                                            // receiver/arg cannot launder to a Public catch
+                                            // binding now that the mini-lane preserves the
+                                            // original thrown value.
+                                            self.join_pending_exception_label(&args_label)?;
+                                            continue;
+                                        }
+                                        Some(err) => return Err(err),
+                                    }
+                                }
+                            }
+                        }
+                        HostcallDispatchBinding::ClientRequest => {
+                            // bd-3894s slice (2b): `http.request(url[, opts])` builds a
+                            // writable `ClientRequest` object here WITHOUT egressing —
+                            // the body is accumulated via `req.write`/`req.end` and the
+                            // deferred egress fires from `.end()`. The capability gate
+                            // above already authorized NetworkEgress at creation time
+                            // (`net:client_request` maps to NetworkEgress), so the
+                            // deferred `.end()` egress is pre-authorized at the engine
+                            // capability layer; the per-endpoint SSRF policy still
+                            // applies at `.end()` via the sandboxed provider.
+                            self.dispatch_client_request_create(args)?
+                        }
+                        HostcallDispatchBinding::HostIo => {
+                            // bd-f5b04.2.7: when a sandboxed host-I/O provider is
+                            // installed, dispatch the (already-authorized) fs hostcall
+                            // through the algebraic-effects stack to perform a real,
+                            // recorded host effect; otherwise it returns undefined.
+                            // bd-656a2: the http leg routes `net:request` (emitted by
+                            // the JS http.get/http.request lowering) through the SAME
+                            // seam — it performs+records a real NetworkSend host effect
+                            // via the sandboxed provider's network mechanism. The gate
+                            // above (`check_hostcall_capability_gate`) has already
+                            // authorized it against the granted NetworkEgress capability.
+                            self.dispatch_host_io_hostcall(&capability.0, args)?
+                        }
+                        HostcallDispatchBinding::Internal
+                        | HostcallDispatchBinding::DeterministicNoop => Value::Undefined,
                     };
                     let runtime_result_label = self.take_pending_hostcall_result_label();
                     let result_label = hostcall_result_contract(&capability.0)
@@ -61932,22 +61907,43 @@ impl InterpreterCore {
         }
 
         let delegated_args = RegRange { start: 0, count };
-        let outcome = if cap.starts_with("promise:") {
-            self.dispatch_promise_hostcall(cap, delegated_args, module)
-        } else if cap == "module:require" {
-            self.dispatch_require_hostcall(delegated_args, module)
-        } else if matches!(cap, "module:import" | "module.import" | "module_load") {
-            self.dispatch_import_hostcall(cap, delegated_args, module)
-        } else if cap.starts_with("number:") {
-            self.dispatch_number_hostcall(cap, delegated_args)
-        } else if cap.starts_with("console:") {
-            self.dispatch_console_hostcall(cap, delegated_args)
-        } else if cap.starts_with("timer:") {
-            self.dispatch_timer_hostcall(cap, delegated_args)
-        } else if cap.starts_with("builtin:") {
-            self.dispatch_builtin_hostcall(cap, delegated_args, module)
-        } else {
-            Ok(Value::Undefined)
+        let outcome = match hostcall_registry_row(cap).map(|row| row.dispatch) {
+            Some(HostcallDispatchBinding::Promise) => {
+                self.dispatch_promise_hostcall(cap, delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::ModuleRequire) => {
+                self.dispatch_require_hostcall(delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::ModuleImport) => {
+                self.dispatch_import_hostcall(cap, delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::Number) => {
+                self.dispatch_number_hostcall(cap, delegated_args)
+            }
+            Some(HostcallDispatchBinding::Console) => {
+                self.dispatch_console_hostcall(cap, delegated_args)
+            }
+            Some(HostcallDispatchBinding::Timer) => {
+                self.dispatch_timer_hostcall(cap, delegated_args)
+            }
+            Some(HostcallDispatchBinding::ProcessSpawn) => {
+                self.dispatch_process_spawn_hostcall(delegated_args)
+            }
+            Some(HostcallDispatchBinding::Builtin) => {
+                self.dispatch_builtin_hostcall(cap, delegated_args, module)
+            }
+            Some(HostcallDispatchBinding::ClientRequest) => {
+                self.dispatch_client_request_create(delegated_args)
+            }
+            Some(HostcallDispatchBinding::HostIo) => {
+                self.dispatch_host_io_hostcall(cap, delegated_args)
+            }
+            Some(
+                HostcallDispatchBinding::Internal | HostcallDispatchBinding::DeterministicNoop,
+            ) => Ok(Value::Undefined),
+            None => Err(InterpreterError::CapabilityDenied {
+                capability: recordable_capability_tag(cap).into_owned(),
+            }),
         };
 
         let current_register_bytes = Self::saturating_sum(
@@ -81896,7 +81892,7 @@ mod module_resolution_security_tests {
 
 #[cfg(test)]
 mod hostcall_capability_classification_tests {
-    use super::{HostcallCapabilityClass, KNOWN_PROMISE_SUBCAPS, classify_hostcall_capability};
+    use super::{HostcallCapabilityClass, classify_hostcall_capability};
 
     /// bd-hxukn: every known `promise:*` sub-capability — the ones the
     /// dispatch table actually understands — must classify as
@@ -81904,7 +81900,19 @@ mod hostcall_capability_classification_tests {
     /// to `Unknown`, even if it shares the prefix.
     #[test]
     fn known_promise_subcaps_remain_internal_allowed() {
-        for known in KNOWN_PROMISE_SUBCAPS {
+        for known in [
+            "promise:constructor",
+            "promise:resolve",
+            "promise:reject",
+            "promise:then",
+            "promise:catch",
+            "promise:finally",
+            "promise:all",
+            "promise:race",
+            "promise:allSettled",
+            "promise:any",
+            "promise:create",
+        ] {
             assert_eq!(
                 classify_hostcall_capability(known),
                 HostcallCapabilityClass::InternalAllowed,

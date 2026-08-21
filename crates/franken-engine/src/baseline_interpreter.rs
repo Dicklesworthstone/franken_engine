@@ -265,6 +265,11 @@ const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
 /// and ids at or above the base index `promise_reaction_callables` instead
 /// of the closure table.
 const PROMISE_REACTION_CALLABLE_BASE: u32 = 0x8000_0000;
+/// Maximum nesting depth for recursive Array join/toString stringification.
+/// Runtime-constructed arrays can nest unboundedly, so recursion is bounded
+/// fail-closed: deeper sub-arrays render as `""` rather than risking stack
+/// exhaustion (bd-sxh8o.3).
+const ARRAY_JOIN_MAX_DEPTH: usize = 128;
 /// Fixed instruction charge for authenticating and publishing one
 /// `cluster.setupPrimary` replacement in addition to every property visited.
 const CLUSTER_SETUP_FIXED_WORK: usize = 1;
@@ -2419,6 +2424,10 @@ pub enum BuiltinFunctionKind {
     /// separator (default `","`); `undefined`/`null` render as `""`
     /// (bd-962ev.1).
     ArrayJoin,
+    /// `Array.prototype.toString` — receiver-aware: the spec join of the
+    /// elements with `","` (ES2020 23.1.3.30), so arrays no longer fall back
+    /// to `Object.prototype.toString`'s `[object Array]` tag (bd-sxh8o.3).
+    ArrayToString,
     /// `Array.prototype.forEach` — receiver-aware: invokes the callback for each
     /// element, returns `undefined` (bd-962ev.2).
     ArrayForEach,
@@ -3621,6 +3630,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_to_string() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayToString,
+            module_specifier: BuiltinModuleSpecifier::default(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn array_for_each() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayForEach,
@@ -4369,6 +4387,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayAt => "at",
             BuiltinFunctionKind::ArrayFlat => "flat",
             BuiltinFunctionKind::ArrayJoin => "join",
+            BuiltinFunctionKind::ArrayToString => "toString",
             BuiltinFunctionKind::ArrayForEach => "forEach",
             BuiltinFunctionKind::ArrayMap => "map",
             BuiltinFunctionKind::ArrayFilter => "filter",
@@ -33391,23 +33410,60 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let len = self.array_like_length(arr_id)?;
                 let separator = match self.builtin_arg(args, 0)? {
                     None | Some(Value::Undefined) => ",".to_string(),
                     Some(value) => self.value_to_string(&value),
                 };
-                let mut parts = Vec::with_capacity(len);
-                for i in 0..len {
-                    let element = self
-                        .array_index_value(arr_id, i)?
-                        .unwrap_or(Value::Undefined);
-                    let rendered = match element {
-                        Value::Undefined | Value::Null => String::new(),
-                        other => self.value_to_string(&other),
-                    };
-                    parts.push(rendered);
+                let mut active = BTreeSet::new();
+                Ok(Value::str(self.array_join_string(
+                    arr_id,
+                    &separator,
+                    &mut active,
+                )?))
+            }
+            BuiltinFunctionKind::ArrayToString => {
+                // ES2020 23.1.3.30: Array.prototype.toString invokes the
+                // receiver's `join` if callable (an own override wins), else
+                // the default "," join; arguments are ignored. A non-array
+                // receiver keeps the ordinary object tag.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                match receiver {
+                    Value::Object(arr_id) => {
+                        let own_join = self
+                            .heap
+                            .get(arr_id.0 as usize)
+                            .and_then(|object| object.properties.get("join"))
+                            .cloned();
+                        if let Some(
+                            callable @ (Value::Closure(_)
+                            | Value::Function(_)
+                            | Value::BuiltinFunction(_)),
+                        ) = own_join
+                        {
+                            return self.invoke_inline_method_call(
+                                Some(module),
+                                callable,
+                                Value::Object(arr_id),
+                                Vec::new(),
+                            );
+                        }
+                        if self
+                            .heap
+                            .get(arr_id.0 as usize)
+                            .is_some_and(|object| object.is_array)
+                        {
+                            let mut active = BTreeSet::new();
+                            Ok(Value::str(self.array_join_string(
+                                arr_id,
+                                ",",
+                                &mut active,
+                            )?))
+                        } else {
+                            Ok(self.object_prototype_to_string_value(&Value::Object(arr_id)))
+                        }
+                    }
+                    other => Ok(self.object_prototype_to_string_value(&other)),
                 }
-                Ok(Value::str(parts.join(&separator)))
             }
             BuiltinFunctionKind::ArrayEntries => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -45912,6 +45968,7 @@ impl InterpreterCore {
             "at" => Some(BuiltinFunction::array_at()),
             "flat" => Some(BuiltinFunction::array_flat()),
             "join" => Some(BuiltinFunction::array_join()),
+            "toString" => Some(BuiltinFunction::array_to_string()),
             "forEach" => Some(BuiltinFunction::array_for_each()),
             "map" => Some(BuiltinFunction::array_map()),
             "filter" => Some(BuiltinFunction::array_filter()),
@@ -71020,8 +71077,65 @@ impl InterpreterCore {
         {
             return String::from_utf8_lossy(bytes).into_owned();
         }
+        // Array exotic objects coerce through Array.prototype.toString — the
+        // spec join of the elements — not the `[object Array]` object tag
+        // (bd-sxh8o.3). Console output, template literals, and `+`
+        // concatenation all route through here.
+        if self
+            .heap
+            .get(id.0 as usize)
+            .is_some_and(|object| object.is_array)
+        {
+            let mut active = BTreeSet::new();
+            if let Ok(joined) = self.array_join_string(id, ",", &mut active) {
+                return joined;
+            }
+        }
         self.error_object_to_string(id)
             .unwrap_or_else(|| "[object Object]".to_string())
+    }
+
+    /// ES2020 23.1.3.13 (join) / 23.1.3.30 (toString) element stringification:
+    /// concatenate the elements with `separator`; `undefined`/`null` render as
+    /// `""`; nested arrays recurse through their own default (`","`) join.
+    /// `active` carries the ancestor chain of arrays currently being joined so
+    /// a cyclic array renders `""` instead of recursing forever, and depth is
+    /// bounded fail-closed at [`ARRAY_JOIN_MAX_DEPTH`] (bd-sxh8o.3).
+    fn array_join_string(
+        &self,
+        array_id: ObjectId,
+        separator: &str,
+        active: &mut BTreeSet<u32>,
+    ) -> Result<String, InterpreterError> {
+        if !active.insert(array_id.0) {
+            return Ok(String::new());
+        }
+        if active.len() > ARRAY_JOIN_MAX_DEPTH {
+            active.remove(&array_id.0);
+            return Ok(String::new());
+        }
+        let len = self.array_like_length(array_id)?;
+        let mut parts = Vec::with_capacity(len.min(4096));
+        for index in 0..len {
+            let element = self
+                .array_index_value(array_id, index)?
+                .unwrap_or(Value::Undefined);
+            let rendered = match element {
+                Value::Undefined | Value::Null => String::new(),
+                Value::Object(nested_id)
+                    if self
+                        .heap
+                        .get(nested_id.0 as usize)
+                        .is_some_and(|object| object.is_array) =>
+                {
+                    self.array_join_string(nested_id, ",", active)?
+                }
+                other => self.value_to_string(&other),
+            };
+            parts.push(rendered);
+        }
+        active.remove(&array_id.0);
+        Ok(parts.join(separator))
     }
 
     /// Returns the Error.prototype.toString rendering of `id` when it is an

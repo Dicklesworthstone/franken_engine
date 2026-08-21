@@ -32668,6 +32668,82 @@ mod tests {
     }
 
     #[test]
+    fn builtin_construct_and_catch_provenance_stays_exact_bd_zyndq() {
+        fn lower_source(name: &str, source: &str) -> (Ir0Module, Ir2Module) {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_zyndq.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            (ir0, ir2)
+        }
+
+        for (name, source, expected_console_count, expected_label) in [
+            (
+                "callable_only_catch",
+                "const probe=(Array.isArray); let outcome='unset'; try { new probe([]); outcome='constructed'; } catch (error) { outcome='caught'; } console.log(outcome); console.log('alive:' + probe([]));",
+                2,
+                Label::Public,
+            ),
+            (
+                "function_constructor",
+                "const generated = new Function('return 7'); console.log('fn:' + generated());",
+                1,
+                Label::Internal,
+            ),
+        ] {
+            let (ir0, ir2) = lower_source(name, source);
+            let console_flows = ir2
+                .ops
+                .iter()
+                .filter_map(|op| match &op.inner {
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log" => {
+                        op.flow.as_ref()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(console_flows.len(), expected_console_count, "{name}");
+            assert!(console_flows.iter().all(|flow| {
+                flow.data_label == expected_label && !flow.declassification_required
+            }));
+
+            let context = LoweringContext::new(
+                format!("eval-hybrid-{name}"),
+                format!("eval-decision-{name}"),
+                "eval-policy-hybrid",
+            )
+            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+            build_ir2_flow_proof_artifact(&ir2, &context)
+                .unwrap_or_else(|error| panic!("{name} flow proof: {error}"));
+            lower_ir0_to_ir3(&ir0, &context)
+                .unwrap_or_else(|error| panic!("{name} eval-equivalent IR0→IR3: {error}"));
+        }
+
+        let (_, unknown_ir2) = lower_source(
+            "unknown_constructor",
+            "const ctor={}; try { new ctor(); } catch (error) { console.log(error); }",
+        );
+        let unknown_context = LoweringContext::new(
+            "eval-hybrid-unknown-constructor",
+            "eval-decision-unknown-constructor",
+            "eval-policy-hybrid",
+        );
+        assert!(matches!(
+            build_ir2_flow_proof_artifact(&unknown_ir2, &unknown_context),
+            Err(LoweringPipelineError::UnauthorizedFlow {
+                source_label: Label::TopSecret,
+                sink_clearance: Label::Internal,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn authenticated_buffer_object_calls_lower_exact_product_shapes_bd_nx5cb() {
         for (case_name, source, capability, expected_arg_count) in [
             (

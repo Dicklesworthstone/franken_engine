@@ -25955,6 +25955,11 @@ fn hostcall_exception_is_operand_derived(
             && inputs
                 .iter()
                 .all(|value| value.shape == FlowValueShape::Primitive),
+        // qs.stringify walks own enumerable string keys of a closed data
+        // object and formats primitive values. Fresh object literals and
+        // parse results stay finite; unknown objects remain fail-high.
+        "builtin:QuerystringStringify" => !inputs.is_empty()
+            && inputs.iter().all(|value| value.shape.is_closed()),
         // The authenticated EventEmitter constructor reference is a finite
         // engine-owned value with no guest operands or callbacks.
         "builtin:EventEmitterConstructorRef" => inputs.is_empty(),
@@ -26316,8 +26321,13 @@ fn simulate_ir2_flow_labels(
                 } else {
                     Label::TopSecret
                 };
-                invalidate_nonprimitive_flow_shapes(&mut value_stack);
-                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                // Array.prototype.join on an authenticated Object.keys array
+                // cannot mutate or escape unrelated closed bindings still
+                // live for a later stringify or own-property read.
+                if callee_shape != FlowValueShape::OwnKeyJoinMethod {
+                    invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                    invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                }
                 let result_shape = match callee_shape {
                     FlowValueShape::OwnKeyJoinMethod => FlowValueShape::Primitive,
                     FlowValueShape::EventEmitterFluentMethod => {
@@ -26584,8 +26594,13 @@ fn simulate_ir2_flow_labels(
                 };
                 inputs.push(object);
                 let label = join_flow_values(&inputs);
-                invalidate_nonprimitive_flow_shapes(&mut value_stack);
-                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                // Finite Object.keys `.join` lookup cannot alias-mutate other
+                // closed values; keep FreshAggregate bindings intact for later
+                // stringify / own-property reads on the same object.
+                if shape != FlowValueShape::OwnKeyJoinMethod {
+                    invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                    invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                }
                 value_stack.push(fresh_shaped_flow_value(
                     label.clone(),
                     shape,
@@ -27123,6 +27138,9 @@ fn simulate_ir2_flow_labels(
                 }
                 if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
                     result_shape = FlowValueShape::FreshAggregate;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:QuerystringStringify" {
+                    result_shape = FlowValueShape::Primitive;
                 }
                 // bd-pafik: authenticated stream construction and promise-
                 // pipeline rejection provenance.
@@ -32523,6 +32541,22 @@ mod tests {
                     "{name} must not require a TopSecret-to-Internal declassification"
                 );
             }
+
+            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
+            // at IR2 annotation. Pin the live 0010/0013 sources through that
+            // same lattice check under the trusted-eval grant.
+            let eval_context = LoweringContext::new(
+                format!("eval-hybrid-{name}"),
+                format!("eval-decision-{name}"),
+                "eval-policy-hybrid",
+            )
+            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
+                panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
+                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            });
         }
 
         let mut unknown_object = Ir1Module::new(
@@ -32563,6 +32597,22 @@ mod tests {
             .expect("unknown Object.keys console flow");
         assert_eq!(unknown_console_flow.data_label, Label::TopSecret);
         assert!(unknown_console_flow.declassification_required);
+        let unknown_context = LoweringContext::new(
+            "eval-hybrid-object-keys-unknown",
+            "eval-decision-object-keys-unknown",
+            "eval-policy-hybrid",
+        );
+        assert!(
+            matches!(
+                build_ir2_flow_proof_artifact(&unknown_ir2, &unknown_context),
+                Err(LoweringPipelineError::UnauthorizedFlow {
+                    source_label: Label::TopSecret,
+                    sink_clearance: Label::Internal,
+                    ..
+                })
+            ),
+            "unknown Object.keys must keep the TopSecret→Internal fail-closed proof"
+        );
     }
 
     #[test]

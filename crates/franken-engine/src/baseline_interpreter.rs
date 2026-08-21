@@ -258,6 +258,13 @@ const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
 const MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES: u64 = 64;
 /// Approximate per-map-entry footprint.
 const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
+/// Synthetic `ClosureHandle` id space for non-closure Promise reaction
+/// callables (builtin functions, async/generator function objects). Real
+/// closure ids stay far below this bound — each closure carries a tracked
+/// memory charge, so the table cannot reach 2^31 entries under any budget —
+/// and ids at or above the base index `promise_reaction_callables` instead
+/// of the closure table.
+const PROMISE_REACTION_CALLABLE_BASE: u32 = 0x8000_0000;
 /// Fixed instruction charge for authenticating and publishing one
 /// `cluster.setupPrimary` replacement in addition to every property visited.
 const CLUSTER_SETUP_FIXED_WORK: usize = 1;
@@ -10037,6 +10044,15 @@ pub struct InterpreterCore {
     /// component charged during the transfer so nested Promise mutations see
     /// one coherent runtime component.
     promise_in_flight_task_bytes: u64,
+    /// Non-closure callable Promise reaction handlers (builtin functions such
+    /// as `console.log`, async/generator function objects) registered through
+    /// `.then`/`.catch`/`.finally`. Keyed by a synthetic id at or above
+    /// [`PROMISE_REACTION_CALLABLE_BASE`] so the microtask queue's
+    /// `ClosureHandle` transport stays unchanged while the id can never
+    /// collide with a real closure-table index (bd-sxh8o.1).
+    promise_reaction_callables: BTreeMap<u32, Value>,
+    /// Next unused synthetic id for `promise_reaction_callables`.
+    next_promise_reaction_callable_id: u32,
     /// bd-201vt: pending arguments for scheduled async fs callbacks
     /// (`fs.readFile`/`fs.writeFile` callback forms), keyed by the `IoCompletion`
     /// macrotask's registration sequence. The host effect runs synchronously at
@@ -10780,6 +10796,8 @@ impl InterpreterCore {
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_in_flight_task_bytes: 0,
+            promise_reaction_callables: BTreeMap::new(),
+            next_promise_reaction_callable_id: PROMISE_REACTION_CALLABLE_BASE,
             pending_io_callbacks: BTreeMap::new(),
             pending_child_process_tasks: BTreeMap::new(),
             child_process_task_in_flight_bytes: 0,
@@ -29309,6 +29327,8 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.promise_in_flight_task_bytes = 0;
+        self.promise_reaction_callables.clear();
+        self.next_promise_reaction_callable_id = PROMISE_REACTION_CALLABLE_BASE;
         self.next_timer_id = 0;
         self.active_timers.clear();
         self.pending_timer_tasks.clear();
@@ -48309,12 +48329,47 @@ impl InterpreterCore {
             Value::GeneratorFunction(_)
             | Value::AsyncFunction(_)
             | Value::AsyncGeneratorFunction(_)
-            | Value::BuiltinFunction(_) => Err(InterpreterError::TypeError {
-                expected: format!("closure-backed Promise reaction {role} handler"),
-                got: "callable handler without schedulable closure state".to_string(),
-            }),
+            | Value::BuiltinFunction(_) => {
+                Ok(Some(self.register_promise_reaction_callable(value)?))
+            }
             _ => Ok(None),
         }
+    }
+
+    /// Register a callable Promise reaction handler that has no closure-table
+    /// backing (a builtin such as `console.log`, or an async/generator
+    /// function object). The callable is retained in
+    /// `promise_reaction_callables` under a synthetic handle id at or above
+    /// [`PROMISE_REACTION_CALLABLE_BASE`]; `execute_promise_reaction_handler`
+    /// resolves such ids back to the stored callee (bd-sxh8o.1).
+    fn register_promise_reaction_callable(
+        &mut self,
+        callable: Value,
+    ) -> Result<crate::closure_model::ClosureHandle, InterpreterError> {
+        if self.closures.len() >= PROMISE_REACTION_CALLABLE_BASE as usize {
+            return Err(InterpreterError::TypeError {
+                expected: "closure table below the reaction-callable id base".to_string(),
+                got: format!("{} closures", self.closures.len()),
+            });
+        }
+        let id = self.next_promise_reaction_callable_id;
+        if id == u32::MAX {
+            return Err(InterpreterError::TypeError {
+                expected: "Promise reaction callable id capacity".to_string(),
+                got: "exhausted synthetic reaction-callable id space".to_string(),
+            });
+        }
+        let previous_bytes = self.promise_reaction_callables_memory_bytes();
+        self.promise_reaction_callables.insert(id, callable);
+        if let Err(error) = self.apply_memory_component_delta(
+            previous_bytes,
+            self.promise_reaction_callables_memory_bytes(),
+        ) {
+            self.promise_reaction_callables.remove(&id);
+            return Err(error);
+        }
+        self.next_promise_reaction_callable_id = id.saturating_add(1);
+        Ok(crate::closure_model::ClosureHandle(id))
     }
 
     fn promise_reaction_arg(
@@ -48915,17 +48970,49 @@ impl InterpreterCore {
             got: "missing module context".to_string(),
         })?;
         let argument = Self::js_value_to_value(&argument);
+        // Synthetic handles at/above the base name a retained non-closure
+        // callable (builtin, async/generator function object); everything
+        // below is a real closure-table id.
+        let callee = if handler.0 >= PROMISE_REACTION_CALLABLE_BASE {
+            self.promise_reaction_callables
+                .get(&handler.0)
+                .cloned()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "registered Promise reaction callable handler".to_string(),
+                    got: format!("unknown reaction callable #{}", handler.0),
+                })?
+        } else {
+            Value::Closure(handler.0)
+        };
         // Promise reactions are control-dependent on settlement as well as
         // value-dependent on the delivered argument. Run the whole isolated
         // callback under the queued task label so ignored arguments cannot
         // make side effects, hostcalls, or nested Promise work appear Public.
-        let (result, _) = self.invoke_inline_method_call_with_argument_label(
+        let result = self.invoke_inline_method_call_with_argument_label(
             Some(module),
-            Value::Closure(handler.0),
+            callee,
             Value::Undefined,
             vec![argument],
             Some(task_label),
-        )?;
+        );
+        match &result {
+            Ok(_) => self.push_component_event(
+                "promise_reaction",
+                "reaction_handler_executed",
+                "ok",
+                None,
+            ),
+            Err(error) => {
+                let detail = error.to_string();
+                self.push_component_event(
+                    "promise_reaction",
+                    "reaction_handler_executed",
+                    "error",
+                    Some(&detail),
+                );
+            }
+        }
+        let (result, _) = result?;
         Ok(Self::value_to_js_value(&result))
     }
 
@@ -72499,6 +72586,15 @@ impl InterpreterCore {
         }))
     }
 
+    /// Owned footprint of the non-closure reaction-callable side table.
+    /// Charged as its own component (not part of `promise_runtime_memory_bytes`)
+    /// so the existing then/fulfill projected-delta preflights stay exact.
+    fn promise_reaction_callables_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.promise_reaction_callables.values().map(|value| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_value_bytes(value))
+        }))
+    }
+
     fn promise_runtime_memory_bytes(&self) -> u64 {
         self.promise_store
             .estimated_memory_bytes()
@@ -73525,6 +73621,7 @@ impl InterpreterCore {
             .saturating_add(self.child_process_streams_memory_bytes())
             .saturating_add(self.pending_timer_tasks_memory_bytes())
             .saturating_add(self.promise_runtime_memory_bytes())
+            .saturating_add(self.promise_reaction_callables_memory_bytes())
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_once_wrappers_memory_bytes())
@@ -76254,9 +76351,19 @@ impl InterpreterCore {
     // -- Structured events -------------------------------------------------
 
     fn push_event(&mut self, event: &str, outcome: &str, err_code: Option<&str>) {
+        self.push_component_event(COMPONENT, event, outcome, err_code);
+    }
+
+    fn push_component_event(
+        &mut self,
+        component: &str,
+        event: &str,
+        outcome: &str,
+        err_code: Option<&str>,
+    ) {
         let event = InterpreterEvent {
             trace_id: self.trace_id.clone(),
-            component: COMPONENT.to_string(),
+            component: component.to_string(),
             event: event.to_string(),
             outcome: outcome.to_string(),
             error_code: err_code.map(str::to_string),

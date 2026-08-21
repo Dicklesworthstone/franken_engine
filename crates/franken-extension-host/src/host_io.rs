@@ -574,6 +574,40 @@ impl ResolutionRaceHook {
     }
 }
 
+/// One open numeric file descriptor in the sandbox fd table (bd-zco6t):
+/// the substrate for Node's `fs.openSync`/`writeSync`/`readSync`/`fsyncSync`/
+/// `closeSync` lifecycle. The held `File` was opened through the same
+/// descriptor-relative containment walk as every other sandboxed operation,
+/// so a root rename or path swap after open cannot re-target it.
+#[derive(Debug)]
+struct SandboxFdEntry {
+    file: std::fs::File,
+    readable: bool,
+    writable: bool,
+    /// Guest-visible path, for stable error text only.
+    guest_path: String,
+}
+
+/// Shared numeric-fd table. Node hands out small integers starting above the
+/// stdio triple; the table is monotonic (closed fds are never reissued within
+/// a provider lifetime) so a stale guest fd can never alias a newer file.
+#[derive(Debug)]
+struct SandboxFdTable {
+    next_fd: u64,
+    entries: std::collections::BTreeMap<u64, SandboxFdEntry>,
+}
+
+impl SandboxFdTable {
+    fn new() -> Self {
+        Self {
+            // 0/1/2 are the conventional stdio descriptors Node never hands
+            // out from fs.openSync.
+            next_fd: 3,
+            entries: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SandboxedHostIo {
     root: PathBuf,
@@ -592,6 +626,9 @@ pub struct SandboxedHostIo {
     mutation_race_hook: Option<std::sync::Arc<ResolutionRaceHook>>,
     #[cfg(all(test, unix))]
     read_race_hook: Option<std::sync::Arc<ResolutionRaceHook>>,
+    /// Numeric fd lifecycle table (bd-zco6t). `Arc`-shared so provider clones
+    /// see one table, `Mutex`-guarded because the provider is `Sync`.
+    fd_table: std::sync::Arc<std::sync::Mutex<SandboxFdTable>>,
 }
 
 impl SandboxedHostIo {
@@ -644,6 +681,7 @@ impl SandboxedHostIo {
             mutation_race_hook: None,
             #[cfg(all(test, unix))]
             read_race_hook: None,
+            fd_table: std::sync::Arc::new(std::sync::Mutex::new(SandboxFdTable::new())),
         })
     }
 
@@ -1353,6 +1391,262 @@ impl SandboxedHostIo {
                 bytes_written: u64::try_from(data.len()).unwrap_or(u64::MAX),
             })
         }
+    }
+
+    /// Look up an open fd entry, mapping an unknown or already-closed fd to
+    /// Node's `EBADF` (bd-zco6t).
+    fn with_fd_entry<T>(
+        &self,
+        fd: u64,
+        action: impl FnOnce(&mut SandboxFdEntry) -> Result<T, HostIoError>,
+    ) -> Result<T, HostIoError> {
+        let mut table = self
+            .fd_table
+            .lock()
+            .map_err(|_| HostIoError::Io {
+                detail: "sandbox fd table lock poisoned".to_string(),
+            })?;
+        let Some(entry) = table.entries.get_mut(&fd) else {
+            return Err(HostIoError::Fs {
+                code: "EBADF".to_string(),
+                detail: format!("bad file descriptor: {fd}"),
+            });
+        };
+        action(entry)
+    }
+
+    /// Node `fs.openSync(path, flags)` substrate (bd-zco6t): resolve `raw`
+    /// through the same descriptor-relative containment walk as every other
+    /// sandboxed operation, open it under the requested Node flag string, and
+    /// hand back a monotonic numeric fd. Supported flags: `r`, `r+`, `w`,
+    /// `w+`, `a`, `a+`. Unknown flags fail with `ERR_INVALID_ARG_VALUE`
+    /// before any filesystem effect.
+    ///
+    /// # Errors
+    /// `EBADF`-family and containment failures surface as [`HostIoError`].
+    pub fn open_fd(&self, raw: &str, flags: &str) -> Result<u64, HostIoError> {
+        #[cfg(not(unix))]
+        {
+            let _ = (raw, flags);
+            Err(Self::fs_not_implemented("open"))
+        }
+        #[cfg(unix)]
+        {
+            let (readable, writable, base_flags) = match flags {
+                "r" => (true, false, rustix::fs::OFlags::RDONLY),
+                "r+" => (true, true, rustix::fs::OFlags::RDWR),
+                "w" => (
+                    false,
+                    true,
+                    rustix::fs::OFlags::WRONLY
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::TRUNC,
+                ),
+                "w+" => (
+                    true,
+                    true,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::TRUNC,
+                ),
+                "a" => (
+                    false,
+                    true,
+                    rustix::fs::OFlags::WRONLY
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::APPEND,
+                ),
+                "a+" => (
+                    true,
+                    true,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::APPEND,
+                ),
+                other => {
+                    return Err(HostIoError::Fs {
+                        code: "ERR_INVALID_ARG_VALUE".to_string(),
+                        detail: format!("unsupported fs open flags: {other}"),
+                    });
+                }
+            };
+            let file = if writable {
+                let target = self.mutation_target(raw, false)?;
+                Self::open_mutation_file(&target, base_flags, raw, "open")?
+            } else {
+                let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, true)? else {
+                    return Err(HostIoError::Fs {
+                        code: "EISDIR".to_string(),
+                        detail: format!("not a regular file: {raw}"),
+                    });
+                };
+                let descriptor = rustix::fs::openat(
+                    &parent,
+                    &name,
+                    base_flags | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(|err| Self::rustix_fs_error("open", raw, err))?;
+                std::fs::File::from(descriptor)
+            };
+            let metadata = file
+                .metadata()
+                .map_err(|err| Self::fs_error("stat", raw, err))?;
+            if !metadata.is_file() {
+                return Err(HostIoError::Fs {
+                    code: "EISDIR".to_string(),
+                    detail: format!("not a regular file: {raw}"),
+                });
+            }
+            let mut table = self
+                .fd_table
+                .lock()
+                .map_err(|_| HostIoError::Io {
+                    detail: "sandbox fd table lock poisoned".to_string(),
+                })?;
+            let fd = table.next_fd;
+            table.next_fd = table.next_fd.saturating_add(1);
+            table.entries.insert(
+                fd,
+                SandboxFdEntry {
+                    file,
+                    readable,
+                    writable,
+                    guest_path: raw.to_string(),
+                },
+            );
+            Ok(fd)
+        }
+    }
+
+    /// Node `fs.writeSync(fd, data)` substrate (bd-zco6t): write at the fd's
+    /// cursor (or the end, for append-mode fds — `O_APPEND` enforces that at
+    /// the descriptor). Returns the byte count, Node's return value.
+    ///
+    /// # Errors
+    /// `EBADF` for unknown/read-only fds; the per-operation byte cap applies.
+    pub fn write_fd(&self, fd: u64, data: &[u8]) -> Result<u64, HostIoError> {
+        if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "write of {} bytes to fd {fd} exceeds the {}-byte cap",
+                    data.len(),
+                    self.max_bytes
+                ),
+            });
+        }
+        self.with_fd_entry(fd, |entry| {
+            if !entry.writable {
+                return Err(HostIoError::Fs {
+                    code: "EBADF".to_string(),
+                    detail: format!("fd {fd} ({}) is not open for writing", entry.guest_path),
+                });
+            }
+            std::io::Write::write_all(&mut entry.file, data)
+                .map_err(|err| Self::fs_error("write", &entry.guest_path.clone(), err))?;
+            Ok(u64::try_from(data.len()).unwrap_or(u64::MAX))
+        })
+    }
+
+    /// Node `fs.readSync(fd, buffer, offset, length, position)` substrate
+    /// (bd-zco6t): read up to `length` bytes. With `position: Some(_)` the
+    /// read is positional (`pread`) and — matching Node — does NOT move the
+    /// fd's cursor; with `None` it reads at the cursor and advances it.
+    /// Returns the bytes actually read (shorter at end-of-file).
+    ///
+    /// # Errors
+    /// `EBADF` for unknown/write-only fds; the per-operation byte cap applies.
+    pub fn read_fd(
+        &self,
+        fd: u64,
+        length: u64,
+        position: Option<u64>,
+    ) -> Result<Vec<u8>, HostIoError> {
+        if length > self.max_bytes {
+            return Err(HostIoError::Io {
+                detail: format!(
+                    "read of {length} bytes from fd {fd} exceeds the {}-byte cap",
+                    self.max_bytes
+                ),
+            });
+        }
+        self.with_fd_entry(fd, |entry| {
+            if !entry.readable {
+                return Err(HostIoError::Fs {
+                    code: "EBADF".to_string(),
+                    detail: format!("fd {fd} ({}) is not open for reading", entry.guest_path),
+                });
+            }
+            let capacity = usize::try_from(length).unwrap_or(usize::MAX);
+            let mut buffer = vec![0u8; capacity];
+            let mut filled = 0usize;
+            while filled < buffer.len() {
+                let read = if let Some(base) = position {
+                    // Positional reads are pread-shaped: the fd cursor stays
+                    // where sequential reads left it, matching Node.
+                    #[cfg(unix)]
+                    {
+                        let offset = base.saturating_add(filled as u64);
+                        std::os::unix::fs::FileExt::read_at(
+                            &entry.file,
+                            &mut buffer[filled..],
+                            offset,
+                        )
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = base;
+                        return Err(Self::fs_not_implemented("pread"));
+                    }
+                } else {
+                    std::io::Read::read(&mut entry.file, &mut buffer[filled..])
+                }
+                .map_err(|err| Self::fs_error("read", &entry.guest_path.clone(), err))?;
+                if read == 0 {
+                    break;
+                }
+                filled += read;
+            }
+            buffer.truncate(filled);
+            Ok(buffer)
+        })
+    }
+
+    /// Node `fs.fsyncSync(fd)` substrate (bd-zco6t): flush the file and its
+    /// metadata to stable storage.
+    ///
+    /// # Errors
+    /// `EBADF` for an unknown fd; I/O failures surface as filesystem errors.
+    pub fn fsync_fd(&self, fd: u64) -> Result<(), HostIoError> {
+        self.with_fd_entry(fd, |entry| {
+            entry
+                .file
+                .sync_all()
+                .map_err(|err| Self::fs_error("fsync", &entry.guest_path.clone(), err))
+        })
+    }
+
+    /// Node `fs.closeSync(fd)` substrate (bd-zco6t): drop the entry (closing
+    /// the descriptor). The numeric fd is never reissued by this provider, so
+    /// a stale guest fd stays `EBADF` forever instead of aliasing a newer
+    /// file.
+    ///
+    /// # Errors
+    /// `EBADF` for an unknown or already-closed fd.
+    pub fn close_fd(&self, fd: u64) -> Result<(), HostIoError> {
+        let mut table = self
+            .fd_table
+            .lock()
+            .map_err(|_| HostIoError::Io {
+                detail: "sandbox fd table lock poisoned".to_string(),
+            })?;
+        if table.entries.remove(&fd).is_none() {
+            return Err(HostIoError::Fs {
+                code: "EBADF".to_string(),
+                detail: format!("bad file descriptor: {fd}"),
+            });
+        }
+        Ok(())
     }
 
     fn fs_argument<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {

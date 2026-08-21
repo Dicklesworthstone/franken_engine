@@ -11303,6 +11303,15 @@ fn lower_expression_to_ir1(
         binding_lookup,
         binding_index,
         root_scope_id,
+    )? || try_lower_simple_binary_expression_to_ir1(
+        expression,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
     )? || try_lower_logical_expression_to_ir1(
         expression,
         ops,
@@ -11510,6 +11519,64 @@ fn try_lower_arrow_expression_to_ir1(
         is_generator: false,
         is_async: *is_async,
         rest_param_index,
+    });
+    Ok(true)
+}
+
+/// Lower ordinary binary-expression trees without retaining the generic
+/// expression lowerer's large match frame at every tree depth. Parser output
+/// represents a concatenation such as `a + b + c + d` as a left-associated
+/// binary tree; keeping one monolithic frame per node can exhaust a normal
+/// test-thread stack even though the source expression itself is shallow.
+///
+/// `instanceof` remains in the generic lowerer because that arm owns the
+/// authenticated Array/net/cluster special cases. All other binary operators
+/// have the uniform left/right/BinaryOp lowering below.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn try_lower_simple_binary_expression_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<bool, LoweringPipelineError> {
+    let Expression::Binary {
+        operator,
+        left,
+        right,
+    } = expression
+    else {
+        return Ok(false);
+    };
+    if *operator == BinaryOperator::Instanceof {
+        return Ok(false);
+    }
+    lower_expression_to_ir1(
+        left,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    lower_expression_to_ir1(
+        right,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    ops.push(Ir1Op::BinaryOp {
+        operator: *operator,
     });
     Ok(true)
 }

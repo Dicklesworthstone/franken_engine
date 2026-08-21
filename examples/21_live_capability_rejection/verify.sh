@@ -6,13 +6,11 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-RCH_BIN="${RCH_BIN:-rch}"
-RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-target_dir="${CARGO_TARGET_DIR:-${CAPABILITY_REJECTION_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_capability_rejection_$(date +%s)_$$}}"
+frankenctl_bin="${repo_root}/target/release/frankenctl"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${repo_root}/artifacts/capability_rejection_example/${timestamp}"
-cargo_stderr="${artifact_dir}/cargo_build_stderr.log"
+legacy_stdout="${artifact_dir}/legacy_positional_stdout.log"
+legacy_stderr="${artifact_dir}/legacy_positional_stderr.log"
 
 example_id="bd-1bao8-capability-rejection"
 component="live_capability_rejection_example"
@@ -22,36 +20,42 @@ mkdir -p "${artifact_dir}"
 
 cd "${repo_root}"
 
-if ! command -v "${RCH_BIN}" >/dev/null 2>&1; then
-  echo "Required rch binary not found: ${RCH_BIN}" >&2
+if [[ ! -x "${frankenctl_bin}" ]]; then
+  echo "Required release binary is missing or not executable: ${frankenctl_bin}" >&2
   exit 2
 fi
 
-run_rch_cargo_build() {
-  set +e
-  "${RCH_BIN}" exec -- env \
-    "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
-    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
-    "CARGO_TARGET_DIR=${target_dir}" \
-    cargo build -p frankenengine-engine --bin frankenctl > /dev/null 2> "${cargo_stderr}"
-  local status=$?
-  set -e
-
-  if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${cargo_stderr}"; then
-    cat "${cargo_stderr}" >&2
-    echo "rch reported local fallback; refusing local execution" >&2
-    return 125
-  fi
-
-  if [[ "${status}" -ne 0 ]]; then
-    cat "${cargo_stderr}" >&2
-    return "${status}"
+fail_on_cli_usage() {
+  local output_file="$1"
+  if grep -Eiq '(^|[^[:alpha:]])usage([^[:alpha:]]|$)|missing required|requires --input|requires --extension-id' "${output_file}"; then
+    echo "frankenctl emitted CLI usage or missing-flag remediation" >&2
+    cat "${output_file}" >&2
+    return 1
   fi
 }
 
-echo "Building frankenctl binary..."
-run_rch_cargo_build
-frankenctl_bin="${target_dir}/debug/frankenctl"
+assert_fs_read_denied() {
+  local output_file="$1"
+  fail_on_cli_usage "${output_file}"
+  if ! grep -Eiq 'CapabilityDenied|capability denied: fs:read' "${output_file}"; then
+    echo "expected a typed fs:read capability denial" >&2
+    cat "${output_file}" >&2
+    return 1
+  fi
+}
+
+# Regression guard: obsolete positional argv must not count as a capability denial.
+legacy_exit_code=0
+"${frankenctl_bin}" run examples/21_live_capability_rejection/ambient_authority_attempt.js \
+  > "${legacy_stdout}" 2> "${legacy_stderr}" || legacy_exit_code=$?
+if [[ "${legacy_exit_code}" -eq 0 ]]; then
+  echo "❌ REGRESSION FAILURE: Obsolete positional argv unexpectedly succeeded!" >&2
+  exit 1
+fi
+if assert_fs_read_denied "${legacy_stderr}" >/dev/null 2>&1; then
+  echo "❌ REGRESSION FAILURE: CLI usage error was misclassified as capability denial!" >&2
+  exit 1
+fi
 
 echo "Testing ambient authority rejection..."
 
@@ -59,7 +63,9 @@ ambient_stdout="${artifact_dir}/ambient_attempt_stdout.log"
 ambient_stderr="${artifact_dir}/ambient_attempt_stderr.log"
 ambient_exit_code=0
 
-"${frankenctl_bin}" run examples/21_live_capability_rejection/ambient_authority_attempt.js \
+"${frankenctl_bin}" run \
+  --input examples/21_live_capability_rejection/ambient_authority_attempt.js \
+  --extension-id example-21-ambient-authority \
   > "${ambient_stdout}" 2> "${ambient_stderr}" || ambient_exit_code=$?
 
 echo "Testing declared capability (allowed case)..."
@@ -68,7 +74,9 @@ declared_stdout="${artifact_dir}/declared_capability_stdout.log"
 declared_stderr="${artifact_dir}/declared_capability_stderr.log"
 declared_exit_code=0
 
-"${frankenctl_bin}" run examples/21_live_capability_rejection/declared_capability.js \
+"${frankenctl_bin}" run \
+  --input examples/21_live_capability_rejection/declared_capability.js \
+  --extension-id example-21-declared-capability \
   > "${declared_stdout}" 2> "${declared_stderr}" || declared_exit_code=$?
 
 # Verify that ambient authority was rejected
@@ -83,17 +91,19 @@ if [[ "${declared_exit_code}" -ne 0 ]]; then
   exit 1
 fi
 
-# Verify that rejection contains expected capability denial evidence
-if ! grep -q "eval.capability.denied\|module:require\|capability" "${ambient_stderr}"; then
-  echo "❌ EVIDENCE FAILURE: Expected capability denial evidence not found!" >&2
-  echo "Stderr contents:" >&2
-  cat "${ambient_stderr}" >&2
+# Verify a typed membrane denial, and reject CLI usage failures explicitly.
+assert_fs_read_denied "${ambient_stderr}"
+fail_on_cli_usage "${declared_stderr}"
+if ! grep -q '"execution_value": "undefined"' "${declared_stdout}"; then
+  echo "❌ EVIDENCE FAILURE: Declared script did not emit the expected run report!" >&2
+  cat "${declared_stdout}" >&2
   exit 1
 fi
 
 echo "✓ Ambient authority properly rejected (exit code: ${ambient_exit_code})"
 echo "✓ Declared capability properly allowed (exit code: ${declared_exit_code})"
 echo "✓ Capability denial evidence captured"
+echo "✓ Obsolete positional argv rejected as a non-capability CLI failure (exit code: ${legacy_exit_code})"
 
 # Generate capability policy input artifact
 capability_policy_input="${artifact_dir}/capability_policy_input.json"
@@ -108,14 +118,14 @@ cat > "${capability_policy_input}" <<EOF
     "exit_code": ${ambient_exit_code},
     "stdout_path": "${ambient_stdout}",
     "stderr_path": "${ambient_stderr}",
-    "command": "${frankenctl_bin} run examples/21_live_capability_rejection/ambient_authority_attempt.js"
+    "command": "${frankenctl_bin} run --input examples/21_live_capability_rejection/ambient_authority_attempt.js --extension-id example-21-ambient-authority"
   },
   "declared_capability_test": {
     "file": "examples/21_live_capability_rejection/declared_capability.js",
     "exit_code": ${declared_exit_code},
     "stdout_path": "${declared_stdout}",
     "stderr_path": "${declared_stderr}",
-    "command": "${frankenctl_bin} run examples/21_live_capability_rejection/declared_capability.js"
+    "command": "${frankenctl_bin} run --input examples/21_live_capability_rejection/declared_capability.js --extension-id example-21-declared-capability"
   }
 }
 EOF
@@ -209,8 +219,7 @@ cat > "${verifier_report}" <<EOF
     "${capability_policy_input}",
     "${capability_evidence}",
     "${denial_receipt}",
-    "${event_trace}",
-    "${cargo_stderr}"
+    "${event_trace}"
   ],
   "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -222,19 +231,17 @@ cat > "${command_transcript}" <<EOF
 # Live Capability Rejection Example - Command Transcript
 # Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-## Build Command
-cd ${repo_root}
-${RCH_BIN} exec -- env RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN} CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} CARGO_TARGET_DIR=${target_dir} cargo build -p frankenengine-engine --bin frankenctl
-# Exit code: 0
+## Binary Under Test
+${frankenctl_bin}
 
 ## Ambient Authority Attempt (Expected: Denied)
-${frankenctl_bin} run examples/21_live_capability_rejection/ambient_authority_attempt.js
+${frankenctl_bin} run --input examples/21_live_capability_rejection/ambient_authority_attempt.js --extension-id example-21-ambient-authority
 # Exit code: ${ambient_exit_code}
 # Stdout: $(wc -l < "${ambient_stdout}") lines
 # Stderr: $(wc -l < "${ambient_stderr}") lines
 
 ## Declared Capability Test (Expected: Allowed)
-${frankenctl_bin} run examples/21_live_capability_rejection/declared_capability.js
+${frankenctl_bin} run --input examples/21_live_capability_rejection/declared_capability.js --extension-id example-21-declared-capability
 # Exit code: ${declared_exit_code}
 # Stdout: $(wc -l < "${declared_stdout}") lines
 # Stderr: $(wc -l < "${declared_stderr}") lines

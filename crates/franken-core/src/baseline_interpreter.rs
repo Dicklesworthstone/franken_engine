@@ -19333,7 +19333,7 @@ mod promise_runtime_accounting_tests_bd_ur3tk_21 {
             .expect("then fits");
         assert_eager_matches_recompute(&core, "after pending .then registration");
 
-        core.fulfill_promise(promise, JsValue::Str("x".repeat(4096)), Label::Public)
+        core.fulfill_promise(promise, JsValue::Str("x".repeat(4096).into()), Label::Public)
             .expect("fulfill fits");
         assert_eager_matches_recompute(&core, "after settlement with a 4KB payload");
         assert!(
@@ -19476,11 +19476,11 @@ mod promise_runtime_accounting_tests_bd_ur3tk_21 {
         .expect("second watcher fits");
         assert_eager_matches_recompute(&core, "after combinator registration");
 
-        core.fulfill_promise(first, JsValue::Str("a".repeat(512)), Label::Public)
+        core.fulfill_promise(first, JsValue::Str("a".repeat(512).into()), Label::Public)
             .expect("first fulfillment");
         assert_eager_matches_recompute(&core, "after first tracked fulfillment");
 
-        core.fulfill_promise(second, JsValue::Str("b".repeat(512)), Label::Public)
+        core.fulfill_promise(second, JsValue::Str("b".repeat(512).into()), Label::Public)
             .expect("second fulfillment completes the aggregate");
         assert_eager_matches_recompute(&core, "after aggregate completion");
         assert!(

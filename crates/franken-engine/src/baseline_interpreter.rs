@@ -62553,14 +62553,21 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| {
                 object
-                    .properties
-                    .exact_entries()
+                    .own_runtime_property_keys()
                     .into_iter()
-                    .filter(|(key, _)| {
+                    .filter_map(|key| match key {
+                        RuntimePropertyKey::String(key) => Some(key),
+                        RuntimePropertyKey::Symbol(_) => None,
+                    })
+                    .filter(|key| {
                         !(object.is_array && key.as_str() == Some("length"))
                             && self.writable_own_runtime_property_visible(object_id, key)
                     })
-                    .map(|(key, value)| (key, value.clone()))
+                    .filter_map(|key| {
+                        object
+                            .own_runtime_property_value(&RuntimePropertyKey::String(key.clone()))
+                            .map(|value| (key, value))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -97641,6 +97648,94 @@ mod async_runtime_tests_current {
         assert_eq!(readable.phase, ReadableFromPumpPhase::DestroyError);
         assert_eq!(readable.lifecycle_label, Label::Secret);
         assert_eq!(core.next_writable_tick_sequence, 42);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_prefinish_write_then_pause_consumes_reserved_final_tick_bd_fw7zd_11() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("final completion token");
+        let writable = core
+            .writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough writable state");
+        writable.end_requested = true;
+        writable.final_status = WritableFinalStatus::Active(token);
+        let readable = core
+            .readable_from_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough readable state");
+        readable.flowing = true;
+        readable.paused = false;
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            passthrough,
+            token,
+        );
+        core.write_reg(0, Value::BuiltinFunction(completion))
+            .expect("final completion register");
+        core.next_writable_tick_sequence = 91;
+        core.stream_passthrough_final(
+            &module,
+            Value::Object(passthrough),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("flowing final");
+        assert_eq!(
+            core.writable_streams[&passthrough].deferred_final_tick_sequence,
+            Some(91)
+        );
+
+        core.write_reg_with_label(1, Value::str("extra"), Label::Secret)
+            .expect("secret rejected write");
+        assert_eq!(
+            core.writable_write(
+                &module,
+                Value::Object(passthrough),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect("write after committed end"),
+            Value::Bool(false)
+        );
+        core.readable_pause(Value::Object(passthrough))
+            .expect("prefinish pause after rejected write");
+
+        let writable = &core.writable_streams[&passthrough];
+        assert_eq!(writable.final_status, WritableFinalStatus::Done);
+        assert_eq!(writable.deferred_final_tick_sequence, None);
+        assert_eq!(writable.tick_sequence, Some(91));
+        assert_eq!(writable.terminal_error_origin, Some(WritableErrorOrigin::Write));
+        assert_eq!(writable.lifecycle_label, Label::Secret);
+        let (Value::Object(error_id), error_label) = writable
+            .terminal_error
+            .as_ref()
+            .expect("retained write-after-end error")
+        else {
+            panic!("write-after-end error must be an Error object");
+        };
+        assert_eq!(error_label, &Label::Secret);
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_STREAM_WRITE_AFTER_END"))
+        );
+        let readable = &core.readable_from_streams[&passthrough];
+        assert_eq!(readable.phase, ReadableFromPumpPhase::DestroyError);
+        assert!(readable.paused);
+        assert!(!readable.flowing);
+        assert_eq!(readable.lifecycle_label, Label::Secret);
+        assert_eq!(core.next_writable_tick_sequence, 92);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

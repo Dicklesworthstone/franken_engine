@@ -229,13 +229,16 @@ fn stringify_basic_pairs() {
 }
 
 #[test]
-fn stringify_key_order_matches_node_insertion_order_disc_013() {
-    // Node 20.19.4 and bun 1.3.14 both retain this property-creation order.
+fn compat_corpus_0010_stringify_uses_object_keys_insertion_order_bd_n8eta() {
+    // Compat corpus querystring/0010: Node 20.19.4 and bun 1.3.14 both retain
+    // this property-creation order through Object.keys and qs.stringify.
     let src = r#"
         const qs = require('querystring');
-        console.log(qs.stringify({ foo: 'bar', baz: 'qux' }));
+        const value = { foo: 'bar', baz: 'qux' };
+        console.log(Object.keys(value).join(','));
+        console.log(qs.stringify(value));
     "#;
-    assert_eq!(eval_console(src), "foo=bar&baz=qux");
+    assert_eq!(eval_console(src), "foo,baz\nfoo=bar&baz=qux");
 }
 
 #[test]

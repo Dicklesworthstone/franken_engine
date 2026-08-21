@@ -24793,6 +24793,39 @@ impl StreamCallbackTag {
     }
 }
 
+/// Build the [`StreamFlowInfo::CallbackCarrier`] for a function literal:
+/// resolve which captures provably held a fresh plain aggregate at creation
+/// time (their body-side ids admit `PlainAggregate` method calls in the
+/// summary walk), then summarize the body's exception sources.
+fn stream_callback_carrier_for_function(
+    param_names: &[String],
+    rest_param_index: Option<u32>,
+    body_ops: &[Ir1Op],
+    free_vars: &[String],
+    free_var_ids: &[BindingId],
+    binding_labels: &BTreeMap<BindingId, Label>,
+    binding_flow_shapes: &BTreeMap<BindingId, FlowValueShape>,
+) -> StreamFlowInfo {
+    let aggregate_captures = free_vars
+        .iter()
+        .zip(free_var_ids.iter())
+        .filter_map(|(name, body_id)| {
+            let (origin_id, _) = parse_capture_cell_name(name)?;
+            (binding_flow_shapes.get(&origin_id).copied() == Some(FlowValueShape::FreshAggregate))
+                .then_some(*body_id)
+        })
+        .collect::<BTreeSet<_>>();
+    StreamFlowInfo::CallbackCarrier(summarize_stream_callback_exceptions(
+        param_names.len(),
+        rest_param_index,
+        body_ops,
+        free_var_ids,
+        free_vars,
+        &aggregate_captures,
+        binding_labels,
+    ))
+}
+
 /// Symbolically bound the exception sources of a stream callback body
 /// (bd-pafik). Returns `Supported(label)` only when every operation in the
 /// body is on the audited allowlist below; ANY other construct — mutation
@@ -24823,8 +24856,28 @@ fn summarize_stream_callback_exceptions(
 ) -> StreamCallbackSummary {
     const STEP_CAP: usize = 20_000;
 
-    let concrete = Label::Internal.join(&infer_function_capture_label(free_vars, binding_labels));
+    // Non-parameter provenance floor: Internal (engine-owned failures) joined
+    // with every capture's enclosing label. An unparseable capture identity
+    // has no sound bound.
+    let mut concrete = Label::Internal;
+    for name in free_vars {
+        let origin = parse_capture_cell_name(name)
+            .or_else(|| parse_class_expression_self_capture_name(name))
+            .map(|(origin_id, _)| origin_id);
+        let Some(origin_id) = origin else {
+            return StreamCallbackSummary::Unsupported;
+        };
+        concrete = concrete.join(binding_labels.get(&origin_id).unwrap_or(&Label::Internal));
+    }
     let capture_ids = free_var_ids.iter().copied().collect::<BTreeSet<_>>();
+    // Body binding ids allocate parameters first (0..param_count); a capture
+    // cell colliding with a parameter slot would make tagging ambiguous.
+    if capture_ids
+        .iter()
+        .any(|id| (*id as usize) < param_count)
+    {
+        return StreamCallbackSummary::Unsupported;
+    }
     // The engine invokes the LAST declared parameter as the continuation. A
     // rest parameter makes the final slot a fresh array instead, so no
     // parameter is provably the continuation.
@@ -26198,11 +26251,25 @@ fn simulate_ir2_flow_labels(
                 } else {
                     FlowValueShape::Unknown
                 };
-                value_stack.push(fresh_shaped_flow_value(
-                    label.clone(),
-                    shape,
-                    &mut next_identity,
-                ));
+                // bd-pafik: an object literal is a supported stream-options
+                // carrier when every entry is closed data or a function
+                // literal with a supported callback summary; the aggregated
+                // summary joins the function summaries.
+                let mut aggregated = StreamCallbackSummary::Supported(Label::Public);
+                for input in &inputs {
+                    match &input.stream {
+                        Some(StreamFlowInfo::CallbackCarrier(summary)) => {
+                            aggregated = aggregated.join(summary);
+                        }
+                        None if input.shape.is_closed() => {}
+                        _ => {
+                            aggregated = StreamCallbackSummary::Unsupported;
+                        }
+                    }
+                }
+                let mut value = fresh_shaped_flow_value(label.clone(), shape, &mut next_identity);
+                value.stream = Some(StreamFlowInfo::CallbackCarrier(aggregated));
+                value_stack.push(value);
                 label
             }
             Ir1Op::ArrayPush
@@ -26239,6 +26306,8 @@ fn simulate_ir2_flow_labels(
             }
             Ir1Op::DeclareFunction {
                 binding_id,
+                param_names,
+                rest_param_index,
                 free_vars,
                 free_var_ids,
                 body_ops,
@@ -26254,14 +26323,26 @@ fn simulate_ir2_flow_labels(
                 );
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &label);
                 binding_flow_shapes.insert(*binding_id, FlowValueShape::Callable);
-                value_stack.push(fresh_shaped_flow_value(
+                let mut value = fresh_shaped_flow_value(
                     label.clone(),
                     FlowValueShape::Callable,
                     &mut next_identity,
+                );
+                value.stream = Some(stream_callback_carrier_for_function(
+                    param_names,
+                    *rest_param_index,
+                    body_ops,
+                    free_vars,
+                    free_var_ids,
+                    binding_labels,
+                    &binding_flow_shapes,
                 ));
+                value_stack.push(value);
                 label
             }
             Ir1Op::CreateFunction {
+                param_names,
+                rest_param_index,
                 free_vars,
                 free_var_ids,
                 body_ops,
@@ -26275,11 +26356,22 @@ fn simulate_ir2_flow_labels(
                     host_io_exception_provenance,
                     summary_depth.saturating_add(1),
                 );
-                value_stack.push(fresh_shaped_flow_value(
+                let carrier = stream_callback_carrier_for_function(
+                    param_names,
+                    *rest_param_index,
+                    body_ops,
+                    free_vars,
+                    free_var_ids,
+                    binding_labels,
+                    &binding_flow_shapes,
+                );
+                let mut value = fresh_shaped_flow_value(
                     label.clone(),
                     FlowValueShape::Callable,
                     &mut next_identity,
-                ));
+                );
+                value.stream = Some(carrier);
+                value_stack.push(value);
                 label
             }
             Ir1Op::ForInInit | Ir1Op::ForOfInit => {
@@ -26539,9 +26631,86 @@ fn simulate_ir2_flow_labels(
                 {
                     result_shape = FlowValueShape::ClosedResult;
                 }
+                // bd-pafik: authenticated stream construction and promise-
+                // pipeline rejection provenance.
+                let mut result_stream = None;
+                match capability.as_str() {
+                    // `Readable.from(iterable)` executes no user callbacks:
+                    // its rejection sources are engine failures and the
+                    // iterable's own data.
+                    "builtin:StreamReadableFrom" => {
+                        stream_states.insert(
+                            op_index,
+                            StreamCallbackSummary::Supported(
+                                Label::Internal.join(&operation_data_label),
+                            ),
+                        );
+                        result_stream = Some(StreamFlowInfo::Stream { origin: op_index });
+                    }
+                    "builtin:StreamReadable"
+                    | "builtin:StreamWritable"
+                    | "builtin:StreamTransform"
+                    | "builtin:StreamPassThrough" => {
+                        // `pop_flow_values` reverses stack order; the options
+                        // object (single constructor argument) is inputs[0].
+                        let summary = match inputs.as_slice() {
+                            [] => StreamCallbackSummary::Supported(
+                                Label::Internal.join(&operation_data_label),
+                            ),
+                            [options] => match &options.stream {
+                                Some(StreamFlowInfo::CallbackCarrier(
+                                    StreamCallbackSummary::Supported(callback_label),
+                                )) => StreamCallbackSummary::Supported(
+                                    Label::Internal
+                                        .join(&operation_data_label)
+                                        .join(callback_label),
+                                ),
+                                _ => StreamCallbackSummary::Unsupported,
+                            },
+                            _ => StreamCallbackSummary::Unsupported,
+                        };
+                        stream_states.insert(op_index, summary);
+                        result_stream = Some(StreamFlowInfo::Stream { origin: op_index });
+                    }
+                    "builtin:StreamPromisesPipeline" => {
+                        // The pipeline can reject with (a) its own validation
+                        // and engine failures, (b) any stage's data, and (c)
+                        // anything a stage callback throws / reports via
+                        // `callback(error)` / rejects with. All three are
+                        // bounded only when EVERY stage is an authenticated
+                        // stream whose callback summary is supported; any
+                        // unknown stage keeps the fail-high default.
+                        let mut rejection = Label::Internal.join(&operation_data_label);
+                        let mut authenticated = !inputs.is_empty();
+                        for input in &inputs {
+                            match &input.stream {
+                                Some(StreamFlowInfo::Stream { origin }) => {
+                                    match stream_states.get(origin) {
+                                        Some(StreamCallbackSummary::Supported(summary)) => {
+                                            rejection = rejection.join(summary);
+                                        }
+                                        _ => authenticated = false,
+                                    }
+                                }
+                                _ => authenticated = false,
+                            }
+                        }
+                        if authenticated {
+                            pipeline_rejections.insert(op_index, rejection.clone());
+                            result_stream =
+                                Some(StreamFlowInfo::PipelinePromise { origin: op_index });
+                            // The synchronous hostcall's own throw path is
+                            // bounded by the same rejection summary.
+                            operation_exception_is_operand_derived = true;
+                            operation_exception_label_override = Some(rejection);
+                        }
+                    }
+                    _ => {}
+                }
                 let mut result =
                     fresh_crypto_flow_value(result_label, result_origin, &mut next_identity);
                 result.shape = result_shape;
+                result.stream = result_stream;
                 value_stack.push(result);
                 operation_data_label
             }

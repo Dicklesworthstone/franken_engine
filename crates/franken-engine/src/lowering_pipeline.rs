@@ -20268,6 +20268,39 @@ fn module_alias_expr_has_rejected_use(
         {
             true
         }
+        // bd-zco6t: passing the confirmed Buffer alias into the numeric fd
+        // read/write (`fs.readSync(fd, buf, ...)` / `fs.writeSync(fd, buf)`)
+        // is an engine-consumed use, not an escape: the fd dispatch mutates
+        // or reads the bytes in place and never observes or re-exposes the
+        // object. This acceptance is syntactic only — the flow layer remains
+        // the enforcement point, because any intervening non-operand-derived
+        // call clears the BufferObject proof and the rewritten
+        // `builtin:BufferObjectToString` hostcall then takes its fail-closed
+        // TopSecret arm.
+        Expression::Call {
+            callee, arguments, ..
+        } if surface == LoweringOnlyModuleAliasSurface::BufferObject
+            && matches!(
+                callee.as_ref(),
+                Expression::Member {
+                    object,
+                    property,
+                    computed: false,
+                    ..
+                } if matches!(
+                    object.as_ref(),
+                    Expression::Identifier(receiver) if receiver != alias
+                ) && matches!(
+                    well_formed_static_name(property),
+                    Some("readSync" | "writeSync")
+                )
+            ) =>
+        {
+            arguments.iter().any(|argument| {
+                !matches!(argument, Expression::Identifier(name) if name == alias)
+                    && module_alias_expr_has_rejected_use(argument, alias, surface)
+            })
+        }
         Expression::Call {
             callee, arguments, ..
         } if surface == LoweringOnlyModuleAliasSurface::EventEmitter
@@ -26202,7 +26235,16 @@ fn simulate_ir2_flow_labels(
                 // proof cannot survive a mutation or opaque escape.
                 if !matches!(
                     value.shape,
-                    FlowValueShape::OwnKeyArray | FlowValueShape::EventEmitterObject
+                    FlowValueShape::OwnKeyArray
+                        | FlowValueShape::EventEmitterObject
+                        // bd-zco6t: the authenticated Buffer is a dedicated
+                        // finite-method receiver (`toString`/`readUInt32LE`);
+                        // this stack-copy preserve is the same synthetic-
+                        // receiver seam OwnKeyArray's `.join` uses —
+                        // GetProperty still invalidates the binding map
+                        // immediately after, so no named-binding proof
+                        // outlives a mutation or escape.
+                        | FlowValueShape::BufferObject
                 ) {
                     invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
                 }
@@ -26481,6 +26523,23 @@ fn simulate_ir2_flow_labels(
                     ) if key.as_str() == Some("emit") => FlowValueShape::EventEmitterEmitMethod,
                     (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
                         if key.as_str() == Some("join") =>
+                    {
+                        FlowValueShape::Callable
+                    }
+                    // bd-zco6t: finite engine observations on closed
+                    // receivers, mirroring the OwnKeyArray `.join` proof.
+                    // `String.prototype.includes` on a primitive receiver and
+                    // the authenticated Buffer's `toString`/`readUInt32LE`
+                    // are engine-owned implementations, so the method value
+                    // is a summarized callable and the subsequent CallMethod
+                    // stays JoinInputs instead of the fail-high TopSecret.
+                    (FlowValueShape::Primitive, Ir1PropertyKey::Static(key))
+                        if key.as_str() == Some("includes") =>
+                    {
+                        FlowValueShape::Callable
+                    }
+                    (FlowValueShape::BufferObject, Ir1PropertyKey::Static(key))
+                        if matches!(key.as_str(), Some("toString" | "readUInt32LE")) =>
                     {
                         FlowValueShape::Callable
                     }
@@ -27012,6 +27071,17 @@ fn simulate_ir2_flow_labels(
                         .and_then(|discriminator| discriminator.fs_operation)
                         == Some(FsOperation::ReadFd)
                 {
+                    result_shape = FlowValueShape::Primitive;
+                }
+                // bd-zco6t: `String(x)` always evaluates to a primitive
+                // string regardless of its input — the shape is a value-kind
+                // truth, not a finiteness claim. The result LABEL still joins
+                // the input's provenance, and a non-operand-derived
+                // invocation keeps its fail-high exception contract and the
+                // global shape invalidation, so guest `toString` coercion is
+                // not opened up — only the catch observation
+                // `String(error).includes(...)` gains a primitive receiver.
+                if capability == "builtin:String" {
                     result_shape = FlowValueShape::Primitive;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
@@ -28589,6 +28659,21 @@ mod tests {
             );
             if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &context) {
                 panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+            // The console sinks are the ops the isolate denied: every one of
+            // them must carry at most Internal after the fd-lifecycle and
+            // finite-observation fixes.
+            for (index, op) in ir2.ops.iter().enumerate() {
+                if let Ir1Op::HostCall { capability, .. } = &op.inner
+                    && capability == "console:log"
+                    && let Some(flow) = op.flow.as_ref()
+                {
+                    assert!(
+                        flow.data_label <= Label::Internal,
+                        "{name} console sink at op {index} must not exceed Internal: {:?}",
+                        flow.data_label
+                    );
+                }
             }
         }
 

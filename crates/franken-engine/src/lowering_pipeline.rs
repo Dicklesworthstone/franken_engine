@@ -24805,6 +24805,12 @@ enum FlowValueShape {
     Primitive,
     Callable,
     CallableContainer,
+    /// A fresh engine-owned array returned by `Object.keys`. Its elements are
+    /// primitive strings and its prototype is the native Array prototype, so
+    /// an immediate static `.join` lookup is finite and cannot invoke guest
+    /// accessors. Any mutation, escape, or control-flow merge clears this
+    /// proof through the ordinary shape invalidation paths.
+    OwnKeyArray,
     ClosedResult,
     BufferObject,
     FreshAggregate,
@@ -24814,7 +24820,11 @@ impl FlowValueShape {
     fn is_closed(self) -> bool {
         matches!(
             self,
-            Self::Primitive | Self::ClosedResult | Self::BufferObject | Self::FreshAggregate
+            Self::Primitive
+                | Self::OwnKeyArray
+                | Self::ClosedResult
+                | Self::BufferObject
+                | Self::FreshAggregate
         )
     }
 }
@@ -25861,6 +25871,19 @@ fn hostcall_exception_is_operand_derived(
             .iter()
             .all(|value| value.shape == FlowValueShape::Primitive),
         "builtin:UrlFormat" => inputs.iter().all(|value| value.shape.is_closed()),
+        // Object.keys is finite for primitives and for aggregates whose own
+        // properties are still statically authenticated. Querystring.parse is
+        // finite for primitive arguments and returns a fresh null-prototype
+        // data object. Arbitrary objects remain fail-high: proxy traps,
+        // accessors, or coercions can otherwise disclose unsummarized labels.
+        "builtin:ObjectKeys" => matches!(inputs, [value]
+            if matches!(value.shape, FlowValueShape::Primitive
+                | FlowValueShape::FreshAggregate
+                | FlowValueShape::OwnKeyArray)),
+        "builtin:QuerystringParse" => !inputs.is_empty()
+            && inputs
+                .iter()
+                .all(|value| value.shape == FlowValueShape::Primitive),
         // These constructors are intercepted only for the unshadowed native
         // globals. Closed direct inputs cover primitive lengths/offsets,
         // engine-owned ArrayBuffers/views, and fresh array literals without
@@ -26137,8 +26160,15 @@ fn simulate_ir2_flow_labels(
                 let label = value.label.clone();
                 // The binding retains a straight-line closed-shape proof until
                 // an operation below can mutate or escape it. The assignment
-                // expression's stack copy is no longer a fresh value.
-                invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
+                // expression's stack copy is no longer a fresh value. Preserve
+                // only the dedicated Object.keys result long enough for the
+                // generic method-call lowering's synthetic receiver binding:
+                // it emits StoreBinding, GetProperty("join"), then LoadBinding.
+                // GetProperty immediately invalidates the stored alias, so the
+                // proof cannot survive a mutation or opaque escape.
+                if value.shape != FlowValueShape::OwnKeyArray {
+                    invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
+                }
                 value_stack.push(value);
                 label
             }
@@ -26383,10 +26413,14 @@ fn simulate_ir2_flow_labels(
                     inputs.push(pop_flow_value(&mut value_stack)?);
                 }
                 let object = pop_flow_value(&mut value_stack)?;
-                let shape = if object.shape == FlowValueShape::CallableContainer {
-                    FlowValueShape::Callable
-                } else {
-                    FlowValueShape::Unknown
+                let shape = match (&object.shape, key) {
+                    (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if key.as_str() == Some("join") =>
+                    {
+                        FlowValueShape::Callable
+                    }
+                    _ => FlowValueShape::Unknown,
                 };
                 inputs.push(object);
                 let label = join_flow_values(&inputs);
@@ -26868,6 +26902,12 @@ fn simulate_ir2_flow_labels(
                     )
                 {
                     result_shape = FlowValueShape::ClosedResult;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:ObjectKeys" {
+                    result_shape = FlowValueShape::OwnKeyArray;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
+                    result_shape = FlowValueShape::FreshAggregate;
                 }
                 // bd-pafik: authenticated stream construction and promise-
                 // pipeline rejection provenance.
@@ -32090,6 +32130,109 @@ mod tests {
                 "{case_name}"
             );
         }
+    }
+
+    #[test]
+    fn object_keys_join_keeps_finite_own_key_provenance_bd_n8eta() {
+        for (name, source, expected_querystring_parse) in [
+            (
+                "querystring_0010",
+                "const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(','));",
+                false,
+            ),
+            (
+                "querystring_0013",
+                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
+                true,
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, arg_count: 1 }
+                        if capability == "builtin:ObjectKeys"
+                )),
+                "{name} must retain the Object.keys operation"
+            );
+            assert_eq!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, .. }
+                        if capability == "builtin:QuerystringParse"
+                )),
+                expected_querystring_parse,
+                "{name} querystring parse lowering"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some("join")
+                )),
+                "{name} must retain the Array.prototype.join observation"
+            );
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .rev()
+                .find(|op| matches!(&op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                ))
+                .and_then(|op| op.flow.as_ref())
+                .unwrap_or_else(|| panic!("console flow for {name}"));
+            assert_eq!(console_flow.data_label, Label::Public, "{name}");
+            assert!(
+                !console_flow.declassification_required,
+                "{name} must not require a TopSecret-to-Internal declassification"
+            );
+        }
+
+        let mut unknown_object = Ir1Module::new(
+            ContentHash::compute(b"object-keys-unknown-bd-n8eta"),
+            "object_keys_unknown_bd_n8eta.js",
+        );
+        unknown_object.ops.extend([
+            Ir1Op::LoadBinding { binding_id: 404 },
+            Ir1Op::HostCall {
+                capability: "builtin:ObjectKeys".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::StoreBinding { binding_id: 405 },
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static("join".into()),
+            },
+            Ir1Op::LoadBinding { binding_id: 405 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(",".into()),
+            },
+            Ir1Op::CallMethod { arg_count: 1 },
+            Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Return,
+        ]);
+        let unknown_ir2 = lower_ir1_to_ir2(&unknown_object)
+            .expect("unknown Object.keys input remains representable")
+            .module;
+        let unknown_console_flow = unknown_ir2
+            .ops
+            .iter()
+            .find(|op| matches!(&op.inner,
+                Ir1Op::HostCall { capability, .. } if capability == "console:log"
+            ))
+            .and_then(|op| op.flow.as_ref())
+            .expect("unknown Object.keys console flow");
+        assert_eq!(unknown_console_flow.data_label, Label::TopSecret);
+        assert!(unknown_console_flow.declassification_required);
     }
 
     #[test]

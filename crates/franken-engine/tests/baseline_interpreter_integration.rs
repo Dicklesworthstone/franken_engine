@@ -3225,8 +3225,15 @@ fn callback_mediated_cross_module_recursion_one_below_effective_depth_limit_bd_h
 }
 
 #[test]
+fn direct_foreign_closure_recursion_one_below_effective_depth_limit_bd_hwjbi() {
+    let value = direct_cross_module_recursion_result(7)
+        .expect("one-below-limit direct foreign-closure recursion must complete");
+    assert_eq!(value, Value::Int(0));
+}
+
+#[test]
 fn direct_foreign_closure_recursion_hits_exact_effective_depth_limit_bd_hwjbi() {
-    let error = direct_cross_module_recursion_result(7)
+    let error = direct_cross_module_recursion_result(8)
         .expect_err("exact-limit direct foreign-closure recursion must fail closed");
     assert_eq!(error, InterpreterError::StackOverflow { depth: 8, max: 8 });
 }

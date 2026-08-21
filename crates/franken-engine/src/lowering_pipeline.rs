@@ -16934,6 +16934,18 @@ fn fs_sync_builtin_spec(method: &str) -> Option<FsBuiltinCall> {
         "utimesSync" => ("fs:write", FsOperation::Utimes, 3, 3),
         "realpathSync" => ("fs:read", FsOperation::Realpath, 1, 2),
         "mkdtempSync" => ("fs:write", FsOperation::Mkdtemp, 1, 2),
+        // Numeric fd lifecycle (bd-zco6t). openSync keeps the existing
+        // `fs:write` capability tag rather than growing an `fs:open` alias
+        // (this table deliberately never adds capability aliases): an open
+        // may create or truncate depending on its flags, so write authority
+        // is the conservative gate. writeSync/readSync carry a NUMERIC fd as
+        // their first argument — the interpreter's fd-shaped dispatch reads
+        // it from the argument list, never as a path.
+        "openSync" => ("fs:write", FsOperation::Open, 1, 3),
+        "writeSync" => ("fs:write", FsOperation::WriteFd, 2, 5),
+        "readSync" => ("fs:read", FsOperation::ReadFd, 2, 5),
+        "fsyncSync" => ("fs:write", FsOperation::Fsync, 1, 1),
+        "closeSync" => ("fs:write", FsOperation::CloseFd, 1, 1),
         _ => return None,
     };
     Some(FsBuiltinCall {

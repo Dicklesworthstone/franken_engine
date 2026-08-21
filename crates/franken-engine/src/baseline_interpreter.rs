@@ -12203,6 +12203,43 @@ impl InterpreterCore {
                 .take(2)
                 .map(|value| self.fs_value_argument(value))
                 .collect(),
+            // Numeric fd lifecycle (bd-zco6t). Open's arg0 is the path (kept
+            // as the effect path); every other fd op identifies its target by
+            // the `fd=` argument, never a path.
+            FsOperation::Open => vec![format!(
+                "flags={}",
+                args.get(1)
+                    .map_or_else(|| "r".to_string(), |value| self.fs_value_argument(value))
+            )],
+            FsOperation::WriteFd | FsOperation::Fsync | FsOperation::CloseFd => vec![format!(
+                "fd={}",
+                args.first()
+                    .map_or_else(String::new, |value| self.fs_value_argument(value))
+            )],
+            FsOperation::ReadFd => {
+                // readSync(fd, buffer, offset, length, position): length
+                // defaults to the target buffer's element length; position
+                // omitted/null means "read at the cursor".
+                let fd = args
+                    .first()
+                    .map_or_else(String::new, |value| self.fs_value_argument(value));
+                let length = match args.get(3) {
+                    Some(Value::Int(length)) => *length,
+                    _ => match args.get(1) {
+                        Some(Value::Object(buffer_id)) => self
+                            .typed_array_view_for_object(*buffer_id)
+                            .ok()
+                            .flatten()
+                            .map_or(0, |view| i64::try_from(view.length).unwrap_or(0)),
+                        _ => 0,
+                    },
+                };
+                let mut arguments = vec![format!("fd={fd}"), format!("length={length}")];
+                if let Some(Value::Int(position)) = args.get(4) {
+                    arguments.push(format!("position={position}"));
+                }
+                arguments
+            }
             FsOperation::Read
             | FsOperation::Write
             | FsOperation::Append
@@ -12301,6 +12338,12 @@ impl InterpreterCore {
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
             FsMetaResult::Metadata(metadata) => self.fs_metadata_value(metadata),
+            // fd reads are consumed by the ReadFd conversion arm (positional
+            // Buffer mutation + count); a stray Bytes result surfaced here
+            // still materializes as a real Buffer rather than vanishing.
+            FsMetaResult::Bytes(bytes) => {
+                Ok(Value::Object(self.alloc_buffer_from_bytes(&bytes)?))
+            }
         }
     }
 
@@ -12498,7 +12541,10 @@ impl InterpreterCore {
             None
         };
         let operation_arguments = self.fs_operation_arguments(operation, logical_args);
-        let content = if matches!(operation, FsOperation::Write | FsOperation::Append) {
+        let content = if matches!(
+            operation,
+            FsOperation::Write | FsOperation::Append | FsOperation::WriteFd
+        ) {
             Some(
                 logical_args
                     .get(1)
@@ -12606,6 +12652,38 @@ impl InterpreterCore {
                 }
                 Value::Undefined
             }
+            // Numeric fd lifecycle result shapes (bd-zco6t): openSync yields
+            // the fd number, writeSync the byte count — both ride the
+            // FsMetaResult::Unsigned carrier the generic arm would collapse
+            // to `undefined`.
+            FsOperation::Open | FsOperation::WriteFd => match result.downcast::<FsMetaResult>() {
+                Ok(FsMetaResult::Unsigned(value)) => {
+                    Value::Int(i64::try_from(value).unwrap_or(i64::MAX))
+                }
+                _ => Value::Undefined,
+            },
+            // readSync mutates the guest Buffer POSITIONALLY (bytes copied in
+            // at `offset`) and evaluates to the byte count actually read.
+            FsOperation::ReadFd => match result.downcast::<FsMetaResult>() {
+                Ok(FsMetaResult::Bytes(bytes)) => {
+                    let offset = match logical_args.get(2) {
+                        Some(Value::Int(offset)) => usize::try_from(*offset).unwrap_or(0),
+                        _ => 0,
+                    };
+                    if let Some(Value::Object(buffer_id)) = logical_args.get(1) {
+                        for (index, byte) in bytes.iter().enumerate() {
+                            self.typed_array_indexed_set_property(
+                                *buffer_id,
+                                &(offset + index).to_string(),
+                                &Value::Int(i64::from(*byte)),
+                            )?;
+                        }
+                        self.join_binary_storage_label(*buffer_id, &filesystem_result_label)?;
+                    }
+                    Value::Int(i64::try_from(bytes.len()).unwrap_or(i64::MAX))
+                }
+                _ => Value::Undefined,
+            },
             _ => match result.downcast::<FsMetaResult>() {
                 Ok(result) => self.fs_meta_result_value(result)?,
                 Err(_) => Value::Undefined,

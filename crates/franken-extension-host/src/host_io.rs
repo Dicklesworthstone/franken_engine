@@ -57,6 +57,19 @@ pub enum FsOperation {
     Utimes,
     Realpath,
     Mkdtemp,
+    /// `fs.openSync(path, flags)` — open a numeric fd in the sandbox fd table
+    /// (bd-zco6t). Conservatively classified as write authority because an
+    /// open can create or truncate depending on its flags.
+    Open,
+    /// `fs.writeSync(fd, data)` — write through an open fd (bd-zco6t).
+    WriteFd,
+    /// `fs.readSync(fd, ..., position)` — read through an open fd, positional
+    /// reads leaving the cursor untouched (bd-zco6t).
+    ReadFd,
+    /// `fs.fsyncSync(fd)` (bd-zco6t).
+    Fsync,
+    /// `fs.closeSync(fd)` (bd-zco6t).
+    CloseFd,
 }
 
 impl FsOperation {
@@ -70,6 +83,7 @@ impl FsOperation {
             | Self::Lstat
             | Self::ReadLink
             | Self::Access
+            | Self::ReadFd
             | Self::Realpath => HostIoCapability::FsRead,
             Self::Write
             | Self::Append
@@ -83,7 +97,11 @@ impl FsOperation {
             | Self::Truncate
             | Self::Chmod
             | Self::Utimes
-            | Self::Mkdtemp => HostIoCapability::FsWrite,
+            | Self::Mkdtemp
+            | Self::Open
+            | Self::WriteFd
+            | Self::Fsync
+            | Self::CloseFd => HostIoCapability::FsWrite,
         }
     }
 
@@ -111,6 +129,11 @@ impl FsOperation {
             Self::Utimes => "utimes",
             Self::Realpath => "realpath",
             Self::Mkdtemp => "mkdtemp",
+            Self::Open => "open",
+            Self::WriteFd => "write_fd",
+            Self::ReadFd => "read_fd",
+            Self::Fsync => "fsync",
+            Self::CloseFd => "close_fd",
         }
     }
 
@@ -138,6 +161,11 @@ impl FsOperation {
             "utimes" => Self::Utimes,
             "realpath" => Self::Realpath,
             "mkdtemp" => Self::Mkdtemp,
+            "open" => Self::Open,
+            "write_fd" => Self::WriteFd,
+            "read_fd" => Self::ReadFd,
+            "fsync" => Self::Fsync,
+            "close_fd" => Self::CloseFd,
             _ => return None,
         })
     }
@@ -174,6 +202,9 @@ pub enum FsMetaResult {
     Strings(Vec<String>),
     DirEntries(Vec<FsDirEntry>),
     Metadata(FsMetadata),
+    /// Raw binary bytes (fd-based `read_fd` results, bd-zco6t). A dedicated
+    /// variant so 0x80..=0xFF bytes never round-trip through a lossy string.
+    Bytes(Vec<u8>),
 }
 
 impl HostIoCapability {
@@ -1649,6 +1680,18 @@ impl SandboxedHostIo {
         Ok(())
     }
 
+    /// Parse the `fd=` argument of an fd-shaped operation. A missing or
+    /// non-numeric fd is `EBADF` — the same guest-visible failure an unknown
+    /// descriptor produces (bd-zco6t).
+    fn fs_fd_argument(arguments: &[String]) -> Result<u64, HostIoError> {
+        Self::fs_argument(arguments, "fd")
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| HostIoError::Fs {
+                code: "EBADF".to_string(),
+                detail: "bad file descriptor argument".to_string(),
+            })
+    }
+
     fn fs_argument<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
         arguments.iter().find_map(|argument| {
             argument
@@ -1673,6 +1716,35 @@ impl SandboxedHostIo {
                 return Err(HostIoError::NotImplemented {
                     what: format!("fs_meta cannot route the {} keystone", operation.as_str()),
                 });
+            }
+            // Numeric fd lifecycle (bd-zco6t): delegate to the sandbox fd
+            // table. `raw` is meaningful only for Open (the path being
+            // opened); fd-shaped operations identify their target through the
+            // `fd=` argument and ignore the path field.
+            FsOperation::Open => {
+                let flags = Self::fs_argument(arguments, "flags").unwrap_or("r");
+                FsMetaResult::Unsigned(self.open_fd(raw, flags)?)
+            }
+            FsOperation::WriteFd => {
+                let fd = Self::fs_fd_argument(arguments)?;
+                FsMetaResult::Unsigned(self.write_fd(fd, data)?)
+            }
+            FsOperation::ReadFd => {
+                let fd = Self::fs_fd_argument(arguments)?;
+                let length = Self::fs_argument(arguments, "length")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let position = Self::fs_argument(arguments, "position")
+                    .and_then(|value| value.parse::<u64>().ok());
+                FsMetaResult::Bytes(self.read_fd(fd, length, position)?)
+            }
+            FsOperation::Fsync => {
+                self.fsync_fd(Self::fs_fd_argument(arguments)?)?;
+                FsMetaResult::Unit
+            }
+            FsOperation::CloseFd => {
+                self.close_fd(Self::fs_fd_argument(arguments)?)?;
+                FsMetaResult::Unit
             }
             FsOperation::Append => {
                 if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {

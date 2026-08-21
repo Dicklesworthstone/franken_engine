@@ -10118,6 +10118,14 @@ pub struct InterpreterCore {
     next_tick_queue: std::collections::VecDeque<NextTickTask>,
     /// Next unused synthetic id for `promise_reaction_callables`.
     next_promise_reaction_callable_id: u32,
+    /// Whether the most recent builtin dispatch fell through to the
+    /// unknown-member arm (bd-z1peg.3). The `builtin:` registry row is a
+    /// family wildcard whose direct dispatch deterministically yields
+    /// `undefined` for unknown members; the DELEGATED path must instead fail
+    /// closed, so it consumes this flag to convert that silent fallthrough
+    /// into a CapabilityDenied. A plain `bool`, so it carries no memory
+    /// accounting weight.
+    builtin_dispatch_hit_unknown_member: bool,
     /// bd-201vt: pending arguments for scheduled async fs callbacks
     /// (`fs.readFile`/`fs.writeFile` callback forms), keyed by the `IoCompletion`
     /// macrotask's registration sequence. The host effect runs synchronously at
@@ -10875,6 +10883,7 @@ impl InterpreterCore {
             promise_in_flight_task_bytes: 0,
             promise_reaction_callables: BTreeMap::new(),
             next_promise_reaction_callable_id: PROMISE_REACTION_CALLABLE_BASE,
+            builtin_dispatch_hit_unknown_member: false,
             next_tick_queue: std::collections::VecDeque::new(),
             pending_io_callbacks: BTreeMap::new(),
             pending_child_process_tasks: BTreeMap::new(),
@@ -62029,6 +62038,7 @@ impl InterpreterCore {
         // previous failed or test-only direct dispatch must never taint the
         // next, unrelated hostcall.
         self.clear_pending_hostcall_result_label();
+        self.builtin_dispatch_hit_unknown_member = false;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
         // ApplyHostCall and callback-running builtins can complete nested
@@ -62180,7 +62190,20 @@ impl InterpreterCore {
                 self.dispatch_process_spawn_hostcall(delegated_args)
             }
             Some(HostcallDispatchBinding::Builtin) => {
-                self.dispatch_builtin_hostcall(cap, delegated_args, module)
+                let outcome = self.dispatch_builtin_hostcall(cap, delegated_args, module);
+                // The `builtin:` registry row is a family wildcard; a
+                // delegated target that fell through to the unknown-member
+                // arm must fail closed instead of surfacing the silent
+                // `undefined` (bd-z1peg.3, acceptance criterion 5).
+                if outcome.is_ok()
+                    && std::mem::take(&mut self.builtin_dispatch_hit_unknown_member)
+                {
+                    Err(InterpreterError::CapabilityDenied {
+                        capability: recordable_capability_tag(cap).into_owned(),
+                    })
+                } else {
+                    outcome
+                }
             }
             Some(HostcallDispatchBinding::ClientRequest) => {
                 self.dispatch_client_request_create(delegated_args)
@@ -62366,7 +62389,9 @@ impl InterpreterCore {
             for (offset, value) in saved_values.into_iter().enumerate() {
                 registers[register_base + offset] = value;
             }
-            registers.truncate(original_register_len);
+            // `resize`, not `truncate`: a hostile nested truncation below the
+            // pre-delegation length must be rebuilt, and truncate never grows.
+            registers.resize(original_register_len, Value::Undefined);
         });
         if self.register_labels.len() < required_len {
             self.register_labels.resize(required_len, Label::Public);
@@ -62374,7 +62399,8 @@ impl InterpreterCore {
         for (offset, label) in saved_labels.into_iter().enumerate() {
             self.register_labels[register_base + offset] = label;
         }
-        self.register_labels.truncate(original_label_len);
+        self.register_labels
+            .resize(original_label_len, Label::Public);
         drop(stale_entry_publication);
     }
 
@@ -70841,7 +70867,11 @@ impl InterpreterCore {
             }
 
             _ => {
-                // Unknown builtin method - return undefined
+                // Unknown builtin method - return undefined. The delegated
+                // ApplyHostCall path converts this deterministic fallthrough
+                // into a fail-closed CapabilityDenied via the flag
+                // (bd-z1peg.3); direct lowering never emits unknown tags.
+                self.builtin_dispatch_hit_unknown_member = true;
                 Ok(Value::Undefined)
             }
         }

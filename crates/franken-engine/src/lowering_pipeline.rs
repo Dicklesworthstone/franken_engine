@@ -25511,7 +25511,7 @@ fn summarize_function_body(
 
     let mut converged = false;
     for _ in 0..MAX_FUNCTION_SUMMARY_PASSES {
-        let Ok((_, changed)) = simulate_ir2_flow_labels(
+        let Ok((_, changed, _)) = simulate_ir2_flow_labels(
             &body_ir2_ops,
             &mut body_binding_labels,
             &catch_region_events,
@@ -25528,7 +25528,7 @@ fn summarize_function_body(
     if !converged {
         return Label::TopSecret;
     }
-    let Ok((labels, changed)) = simulate_ir2_flow_labels(
+    let Ok((labels, changed, _)) = simulate_ir2_flow_labels(
         &body_ir2_ops,
         &mut body_binding_labels,
         &catch_region_events,
@@ -25898,11 +25898,18 @@ fn simulate_ir2_flow_labels(
     catch_region_events: &CatchRegionEvents,
     host_io_exception_provenance: HostIoExceptionProvenance,
     summary_depth: usize,
-) -> Result<(Vec<Label>, bool), LoweringPipelineError> {
+) -> Result<(Vec<Label>, bool, BTreeSet<usize>), LoweringPipelineError> {
     let mut value_stack = Vec::<FlowValue>::new();
     let mut next_identity = 0usize;
     let (catch_region_starts, catch_region_ends, initial_catch_entry_labels) = catch_region_events;
     let mut catch_entry_labels = initial_catch_entry_labels.clone();
+    // bd-pafik: identities of live catch-entry values and the op indexes of
+    // the binding stores that consume one. A catch-parameter store is where
+    // exception provenance becomes observable to source code, so the
+    // annotation pass materializes a flow annotation there even though
+    // ordinary binding stores stay unannotated.
+    let mut catch_entry_identities = BTreeSet::<usize>::new();
+    let mut catch_entry_store_indexes = BTreeSet::<usize>::new();
     let mut active_catch_regions = Vec::<u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, usize>::new();
     let mut binding_crypto_origins = BTreeMap::<BindingId, Option<usize>>::new();
@@ -26001,6 +26008,9 @@ fn simulate_ir2_flow_labels(
             }
             Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
                 let mut value = pop_flow_value(&mut value_stack)?;
+                if catch_entry_identities.contains(&value.identity) {
+                    catch_entry_store_indexes.insert(op_index);
+                }
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &value.label);
                 binding_crypto_origins.insert(*binding_id, value.crypto_origin);
                 binding_flow_shapes.insert(*binding_id, value.shape);
@@ -26223,7 +26233,9 @@ fn simulate_ir2_flow_labels(
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 if let Some(catch_label) = catch_entry_labels.get(id) {
-                    value_stack.push(fresh_flow_value(catch_label.clone(), &mut next_identity));
+                    let value = fresh_flow_value(catch_label.clone(), &mut next_identity);
+                    catch_entry_identities.insert(value.identity);
+                    value_stack.push(value);
                 }
                 if iterator_cleanup_labels.get(id).is_some_and(|expected| {
                     value_stack
@@ -26854,7 +26866,7 @@ fn simulate_ir2_flow_labels(
         inferred_labels.push(inferred);
     }
 
-    Ok((inferred_labels, bindings_changed))
+    Ok((inferred_labels, bindings_changed, catch_entry_store_indexes))
 }
 
 fn infer_ir2_flow_annotations(
@@ -26871,7 +26883,7 @@ fn infer_ir2_flow_annotations(
     // source size. The strict pass budget bounds work to O(n) and fails closed
     // when exact propagation would require a dedicated dependency worklist.
     for _ in 0..MAX_FLOW_INFERENCE_PASSES {
-        let (_, changed) = simulate_ir2_flow_labels(
+        let (_, changed, _) = simulate_ir2_flow_labels(
             &ir2.ops,
             &mut binding_labels,
             &catch_region_events,
@@ -26889,13 +26901,14 @@ fn infer_ir2_flow_annotations(
         });
     }
 
-    let (inferred_labels, changed_after_convergence) = simulate_ir2_flow_labels(
-        &ir2.ops,
-        &mut binding_labels,
-        &catch_region_events,
-        host_io_exception_provenance,
-        0,
-    )?;
+    let (inferred_labels, changed_after_convergence, catch_entry_store_indexes) =
+        simulate_ir2_flow_labels(
+            &ir2.ops,
+            &mut binding_labels,
+            &catch_region_events,
+            host_io_exception_provenance,
+            0,
+        )?;
     if changed_after_convergence {
         return Err(LoweringPipelineError::InvariantViolation {
             detail: "IR2 flow-label binding fixed point changed after convergence",
@@ -26908,7 +26921,9 @@ fn infer_ir2_flow_annotations(
         runtime_check_ops: 0,
     };
 
-    for (op, inferred_data_label) in ir2.ops.iter_mut().zip(inferred_labels) {
+    for (op_index, (op, inferred_data_label)) in
+        ir2.ops.iter_mut().zip(inferred_labels).enumerate()
+    {
         let inferred_sink_clearance = infer_sink_clearance(
             &op.effect,
             op.required_capability.as_ref(),
@@ -26925,7 +26940,12 @@ fn infer_ir2_flow_annotations(
                 capability,
             )
         });
-        let should_annotate = op.flow.is_some() || !matches!(op.effect, EffectBoundary::Pure);
+        // bd-pafik: a catch-parameter binding store is where caught exception
+        // provenance becomes observable to source code, so it materializes an
+        // annotation; every other Pure, statically-unannotated op stays bare.
+        let should_annotate = op.flow.is_some()
+            || !matches!(op.effect, EffectBoundary::Pure)
+            || catch_entry_store_indexes.contains(&op_index);
         if should_annotate {
             metrics.total_flow_ops = metrics.total_flow_ops.saturating_add(1);
             if requires_declassification || runtime_guard_needed {

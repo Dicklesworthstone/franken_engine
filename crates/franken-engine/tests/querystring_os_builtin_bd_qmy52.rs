@@ -48,13 +48,13 @@ fn eval_err(src: &str) -> String {
 // -------------------------------------------------------------------------
 
 #[test]
-fn parse_basic_pairs() {
+fn compat_corpus_0013_parse_preserves_pair_key_order_bd_n8eta() {
     let src = r#"
         const qs = require('querystring');
         const o = qs.parse('foo=bar&abc=xyz');
-        console.log(o.foo, o.abc);
+        console.log(Object.keys(o).join(','), o.foo, o.abc);
     "#;
-    assert_eq!(eval_console(src), "bar xyz");
+    assert_eq!(eval_console(src), "foo,abc bar xyz");
 }
 
 #[test]

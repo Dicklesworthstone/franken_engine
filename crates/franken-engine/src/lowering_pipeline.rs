@@ -26389,9 +26389,23 @@ fn simulate_ir2_flow_labels(
                 }
                 let inputs = pop_flow_values(&mut value_stack, 2)?;
                 let label = join_flow_values(&inputs);
-                invalidate_nonprimitive_flow_shapes(&mut value_stack);
-                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                operation_exception_is_operand_derived = inputs
+                    .iter()
+                    .all(|value| value.shape == FlowValueShape::Primitive);
+                if !operation_exception_is_operand_derived {
+                    invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                    invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                }
+                // Every successful ECMAScript binary operation produces a
+                // primitive. Object operands can still run guest coercions,
+                // so only all-primitive inputs receive the bounded exception
+                // contract above; the result value-kind remains primitive in
+                // either case, matching the UnaryOp rule below.
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    FlowValueShape::Primitive,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::UnaryOp { operator } => {

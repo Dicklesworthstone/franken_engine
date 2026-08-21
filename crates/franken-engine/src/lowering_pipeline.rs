@@ -24797,6 +24797,10 @@ struct FlowValue {
     /// and options-object literals, authenticated stream states, and
     /// pipeline-promise rejection origins).
     stream: Option<StreamFlowInfo>,
+    /// bd-zco6t: the fs-operation discriminator carried by a NUL-sentinel
+    /// `fsop:` string literal, so the flow simulation can distinguish finite
+    /// fd-lifecycle results from generic fs reads.
+    fs_operation: Option<FsOperation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25471,6 +25475,7 @@ fn fresh_flow_value(label: Label, next_identity: &mut usize) -> FlowValue {
         shape: FlowValueShape::Unknown,
         process_operation: None,
         stream: None,
+        fs_operation: None,
     }
 }
 
@@ -26082,6 +26087,14 @@ fn simulate_ir2_flow_labels(
                     flow_value.process_operation = raw
                         .as_str()
                         .and_then(ChildProcessOperation::from_discriminator);
+                    // bd-zco6t: an engine-emitted fs NUL-sentinel discriminator
+                    // identifies the concrete fs operation for the HostCall
+                    // result-shape rules below. Guest strings cannot begin
+                    // with NUL through the parser, so this is lowering-owned.
+                    flow_value.fs_operation = raw
+                        .as_str()
+                        .and_then(|text| text.strip_prefix("\0fsop:"))
+                        .and_then(FsOperation::parse_name);
                 }
                 value_stack.push(flow_value);
                 label
@@ -26477,6 +26490,7 @@ fn simulate_ir2_flow_labels(
                     // after literal construction, so any callback-carrier
                     // proof it held no longer covers its contents.
                     stream: None,
+                    fs_operation: None,
                 });
                 label
             }
@@ -26565,6 +26579,7 @@ fn simulate_ir2_flow_labels(
                         shape: FlowValueShape::Unknown,
                         process_operation: None,
                         stream: None,
+                        fs_operation: None,
                     });
                 } else {
                     value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
@@ -26905,6 +26920,29 @@ fn simulate_ir2_flow_labels(
                 }
                 if hostcall_is_operand_derived && capability == "builtin:ObjectKeys" {
                     result_shape = FlowValueShape::OwnKeyArray;
+                }
+                // bd-zco6t: finite fd-lifecycle results are closed primitives.
+                // Every operand-derived `fs:write` hostcall yields a primitive
+                // (openSync's numeric fd, writeSync's byte count, and the
+                // undefined of writeFileSync/append/mkdir/closeSync/fsyncSync
+                // and friends), so the fd a later writeSync/readSync consumes
+                // is a CLOSED input and those calls stay operand-derived —
+                // preserving unrelated Buffer proofs instead of poisoning
+                // them. `fs:read` stays Unknown-shaped EXCEPT the fd-based
+                // read_fd form, whose JS value is the byte count (the Buffer
+                // is mutated in place); a no-encoding readFileSync returns a
+                // Buffer the static layer deliberately does not vouch for.
+                if hostcall_is_operand_derived && capability == "fs:write" {
+                    result_shape = FlowValueShape::Primitive;
+                }
+                if hostcall_is_operand_derived
+                    && capability == "fs:read"
+                    && inputs
+                        .first()
+                        .and_then(|discriminator| discriminator.fs_operation)
+                        == Some(FsOperation::ReadFd)
+                {
+                    result_shape = FlowValueShape::Primitive;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
                     result_shape = FlowValueShape::FreshAggregate;
@@ -27455,6 +27493,7 @@ mod tests {
                     shape,
                     process_operation: None,
                     stream: None,
+                    fs_operation: None,
                 })
                 .collect::<Vec<_>>();
             inputs.push(FlowValue {
@@ -27464,6 +27503,7 @@ mod tests {
                 shape: FlowValueShape::Primitive,
                 process_operation: Some(ChildProcessOperation::ExecFile),
                 stream: None,
+                fs_operation: None,
             });
             inputs
         };
@@ -28448,6 +28488,69 @@ mod tests {
             ),
             (Label::TopSecret, true),
             "a guest callback remains fail-high even with the canonical provider"
+        );
+    }
+
+    /// bd-zco6t: the numeric fd-lifecycle corpus fixtures must lower without
+    /// any UnauthorizedFlow under the canonical ProviderInternal provenance.
+    /// Before the fd result-shape rules, openSync's Unknown-shaped fd made
+    /// every later writeSync/readSync non-operand-derived: their TopSecret
+    /// exception contract poisoned the catch, and the shape invalidation
+    /// destroyed the Buffer proof `buf.toString('utf8')` depends on.
+    #[test]
+    fn fd_lifecycle_fixtures_lower_without_unauthorized_flow_bd_zco6t() {
+        fn assert_flow_clean(name: &str, source: &str) {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_zco6t.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+            let ir2 = lower_ir1_to_ir2_with_host_io_exception_provenance(
+                &ir1,
+                HostIoExceptionProvenance::ProviderInternal,
+            )
+            .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+            .module;
+            let context = LoweringContext::new(
+                "trace-bd-zco6t",
+                "decision-bd-zco6t",
+                "policy-bd-zco6t",
+            );
+            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &context) {
+                panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+        }
+
+        // Corpus fixture 0022: the positional read's fd must be a closed
+        // primitive so the readSync stays operand-derived and the Buffer
+        // proof behind buf.toString survives.
+        assert_flow_clean(
+            "fixture_0022_readsync",
+            "const fs = require('fs');\n\
+             fs.writeFileSync('r.txt', 'abcdefgh');\n\
+             const fd = fs.openSync('r.txt', 'r');\n\
+             const buf = Buffer.alloc(4);\n\
+             const n = fs.readSync(fd, buf, 0, 4, 2);\n\
+             fs.closeSync(fd);\n\
+             console.log(n);\n\
+             console.log(buf.toString('utf8'));\n",
+        );
+
+        // The stale-fd probe: an operand-derived writeSync's EBADF is
+        // Internal-join(operands), so the catch observation can sink at
+        // Internal instead of denying TopSecret -> Internal.
+        assert_flow_clean(
+            "stale_fd_ebadf_catch",
+            "const fs = require('fs');\n\
+             const fd = fs.openSync('gone.txt', 'w');\n\
+             fs.closeSync(fd);\n\
+             try {\n\
+               fs.writeSync(fd, 'late');\n\
+               console.log('unreachable');\n\
+             } catch (error) {\n\
+               console.log('caught:' + (String(error).includes('EBADF')));\n\
+             }\n",
         );
     }
 

@@ -8000,8 +8000,10 @@ impl CompactTier1Program {
             | Ir3Instruction::ResolveNameStatus { dst, .. }
             | Ir3Instruction::DeleteName { dst, .. }
             | Ir3Instruction::CreateClosure { dst, .. }
+            | Ir3Instruction::CreateArrowClosure { dst, .. }
             | Ir3Instruction::CreateGenerator { dst, .. }
             | Ir3Instruction::CreateAsyncFunction { dst, .. }
+            | Ir3Instruction::CreateAsyncArrowClosure { dst, .. }
             | Ir3Instruction::CreateAsyncGenerator { dst, .. } => requirement(&[*dst], &[]),
             Ir3Instruction::UnaryNeg { dst, src }
             | Ir3Instruction::UnaryPlus { dst, src }
@@ -10018,6 +10020,13 @@ pub struct InterpreterCore {
     /// from containing `super`; this private carrier serves the nested-arrow
     /// lane without exposing a guest-writable marker.
     closure_lexical_super_metadata: BTreeMap<u32, ClosureLexicalSuperMetadata>,
+    /// Lexical `this` captured at `CreateArrowClosure` /
+    /// `CreateAsyncArrowClosure` (bd-asw4m.3): closure_id -> the creating
+    /// frame's `this` value and label. Consulted by
+    /// `clone_closure_lexical_this_binding` so every `Call`/`CallMethod`
+    /// binds the arrow's defining `this` instead of the receiver or the
+    /// caller's live `this`. Ordinary closures have no entry.
+    arrow_lexical_this: BTreeMap<u32, (Value, Label)>,
     /// Program provenance for closures created by the live interpreter. Test
     /// fixtures that seed the private closure table directly intentionally
     /// have no entry and retain same-module behavior.
@@ -10825,6 +10834,7 @@ impl InterpreterCore {
             closures: Vec::new(),
             closure_method_metadata: BTreeMap::new(),
             closure_lexical_super_metadata: BTreeMap::new(),
+            arrow_lexical_this: BTreeMap::new(),
             closure_module_origins: BTreeMap::new(),
             closure_generated_function_artifacts: BTreeMap::new(),
             module_reentrant_call_depth: 0,
@@ -29355,6 +29365,7 @@ impl InterpreterCore {
         self.closures.clear();
         self.closure_method_metadata.clear();
         self.closure_lexical_super_metadata.clear();
+        self.arrow_lexical_this.clear();
         self.closure_module_origins.clear();
         self.closure_generated_function_artifacts.clear();
         self.generators.clear();
@@ -42932,6 +42943,73 @@ impl InterpreterCore {
                     self.pending_captures.clear();
                     self.ip += 1;
                 }
+                Ir3Instruction::CreateArrowClosure {
+                    dst,
+                    function_index,
+                    capture_count,
+                } => {
+                    // bd-asw4m.3: identical to CreateClosure, plus the
+                    // creating frame's lexical `this` is captured so later
+                    // Call/CallMethod invocations bind it instead of the
+                    // receiver. Top-level arrows capture `undefined`.
+                    self.run_pre_allocation_hook(
+                        module,
+                        AllocKind::Closure,
+                        capture_count as usize,
+                    )?;
+                    let previous_estimated_memory_bytes = self.estimated_memory_bytes;
+                    let previous_closure_bytes = self.closures_memory_bytes();
+                    let lexical_super_metadata =
+                        self.capture_current_lexical_super_metadata(module, function_index)?;
+                    let lexical_super_temporary_bytes = lexical_super_metadata
+                        .as_ref()
+                        .map(Self::estimate_closure_lexical_super_metadata_entry_bytes)
+                        .unwrap_or(0);
+                    let lexical_this = self
+                        .call_stack
+                        .last()
+                        .map(|frame| (frame.this_value.clone(), frame.this_label.clone()))
+                        .unwrap_or((Value::Undefined, Label::Public));
+                    let lexical_this_temporary_bytes =
+                        Self::estimate_arrow_lexical_this_entry_bytes(&lexical_this);
+                    let captured_env = self.snapshot_scope_chain_with_temporary_budget(
+                        lexical_super_temporary_bytes
+                            .saturating_add(lexical_this_temporary_bytes),
+                    )?;
+                    let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
+                        InterpreterError::TypeError {
+                            expected: "closure table capacity".into(),
+                            got: format!("exceeded u32::MAX ({})", self.closures.len()),
+                        }
+                    })?;
+                    self.closures.push(ClosureValue {
+                        function_index,
+                        captured_env,
+                    });
+                    self.record_closure_program_provenance(closure_id, module);
+                    if let Some(metadata) = lexical_super_metadata {
+                        self.closure_lexical_super_metadata
+                            .insert(closure_id, metadata);
+                    }
+                    self.arrow_lexical_this.insert(closure_id, lexical_this);
+                    if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
+                        self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
+                        self.arrow_lexical_this.remove(&closure_id);
+                        self.remove_closure_program_provenance(closure_id);
+                        return Err(err);
+                    }
+                    if let Err(err) = self.write_reg(dst, Value::Closure(closure_id)) {
+                        self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
+                        self.arrow_lexical_this.remove(&closure_id);
+                        self.remove_closure_program_provenance(closure_id);
+                        self.estimated_memory_bytes = previous_estimated_memory_bytes;
+                        return Err(err);
+                    }
+                    self.pending_captures.clear();
+                    self.ip += 1;
+                }
                 Ir3Instruction::CreateGenerator {
                     dst,
                     function_index,
@@ -43015,6 +43093,72 @@ impl InterpreterCore {
                     if let Err(err) = self.write_reg(dst, Value::AsyncFunction(closure_id)) {
                         self.closures.pop();
                         self.closure_lexical_super_metadata.remove(&closure_id);
+                        self.remove_closure_program_provenance(closure_id);
+                        self.estimated_memory_bytes = previous_estimated_memory_bytes;
+                        return Err(err);
+                    }
+                    self.pending_captures.clear();
+                    self.ip += 1;
+                }
+                Ir3Instruction::CreateAsyncArrowClosure {
+                    dst,
+                    function_index,
+                    capture_count,
+                } => {
+                    // bd-asw4m.3: identical to CreateAsyncFunction, plus the
+                    // creating frame's lexical `this` is captured (see
+                    // CreateArrowClosure).
+                    self.run_pre_allocation_hook(
+                        module,
+                        AllocKind::Closure,
+                        capture_count as usize,
+                    )?;
+                    let previous_estimated_memory_bytes = self.estimated_memory_bytes;
+                    let lexical_super_metadata =
+                        self.capture_current_lexical_super_metadata(module, function_index)?;
+                    let lexical_super_temporary_bytes = lexical_super_metadata
+                        .as_ref()
+                        .map(Self::estimate_closure_lexical_super_metadata_entry_bytes)
+                        .unwrap_or(0);
+                    let lexical_this = self
+                        .call_stack
+                        .last()
+                        .map(|frame| (frame.this_value.clone(), frame.this_label.clone()))
+                        .unwrap_or((Value::Undefined, Label::Public));
+                    let lexical_this_temporary_bytes =
+                        Self::estimate_arrow_lexical_this_entry_bytes(&lexical_this);
+                    let captured_env = self.snapshot_scope_chain_with_temporary_budget(
+                        lexical_super_temporary_bytes
+                            .saturating_add(lexical_this_temporary_bytes),
+                    )?;
+                    let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
+                        InterpreterError::TypeError {
+                            expected: "closure table capacity".into(),
+                            got: format!("exceeded u32::MAX ({})", self.closures.len()),
+                        }
+                    })?;
+                    let previous_closure_bytes = self.closures_memory_bytes();
+                    self.closures.push(ClosureValue {
+                        function_index,
+                        captured_env,
+                    });
+                    self.record_closure_program_provenance(closure_id, module);
+                    if let Some(metadata) = lexical_super_metadata {
+                        self.closure_lexical_super_metadata
+                            .insert(closure_id, metadata);
+                    }
+                    self.arrow_lexical_this.insert(closure_id, lexical_this);
+                    if let Err(err) = self.apply_closures_memory_delta(previous_closure_bytes) {
+                        self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
+                        self.arrow_lexical_this.remove(&closure_id);
+                        self.remove_closure_program_provenance(closure_id);
+                        return Err(err);
+                    }
+                    if let Err(err) = self.write_reg(dst, Value::AsyncFunction(closure_id)) {
+                        self.closures.pop();
+                        self.closure_lexical_super_metadata.remove(&closure_id);
+                        self.arrow_lexical_this.remove(&closure_id);
                         self.remove_closure_program_provenance(closure_id);
                         self.estimated_memory_bytes = previous_estimated_memory_bytes;
                         return Err(err);
@@ -74220,6 +74364,17 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&metadata.this_label))
     }
 
+    /// bd-asw4m.3: bytes for one `arrow_lexical_this` entry (closure_id ->
+    /// captured `this` value and label). Folded into
+    /// `closures_memory_bytes`, so the strict estimate==recompute invariant
+    /// holds through the existing `apply_closures_memory_delta` pattern.
+    fn estimate_arrow_lexical_this_entry_bytes(entry: &(Value, Label)) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<u32>() as u64)
+            .saturating_add(Self::estimate_value_bytes(&entry.0))
+            .saturating_add(Self::estimate_label_bytes(&entry.1))
+    }
+
     fn registers_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes))
     }
@@ -74305,6 +74460,11 @@ impl InterpreterCore {
                 self.closure_lexical_super_metadata
                     .values()
                     .map(Self::estimate_closure_lexical_super_metadata_entry_bytes),
+            ))
+            .saturating_add(Self::saturating_sum(
+                self.arrow_lexical_this
+                    .values()
+                    .map(Self::estimate_arrow_lexical_this_entry_bytes),
             ))
             .saturating_add(Self::saturating_sum(
                 self.closure_module_origins.values().map(|origin| {
@@ -76423,7 +76583,9 @@ impl InterpreterCore {
                 match instruction {
                     Ir3Instruction::LoadSuper { .. } => return Ok(true),
                     Ir3Instruction::CreateClosure { function_index, .. }
-                    | Ir3Instruction::CreateAsyncFunction { function_index, .. } => {
+                    | Ir3Instruction::CreateArrowClosure { function_index, .. }
+                    | Ir3Instruction::CreateAsyncFunction { function_index, .. }
+                    | Ir3Instruction::CreateAsyncArrowClosure { function_index, .. } => {
                         let child = *function_index as usize;
                         if child < function_count && !visited[child] {
                             visited[child] = true;
@@ -76476,6 +76638,16 @@ impl InterpreterCore {
             Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => closure_id,
             _ => return Ok(None),
         };
+        // bd-asw4m.3: an arrow closure always binds its creation-time lexical
+        // `this`, regardless of receiver or caller frame.
+        if let Some((this_value, this_label)) = self.arrow_lexical_this.get(closure_id) {
+            self.check_temporary_memory_budget(
+                already_owned_temporary_bytes
+                    .saturating_add(Self::estimate_value_bytes(this_value))
+                    .saturating_add(Self::estimate_label_bytes(this_label)),
+            )?;
+            return Ok(Some((this_value.clone(), this_label.clone())));
+        }
         let Some(metadata) = self.closure_lexical_super_metadata.get(closure_id) else {
             return Ok(None);
         };
@@ -97648,6 +97820,94 @@ mod async_runtime_tests_current {
         assert_eq!(readable.phase, ReadableFromPumpPhase::DestroyError);
         assert_eq!(readable.lifecycle_label, Label::Secret);
         assert_eq!(core.next_writable_tick_sequence, 42);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_prefinish_write_then_pause_consumes_reserved_final_tick_bd_fw7zd_11() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("final completion token");
+        let writable = core
+            .writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough writable state");
+        writable.end_requested = true;
+        writable.final_status = WritableFinalStatus::Active(token);
+        let readable = core
+            .readable_from_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough readable state");
+        readable.flowing = true;
+        readable.paused = false;
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            passthrough,
+            token,
+        );
+        core.write_reg(0, Value::BuiltinFunction(completion))
+            .expect("final completion register");
+        core.next_writable_tick_sequence = 91;
+        core.stream_passthrough_final(
+            &module,
+            Value::Object(passthrough),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("flowing final");
+        assert_eq!(
+            core.writable_streams[&passthrough].deferred_final_tick_sequence,
+            Some(91)
+        );
+
+        core.write_reg_with_label(1, Value::str("extra"), Label::Secret)
+            .expect("secret rejected write");
+        assert_eq!(
+            core.writable_write(
+                &module,
+                Value::Object(passthrough),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect("write after committed end"),
+            Value::Bool(false)
+        );
+        core.readable_pause(Value::Object(passthrough))
+            .expect("prefinish pause after rejected write");
+
+        let writable = &core.writable_streams[&passthrough];
+        assert_eq!(writable.final_status, WritableFinalStatus::Done);
+        assert_eq!(writable.deferred_final_tick_sequence, None);
+        assert_eq!(writable.tick_sequence, Some(91));
+        assert_eq!(writable.terminal_error_origin, Some(WritableErrorOrigin::Write));
+        assert_eq!(writable.lifecycle_label, Label::Secret);
+        let (Value::Object(error_id), error_label) = writable
+            .terminal_error
+            .as_ref()
+            .expect("retained write-after-end error")
+        else {
+            panic!("write-after-end error must be an Error object");
+        };
+        assert_eq!(error_label, &Label::Secret);
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_STREAM_WRITE_AFTER_END"))
+        );
+        let readable = &core.readable_from_streams[&passthrough];
+        assert_eq!(readable.phase, ReadableFromPumpPhase::DestroyError);
+        assert!(readable.paused);
+        assert!(!readable.flowing);
+        assert_eq!(readable.lifecycle_label, Label::Secret);
+        assert_eq!(core.next_writable_tick_sequence, 92);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

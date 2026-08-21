@@ -644,6 +644,13 @@ pub enum Ir1Op {
         /// True when the source function is async (`async function` or `async () =>`).
         #[serde(default)]
         is_async: bool,
+        /// True when the source function is an arrow (`=>`): it has lexical
+        /// `this`, so IR3 lowering emits `CreateArrowClosure` /
+        /// `CreateAsyncArrowClosure` and invocation ignores the receiver
+        /// (bd-asw4m.3). Encoded canonically only when set, so arrow-free
+        /// modules keep their historical content hashes.
+        #[serde(default)]
+        is_arrow: bool,
         /// Index into `param_names` of the rest parameter (`...xs`), if any
         /// (bd-zs4d5).
         rest_param_index: Option<u32>,
@@ -947,6 +954,7 @@ impl Ir1Op {
                 local_lexical_bindings,
                 is_generator,
                 is_async,
+                is_arrow,
                 rest_param_index: _,
             } => {
                 let mut entries = vec![
@@ -988,6 +996,11 @@ impl Ir1Op {
                         "local_lexical_bindings",
                         canonical_resolved_binding_array(local_lexical_bindings),
                     ));
+                }
+                // Only arrows carry the marker so arrow-free modules keep
+                // their historical content hashes (bd-asw4m.3).
+                if *is_arrow {
+                    entries.push(("is_arrow", CanonicalValue::Bool(true)));
                 }
                 CanonicalValue::map_from_entries(entries)
             }
@@ -1655,6 +1668,16 @@ pub enum Ir3Instruction {
         function_index: u32,
         capture_count: u32,
     },
+    /// Create an ARROW closure (bd-asw4m.3): identical to `CreateClosure`
+    /// except the interpreter also captures the creating frame's lexical
+    /// `this`, and every later `Call`/`CallMethod` binds that captured value
+    /// instead of the receiver or the caller's live `this`. Arrows are never
+    /// generators, so only the sync and async arrow variants exist.
+    CreateArrowClosure {
+        dst: Reg,
+        function_index: u32,
+        capture_count: u32,
+    },
     /// Push a capture slot name for the next CreateClosure.
     /// The interpreter resolves the name in the current scope chain
     /// and records the binding reference as a closure capture.
@@ -1738,6 +1761,14 @@ pub enum Ir3Instruction {
     /// `capture_count` is the number of captured variables.
     /// The async function starts in a suspended-at-start state.
     CreateAsyncFunction {
+        dst: Reg,
+        function_index: u32,
+        capture_count: u32,
+    },
+    /// Create an ASYNC ARROW closure (bd-asw4m.3): identical to
+    /// `CreateAsyncFunction` except the interpreter also captures the
+    /// creating frame's lexical `this` (see `CreateArrowClosure`).
+    CreateAsyncArrowClosure {
         dst: Reg,
         function_index: u32,
         capture_count: u32,
@@ -2230,6 +2261,22 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*capture_count)),
                 ),
             ]),
+            Self::CreateArrowClosure {
+                dst,
+                function_index,
+                capture_count,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_arrow_closure")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "function_index",
+                    CanonicalValue::U64(u64::from(*function_index)),
+                ),
+                (
+                    "capture_count",
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                ),
+            ]),
             Self::PushCapture { name_pool_index } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("push_capture")),
                 (
@@ -2411,6 +2458,22 @@ impl Ir3Instruction {
                 capture_count,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_async_function")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "function_index",
+                    CanonicalValue::U64(u64::from(*function_index)),
+                ),
+                (
+                    "capture_count",
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                ),
+            ]),
+            Self::CreateAsyncArrowClosure {
+                dst,
+                function_index,
+                capture_count,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_async_arrow_closure")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
                 (
                     "function_index",

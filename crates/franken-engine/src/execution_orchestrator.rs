@@ -4665,6 +4665,9 @@ impl ExecutionOrchestrator {
                 "discard_abrupt_completion"
             }
             crate::ir_contract::Ir3Instruction::CreateClosure { .. } => "create_closure",
+            crate::ir_contract::Ir3Instruction::CreateArrowClosure { .. } => {
+                "create_arrow_closure"
+            }
             crate::ir_contract::Ir3Instruction::PushCapture { .. } => "push_capture",
             crate::ir_contract::Ir3Instruction::PushScope => "push_scope",
             crate::ir_contract::Ir3Instruction::PopScope => "pop_scope",
@@ -4690,6 +4693,9 @@ impl ExecutionOrchestrator {
             | &crate::ir_contract::Ir3Instruction::Yield { .. } => "generator_op",
             &crate::ir_contract::Ir3Instruction::CreateAsyncFunction { .. } => {
                 "create_async_function"
+            }
+            &crate::ir_contract::Ir3Instruction::CreateAsyncArrowClosure { .. } => {
+                "create_async_arrow_closure"
             }
             &crate::ir_contract::Ir3Instruction::AwaitValue { .. } => "await_value",
             &crate::ir_contract::Ir3Instruction::ModuleAwaitValue { .. } => "module_await_value",

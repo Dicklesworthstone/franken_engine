@@ -6090,6 +6090,7 @@ fn lower_statement_to_ir1_with_flow(
                     local_lexical_bindings: m_local_lexical_bindings,
                     is_generator: false,
                     is_async: false,
+                    is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
 
@@ -6630,6 +6631,7 @@ pub fn lower_ir2_to_ir3(
         local_lexical_bindings: Vec<ResolvedBinding>,
         is_generator: bool,
         is_async: bool,
+        is_arrow: bool,
         rest_param_index: Option<u32>,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
@@ -7873,6 +7875,7 @@ pub fn lower_ir2_to_ir3(
                         local_lexical_bindings: local_lexical_bindings.clone(),
                         is_generator: *is_generator,
                         is_async: *is_async,
+                        is_arrow: false,
                         rest_param_index: *rest_param_index,
                     });
                     if *is_generator && *is_async {
@@ -7925,6 +7928,7 @@ pub fn lower_ir2_to_ir3(
                 local_lexical_bindings,
                 is_generator,
                 is_async,
+                is_arrow,
                 rest_param_index,
             } => {
                 let dst = alloc_register(&mut register_cursor);
@@ -7972,6 +7976,7 @@ pub fn lower_ir2_to_ir3(
                     local_lexical_bindings: local_lexical_bindings.clone(),
                     is_generator: *is_generator,
                     is_async: *is_async,
+                    is_arrow: *is_arrow,
                     rest_param_index: *rest_param_index,
                 });
                 if *is_generator && *is_async {
@@ -7986,8 +7991,20 @@ pub fn lower_ir2_to_ir3(
                         function_index,
                         capture_count: free_vars.len() as u32,
                     });
+                } else if *is_async && *is_arrow {
+                    ir3.instructions.push(Ir3Instruction::CreateAsyncArrowClosure {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
                 } else if *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                } else if *is_arrow {
+                    ir3.instructions.push(Ir3Instruction::CreateArrowClosure {
                         dst,
                         function_index,
                         capture_count: free_vars.len() as u32,
@@ -8382,6 +8399,7 @@ pub fn lower_ir2_to_ir3(
             local_lexical_bindings: fn_local_lexical_bindings,
             is_generator: fn_is_generator,
             is_async: _fn_is_async,
+            is_arrow: _fn_is_arrow,
             rest_param_index: fn_rest_param_index,
         } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
@@ -9305,6 +9323,7 @@ pub fn lower_ir2_to_ir3(
                         local_lexical_bindings: inner_local_lexical_bindings.clone(),
                         is_generator: *inner_gen,
                         is_async: *inner_async,
+                        is_arrow: false,
                         rest_param_index: *inner_rest,
                     });
                     if *inner_gen && *inner_async {
@@ -9361,6 +9380,7 @@ pub fn lower_ir2_to_ir3(
                     local_lexical_bindings: inner_local_lexical_bindings,
                     is_generator: inner_gen,
                     is_async: inner_async,
+                    is_arrow: inner_arrow,
                     rest_param_index: inner_rest,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
@@ -9403,6 +9423,7 @@ pub fn lower_ir2_to_ir3(
                         local_lexical_bindings: inner_local_lexical_bindings.clone(),
                         is_generator: *inner_gen,
                         is_async: *inner_async,
+                        is_arrow: *inner_arrow,
                         rest_param_index: *inner_rest,
                     });
                     if *inner_gen && *inner_async {
@@ -9417,8 +9438,20 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: inner_fv.len() as u32,
                         });
+                    } else if *inner_async && *inner_arrow {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncArrowClosure {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
                     } else if *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_arrow {
+                        ir3.instructions.push(Ir3Instruction::CreateArrowClosure {
                             dst,
                             function_index,
                             capture_count: inner_fv.len() as u32,
@@ -11518,6 +11551,7 @@ fn try_lower_arrow_expression_to_ir1(
         local_lexical_bindings: arrow_local_lexical_bindings,
         is_generator: false,
         is_async: *is_async,
+        is_arrow: true,
         rest_param_index,
     });
     Ok(true)
@@ -15426,6 +15460,7 @@ fn lower_expression_to_ir1_inner(
                 local_lexical_bindings: fn_local_lexical_bindings,
                 is_generator: *is_generator,
                 is_async: *is_async,
+                is_arrow: false,
                 rest_param_index,
             });
         }
@@ -16231,6 +16266,7 @@ fn lower_expression_to_ir1_inner(
                     local_lexical_bindings: m_local_lexical_bindings,
                     is_generator: false,
                     is_async: false,
+                    is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
                 let property_key = Ir1PropertyKey::Static(method_key);
@@ -37089,7 +37125,7 @@ mod tests {
             .instructions
             .iter()
             .find_map(|instruction| match instruction {
-                Ir3Instruction::CreateClosure { function_index, .. } => output
+                Ir3Instruction::CreateArrowClosure { function_index, .. } => output
                     .ir3
                     .function_table
                     .get(function_index.to_owned() as usize)
@@ -37166,7 +37202,7 @@ mod tests {
             .instructions
             .iter()
             .find_map(|instruction| match instruction {
-                Ir3Instruction::CreateClosure { function_index, .. } => {
+                Ir3Instruction::CreateArrowClosure { function_index, .. } => {
                     output.ir3.function_table.get(*function_index as usize)
                 }
                 _ => None,
@@ -37230,7 +37266,7 @@ mod tests {
             .instructions
             .iter()
             .find_map(|instruction| match instruction {
-                Ir3Instruction::CreateClosure { function_index, .. } => output
+                Ir3Instruction::CreateArrowClosure { function_index, .. } => output
                     .ir3
                     .function_table
                     .get(function_index.to_owned() as usize),
@@ -39286,7 +39322,8 @@ mod tests {
                 .instructions
                 .iter()
                 .find_map(|instruction| match instruction {
-                    Ir3Instruction::CreateClosure { function_index, .. } => {
+                    Ir3Instruction::CreateClosure { function_index, .. }
+                    | Ir3Instruction::CreateArrowClosure { function_index, .. } => {
                         output.ir3.function_table.get(*function_index as usize)
                     }
                     _ => None,

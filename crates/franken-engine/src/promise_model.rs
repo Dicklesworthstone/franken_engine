@@ -452,8 +452,9 @@ impl std::fmt::Display for PromiseError {
 /// registration with full determinism guarantees.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromiseStore {
-    /// All promises, indexed by handle.
-    promises: Vec<PromiseRecord>,
+    /// All promise slots, indexed by handle. Execution-boundary cancellation
+    /// leaves a vacant slot so later handles remain stable and monotonic.
+    promises: Vec<Option<PromiseRecord>>,
     /// Monotonic creation counter.
     next_seq: u64,
     /// Witness log for replay.
@@ -472,8 +473,10 @@ impl PromiseStore {
     /// Deterministic resident-memory estimate for every Promise-owned record,
     /// reaction, label, settled payload, and replay witness.
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
-        estimate_vector_slot_bytes::<PromiseRecord>(self.promises.len())
-            .saturating_add(saturating_sum(self.promises.iter().map(|record| {
+        estimate_vector_slot_bytes::<PromiseRecord>(
+            self.promises.iter().filter(|record| record.is_some()).count(),
+        )
+            .saturating_add(saturating_sum(self.promises.iter().flatten().map(|record| {
                 let state_bytes = match &record.state {
                     PromiseState::Pending => 0,
                     PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
@@ -611,7 +614,7 @@ impl PromiseStore {
         let handle = PromiseHandle(self.promises.len() as u32);
         let seq = self.next_seq;
         self.next_seq += 1;
-        self.promises.push(PromiseRecord::new(handle, seq));
+        self.promises.push(Some(PromiseRecord::new(handle, seq)));
         self.witness
             .push(WitnessEvent::PromiseCreated { handle, seq });
         handle
@@ -620,7 +623,7 @@ impl PromiseStore {
     /// Roll back the most recent still-pending creation after an enclosing
     /// interpreter memory preflight refuses its resident charge.
     pub(crate) fn rollback_last_created(&mut self, handle: PromiseHandle) -> bool {
-        let is_last_pending = self.promises.last().is_some_and(|record| {
+        let is_last_pending = self.promises.last().and_then(Option::as_ref).is_some_and(|record| {
             record.handle == handle
                 && matches!(record.state, PromiseState::Pending)
                 && record.reactions.is_empty()
@@ -641,10 +644,48 @@ impl PromiseStore {
         true
     }
 
+    /// Remove an unpublished, still-pending Promise at an execution boundary.
+    ///
+    /// Unlike [`Self::rollback_last_created`], this transaction can remove an
+    /// arbitrary handle after reentrant guest execution has created later
+    /// Promises. The arena slot remains vacant so no live handle is shifted or
+    /// reused. Removing the matching creation witness keeps ownership and
+    /// resident-memory accounting aligned with the removed record.
+    pub(crate) fn remove_pending_at_execution_boundary(
+        &mut self,
+        handle: PromiseHandle,
+    ) -> Result<PromiseRecord, PromiseError> {
+        let record = self.get(handle)?;
+        if record.state.is_settled() {
+            return Err(PromiseError::AlreadySettled { handle });
+        }
+        let creation_seq = record.creation_seq;
+        let witness_index = self
+            .witness
+            .iter()
+            .rposition(|event| {
+                matches!(
+                    event,
+                    WitnessEvent::PromiseCreated {
+                        handle: witness_handle,
+                        seq,
+                    } if *witness_handle == handle && *seq == creation_seq
+                )
+            })
+            .ok_or(PromiseError::InvalidHandle { handle })?;
+
+        let record = self.promises[handle.0 as usize]
+            .take()
+            .expect("validated pending Promise slot remains occupied");
+        self.witness.remove(witness_index);
+        Ok(record)
+    }
+
     /// Get a Promise by handle.
     pub fn get(&self, handle: PromiseHandle) -> Result<&PromiseRecord, PromiseError> {
         self.promises
             .get(handle.0 as usize)
+            .and_then(Option::as_ref)
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
@@ -652,6 +693,7 @@ impl PromiseStore {
     fn get_mut(&mut self, handle: PromiseHandle) -> Result<&mut PromiseRecord, PromiseError> {
         self.promises
             .get_mut(handle.0 as usize)
+            .and_then(Option::as_mut)
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
@@ -799,29 +841,42 @@ impl PromiseStore {
             },
         };
 
-        self.promises[root_index].terminal_epoch = terminal_epoch;
+        self.promises[root_index]
+            .as_mut()
+            .expect("validated fatal-rejection root remains occupied")
+            .terminal_epoch = terminal_epoch;
         for parent_index in root_index..self.promises.len() {
-            if self.promises[parent_index].terminal_epoch != terminal_epoch {
+            let Some(parent) = self.promises[parent_index].as_ref() else {
+                continue;
+            };
+            if parent.terminal_epoch != terminal_epoch {
                 continue;
             }
-            for reaction_index in 0..self.promises[parent_index].reactions.len() {
-                let child = self.promises[parent_index].reactions[reaction_index].result_promise;
+            let reaction_count = parent.reactions.len();
+            for reaction_index in 0..reaction_count {
+                let child = self.promises[parent_index]
+                    .as_ref()
+                    .expect("marked fatal-rejection parent remains occupied")
+                    .reactions[reaction_index]
+                    .result_promise;
                 let child_index = child.0 as usize;
                 if child_index <= parent_index || child_index >= self.promises.len() {
                     continue;
                 }
-                if matches!(self.promises[child_index].state, PromiseState::Pending) {
-                    self.promises[child_index].terminal_epoch = terminal_epoch;
+                if let Some(child) = self.promises[child_index].as_mut()
+                    && matches!(child.state, PromiseState::Pending)
+                {
+                    child.terminal_epoch = terminal_epoch;
                 }
             }
         }
 
         let mut rejected_count = 0usize;
         for candidate_index in (root_index..self.promises.len()).rev() {
-            if self.promises[candidate_index].terminal_epoch == terminal_epoch
-                && matches!(self.promises[candidate_index].state, PromiseState::Pending)
+            if let Some(record) = self.promises[candidate_index].as_mut()
+                && record.terminal_epoch == terminal_epoch
+                && matches!(record.state, PromiseState::Pending)
             {
-                let record = &mut self.promises[candidate_index];
                 record.state = PromiseState::Rejected(JsValue::Undefined);
                 record.label = terminal_label.clone();
                 record.rejection_handled = false;
@@ -840,6 +895,7 @@ impl PromiseStore {
     ) -> bool {
         self.promises
             .get(handle.0 as usize)
+            .and_then(Option::as_ref)
             .is_some_and(|record| record.terminal_epoch == terminal_epoch)
     }
 
@@ -992,12 +1048,12 @@ impl PromiseStore {
 
     /// Number of promises in the store.
     pub fn len(&self) -> usize {
-        self.promises.len()
+        self.promises.iter().filter(|record| record.is_some()).count()
     }
 
     /// Whether the store is empty.
     pub fn is_empty(&self) -> bool {
-        self.promises.is_empty()
+        self.promises.iter().all(Option::is_none)
     }
 
     /// Get the witness log (for replay/forensics).
@@ -1009,6 +1065,7 @@ impl PromiseStore {
     pub fn unhandled_rejections(&self) -> Vec<PromiseHandle> {
         self.promises
             .iter()
+            .flatten()
             .filter(|p| p.state.is_rejected() && !p.rejection_handled)
             .map(|p| p.handle)
             .collect()
@@ -2355,7 +2412,7 @@ mod tests {
             level: 3,
         };
         let store = PromiseStore {
-            promises: vec![PromiseRecord {
+            promises: vec![Some(PromiseRecord {
                 handle: PromiseHandle(0),
                 state: PromiseState::Fulfilled(value.clone()),
                 reactions: vec![PromiseReaction {
@@ -2368,7 +2425,7 @@ mod tests {
                 creation_seq: 0,
                 rejection_handled: false,
                 terminal_epoch: 0,
-            }],
+            })],
             next_seq: 1,
             witness: vec![WitnessEvent::PromiseFulfilled {
                 handle: PromiseHandle(0),
@@ -2672,6 +2729,35 @@ mod tests {
         assert!(store.witness_log().is_empty());
         assert_eq!(store.estimated_memory_bytes(), baseline);
         assert!(!store.rollback_last_created(handle));
+    }
+
+    #[test]
+    fn execution_boundary_removal_disposes_non_tail_pending_promise_exactly() {
+        let mut store = PromiseStore::new();
+        let removed = store.create();
+        let retained = store.create();
+        let before_removal = store.estimated_memory_bytes();
+
+        let record = store
+            .remove_pending_at_execution_boundary(removed)
+            .expect("an unpublished non-tail Promise remains removable");
+
+        assert_eq!(record.handle, removed);
+        assert!(matches!(record.state, PromiseState::Pending));
+        assert!(store.get(removed).is_err());
+        assert!(store.get(retained).is_ok());
+        assert_eq!(store.len(), 1);
+        assert_eq!(
+            store.estimated_memory_bytes(),
+            before_removal
+                .saturating_sub(std::mem::size_of::<PromiseRecord>() as u64)
+                .saturating_sub(std::mem::size_of::<WitnessEvent>() as u64)
+        );
+        assert_eq!(
+            store.create(),
+            PromiseHandle(2),
+            "vacant execution-boundary slots must never be reused"
+        );
     }
 
     #[test]

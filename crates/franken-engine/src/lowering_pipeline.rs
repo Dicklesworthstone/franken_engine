@@ -26290,6 +26290,12 @@ fn simulate_ir2_flow_labels(
             }
             Ir1Op::CallMethod { arg_count } => {
                 let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
+                // Stack layout is `[..., callee, receiver, arg0, ...]`,
+                // matching both IR1 -> IR3 lowering paths above. Pop the
+                // receiver before the callee so finite receiver-aware method
+                // shapes (notably EventEmitter.on/once/emit) are attributed
+                // to the callable rather than mistaken for the receiver.
+                let receiver = pop_flow_value(&mut value_stack)?;
                 let callee = pop_flow_value(&mut value_stack)?;
                 let callee_shape = callee.shape;
                 let callee_is_summarized = matches!(
@@ -26299,7 +26305,7 @@ fn simulate_ir2_flow_labels(
                         | FlowValueShape::EventEmitterEmitMethod
                 );
                 inputs.push(callee);
-                inputs.push(pop_flow_value(&mut value_stack)?);
+                inputs.push(receiver);
                 let label = if callee_is_summarized {
                     join_flow_values(&inputs)
                 } else {
@@ -34270,6 +34276,18 @@ mod tests {
         )
         .expect("lower mixed EventEmitter fixture to IR2")
         .module;
+        let final_console_flow = ir2
+            .ops
+            .iter()
+            .find_map(|op| match &op.inner {
+                Ir1Op::HostCall { capability, .. } if capability == "builtin:ConsoleLog" => {
+                    op.flow.as_ref()
+                }
+                _ => None,
+            })
+            .expect("mixed fixture must retain the final console flow annotation");
+        assert_eq!(final_console_flow.data_label, Label::Internal);
+        assert!(!final_console_flow.declassification_required);
         let context = LoweringContext::new(
             "trace-bd-asw4m-3",
             "decision-bd-asw4m-3",

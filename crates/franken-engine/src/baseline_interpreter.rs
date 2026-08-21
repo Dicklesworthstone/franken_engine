@@ -84004,6 +84004,9 @@ mod async_runtime_tests_current {
         core.config
             .granted_capabilities
             .insert(RuntimeCapability::Builtin);
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
         core
     }
 

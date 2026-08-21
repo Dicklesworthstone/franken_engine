@@ -130,6 +130,10 @@ __pycache__/
 .beads/*.corrupt_*
 .beads/*.rebuild_*
 .beads/recovery_*/
+# WAL certification sidecars (`*.db-wal` does not match beads.db-wal-cert).
+# Per-machine br fsqlite probes, like -wal/-shm; never canonical tracker state.
+.beads/*.db-wal-cert
+.beads/*.db-wal-cert-head
 
 # Stale beads snapshot dumps (agent-generated; not canonical state)
 .beads_snapshot_*/

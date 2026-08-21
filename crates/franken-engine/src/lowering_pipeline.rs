@@ -24678,6 +24678,10 @@ struct FlowValue {
     crypto_origin: Option<usize>,
     shape: FlowValueShape,
     process_operation: Option<ChildProcessOperation>,
+    /// bd-pafik: stream-protocol provenance (callback summaries on function
+    /// and options-object literals, authenticated stream states, and
+    /// pipeline-promise rejection origins).
+    stream: Option<StreamFlowInfo>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24685,6 +24689,7 @@ enum FlowValueShape {
     Unknown,
     Primitive,
     Callable,
+    CallableContainer,
     ClosedResult,
     BufferObject,
     FreshAggregate,
@@ -24718,6 +24723,395 @@ fn invalidate_nonprimitive_binding_flow_shapes(
             *shape = FlowValueShape::Unknown;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// bd-pafik: stream pipeline callback and Promise rejection provenance
+// ---------------------------------------------------------------------------
+
+/// Conservative symbolic exception summary for a user callback handed to a
+/// stream constructor (bd-pafik). `Supported(label)` bounds the provenance of
+/// every value the callback can throw, pass to its engine continuation
+/// (`callback(error)`), or reject with — EXCEPT contributions derived from the
+/// callback's parameters, which the pipeline site covers separately by joining
+/// its operand labels. `Unsupported` means no sound bound was established and
+/// every consumer must fail high (TopSecret).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StreamCallbackSummary {
+    Supported(Label),
+    Unsupported,
+}
+
+impl StreamCallbackSummary {
+    fn join(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Supported(a), Self::Supported(b)) => Self::Supported(a.join(b)),
+            _ => Self::Unsupported,
+        }
+    }
+}
+
+/// bd-pafik: stream-protocol provenance carried by a [`FlowValue`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StreamFlowInfo {
+    /// A function literal (or options-object literal aggregating function
+    /// literals) whose callback exception sources were symbolically
+    /// summarized at creation.
+    CallbackCarrier(StreamCallbackSummary),
+    /// A stream constructed by an audited stream hostcall; `origin` keys its
+    /// authenticated callback-error state.
+    Stream { origin: usize },
+    /// The Promise produced by `stream/promises` `pipeline`; `origin` keys
+    /// its static rejection summary.
+    PipelinePromise { origin: usize },
+}
+
+/// Per-slot abstract tag for the callback-body dataflow walk. The three
+/// non-`Data` tags are MUST properties (definitely that thing on every path);
+/// the merge of unequal tags is therefore `Data`, which admits nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamCallbackTag {
+    /// Definitely the engine-provided continuation parameter (the last
+    /// declared parameter, per the Node stream callback convention this
+    /// engine implements for `write`/`transform`/`flush`/`final`).
+    Continuation,
+    /// Definitely a plain fresh aggregate: either a body-local array/object
+    /// literal of closed values, or a capture of an outer binding that
+    /// provably held such an aggregate when the callback was created. Its
+    /// methods are the engine's own Array/Object prototype natives, whose
+    /// exceptions are engine-internal and operand-derived.
+    PlainAggregate,
+    /// Definitely a primitive value.
+    Primitive,
+    /// Anything else.
+    Data,
+}
+
+impl StreamCallbackTag {
+    fn merge(self, other: Self) -> Self {
+        if self == other { self } else { Self::Data }
+    }
+}
+
+/// Symbolically bound the exception sources of a stream callback body
+/// (bd-pafik). Returns `Supported(label)` only when every operation in the
+/// body is on the audited allowlist below; ANY other construct — mutation
+/// (`SetProperty`/`DeleteProperty`), alias escape into an unknown call,
+/// nested function creation (recursion), `try` regions, dynamic name access,
+/// un-audited hostcalls, iterators, `await`/`yield` — bails to `Unsupported`,
+/// as does dataflow nonconvergence (step cap) or any stack-height merge
+/// mismatch.
+///
+/// Soundness shape: the returned label joins the callback's capture labels
+/// (via [`infer_function_capture_label`], Internal-floored) — every
+/// NON-parameter value the body can reach flows from a literal (Public), a
+/// capture (≤ that join), or an admitted engine-finite operation over those.
+/// Parameter-derived values are excluded here by construction and covered at
+/// the pipeline site by the operand join. Admissions that lean on the same
+/// bd-ojvo1-era heap approximations as the main pass (`GetProperty` joins the
+/// receiver label; `PlainAggregate` method calls trust the aggregate's
+/// creation-time shape) are the documented heap-property provenance
+/// prerequisites of this summary.
+fn summarize_stream_callback_exceptions(
+    param_count: usize,
+    rest_param_index: Option<u32>,
+    body_ops: &[Ir1Op],
+    free_var_ids: &[BindingId],
+    free_vars: &[String],
+    aggregate_captures: &BTreeSet<BindingId>,
+    binding_labels: &BTreeMap<BindingId, Label>,
+) -> StreamCallbackSummary {
+    const STEP_CAP: usize = 20_000;
+
+    let concrete = Label::Internal.join(&infer_function_capture_label(free_vars, binding_labels));
+    let capture_ids = free_var_ids.iter().copied().collect::<BTreeSet<_>>();
+    // The engine invokes the LAST declared parameter as the continuation. A
+    // rest parameter makes the final slot a fresh array instead, so no
+    // parameter is provably the continuation.
+    let continuation_id = match rest_param_index {
+        Some(_) => None,
+        None => param_count
+            .checked_sub(1)
+            .and_then(|index| u32::try_from(index).ok()),
+    };
+
+    let mut label_targets = BTreeMap::<u32, usize>::new();
+    for (index, body_op) in body_ops.iter().enumerate() {
+        if let Ir1Op::Label { id } = body_op {
+            if label_targets.insert(*id, index).is_some() {
+                return StreamCallbackSummary::Unsupported;
+            }
+        }
+    }
+
+    type TagState = (Vec<StreamCallbackTag>, BTreeMap<BindingId, StreamCallbackTag>);
+    let merge_states = |a: &TagState, b: &TagState| -> Option<TagState> {
+        if a.0.len() != b.0.len() {
+            return None;
+        }
+        let stack = a
+            .0
+            .iter()
+            .zip(b.0.iter())
+            .map(|(x, y)| x.merge(*y))
+            .collect::<Vec<_>>();
+        let mut locals = BTreeMap::new();
+        for key in a.1.keys().chain(b.1.keys()) {
+            let merged = match (a.1.get(key), b.1.get(key)) {
+                (Some(x), Some(y)) => x.merge(*y),
+                _ => StreamCallbackTag::Data,
+            };
+            locals.insert(*key, merged);
+        }
+        Some((stack, locals))
+    };
+
+    let mut states = BTreeMap::<usize, TagState>::new();
+    let mut worklist = vec![(0usize, (Vec::new(), BTreeMap::new()))];
+    let mut steps = 0usize;
+
+    let load_tag = |binding_id: u32, locals: &BTreeMap<BindingId, StreamCallbackTag>| {
+        if capture_ids.contains(&binding_id) {
+            if aggregate_captures.contains(&binding_id) {
+                StreamCallbackTag::PlainAggregate
+            } else {
+                StreamCallbackTag::Data
+            }
+        } else if let Some(tag) = locals.get(&binding_id) {
+            *tag
+        } else if continuation_id == Some(binding_id) {
+            StreamCallbackTag::Continuation
+        } else {
+            StreamCallbackTag::Data
+        }
+    };
+
+    while let Some((entry_index, entry_state)) = worklist.pop() {
+        let merged_entry = match states.get(&entry_index) {
+            Some(existing) => {
+                let Some(merged) = merge_states(existing, &entry_state) else {
+                    return StreamCallbackSummary::Unsupported;
+                };
+                if merged == *existing {
+                    continue;
+                }
+                merged
+            }
+            None => entry_state,
+        };
+        states.insert(entry_index, merged_entry.clone());
+        let (mut stack, mut locals) = merged_entry;
+
+        let mut index = entry_index;
+        loop {
+            steps += 1;
+            if steps > STEP_CAP {
+                return StreamCallbackSummary::Unsupported;
+            }
+            let Some(body_op) = body_ops.get(index) else {
+                break;
+            };
+            match body_op {
+                Ir1Op::LoadLiteral { .. } => stack.push(StreamCallbackTag::Primitive),
+                Ir1Op::LoadBinding { binding_id } => stack.push(load_tag(*binding_id, &locals)),
+                Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
+                    let Some(tag) = stack.pop() else {
+                        return StreamCallbackSummary::Unsupported;
+                    };
+                    locals.insert(*binding_id, tag);
+                    stack.push(tag);
+                }
+                Ir1Op::BinaryOp { .. } => {
+                    if stack.len() < 2 {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    stack.pop();
+                    stack.pop();
+                    stack.push(StreamCallbackTag::Primitive);
+                }
+                Ir1Op::UnaryOp { .. } => {
+                    if stack.pop().is_none() {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    stack.push(StreamCallbackTag::Primitive);
+                }
+                Ir1Op::GetProperty { key } => {
+                    let pops = if matches!(key, Ir1PropertyKey::Dynamic) { 2 } else { 1 };
+                    if stack.len() < pops {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    for _ in 0..pops {
+                        stack.pop();
+                    }
+                    stack.push(StreamCallbackTag::Data);
+                }
+                Ir1Op::NewArray { count } => {
+                    let count = *count as usize;
+                    if stack.len() < count {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    let closed = stack[stack.len() - count..]
+                        .iter()
+                        .all(|tag| matches!(tag, StreamCallbackTag::Primitive));
+                    for _ in 0..count {
+                        stack.pop();
+                    }
+                    stack.push(if closed {
+                        StreamCallbackTag::PlainAggregate
+                    } else {
+                        StreamCallbackTag::Data
+                    });
+                }
+                Ir1Op::NewObject { count } => {
+                    let Some(needed) = (*count as usize).checked_mul(2) else {
+                        return StreamCallbackSummary::Unsupported;
+                    };
+                    if stack.len() < needed {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    let closed = stack[stack.len() - needed..]
+                        .iter()
+                        .all(|tag| matches!(tag, StreamCallbackTag::Primitive));
+                    for _ in 0..needed {
+                        stack.pop();
+                    }
+                    stack.push(if closed {
+                        StreamCallbackTag::PlainAggregate
+                    } else {
+                        StreamCallbackTag::Data
+                    });
+                }
+                Ir1Op::Call { arg_count } => {
+                    let args = *arg_count as usize;
+                    if stack.len() < args + 1 {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    for _ in 0..args {
+                        stack.pop();
+                    }
+                    let callee = stack.pop().expect("callee presence checked above");
+                    // Only the engine continuation is a known-finite callee;
+                    // its error argument's non-parameter provenance is covered
+                    // by `concrete` and the pipeline operand join.
+                    if callee != StreamCallbackTag::Continuation {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    stack.push(StreamCallbackTag::Data);
+                }
+                Ir1Op::CallMethod { arg_count } => {
+                    let args = *arg_count as usize;
+                    // Stack order: args, then method-name value, then receiver.
+                    if stack.len() < args + 2 {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    for _ in 0..args + 1 {
+                        stack.pop();
+                    }
+                    let receiver = stack.pop().expect("receiver presence checked above");
+                    // Plain-aggregate receivers dispatch the engine's own
+                    // Array/Object prototype natives (heap-property
+                    // provenance prerequisite: creation-time shape).
+                    if receiver != StreamCallbackTag::PlainAggregate {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    stack.push(StreamCallbackTag::Data);
+                }
+                Ir1Op::HostCall {
+                    capability,
+                    arg_count,
+                } => {
+                    let args = *arg_count as usize;
+                    if stack.len() < args {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    let arg_tags = stack.split_off(stack.len() - args);
+                    match capability.as_str() {
+                        // `String(value)` is a finite engine formatter
+                        // (`value_to_string` takes `&self`: it can never
+                        // re-enter guest code), so its exceptions are
+                        // engine-internal for every operand.
+                        "builtin:String" => stack.push(StreamCallbackTag::Primitive),
+                        // The unshadowed native Error family is finite for
+                        // primitive messages (bd-8y64t); object arguments can
+                        // re-enter guest coercion, so they bail.
+                        "builtin:Error"
+                        | "builtin:TypeError"
+                        | "builtin:RangeError"
+                        | "builtin:ReferenceError"
+                        | "builtin:SyntaxError"
+                        | "builtin:EvalError"
+                        | "builtin:URIError" => {
+                            if !arg_tags
+                                .iter()
+                                .all(|tag| matches!(tag, StreamCallbackTag::Primitive))
+                            {
+                                return StreamCallbackSummary::Unsupported;
+                            }
+                            stack.push(StreamCallbackTag::Data);
+                        }
+                        _ => return StreamCallbackSummary::Unsupported,
+                    }
+                }
+                Ir1Op::Throw => {
+                    // The thrown value's non-parameter provenance is bounded
+                    // by `concrete`; parameter-derived provenance is covered
+                    // by the pipeline operand join.
+                    if stack.pop().is_none() {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    break;
+                }
+                Ir1Op::Return => {
+                    stack.pop();
+                    break;
+                }
+                Ir1Op::Pop | Ir1Op::Discard => {
+                    if stack.pop().is_none() {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                }
+                Ir1Op::Nop => {}
+                Ir1Op::Label { .. } => {}
+                Ir1Op::Jump { label_id } => {
+                    let Some(&target_index) = label_targets.get(label_id) else {
+                        return StreamCallbackSummary::Unsupported;
+                    };
+                    worklist.push((target_index, (stack, locals)));
+                    break;
+                }
+                Ir1Op::JumpIfFalsy { label_id } => {
+                    if stack.last().is_none() {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    let Some(&target_index) = label_targets.get(label_id) else {
+                        return StreamCallbackSummary::Unsupported;
+                    };
+                    worklist.push((target_index, (stack.clone(), locals.clone())));
+                }
+                Ir1Op::JumpIfFalsyConsume { label_id }
+                | Ir1Op::JumpIfTruthy { label_id }
+                | Ir1Op::JumpIfNullish { label_id } => {
+                    if stack.pop().is_none() {
+                        return StreamCallbackSummary::Unsupported;
+                    }
+                    let Some(&target_index) = label_targets.get(label_id) else {
+                        return StreamCallbackSummary::Unsupported;
+                    };
+                    worklist.push((target_index, (stack.clone(), locals.clone())));
+                }
+                _ => return StreamCallbackSummary::Unsupported,
+            }
+            index += 1;
+            // Straight-line successor states merge through the same map when
+            // the successor is a join point (a Label op).
+            if matches!(body_ops.get(index), Some(Ir1Op::Label { .. })) {
+                worklist.push((index, (stack.clone(), locals.clone())));
+                break;
+            }
+        }
+    }
+
+    StreamCallbackSummary::Supported(concrete)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24839,6 +25233,7 @@ fn fresh_flow_value(label: Label, next_identity: &mut usize) -> FlowValue {
         crypto_origin: None,
         shape: FlowValueShape::Unknown,
         process_operation: None,
+        stream: None,
     }
 }
 
@@ -24886,33 +25281,126 @@ fn join_binding_label(
 
 fn infer_function_capture_label(
     free_vars: &[String],
+    free_var_ids: &[BindingId],
+    body_ops: &[Ir1Op],
     binding_labels: &BTreeMap<BindingId, Label>,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    summary_depth: usize,
 ) -> Label {
-    let capture_label = Label::join_all(free_vars.iter().map(|runtime_name| {
-        let origin_id = parse_capture_cell_name(runtime_name)
-            .or_else(|| parse_class_expression_self_capture_name(runtime_name))
-            .map(|(origin_id, _)| origin_id);
-        origin_id.map_or(Label::TopSecret, |binding_id| {
-            binding_labels
-                .get(&binding_id)
-                .cloned()
-                // A recognized lexical capture may precede its first store
-                // (notably `const server = make(() => server.close())`). Start
-                // that fixed-point edge at the same Internal unknown-runtime
-                // floor as an ordinary unresolved binding load; later passes
-                // monotonically join the actual store provenance. Only an
-                // unparseable capture identity takes the fail-high branch.
-                .unwrap_or(Label::Internal)
-        })
-    }))
-    .unwrap_or(Label::Public);
+    summarize_function_body(
+        free_vars,
+        free_var_ids,
+        body_ops,
+        binding_labels,
+        host_io_exception_provenance,
+        summary_depth,
+    )
+}
 
-    // Function results are not identity transforms of their captures: the
-    // deferred body, caller-supplied parameters, and nested calls can all add
-    // provenance that IR2 does not yet summarize. Preserve the historic
-    // unknown-runtime floor so operand-aware inference never downgrades a
-    // function binding from Internal to Public; bd-qjh7y owns exact summaries.
-    Label::Internal.join(&capture_label)
+/// Compute the hidden IFC sources of a function value. `free_var_ids` live in
+/// the detached body namespace; the canonical capture-cell name carries the
+/// enclosing binding origin. Keeping the two aligned here mirrors runtime
+/// closure setup, which binds each body-local scoped load to that exact outer
+/// cell rather than treating the body ID as a module binding ID.
+fn summarize_function_body(
+    free_vars: &[String],
+    free_var_ids: &[BindingId],
+    body_ops: &[Ir1Op],
+    enclosing_labels: &BTreeMap<BindingId, Label>,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    summary_depth: usize,
+) -> Label {
+    const MAX_FUNCTION_SUMMARY_DEPTH: usize = 64;
+    const MAX_FUNCTION_SUMMARY_PASSES: usize = 16;
+
+    if summary_depth > MAX_FUNCTION_SUMMARY_DEPTH
+        || free_vars.len() != free_var_ids.len()
+        || body_ops.is_empty()
+    {
+        return Label::TopSecret;
+    }
+
+    let mut body_binding_labels = BTreeMap::<BindingId, Label>::new();
+    let mut capture_origins = BTreeSet::<BindingId>::new();
+    let mut body_capture_ids = BTreeSet::<BindingId>::new();
+    let mut capture_label = Label::Public;
+    for (runtime_name, body_id) in free_vars.iter().zip(free_var_ids) {
+        let Some(origin_id) = parse_capture_cell_name(runtime_name)
+            .or_else(|| parse_class_expression_self_capture_name(runtime_name))
+            .map(|(origin_id, _)| origin_id)
+        else {
+            return Label::TopSecret;
+        };
+        if !capture_origins.insert(origin_id) || !body_capture_ids.insert(*body_id) {
+            return Label::TopSecret;
+        }
+        // A closure can be created before the captured binding's first store.
+        // Match runtime's retained cell with the ordinary unresolved-binding
+        // floor until the enclosing fixed point supplies a stronger label.
+        let origin_label = enclosing_labels
+            .get(&origin_id)
+            .cloned()
+            .unwrap_or(Label::Internal);
+        capture_label = capture_label.join(&origin_label);
+        body_binding_labels.insert(*body_id, origin_label);
+    }
+
+    let body_ir2_ops = body_ops
+        .iter()
+        .map(|inner| {
+            let (effect, required_capability, flow) = classify_ir1_op(inner);
+            Ir2Op {
+                inner: inner.clone(),
+                effect,
+                required_capability,
+                flow,
+                span: None,
+            }
+        })
+        .collect::<Vec<_>>();
+    let Ok(catch_region_events) = ir2_catch_region_events(&body_ir2_ops) else {
+        return Label::TopSecret;
+    };
+
+    let mut converged = false;
+    for _ in 0..MAX_FUNCTION_SUMMARY_PASSES {
+        let Ok((_, changed)) = simulate_ir2_flow_labels(
+            &body_ir2_ops,
+            &mut body_binding_labels,
+            &catch_region_events,
+            host_io_exception_provenance,
+            summary_depth,
+        ) else {
+            return Label::TopSecret;
+        };
+        if !changed {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return Label::TopSecret;
+    }
+    let Ok((labels, changed)) = simulate_ir2_flow_labels(
+        &body_ir2_ops,
+        &mut body_binding_labels,
+        &catch_region_events,
+        host_io_exception_provenance,
+        summary_depth,
+    ) else {
+        return Label::TopSecret;
+    };
+    if changed {
+        return Label::TopSecret;
+    }
+
+    let return_label = Label::join_all(body_ir2_ops.iter().zip(labels).filter_map(
+        |(op, label)| {
+            matches!(op.inner, Ir1Op::Return | Ir1Op::Yield { .. }).then_some(label)
+        },
+    ))
+    .unwrap_or(Label::TopSecret);
+    capture_label.join(&return_label)
 }
 
 type CatchRegionEvents = (
@@ -24921,9 +25409,9 @@ type CatchRegionEvents = (
     BTreeMap<u32, Label>,
 );
 
-fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, LoweringPipelineError> {
+fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringPipelineError> {
     let mut label_positions = BTreeMap::new();
-    for (index, op) in ir2.ops.iter().enumerate() {
+    for (index, op) in ops.iter().enumerate() {
         let Ir1Op::Label { id } = &op.inner else {
             continue;
         };
@@ -24933,8 +25421,7 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
             });
         }
     }
-    let explicit_finally_entry_labels = ir2
-        .ops
+    let explicit_finally_entry_labels = ops
         .windows(2)
         .filter_map(|pair| match (&pair[0].inner, &pair[1].inner) {
             (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
@@ -24951,7 +25438,7 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
 
     let mut regions = Vec::<ProtectedRegion>::new();
     let mut region_by_begin = BTreeMap::<usize, usize>::new();
-    for (index, op) in ir2.ops.iter().enumerate() {
+    for (index, op) in ops.iter().enumerate() {
         let Ir1Op::BeginTry {
             catch_label,
             finally_label,
@@ -24993,7 +25480,7 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
     // forwarders' finalizer bodies without letting duplicate inner markers
     // accidentally terminate an enclosing region.
     let mut active_regions = Vec::<usize>::new();
-    for (op_index, op) in ir2.ops.iter().enumerate() {
+    for (op_index, op) in ops.iter().enumerate() {
         while active_regions
             .last()
             .is_some_and(|region_id| regions[*region_id].target_index <= op_index)
@@ -25252,10 +25739,11 @@ fn ir1_exception_flow_label(
 }
 
 fn simulate_ir2_flow_labels(
-    ir2: &Ir2Module,
+    ops: &[Ir2Op],
     binding_labels: &mut BTreeMap<BindingId, Label>,
     catch_region_events: &CatchRegionEvents,
     host_io_exception_provenance: HostIoExceptionProvenance,
+    summary_depth: usize,
 ) -> Result<(Vec<Label>, bool), LoweringPipelineError> {
     let mut value_stack = Vec::<FlowValue>::new();
     let mut next_identity = 0usize;
@@ -25266,10 +25754,17 @@ fn simulate_ir2_flow_labels(
     let mut binding_crypto_origins = BTreeMap::<BindingId, Option<usize>>::new();
     let mut binding_flow_shapes = BTreeMap::<BindingId, FlowValueShape>::new();
     let mut crypto_flow_states = BTreeMap::<usize, CryptoFlowObjectState>::new();
-    let mut inferred_labels = Vec::with_capacity(ir2.ops.len());
+    // bd-pafik: authenticated stream callback-error states (keyed by the
+    // constructing hostcall's op index), static pipeline rejection summaries
+    // (keyed by the pipeline hostcall's op index), and the binding round-trip
+    // map that lets `const sink = new Writable({...})` keep its provenance.
+    let mut stream_states = BTreeMap::<usize, StreamCallbackSummary>::new();
+    let mut pipeline_rejections = BTreeMap::<usize, Label>::new();
+    let mut binding_stream_infos = BTreeMap::<BindingId, StreamFlowInfo>::new();
+    let mut inferred_labels = Vec::with_capacity(ops.len());
     let mut bindings_changed = false;
 
-    for (op_index, op) in ir2.ops.iter().enumerate() {
+    for (op_index, op) in ops.iter().enumerate() {
         if let Some(ending) = catch_region_ends.get(&op_index) {
             for catch_label in ending {
                 if active_catch_regions.pop().as_ref() != Some(catch_label) {
@@ -25317,6 +25812,18 @@ fn simulate_ir2_flow_labels(
                     .get(binding_id)
                     .copied()
                     .unwrap_or(FlowValueShape::Unknown);
+                // bd-pafik: restore stream provenance across the binding
+                // round-trip, but only while its origin state still exists.
+                value.stream = binding_stream_infos
+                    .get(binding_id)
+                    .filter(|info| match info {
+                        StreamFlowInfo::Stream { origin } => stream_states.contains_key(origin),
+                        StreamFlowInfo::PipelinePromise { origin } => {
+                            pipeline_rejections.contains_key(origin)
+                        }
+                        StreamFlowInfo::CallbackCarrier(_) => false,
+                    })
+                    .cloned();
                 value_stack.push(value);
                 label
             }
@@ -25343,6 +25850,19 @@ fn simulate_ir2_flow_labels(
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &value.label);
                 binding_crypto_origins.insert(*binding_id, value.crypto_origin);
                 binding_flow_shapes.insert(*binding_id, value.shape);
+                // bd-pafik: stream and pipeline-promise provenance survives
+                // binding storage; callback carriers deliberately do not
+                // (options objects must flow literally into the stream
+                // constructor to stay authenticated).
+                match &value.stream {
+                    Some(info @ (StreamFlowInfo::Stream { .. }
+                    | StreamFlowInfo::PipelinePromise { .. })) => {
+                        binding_stream_infos.insert(*binding_id, info.clone());
+                    }
+                    _ => {
+                        binding_stream_infos.remove(binding_id);
+                    }
+                }
                 let label = value.label.clone();
                 // The binding retains a straight-line closed-shape proof until
                 // an operation below can mutate or escape it. The assignment
@@ -25364,8 +25884,14 @@ fn simulate_ir2_flow_labels(
                 .unwrap_or(Label::Internal),
             Ir1Op::Call { arg_count } => {
                 let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
-                inputs.push(pop_flow_value(&mut value_stack)?);
-                let label = join_flow_values(&inputs);
+                let callee = pop_flow_value(&mut value_stack)?;
+                let callee_is_summarized = callee.shape == FlowValueShape::Callable;
+                inputs.push(callee);
+                let label = if callee_is_summarized {
+                    join_flow_values(&inputs)
+                } else {
+                    Label::TopSecret
+                };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
@@ -25373,16 +25899,22 @@ fn simulate_ir2_flow_labels(
             }
             Ir1Op::CallMethod { arg_count } => {
                 let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
+                let callee = pop_flow_value(&mut value_stack)?;
+                let callee_is_summarized = callee.shape == FlowValueShape::Callable;
+                inputs.push(callee);
                 inputs.push(pop_flow_value(&mut value_stack)?);
-                inputs.push(pop_flow_value(&mut value_stack)?);
-                let label = join_flow_values(&inputs);
+                let label = if callee_is_summarized {
+                    join_flow_values(&inputs)
+                } else {
+                    Label::TopSecret
+                };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
                 label
             }
             Ir1Op::Return => {
-                if op_index + 1 == ir2.ops.len() {
+                if op_index + 1 == ops.len() {
                     value_stack
                         .last()
                         .map_or(Label::Public, |value| value.label.clone())
@@ -25563,20 +26095,35 @@ fn simulate_ir2_flow_labels(
                 if matches!(key, Ir1PropertyKey::Dynamic) {
                     inputs.push(pop_flow_value(&mut value_stack)?);
                 }
-                inputs.push(pop_flow_value(&mut value_stack)?);
+                let object = pop_flow_value(&mut value_stack)?;
+                let shape = if object.shape == FlowValueShape::CallableContainer {
+                    FlowValueShape::Callable
+                } else {
+                    FlowValueShape::Unknown
+                };
+                inputs.push(object);
                 let label = join_flow_values(&inputs);
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::SetProperty { key } => {
                 let mut value = pop_flow_value(&mut value_stack)?;
+                let value_is_callable = value.shape == FlowValueShape::Callable;
                 let mut inputs = vec![value.clone()];
                 if matches!(key, Ir1PropertyKey::Dynamic) {
                     inputs.push(pop_flow_value(&mut value_stack)?);
                 }
-                inputs.push(pop_flow_value(&mut value_stack)?);
+                let mut object = pop_flow_value(&mut value_stack)?;
+                if value_is_callable {
+                    object.shape = FlowValueShape::CallableContainer;
+                }
+                inputs.push(object);
                 let label = join_flow_values(&inputs);
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
@@ -25586,11 +26133,15 @@ fn simulate_ir2_flow_labels(
             }
             Ir1Op::DefineAccessor { key, .. } | Ir1Op::DefineMethod { key } => {
                 let function = pop_flow_value(&mut value_stack)?;
+                let function_is_summarized = function.shape == FlowValueShape::Callable;
                 let mut inputs = vec![function];
                 if matches!(key, Ir1PropertyKey::Dynamic) {
                     inputs.push(pop_flow_value(&mut value_stack)?);
                 }
-                let object = pop_flow_value(&mut value_stack)?;
+                let mut object = pop_flow_value(&mut value_stack)?;
+                if function_is_summarized {
+                    object.shape = FlowValueShape::CallableContainer;
+                }
                 inputs.push(object.clone());
                 let label = join_flow_values(&inputs);
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
@@ -25599,7 +26150,7 @@ fn simulate_ir2_flow_labels(
                     identity: object.identity,
                     label: label.clone(),
                     crypto_origin: None,
-                    shape: FlowValueShape::Unknown,
+                    shape: object.shape,
                     process_operation: None,
                 });
                 label
@@ -25637,7 +26188,12 @@ fn simulate_ir2_flow_labels(
                     .ok_or(LoweringPipelineError::ValueStackUnderflow)?;
                 let inputs = pop_flow_values(&mut value_stack, needed)?;
                 let label = join_flow_values(&inputs);
-                let shape = if inputs.iter().all(|value| value.shape.is_closed()) {
+                let shape = if inputs
+                    .iter()
+                    .any(|value| value.shape == FlowValueShape::Callable)
+                {
+                    FlowValueShape::CallableContainer
+                } else if inputs.iter().all(|value| value.shape.is_closed()) {
                     FlowValueShape::FreshAggregate
                 } else {
                     FlowValueShape::Unknown
@@ -25669,6 +26225,7 @@ fn simulate_ir2_flow_labels(
                         crypto_origin: None,
                         shape: FlowValueShape::Unknown,
                         process_operation: None,
+                        stream: None,
                     });
                 } else {
                     value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
@@ -25683,9 +26240,18 @@ fn simulate_ir2_flow_labels(
             Ir1Op::DeclareFunction {
                 binding_id,
                 free_vars,
+                free_var_ids,
+                body_ops,
                 ..
             } => {
-                let label = infer_function_capture_label(free_vars, binding_labels);
+                let label = infer_function_capture_label(
+                    free_vars,
+                    free_var_ids,
+                    body_ops,
+                    binding_labels,
+                    host_io_exception_provenance,
+                    summary_depth.saturating_add(1),
+                );
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &label);
                 binding_flow_shapes.insert(*binding_id, FlowValueShape::Callable);
                 value_stack.push(fresh_shaped_flow_value(
@@ -25695,8 +26261,20 @@ fn simulate_ir2_flow_labels(
                 ));
                 label
             }
-            Ir1Op::CreateFunction { free_vars, .. } => {
-                let label = infer_function_capture_label(free_vars, binding_labels);
+            Ir1Op::CreateFunction {
+                free_vars,
+                free_var_ids,
+                body_ops,
+                ..
+            } => {
+                let label = infer_function_capture_label(
+                    free_vars,
+                    free_var_ids,
+                    body_ops,
+                    binding_labels,
+                    host_io_exception_provenance,
+                    summary_depth.saturating_add(1),
+                );
                 value_stack.push(fresh_shaped_flow_value(
                     label.clone(),
                     FlowValueShape::Callable,
@@ -26001,7 +26579,7 @@ fn infer_ir2_flow_annotations(
     const MAX_FLOW_INFERENCE_PASSES: usize = 16;
 
     let mut binding_labels = BTreeMap::<BindingId, Label>::new();
-    let catch_region_events = ir2_catch_region_events(ir2)?;
+    let catch_region_events = ir2_catch_region_events(&ir2.ops)?;
     let mut converged = false;
     // A reverse binding-dependency chain can otherwise force one complete IR2
     // rescan per binding, making inference quadratic in attacker-controlled
@@ -26009,10 +26587,11 @@ fn infer_ir2_flow_annotations(
     // when exact propagation would require a dedicated dependency worklist.
     for _ in 0..MAX_FLOW_INFERENCE_PASSES {
         let (_, changed) = simulate_ir2_flow_labels(
-            ir2,
+            &ir2.ops,
             &mut binding_labels,
             &catch_region_events,
             host_io_exception_provenance,
+            0,
         )?;
         if !changed {
             converged = true;
@@ -26026,10 +26605,11 @@ fn infer_ir2_flow_annotations(
     }
 
     let (inferred_labels, changed_after_convergence) = simulate_ir2_flow_labels(
-        ir2,
+        &ir2.ops,
         &mut binding_labels,
         &catch_region_events,
         host_io_exception_provenance,
+        0,
     )?;
     if changed_after_convergence {
         return Err(LoweringPipelineError::InvariantViolation {
@@ -26439,6 +27019,7 @@ mod tests {
                     crypto_origin: None,
                     shape,
                     process_operation: None,
+                    stream: None,
                 })
                 .collect::<Vec<_>>();
             inputs.push(FlowValue {
@@ -26447,6 +27028,7 @@ mod tests {
                 crypto_origin: None,
                 shape: FlowValueShape::Primitive,
                 process_operation: Some(ChildProcessOperation::ExecFile),
+                stream: None,
             });
             inputs
         };
@@ -28179,6 +28761,167 @@ mod tests {
             .expect("hostcall flow annotation");
         assert_eq!(flow.data_label, Label::TopSecret);
         assert!(flow.declassification_required);
+    }
+
+    fn network_egress_label(ir1: &Ir1Module) -> Label {
+        lower_ir1_to_ir2(ir1)
+            .expect("function summary fixture must lower")
+            .module
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "net.write"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("network egress flow annotation")
+            .data_label
+            .clone()
+    }
+
+    fn secret_returning_function() -> Ir1Op {
+        Ir1Op::CreateFunction {
+            name: None,
+            param_names: Vec::new(),
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_function_result".into()),
+                },
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            rest_param_index: None,
+        }
+    }
+
+    #[test]
+    fn no_capture_return_summary_survives_call_into_egress_bd_qjh7y() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"qjh7y-call"), "qjh7y_call.js");
+        ir1.ops.extend([
+            secret_returning_function(),
+            Ir1Op::StoreBinding { binding_id: 1 },
+            Ir1Op::Pop,
+            Ir1Op::LoadBinding { binding_id: 1 },
+            Ir1Op::Call { arg_count: 0 },
+            Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Return,
+        ]);
+
+        assert_eq!(network_egress_label(&ir1), Label::Secret);
+    }
+
+    #[test]
+    fn capture_origin_not_body_id_drives_return_summary_bd_qjh7y() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"qjh7y-capture-origin"),
+            "qjh7y_capture_origin.js",
+        );
+        ir1.ops.extend([
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("secret_captured_value".into()),
+            },
+            Ir1Op::StoreBinding { binding_id: 7 },
+            Ir1Op::Pop,
+            Ir1Op::CreateFunction {
+                name: None,
+                param_names: Vec::new(),
+                body_ops: vec![Ir1Op::LoadBinding { binding_id: 99 }, Ir1Op::Return],
+                free_vars: vec![capture_cell_name("captured", 7)],
+                free_var_ids: vec![99],
+                runtime_global_loads: Vec::new(),
+                child_captured_locals: Vec::new(),
+                local_lexical_bindings: Vec::new(),
+                is_generator: false,
+                is_async: false,
+                rest_param_index: None,
+            },
+            Ir1Op::Call { arg_count: 0 },
+            Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Return,
+        ]);
+
+        assert_eq!(network_egress_label(&ir1), Label::Secret);
+    }
+
+    #[test]
+    fn nested_and_method_function_summaries_reach_egress_bd_qjh7y() {
+        let nested_body = vec![
+            secret_returning_function(),
+            Ir1Op::StoreBinding { binding_id: 2 },
+            Ir1Op::Pop,
+            Ir1Op::LoadBinding { binding_id: 2 },
+            Ir1Op::Call { arg_count: 0 },
+            Ir1Op::Return,
+        ];
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"qjh7y-nested-method"),
+            "qjh7y_nested_method.js",
+        );
+        let method = Ir1Op::CreateFunction {
+            name: None,
+            param_names: Vec::new(),
+            body_ops: nested_body,
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
+            is_generator: false,
+            is_async: true,
+            rest_param_index: None,
+        };
+        ir1.ops.extend([
+            Ir1Op::NewObject { count: 0 },
+            method,
+            Ir1Op::DefineMethod {
+                key: Ir1PropertyKey::Static("read".into()),
+            },
+            Ir1Op::StoreBinding { binding_id: 3 },
+            Ir1Op::Pop,
+            Ir1Op::LoadBinding { binding_id: 3 },
+            Ir1Op::LoadBinding { binding_id: 3 },
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static("read".into()),
+            },
+            Ir1Op::CallMethod { arg_count: 0 },
+            Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Return,
+        ]);
+
+        assert_eq!(network_egress_label(&ir1), Label::Secret);
+    }
+
+    #[test]
+    fn unsupported_callee_fails_high_bd_qjh7y() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"qjh7y-unknown"), "qjh7y_unknown.js");
+        ir1.ops.extend([
+            Ir1Op::LoadBinding { binding_id: 404 },
+            Ir1Op::Call { arg_count: 0 },
+            Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Return,
+        ]);
+
+        assert_eq!(network_egress_label(&ir1), Label::TopSecret);
     }
 
     #[test]
@@ -34613,13 +35356,33 @@ mod tests {
     #[test]
     fn recognized_forward_capture_uses_internal_fixed_point_seed_bd_bscab_bd_oardi() {
         let labels = BTreeMap::new();
+        let body = vec![
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ];
         assert_eq!(
-            infer_function_capture_label(&[capture_cell_name("server", 73)], &labels),
+            infer_function_capture_label(
+                &[capture_cell_name("server", 73)],
+                &[9],
+                &body,
+                &labels,
+                HostIoExceptionProvenance::Unknown,
+                0,
+            ),
             Label::Internal,
             "a recognized capture preceding its store must converge from the runtime floor"
         );
         assert_eq!(
-            infer_function_capture_label(&["unrecognized-capture".to_string()], &labels),
+            infer_function_capture_label(
+                &["unrecognized-capture".to_string()],
+                &[9],
+                &body,
+                &labels,
+                HostIoExceptionProvenance::Unknown,
+                0,
+            ),
             Label::TopSecret,
             "an unauthenticated capture identity must still fail high"
         );

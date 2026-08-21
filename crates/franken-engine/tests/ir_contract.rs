@@ -609,6 +609,7 @@ fn function_local_lexical_metadata_is_backward_compatible_and_canonical_bd_pimva
                 local_lexical_bindings,
                 is_generator: false,
                 is_async: false,
+                is_arrow: false,
                 rest_param_index: None,
             }
         }

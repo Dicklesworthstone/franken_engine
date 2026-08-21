@@ -24896,6 +24896,65 @@ impl StreamCallbackTag {
     }
 }
 
+/// bd-pafik: resolve a stream constructor's authenticated callback-error
+/// state from its popped inputs (`pop_flow_values` order: inputs[0] is the
+/// LAST argument). Zero arguments means no user callbacks; a single options
+/// argument must carry a supported callback summary; anything else is
+/// unsupported.
+fn stream_constructor_summary(
+    inputs: &[FlowValue],
+    operation_data_label: &Label,
+) -> StreamCallbackSummary {
+    match inputs {
+        [] => StreamCallbackSummary::Supported(Label::Internal.join(operation_data_label)),
+        [options] => match &options.stream {
+            Some(StreamFlowInfo::CallbackCarrier(StreamCallbackSummary::Supported(
+                callback_label,
+            ))) => {
+                // Deliberately do NOT join the options object's own value
+                // label: it is the JoinInputs of the callback FUNCTION value,
+                // whose bd-qjh7y return summary fails high on the engine
+                // continuation call (`callback(...)` has no Callable-shaped
+                // callee) and would poison every authenticated stream with
+                // TopSecret. The symbolic callback summary is the exact
+                // audited bound for what the constructor consumes.
+                StreamCallbackSummary::Supported(Label::Internal.join(callback_label))
+            }
+            _ => StreamCallbackSummary::Unsupported,
+        },
+        _ => StreamCallbackSummary::Unsupported,
+    }
+}
+
+/// bd-pafik: compute the static rejection summary for a `stream/promises`
+/// pipeline whose every stage must be an authenticated stream with a
+/// supported callback summary. `None` = at least one unknown stage: fail
+/// high.
+fn stream_pipeline_rejection(
+    inputs: &[FlowValue],
+    stream_states: &BTreeMap<usize, StreamCallbackSummary>,
+) -> Option<Label> {
+    if inputs.is_empty() {
+        return None;
+    }
+    // Start at the Internal engine-failure floor and join ONLY the
+    // authenticated per-stage summaries. Each summary already covers its
+    // stage's data (`Readable.from` joins the iterable; constructors carry
+    // the audited callback bound), while the raw operand join would re-import
+    // the bd-qjh7y JoinInputs poison from the stream VALUES' labels.
+    let mut rejection = Label::Internal;
+    for input in inputs {
+        let Some(StreamFlowInfo::Stream { origin }) = &input.stream else {
+            return None;
+        };
+        let Some(StreamCallbackSummary::Supported(summary)) = stream_states.get(origin) else {
+            return None;
+        };
+        rejection = rejection.join(summary);
+    }
+    Some(rejection)
+}
+
 /// Build the [`StreamFlowInfo::CallbackCarrier`] for a function literal:
 /// resolve which captures provably held a fresh plain aggregate at creation
 /// time (their body-side ids admit `PlainAggregate` method calls in the
@@ -26148,7 +26207,10 @@ fn simulate_ir2_flow_labels(
                     && let Some(rejection) = pipeline_rejections.get(origin)
                 {
                     operation_exception_is_operand_derived = true;
-                    operation_exception_label_override = Some(rejection.join(&value.label));
+                    // The rejection summary alone is the bound; the operand's
+                    // own value label is the pipeline result label, which the
+                    // authenticated path already set to this same summary.
+                    operation_exception_label_override = Some(rejection.clone());
                 }
                 // Await resumes with a Promise settlement and Yield resumes
                 // with a caller-supplied value. Neither output is an identity
@@ -26815,24 +26877,16 @@ fn simulate_ir2_flow_labels(
                     | "builtin:StreamWritable"
                     | "builtin:StreamTransform"
                     | "builtin:StreamPassThrough" => {
-                        // `pop_flow_values` reverses stack order; the options
-                        // object (single constructor argument) is inputs[0].
-                        let summary = match inputs.as_slice() {
-                            [] => StreamCallbackSummary::Supported(
-                                Label::Internal.join(&operation_data_label),
-                            ),
-                            [options] => match &options.stream {
-                                Some(StreamFlowInfo::CallbackCarrier(
-                                    StreamCallbackSummary::Supported(callback_label),
-                                )) => StreamCallbackSummary::Supported(
-                                    Label::Internal
-                                        .join(&operation_data_label)
-                                        .join(callback_label),
-                                ),
-                                _ => StreamCallbackSummary::Unsupported,
-                            },
-                            _ => StreamCallbackSummary::Unsupported,
-                        };
+                        let summary = stream_constructor_summary(&inputs, &operation_data_label);
+                        if let StreamCallbackSummary::Supported(bound) = &summary {
+                            // The authenticated callback-error bound is also
+                            // the constructed stream VALUE's provenance: the
+                            // constructor consumes only the options object,
+                            // and the raw JoinInputs label carries the
+                            // bd-qjh7y fail-high return summary of the
+                            // callback function value.
+                            result_label = bound.clone();
+                        }
                         stream_states.insert(op_index, summary);
                         result_stream = Some(StreamFlowInfo::Stream { origin: op_index });
                     }
@@ -26844,27 +26898,15 @@ fn simulate_ir2_flow_labels(
                         // bounded only when EVERY stage is an authenticated
                         // stream whose callback summary is supported; any
                         // unknown stage keeps the fail-high default.
-                        let mut rejection = Label::Internal.join(&operation_data_label);
-                        let mut authenticated = !inputs.is_empty();
-                        for input in &inputs {
-                            match &input.stream {
-                                Some(StreamFlowInfo::Stream { origin }) => {
-                                    match stream_states.get(origin) {
-                                        Some(StreamCallbackSummary::Supported(summary)) => {
-                                            rejection = rejection.join(summary);
-                                        }
-                                        _ => authenticated = false,
-                                    }
-                                }
-                                _ => authenticated = false,
-                            }
-                        }
-                        if authenticated {
+                        if let Some(rejection) =
+                            stream_pipeline_rejection(&inputs, &stream_states)
+                        {
                             pipeline_rejections.insert(op_index, rejection.clone());
                             result_stream =
                                 Some(StreamFlowInfo::PipelinePromise { origin: op_index });
-                            // The synchronous hostcall's own throw path is
-                            // bounded by the same rejection summary.
+                            // The settlement value and the synchronous throw
+                            // path are both bounded by the rejection summary.
+                            result_label = rejection.clone();
                             operation_exception_is_operand_derived = true;
                             operation_exception_label_override = Some(rejection);
                         }
@@ -28767,6 +28809,7 @@ mod tests {
             local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
+            is_arrow: false,
             rest_param_index: None,
         }
     }
@@ -28860,6 +28903,115 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(catch_store_labels.len(), 1, "exactly one catch store");
         catch_store_labels.pop().expect("catch store present").1
+    }
+
+    /// Link test: the pure options/constructor/pipeline resolution helpers,
+    /// with hand-built flow values (no simulator in the loop).
+    #[test]
+    fn stream_authentication_helpers_resolve_supported_chain_bd_pafik() {
+        let mut next_identity = 0usize;
+        // The options object's VALUE label carries the bd-qjh7y JoinInputs
+        // poison (the callback function value's fail-high return summary);
+        // the authenticated summary must not re-import it.
+        let mut options = fresh_shaped_flow_value(
+            Label::TopSecret,
+            FlowValueShape::CallableContainer,
+            &mut next_identity,
+        );
+        options.stream = Some(StreamFlowInfo::CallbackCarrier(
+            StreamCallbackSummary::Supported(Label::Internal),
+        ));
+        assert_eq!(
+            stream_constructor_summary(std::slice::from_ref(&options), &Label::TopSecret),
+            StreamCallbackSummary::Supported(Label::Internal)
+        );
+        let mut carrierless = fresh_flow_value(Label::Internal, &mut next_identity);
+        assert_eq!(
+            stream_constructor_summary(std::slice::from_ref(&carrierless), &Label::Internal),
+            StreamCallbackSummary::Unsupported
+        );
+        carrierless.stream = Some(StreamFlowInfo::CallbackCarrier(
+            StreamCallbackSummary::Unsupported,
+        ));
+        assert_eq!(
+            stream_constructor_summary(std::slice::from_ref(&carrierless), &Label::Internal),
+            StreamCallbackSummary::Unsupported
+        );
+
+        let mut states = BTreeMap::new();
+        states.insert(3usize, StreamCallbackSummary::Supported(Label::Internal));
+        states.insert(8usize, StreamCallbackSummary::Supported(Label::Public));
+        // Stage VALUES may carry poisoned JoinInputs labels; only the
+        // authenticated per-stage summaries flow into the rejection.
+        let mut sink = fresh_flow_value(Label::TopSecret, &mut next_identity);
+        sink.stream = Some(StreamFlowInfo::Stream { origin: 3 });
+        let mut source = fresh_flow_value(Label::TopSecret, &mut next_identity);
+        source.stream = Some(StreamFlowInfo::Stream { origin: 8 });
+        assert_eq!(
+            stream_pipeline_rejection(&[sink.clone(), source.clone()], &states),
+            Some(Label::Internal)
+        );
+        let plain = fresh_flow_value(Label::Internal, &mut next_identity);
+        assert_eq!(stream_pipeline_rejection(&[sink, plain], &states), None);
+        assert_eq!(stream_pipeline_rejection(&[], &states), None);
+    }
+
+    /// Link test: the pipeline HOSTCALL's own exception override (no Await in
+    /// the region). If this passes while the Await test fails, the break is
+    /// on the Await side; if this fails, the break is in constructor/options
+    /// authentication or the hostcall override.
+    #[test]
+    fn pipeline_hostcall_bounds_catch_without_await_bd_pafik() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"bd-pafik-noawait"), "bd_pafik_na.js");
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("write".into()),
+        });
+        ir1.ops
+            .push(pafik_callback_fn(3, pafik_reporting_callback_body(), Vec::new()));
+        ir1.ops.push(Ir1Op::NewObject { count: 1 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "builtin:StreamWritable".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 0 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::BeginTry {
+            catch_label: 1,
+            finally_label: None,
+        });
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id: 0 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "builtin:StreamPromisesPipeline".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::EndTry);
+        ir1.ops.push(Ir1Op::Jump { label_id: 2 });
+        ir1.ops.push(Ir1Op::Label { id: 1 });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 2 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Label { id: 2 });
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        });
+        ir1.ops.push(Ir1Op::Return);
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("bd-pafik no-await module must lower")
+            .module;
+        let label = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::StoreBinding { binding_id: 2 }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("catch StoreBinding flow annotation")
+            .data_label
+            .clone();
+        assert_ne!(label, Label::TopSecret);
+        assert_eq!(
+            label.join(&Label::Internal),
+            Label::Internal,
+            "authenticated pipeline hostcall must bound its own throw, got {label:?}"
+        );
     }
 
     #[test]
@@ -29245,6 +29397,7 @@ mod tests {
             local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
+            is_arrow: false,
             rest_param_index: None,
         });
         ir1.ops.push(Ir1Op::HostCall {
@@ -29288,6 +29441,7 @@ mod tests {
             local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
+            is_arrow: false,
             rest_param_index: None,
         });
         ir1.ops.push(Ir1Op::Call { arg_count: 0 });
@@ -29413,6 +29567,7 @@ mod tests {
             local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
+            is_arrow: false,
             rest_param_index: None,
         });
         ir1.ops.push(Ir1Op::HostCall {
@@ -29469,6 +29624,7 @@ mod tests {
             local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
+            is_arrow: false,
             rest_param_index: None,
         }
     }
@@ -29541,6 +29697,7 @@ mod tests {
                 local_lexical_bindings: Vec::new(),
                 is_generator: false,
                 is_async: false,
+                is_arrow: false,
                 rest_param_index: None,
             },
             Ir1Op::Call { arg_count: 0 },
@@ -29579,6 +29736,7 @@ mod tests {
             local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: true,
+            is_arrow: false,
             rest_param_index: None,
         };
         ir1.ops.extend([
@@ -29670,6 +29828,7 @@ mod tests {
                     local_lexical_bindings: Vec::new(),
                     is_generator,
                     is_async,
+                    is_arrow: false,
                     rest_param_index: None,
                 },
                 Ir1Op::Call { arg_count: 0 },

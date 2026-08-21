@@ -65,24 +65,30 @@ fn function_like_iterator_result_steps_yield_undefined() {
 /// undefined off a carrier with no ordinary-property backing). The pre-fix
 /// engine instead rejected the carrier itself ("object returned by
 /// @@iterator, got function").
+///
+/// This engine's eval front-end cannot parse `try`/`catch`, so the thrown
+/// TypeError is observed through `eval_value`'s `Err` arm: the interpreter
+/// surfaces the uncaught error and its exact `type error: expected …, got …`
+/// message.
 #[test]
 fn bare_function_iterator_rejects_on_missing_next() {
     let s = eval_value(
         r#"
         let iterable = { [Symbol.iterator]: function () { return function () {}; } };
-        let caught = "";
-        try { for (const value of iterable) { value; } }
-        catch (error) { caught = error.name + "|" + error.message; }
-        caught;
+        for (const value of iterable) { value; }
         "#,
     );
     assert!(
-        s.starts_with("TypeError|"),
-        "bare-function iterator must throw TypeError, got: {s}"
+        s.starts_with("ERR:") && s.contains("type error"),
+        "bare-function iterator must surface a TypeError, got: {s}"
     );
     assert!(
         s.contains("callable iterator.next"),
         "rejection must be the missing-next check, not the carrier check: {s}"
+    );
+    assert!(
+        !s.contains("object returned by @@iterator"),
+        "the object-like carrier itself must no longer be rejected: {s}"
     );
 }
 
@@ -92,15 +98,12 @@ fn primitive_iterator_still_rejects_as_non_object() {
     let s = eval_value(
         r#"
         let iterable = { [Symbol.iterator]: function () { return 5; } };
-        let caught = "";
-        try { for (const value of iterable) { value; } }
-        catch (error) { caught = error.name + "|" + error.message; }
-        caught;
+        for (const value of iterable) { value; }
         "#,
     );
     assert!(
-        s.starts_with("TypeError|"),
-        "primitive iterator must throw TypeError, got: {s}"
+        s.starts_with("ERR:") && s.contains("type error"),
+        "primitive iterator must surface a TypeError, got: {s}"
     );
     assert!(
         s.contains("object returned by @@iterator"),
@@ -115,15 +118,12 @@ fn primitive_iterator_result_still_rejects() {
         r#"
         let iterator = { next: function () { return 1; } };
         let iterable = { [Symbol.iterator]: function () { return iterator; } };
-        let caught = "";
-        try { for (const value of iterable) { value; } }
-        catch (error) { caught = error.name + "|" + error.message; }
-        caught;
+        for (const value of iterable) { value; }
         "#,
     );
     assert!(
-        s.starts_with("TypeError|"),
-        "primitive iterator result must throw TypeError, got: {s}"
+        s.starts_with("ERR:") && s.contains("type error"),
+        "primitive iterator result must surface a TypeError, got: {s}"
     );
     assert!(
         s.contains("iterator result object"),

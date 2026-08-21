@@ -16022,11 +16022,20 @@ impl InterpreterCore {
         })
     }
 
+    /// Dynamic bytes retained by an IFC label. Level labels (`Public`,
+    /// `Secret`, ...) are inline enum values whose storage is already counted
+    /// by their owning slot (register arena, record field, queue entry), so
+    /// only a `Custom` label's owned name allocation carries the base charge.
+    /// Charging a base per level label made the boot-time register-label
+    /// arena a phantom recompute-only constant that no eager path ever
+    /// charged, breaking eager==recompute on a fresh core (bd-ur3tk.21).
     fn estimate_label_bytes(label: &crate::ifc_artifacts::Label) -> u64 {
-        MEMORY_ESTIMATE_LABEL_BASE_BYTES.saturating_add(match label {
-            crate::ifc_artifacts::Label::Custom { name, .. } => name.len() as u64,
+        match label {
+            crate::ifc_artifacts::Label::Custom { name, .. } => {
+                MEMORY_ESTIMATE_LABEL_BASE_BYTES.saturating_add(name.len() as u64)
+            }
             _ => 0,
-        })
+        }
     }
 
     fn estimate_closure_method_metadata_entry_bytes(metadata: &ClosureMethodMetadata) -> u64 {
@@ -16055,7 +16064,16 @@ impl InterpreterCore {
                     .saturating_add(state_bytes)
             })
             .sum::<u64>();
-        MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
+        // The frame base is charged only once a frame owns bindings: an empty
+        // frame (notably the boot frame created inside `InterpreterCore::new`)
+        // is inline interpreter substrate that no eager path charges, and a
+        // recompute-only constant would break eager==recompute on a fresh
+        // core (bd-ur3tk.21). Binding maps still pay per-entry bases above.
+        if frame.bindings.is_empty() {
+            bindings
+        } else {
+            MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
+        }
     }
 
     fn estimate_scope_chain_bytes(frames: &[ScopeFrame]) -> u64 {

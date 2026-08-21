@@ -13,7 +13,9 @@
 
 use std::collections::BTreeMap;
 
-use frankenengine_engine::execution_orchestrator::{ExecutionOrchestrator, ExtensionPackage};
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt,
+};
 
 fn package(id: &str, source: &str) -> ExtensionPackage {
     ExtensionPackage {

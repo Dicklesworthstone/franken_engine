@@ -5588,11 +5588,16 @@ enum RuntimeIteratorState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ModuleRuntimeStatus {
     Evaluating,
+    /// Evaluation reached either this module's top-level await or an imported
+    /// module that is still evaluating asynchronously. The executable program
+    /// and suspended activation are retained by the module record until its
+    /// evaluation Promise settles (bd-yn3lv).
+    AsyncEvaluating,
     Evaluated,
     Failed(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
@@ -5603,6 +5608,11 @@ struct ModuleRuntimeRecord {
     /// program; retaining one shared `Arc` prevents that index from being
     /// reinterpreted against the importing module's function table.
     compiled_module: Option<Arc<Ir3Module>>,
+    /// Promise representing completion of this module's async evaluation.
+    evaluation_promise: Option<crate::promise_model::PromiseHandle>,
+    /// Owned activation parked while an imported module is asynchronously
+    /// evaluating. Entry-module execution remains installed in the core.
+    async_execution: Option<ModuleExecutionSnapshot>,
 }
 
 /// Realm-persistent dynamic-code artifacts owned by one immutable module
@@ -5883,14 +5893,23 @@ struct AsyncResumptionContext {
     result_register: u32,
 }
 
-/// Context for resuming entry-module evaluation after a pending top-level
-/// await. Unlike an async function, the entry module already owns the core's
-/// active register/scope state, so the continuation only needs to identify the
-/// destination register. The instruction pointer is advanced past
-/// `ModuleAwaitValue` when the suspension is installed.
+/// The operation to perform when a module-evaluation Promise reaction fires.
+#[derive(Debug, Clone)]
+enum ModuleAwaitContinuation {
+    /// Resume after a source-level `await`, writing the fulfilled value.
+    AwaitValue { result_register: u32 },
+    /// Resume an importer after an async dependency settles. A rejection is a
+    /// module-graph evaluation failure, not a catchable body-level throw.
+    Dependency { specifier: String },
+}
+
+/// Context for resuming any module after a pending top-level await or async
+/// dependency. Imported modules carry their activation in the owning module
+/// record; the entry module remains installed in the core.
 #[derive(Debug, Clone)]
 struct TopLevelAwaitResumptionContext {
-    result_register: u32,
+    module_specifier: String,
+    continuation: ModuleAwaitContinuation,
 }
 
 /// An async generator object combines generator suspension with promise wrapping.
@@ -8046,6 +8065,12 @@ impl CompactTier1Program {
             | Ir3Instruction::InOp { dst, lhs, rhs } => requirement(&[*dst, *lhs, *rhs], &[]),
             Ir3Instruction::Construct { callee, args, dst }
             | Ir3Instruction::Call { callee, args, dst } => requirement(&[*callee, *dst], &[*args]),
+            Ir3Instruction::ConstructWithNewTarget {
+                callee,
+                new_target,
+                args,
+                dst,
+            } => requirement(&[*callee, *new_target, *dst], &[*args]),
             Ir3Instruction::ConstructSuper { args, dst }
             | Ir3Instruction::HostCall { args, dst, .. }
             | Ir3Instruction::TemplateLiteral { parts: args, dst } => {
@@ -10230,6 +10255,11 @@ pub struct InterpreterCore {
     next_promise_combinator_id: u64,
     /// Module registry/cache for ImportModule execution.
     module_state: ModuleState,
+    /// One-shot result side channel from the synchronous import dispatcher to
+    /// the `ImportModule` instruction. When populated, the namespace is
+    /// available but the importer must park behind this dependency's module
+    /// evaluation Promise before executing its next instruction (bd-yn3lv).
+    pending_async_module_import: Option<(String, crate::promise_model::PromiseHandle)>,
     /// Active CommonJS module context, if currently evaluating a CJS module.
     active_cjs_context: Option<CjsModuleContext>,
     /// Current module specifier (used to resolve relative imports).
@@ -10886,6 +10916,7 @@ impl InterpreterCore {
             promise_combinator_watchers: BTreeMap::new(),
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
+            pending_async_module_import: None,
             active_cjs_context: None,
             current_module_specifier: None,
             active_generated_function_artifact: None,
@@ -29382,6 +29413,7 @@ impl InterpreterCore {
         self.gc_remembered_set.clear();
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;
+        self.pending_async_module_import = None;
         self.active_cjs_context = None;
 
         // The clears above released many independently-charged memory
@@ -30896,6 +30928,8 @@ impl InterpreterCore {
                 exports: BTreeMap::new(),
                 cjs_module_object: None,
                 compiled_module,
+                evaluation_promise: None,
+                async_execution: None,
             },
         );
         self.module_state.retained_program_bytes = self
@@ -31085,17 +31119,26 @@ impl InterpreterCore {
         is_cjs: bool,
     ) -> Result<Value, InterpreterError> {
         if let Some(record) = self.module_state.modules.get(resolved) {
-            return match &record.status {
-                ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => {
-                    Ok(Value::Object(record.namespace_object))
-                }
+            let namespace = record.namespace_object;
+            let async_promise = match &record.status {
+                ModuleRuntimeStatus::AsyncEvaluating => Some(record.evaluation_promise.ok_or_else(
+                    || InterpreterError::ModuleEvaluationFailed {
+                        specifier: resolved.to_string(),
+                        reason: "async-evaluating module has no evaluation Promise".to_string(),
+                    },
+                )?),
+                ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => None,
                 ModuleRuntimeStatus::Failed(reason) => {
-                    Err(InterpreterError::ModuleEvaluationFailed {
+                    return Err(InterpreterError::ModuleEvaluationFailed {
                         specifier: resolved.to_string(),
                         reason: reason.clone(),
-                    })
+                    });
                 }
             };
+            if let Some(promise) = async_promise {
+                self.pending_async_module_import = Some((resolved.to_string(), promise));
+            }
+            return Ok(Value::Object(namespace));
         }
 
         let namespace_object = self.ensure_module_record(module, resolved)?;
@@ -31137,13 +31180,30 @@ impl InterpreterCore {
         self.retain_module_program(resolved, &lowering_output.ir3)?;
         let eval_result = if is_cjs {
             self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
+                .map(|()| false)
         } else {
             self.evaluate_module_ir3(&lowering_output.ir3, resolved)
         };
         match eval_result {
-            Ok(()) => {
+            Ok(async_evaluating) => {
                 if let Some(record) = self.module_state.modules.get_mut(resolved) {
-                    record.status = ModuleRuntimeStatus::Evaluated;
+                    record.status = if async_evaluating {
+                        ModuleRuntimeStatus::AsyncEvaluating
+                    } else {
+                        ModuleRuntimeStatus::Evaluated
+                    };
+                }
+                if async_evaluating {
+                    let promise = self
+                        .module_state
+                        .modules
+                        .get(resolved)
+                        .and_then(|record| record.evaluation_promise)
+                        .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                            specifier: resolved.to_string(),
+                            reason: "suspended module has no evaluation Promise".to_string(),
+                        })?;
+                    self.pending_async_module_import = Some((resolved.to_string(), promise));
                 }
                 Ok(Value::Object(namespace_object))
             }
@@ -35801,7 +35861,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         specifier: &str,
-    ) -> Result<(), InterpreterError> {
+    ) -> Result<bool, InterpreterError> {
         let snapshot = self.snapshot_module_execution()?;
         let previous_cjs_context = self.active_cjs_context.take();
         if let Err(err) = self.prepare_module_execution(specifier) {
@@ -35810,9 +35870,51 @@ impl InterpreterCore {
             return Err(err);
         }
         let result = self.run_nested_module_execution(module);
+        let suspended = result.is_ok()
+            && self
+                .top_level_await_resumption_contexts
+                .values()
+                .any(|context| context.module_specifier == specifier);
+        let suspended_execution = if suspended {
+            match self.snapshot_module_execution() {
+                Ok(execution) => Some(execution),
+                Err(error) => {
+                    self.restore_module_execution(snapshot, true);
+                    self.active_cjs_context = previous_cjs_context;
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        let async_settlement_failure = self
+            .module_state
+            .modules
+            .get(specifier)
+            .and_then(|record| match &record.status {
+                ModuleRuntimeStatus::Failed(reason) => Some(reason.clone()),
+                _ => None,
+            });
         self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;
-        result
+        result?;
+        if let Some(reason) = async_settlement_failure {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason,
+            });
+        }
+        if let Some(execution) = suspended_execution {
+            let record = self.module_state.modules.get_mut(specifier).ok_or_else(|| {
+                InterpreterError::ModuleEvaluationFailed {
+                    specifier: specifier.to_string(),
+                    reason: "module record disappeared while parking async evaluation"
+                        .to_string(),
+                }
+            })?;
+            record.async_execution = Some(execution);
+        }
+        Ok(suspended)
     }
 
     fn evaluate_cjs_ir3(
@@ -36302,16 +36404,76 @@ impl InterpreterCore {
         result_reg: u32,
         promise_label: Label,
     ) -> Result<(), InterpreterError> {
+        let module_specifier = self.current_module_specifier.clone().ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: "<unknown>".to_string(),
+                reason: "top-level await has no owning module".to_string(),
+            }
+        })?;
+        self.ensure_module_evaluation_promise(&module_specifier)?;
         let result_promise = self.register_promise_then_for_await(promise_handle, promise_label)?;
 
         self.top_level_await_resumption_contexts.insert(
             result_promise.0,
             TopLevelAwaitResumptionContext {
-                result_register: result_reg,
+                module_specifier,
+                continuation: ModuleAwaitContinuation::AwaitValue {
+                    result_register: result_reg,
+                },
             },
         );
         self.ip += 1;
         self.push_event("top_level_await_suspended", "ok", None);
+        Ok(())
+    }
+
+    fn ensure_module_evaluation_promise(
+        &mut self,
+        specifier: &str,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        if let Some(promise) = self
+            .module_state
+            .modules
+            .get(specifier)
+            .and_then(|record| record.evaluation_promise)
+        {
+            return Ok(promise);
+        }
+        let promise = self.create_promise()?;
+        let record = self.module_state.modules.get_mut(specifier).ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module record missing while creating evaluation Promise".to_string(),
+            }
+        })?;
+        record.evaluation_promise = Some(promise);
+        Ok(promise)
+    }
+
+    fn suspend_on_async_module_dependency(
+        &mut self,
+        dependency_promise: crate::promise_model::PromiseHandle,
+        dependency: String,
+    ) -> Result<(), InterpreterError> {
+        let module_specifier = self.current_module_specifier.clone().ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: "<unknown>".to_string(),
+                reason: "async module dependency has no importing module".to_string(),
+            }
+        })?;
+        self.ensure_module_evaluation_promise(&module_specifier)?;
+        let result_promise =
+            self.register_promise_then_for_await(dependency_promise, Label::Public)?;
+        self.top_level_await_resumption_contexts.insert(
+            result_promise.0,
+            TopLevelAwaitResumptionContext {
+                module_specifier,
+                continuation: ModuleAwaitContinuation::Dependency {
+                    specifier: dependency,
+                },
+            },
+        );
+        self.push_event("module_dependency_suspended", "ok", None);
         Ok(())
     }
 
@@ -36644,6 +36806,103 @@ impl InterpreterCore {
         }
     }
 
+    fn resume_module_evaluation_task(
+        &mut self,
+        resumption_context: TopLevelAwaitResumptionContext,
+        settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
+        label: Label,
+        fallback_module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let specifier = resumption_context.module_specifier.clone();
+        if self.current_module_specifier.as_deref() == Some(specifier.as_str()) {
+            let owned_module = if fallback_module
+                .is_some_and(|module| module.header.source_label == specifier)
+            {
+                None
+            } else {
+                Some(
+                    self.module_state
+                        .modules
+                        .get(&specifier)
+                        .and_then(|record| record.compiled_module.as_ref())
+                        .cloned()
+                        .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                            specifier: specifier.clone(),
+                            reason: "async module continuation has no retained program".to_string(),
+                        })?,
+                )
+            };
+            let module = owned_module.as_deref().or(fallback_module);
+            if let Err(error) =
+                self.resume_top_level_after_await(resumption_context, settled, label.clone())
+            {
+                if self.entry_module_specifier.as_deref() == Some(specifier.as_str()) {
+                    self.replace_top_level_await_outcome(Err(error));
+                } else {
+                    self.settle_imported_module_evaluation(&specifier, Err(error), label)?;
+                }
+            } else {
+                self.continue_resumed_top_level(module, &specifier, label);
+            }
+            return Ok(());
+        }
+
+        let (owner_module, suspended_execution) = {
+            let record = self.module_state.modules.get_mut(&specifier).ok_or_else(|| {
+                InterpreterError::ModuleEvaluationFailed {
+                    specifier: specifier.clone(),
+                    reason: "async continuation owner module is not retained".to_string(),
+                }
+            })?;
+            let owner_module = record.compiled_module.as_ref().cloned().ok_or_else(|| {
+                InterpreterError::ModuleEvaluationFailed {
+                    specifier: specifier.clone(),
+                    reason: "async continuation owner has no retained program".to_string(),
+                }
+            })?;
+            let suspended_execution = record.async_execution.take().ok_or_else(|| {
+                InterpreterError::ModuleEvaluationFailed {
+                    specifier: specifier.clone(),
+                    reason: "async continuation owner has no parked activation".to_string(),
+                }
+            })?;
+            (owner_module, suspended_execution)
+        };
+
+        let caller_execution = self.snapshot_module_execution()?;
+        self.restore_module_execution(suspended_execution, true);
+        let resume_result =
+            self.resume_top_level_after_await(resumption_context, settled, label.clone());
+        if let Err(error) = resume_result {
+            self.settle_imported_module_evaluation(&specifier, Err(error), label.clone())?;
+        } else {
+            self.continue_resumed_top_level(Some(owner_module.as_ref()), &specifier, label.clone());
+        }
+
+        let still_suspended = self
+            .top_level_await_resumption_contexts
+            .values()
+            .any(|context| context.module_specifier == specifier);
+        let parked_execution = if still_suspended {
+            Some(self.snapshot_module_execution()?)
+        } else {
+            None
+        };
+        self.restore_module_execution(caller_execution, true);
+        if let Some(execution) = parked_execution {
+            let record = self.module_state.modules.get_mut(&specifier).ok_or_else(|| {
+                InterpreterError::ModuleEvaluationFailed {
+                    specifier: specifier.clone(),
+                    reason: "async module record disappeared while re-parking continuation"
+                        .to_string(),
+                }
+            })?;
+            record.status = ModuleRuntimeStatus::AsyncEvaluating;
+            record.async_execution = Some(execution);
+        }
+        Ok(())
+    }
+
     fn resume_top_level_after_await(
         &mut self,
         resumption_context: TopLevelAwaitResumptionContext,
@@ -36651,23 +36910,38 @@ impl InterpreterCore {
         label: Label,
     ) -> Result<(), InterpreterError> {
         self.push_event("top_level_await_resumed", "ok", None);
-        match settled {
-            Ok(argument) => {
+        match (resumption_context.continuation, settled) {
+            (
+                ModuleAwaitContinuation::AwaitValue { result_register },
+                Ok(argument),
+            ) => {
                 self.write_reg_with_label(
-                    resumption_context.result_register,
+                    result_register,
                     Self::js_value_to_value(&argument),
                     label,
                 )?;
             }
-            Err(reason) => {
+            (ModuleAwaitContinuation::AwaitValue { .. }, Err(reason)) => {
                 let error_value = Self::js_value_to_value(&reason);
                 let _ = self.raise_await_rejection_with_label(error_value, label)?;
+            }
+            (ModuleAwaitContinuation::Dependency { .. }, Ok(_)) => {}
+            (ModuleAwaitContinuation::Dependency { specifier }, Err(reason)) => {
+                return Err(InterpreterError::ModuleEvaluationFailed {
+                    specifier,
+                    reason: format!("async dependency rejected: {reason:?}"),
+                });
             }
         }
         Ok(())
     }
 
-    fn continue_resumed_top_level(&mut self, module: Option<&Ir3Module>) {
+    fn continue_resumed_top_level(
+        &mut self,
+        module: Option<&Ir3Module>,
+        module_specifier: &str,
+        settlement_label: Label,
+    ) {
         let outcome = match module {
             Some(module) => self.run_loop_labeled(module),
             None => Err(InterpreterError::TypeError {
@@ -36676,7 +36950,11 @@ impl InterpreterCore {
             }),
         };
 
-        if self.top_level_await_resumption_contexts.is_empty() {
+        let module_still_suspended = self
+            .top_level_await_resumption_contexts
+            .values()
+            .any(|context| context.module_specifier == module_specifier);
+        if !module_still_suspended {
             let outcome = match outcome {
                 Err(InterpreterError::Halted) => self.read_reg(0).map(|value| {
                     let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
@@ -36684,9 +36962,61 @@ impl InterpreterCore {
                 }),
                 other => other,
             };
-            self.replace_top_level_await_outcome(outcome);
+            if self.entry_module_specifier.as_deref() == Some(module_specifier) {
+                self.replace_top_level_await_outcome(outcome);
+            } else if let Err(error) =
+                self.settle_imported_module_evaluation(module_specifier, outcome, settlement_label)
+            {
+                self.replace_top_level_await_outcome(Err(error));
+            }
         } else if let Err(error) = outcome {
-            self.replace_top_level_await_outcome(Err(error));
+            if self.entry_module_specifier.as_deref() == Some(module_specifier) {
+                self.replace_top_level_await_outcome(Err(error));
+            } else if let Err(settlement_error) = self.settle_imported_module_evaluation(
+                module_specifier,
+                Err(error),
+                settlement_label,
+            ) {
+                self.replace_top_level_await_outcome(Err(settlement_error));
+            }
+        }
+    }
+
+    fn settle_imported_module_evaluation(
+        &mut self,
+        specifier: &str,
+        outcome: Result<LabeledReturn, InterpreterError>,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let evaluation_promise = self
+            .module_state
+            .modules
+            .get(specifier)
+            .and_then(|record| record.evaluation_promise)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "async module completion has no evaluation Promise".to_string(),
+            })?;
+        match outcome {
+            Ok(_) => {
+                if let Some(record) = self.module_state.modules.get_mut(specifier) {
+                    record.status = ModuleRuntimeStatus::Evaluated;
+                    record.async_execution = None;
+                }
+                self.fulfill_promise(
+                    evaluation_promise,
+                    crate::object_model::JsValue::Undefined,
+                    label,
+                )
+            }
+            Err(error) => {
+                let reason = Self::promise_rejection_from_error(&error);
+                if let Some(record) = self.module_state.modules.get_mut(specifier) {
+                    record.status = ModuleRuntimeStatus::Failed(error.to_string());
+                    record.async_execution = None;
+                }
+                self.reject_promise(evaluation_promise, reason, label)
+            }
         }
     }
 
@@ -40808,6 +41138,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
+                    self.pending_async_module_import = None;
                     check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                     let specifier_label = self.join_arg_range_label(RegRange {
                         start: specifier,
@@ -40829,6 +41160,18 @@ impl InterpreterCore {
                         .result_label(&specifier_label, None);
                     self.write_reg_with_label(dst, namespace, result_label)?;
                     self.ip += 1;
+                    if let Some((dependency, evaluation_promise)) =
+                        self.pending_async_module_import.take()
+                    {
+                        self.suspend_on_async_module_dependency(
+                            evaluation_promise,
+                            dependency,
+                        )?;
+                        return Ok(LabeledReturn {
+                            value: Value::Undefined,
+                            label: Label::Public,
+                        });
+                    }
                 }
                 Ir3Instruction::ExportBinding {
                     name_pool_index,
@@ -41827,6 +42170,108 @@ impl InterpreterCore {
                         }
                     }
                 }
+                Ir3Instruction::ConstructWithNewTarget {
+                    callee,
+                    new_target,
+                    args,
+                    dst,
+                } => {
+                    let callee_value = self.read_reg(callee)?;
+                    let callee_label = self.clone_register_label_with_temporary_budget(callee)?;
+                    let new_target_value = self.read_reg(new_target)?;
+                    let new_target_label =
+                        self.clone_register_label_with_temporary_budget(new_target)?;
+
+                    if !self.is_constructible_value(&callee_value) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "constructible Reflect.construct target".to_string(),
+                            got: callee_value.type_name().to_string(),
+                        });
+                    }
+                    if !self.is_constructible_value(&new_target_value) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "constructible Reflect.construct newTarget".to_string(),
+                            got: new_target_value.type_name().to_string(),
+                        });
+                    }
+
+                    if self.foreign_closure_module(&callee_value, module)?.is_some() {
+                        let call_labels =
+                            self.clone_isolated_call_labels_from_registers(Some(callee), args)?;
+                        let arguments = self.call_arguments(args)?;
+                        let (result, result_label) =
+                            match self.invoke_inline_construct_with_labels(
+                                Some(module),
+                                callee_value,
+                                arguments,
+                                Some(call_labels),
+                                Some((new_target_value, new_target_label)),
+                            ) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    match self.route_isolated_explicit_throw(module, error)? {
+                                        None => continue,
+                                        Some(error) => return Err(error),
+                                    }
+                                }
+                            };
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    if let Value::BuiltinFunction(builtin) = &callee_value {
+                        let prototype =
+                            self.constructor_prototype_for_value(module, &new_target_value)?;
+                        let result =
+                            self.dispatch_builtin_function(module, builtin, args, None, None)?;
+                        if let Value::Object(object_id) = result {
+                            self.mutate_heap(|heap| {
+                                if let Some(object) = heap.get_mut(object_id.0 as usize) {
+                                    object.prototype = Some(prototype);
+                                }
+                            });
+                            let result_label = self.join_arg_range_label(args)?;
+                            let result_label = self.join_owned_label_with_temporary_budget(
+                                result_label,
+                                &callee_label,
+                            )?;
+                            let result_label = self.join_owned_label_with_temporary_budget(
+                                result_label,
+                                &new_target_label,
+                            )?;
+                            self.write_reg_with_label(
+                                dst,
+                                Value::Object(object_id),
+                                result_label,
+                            )?;
+                            self.ip += 1;
+                            continue;
+                        }
+                        return Err(InterpreterError::TypeError {
+                            expected: "object result from constructible builtin target".to_string(),
+                            got: result.type_name().to_string(),
+                        });
+                    }
+
+                    if let Err(error) = self.enter_constructor_call(
+                        module,
+                        callee_value,
+                        callee_label,
+                        args,
+                        self.ip + 1,
+                        dst,
+                        new_target_value,
+                        new_target_label,
+                        false,
+                        compact_tier1,
+                    ) {
+                        match self.route_isolated_explicit_throw(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        }
+                    }
+                }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
                     let callee_label = self.clone_register_label_with_temporary_budget(callee)?;
@@ -41901,6 +42346,7 @@ impl InterpreterCore {
                             callee_val.clone(),
                             arguments,
                             Some(call_labels),
+                            None,
                         ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
@@ -42616,11 +43062,11 @@ impl InterpreterCore {
                         matches!(await_instruction, Ir3Instruction::ModuleAwaitValue { .. });
                     if is_module_await {
                         let current = self.current_module_specifier.as_deref();
-                        let entry = self.entry_module_specifier.as_deref();
-                        if !self.call_stack.is_empty() || current != entry {
+                        if !self.call_stack.is_empty() {
                             return Err(InterpreterError::ModuleEvaluationFailed {
                                 specifier: current.unwrap_or("<unknown>").to_string(),
-                                reason: "top-level await in an imported module requires async module-graph continuation support".to_string(),
+                                reason: "module await executed with an active function frame"
+                                    .to_string(),
                             });
                         }
                     }
@@ -49350,16 +49796,12 @@ impl InterpreterCore {
                                 .top_level_await_resumption_contexts
                                 .remove(&result_promise.0)
                             {
-                                let resumed = self.resume_top_level_after_await(
+                                self.resume_module_evaluation_task(
                                     resumption_context,
                                     Ok(argument.clone()),
                                     task_label.clone(),
-                                );
-                                if let Err(error) = resumed {
-                                    self.replace_top_level_await_outcome(Err(error));
-                                } else {
-                                    self.continue_resumed_top_level(module);
-                                }
+                                    module,
+                                )?;
                             } else {
                                 // With no closure handler, the identity transform propagates
                                 // the argument to the result promise as a fulfillment value.
@@ -49423,16 +49865,12 @@ impl InterpreterCore {
                             .top_level_await_resumption_contexts
                             .remove(&result_promise.0)
                         {
-                            let resumed = self.resume_top_level_after_await(
+                            self.resume_module_evaluation_task(
                                 resumption_context,
                                 Err(reason.clone()),
                                 task_label.clone(),
-                            );
-                            if let Err(error) = resumed {
-                                self.replace_top_level_await_outcome(Err(error));
-                            } else {
-                                self.continue_resumed_top_level(module);
-                            }
+                                module,
+                            )?;
                         } else {
                             self.reject_promise(
                                 *result_promise,
@@ -55686,7 +56124,7 @@ impl InterpreterCore {
         constructor: Value,
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
-        self.invoke_inline_construct_with_labels(module, constructor, arguments, None)
+        self.invoke_inline_construct_with_labels(module, constructor, arguments, None, None)
             .map(|(value, _label)| value)
     }
 
@@ -55696,6 +56134,7 @@ impl InterpreterCore {
         constructor: Value,
         arguments: Vec<Value>,
         call_labels: Option<IsolatedCallLabels>,
+        explicit_new_target: Option<(Value, Label)>,
     ) -> Result<(Value, Label), InterpreterError> {
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Reflect.construct dispatch".to_string(),
@@ -55707,6 +56146,12 @@ impl InterpreterCore {
             .map(|handle| self.contained_codegen_grant_for_artifact(handle))
             .transpose()?;
         let foreign_module = self.foreign_closure_module(&constructor, caller_module)?;
+        if let Some((new_target, _)) = explicit_new_target.as_ref() {
+            // Resolve independently from the target: function indices are
+            // module-local, and equal indices from two retained modules must
+            // never alias their prototype owners.
+            let _ = self.foreign_closure_module(new_target, caller_module)?;
+        }
         let is_foreign_construct = foreign_module.is_some();
         if is_foreign_construct {
             self.check_module_reentrant_call_depth()?;
@@ -55718,11 +56163,12 @@ impl InterpreterCore {
                 expected: "u32-bounded Reflect.construct argument count".to_string(),
                 got: format!("{} arguments", arguments.len()),
             })?;
+        let argument_start: u32 = if explicit_new_target.is_some() { 2 } else { 1 };
         let required_registers =
-            1u32.checked_add(arg_count)
+            argument_start.checked_add(arg_count)
                 .ok_or_else(|| InterpreterError::TypeError {
                     expected: "u32-bounded Reflect.construct register budget".to_string(),
-                    got: format!("1 constructor register + {arg_count} arguments"),
+                    got: format!("{argument_start} constructor registers + {arg_count} arguments"),
                 })?;
         if required_registers > self.config.max_registers {
             return Err(InterpreterError::TypeError {
@@ -55754,7 +56200,13 @@ impl InterpreterCore {
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
             .map(|labels| Self::isolated_call_label_transport_bytes(labels, arguments.len()))
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .saturating_add(
+                explicit_new_target
+                    .as_ref()
+                    .map(|(_, label)| Self::estimate_label_bytes(label))
+                    .unwrap_or(0),
+            );
         self.check_temporary_memory_budget(
             transient_execution_bytes
                 .saturating_add(self.module_execution_snapshot_memory_bytes())
@@ -55766,13 +56218,25 @@ impl InterpreterCore {
         )?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
-        wrapper.instructions.push(Ir3Instruction::Construct {
-            callee: 0,
-            args: RegRange {
-                start: 1,
-                count: arg_count,
-            },
-            dst: 0,
+        wrapper.instructions.push(if explicit_new_target.is_some() {
+            Ir3Instruction::ConstructWithNewTarget {
+                callee: 0,
+                new_target: 1,
+                args: RegRange {
+                    start: argument_start,
+                    count: arg_count,
+                },
+                dst: 0,
+            }
+        } else {
+            Ir3Instruction::Construct {
+                callee: 0,
+                args: RegRange {
+                    start: argument_start,
+                    count: arg_count,
+                },
+                dst: 0,
+            }
         });
         wrapper
             .instructions
@@ -55831,8 +56295,16 @@ impl InterpreterCore {
                 constructor_label,
                 &mut remaining_label_transport_bytes,
             )?;
+            if let Some((new_target, new_target_label)) = explicit_new_target {
+                self.seed_isolated_receiver(
+                    1,
+                    new_target,
+                    Some(new_target_label),
+                    &mut remaining_label_transport_bytes,
+                )?;
+            }
             self.seed_isolated_arguments(
-                1,
+                argument_start,
                 arguments,
                 argument_labels,
                 &mut remaining_label_transport_bytes,
@@ -65912,15 +66384,27 @@ impl InterpreterCore {
                         got: target.type_name().to_string(),
                     });
                 }
-                if args.count >= 3 {
-                    let new_target = self.read_reg(args.start + 2)?;
+                let explicit_new_target = if args.count >= 3 {
+                    let new_target_register = args.start.checked_add(2).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
+                    let new_target = self.read_reg(new_target_register)?;
                     if !self.is_constructible_value(&new_target) {
                         return Err(InterpreterError::TypeError {
                             expected: "constructible Reflect.construct newTarget".to_string(),
                             got: new_target.type_name().to_string(),
                         });
                     }
-                }
+                    Some((
+                        new_target,
+                        self.clone_register_label_with_temporary_budget(new_target_register)?,
+                    ))
+                } else {
+                    None
+                };
                 let arguments_list_register =
                     args.start
                         .checked_add(1)
@@ -65947,7 +66431,13 @@ impl InterpreterCore {
                     target,
                     arguments,
                     Some(call_labels),
+                    explicit_new_target.clone(),
                 )?;
+                let label = if let Some((_, new_target_label)) = explicit_new_target {
+                    self.join_owned_label_with_temporary_budget(label, &new_target_label)?
+                } else {
+                    label
+                };
                 self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
             }
@@ -75865,14 +76355,19 @@ impl InterpreterCore {
         module: &Ir3Module,
         value: &Value,
     ) -> Result<ObjectId, InterpreterError> {
+        let foreign_owner = self.foreign_closure_module(value, module)?;
+        let owner_module = foreign_owner.as_deref().unwrap_or(module);
         match value {
             Value::Function(function_index) => {
-                self.ensure_function_prototype(module, *function_index)
+                self.ensure_function_prototype(owner_module, *function_index)
             }
             Value::Closure(closure_id)
                 if !self.closure_method_metadata.contains_key(closure_id) =>
             {
-                self.ensure_closure_prototype(module, *closure_id)
+                self.ensure_closure_prototype(owner_module, *closure_id)
+            }
+            Value::BuiltinFunction(builtin) if builtin.kind.is_constructible() => {
+                self.ensure_builtin_prototype(builtin.display_name())
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "constructor function".to_string(),
@@ -83478,6 +83973,131 @@ mod async_runtime_tests_current {
         );
     }
 
+    fn lower_module_graph_entry_bd_yn3lv(path: &Path, source: &str) -> Ir3Module {
+        let label = path.display().to_string();
+        let syntax_tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: label.clone(),
+                    text: source.to_string(),
+                },
+                ParseGoal::Module,
+                &ParserOptions::default(),
+            )
+            .expect("async module-graph entry should parse");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(syntax_tree, &label),
+            &LoweringContext::new("bd-yn3lv", "module-graph", "async-evaluation"),
+        )
+        .expect("async module-graph entry should lower")
+        .ir3
+    }
+
+    fn async_module_graph_core_bd_yn3lv(root: &Path) -> InterpreterCore {
+        let mut core = test_interpreter();
+        core.config
+            .set_module_root(root.display().to_string())
+            .expect("set async module-graph root");
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::ModuleLoad);
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        core
+    }
+
+    #[test]
+    fn imported_tla_resumes_transitive_parents_with_owned_programs_bd_yn3lv() {
+        let temp = tempfile::tempdir().expect("async module-graph root");
+        let entry = temp.path().join("entry.mjs");
+        let middle = temp.path().join("middle.mjs");
+        let leaf = temp.path().join("leaf.mjs");
+        let entry_source =
+            "import { result } from './middle.mjs'; console.log('entry:' + result());";
+        std::fs::write(&entry, entry_source).expect("write async graph entry");
+        std::fs::write(
+            &middle,
+            "import { answer } from './leaf.mjs'; console.log('middle:' + answer()); export function result() { return answer() + 2; }",
+        )
+        .expect("write async graph middle");
+        std::fs::write(
+            &leaf,
+            "await Promise.resolve(); console.log('leaf'); export function answer() { return 40; }",
+        )
+        .expect("write async graph leaf");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(temp.path());
+        core.execute(&module)
+            .expect("transitive imported top-level await should settle");
+
+        let messages: Vec<&str> = core
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["leaf", "middle:40", "entry:42"]);
+        for path in [&leaf, &middle] {
+            let specifier = path
+                .canonicalize()
+                .expect("canonical module path")
+                .display()
+                .to_string();
+            let record = core
+                .module_state
+                .modules
+                .get(&specifier)
+                .expect("evaluated async graph module record");
+            assert!(matches!(record.status, ModuleRuntimeStatus::Evaluated));
+            assert!(record.compiled_module.is_some());
+            assert!(record.async_execution.is_none());
+        }
+    }
+
+    #[test]
+    fn imported_tla_rejection_propagates_through_parent_graph_bd_yn3lv() {
+        let temp = tempfile::tempdir().expect("rejecting async module-graph root");
+        let entry = temp.path().join("entry.mjs");
+        let middle = temp.path().join("middle.mjs");
+        let leaf = temp.path().join("leaf.mjs");
+        let entry_source = "import './middle.mjs'; console.log('entry-unreachable');";
+        std::fs::write(&entry, entry_source).expect("write rejecting graph entry");
+        std::fs::write(
+            &middle,
+            "import './leaf.mjs'; console.log('middle-unreachable');",
+        )
+        .expect("write rejecting graph middle");
+        std::fs::write(
+            &leaf,
+            "await Promise.reject('leaf-failed'); console.log('leaf-unreachable');",
+        )
+        .expect("write rejecting graph leaf");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(temp.path());
+        let error = core
+            .execute(&module)
+            .expect_err("dependency rejection must reject the importing module graph");
+
+        assert!(
+            error.to_string().contains("leaf-failed"),
+            "unexpected module-graph rejection: {error}"
+        );
+        assert!(core.console_output.is_empty());
+        for path in [&leaf, &middle] {
+            let specifier = path
+                .canonicalize()
+                .expect("canonical module path")
+                .display()
+                .to_string();
+            assert!(matches!(
+                core.module_state.modules[&specifier].status,
+                ModuleRuntimeStatus::Failed(_)
+            ));
+        }
+    }
+
     #[test]
     fn module_load_paths_apply_source_floor_bd_z1peg() {
         let temp = tempfile::tempdir().expect("module source root");
@@ -90293,6 +90913,8 @@ mod async_runtime_tests_current {
                     exports: BTreeMap::new(),
                     cjs_module_object: None,
                     compiled_module: None,
+                    evaluation_promise: None,
+                    async_execution: None,
                 },
             );
             core.current_module_specifier = Some(specifier.clone());
@@ -103772,6 +104394,310 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn reflect_construct_defaults_new_target_to_target_bd_36e01() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadNewTarget { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 2,
+                    val: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("default_new_target".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.constant_pool.push("observedNewTarget".into());
+        owner.header.source_label = "default-new-target-owner.mjs".to_string();
+        let mut caller = test_module_with_functions(Vec::new(), Vec::new());
+        caller.header.source_label = "default-new-target-caller.mjs".to_string();
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "default-new-target-owner.mjs")
+            .expect("target owner should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "default-new-target-owner.mjs".to_string());
+        let argument_list = seed_array_like(&mut core, &[]);
+        core.write_reg(0, Value::Closure(0)).expect("target");
+        core.write_reg(1, Value::Object(argument_list))
+            .expect("arguments list");
+        core.sync_estimated_memory_bytes()
+            .expect("seeded default-newTarget fixture accounting");
+
+        let result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 2 },
+                Some(&caller),
+            )
+            .expect("omitted newTarget should default to target");
+        let Value::Object(result_id) = result else {
+            panic!("Reflect.construct should return the allocated object");
+        };
+        assert_eq!(
+            core.heap[result_id.0 as usize]
+                .properties
+                .get("observedNewTarget"),
+            Some(&Value::Closure(0)),
+            "LoadNewTarget must observe the target when the third argument is omitted"
+        );
+        let target_key = (InterpreterCore::closure_prototype_owner_id(&owner), 0);
+        assert_eq!(
+            core.heap[result_id.0 as usize].prototype,
+            Some(core.function_prototypes[&target_key])
+        );
+    }
+
+    #[test]
+    fn reflect_construct_explicit_cross_module_new_target_preserves_owner_and_ifc_bd_36e01() {
+        let mut target_owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadNewTarget { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 2,
+                    val: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("target_constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        target_owner.constant_pool.push("observedNewTarget".into());
+        target_owner.header.source_label = "reflect-target-owner.mjs".to_string();
+        let mut new_target_owner = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("new_target_constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        new_target_owner.header.source_label = "reflect-new-target-owner.mjs".to_string();
+        let mut caller = test_module_with_functions(
+            Vec::new(),
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("colliding_caller_function".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        caller.header.source_label = "reflect-new-target-caller.mjs".to_string();
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&target_owner, "reflect-target-owner.mjs")
+            .expect("target owner should be retained");
+        core.ensure_module_record(&new_target_owner, "reflect-new-target-owner.mjs")
+            .expect("newTarget owner should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "reflect-target-owner.mjs".to_string());
+        core.closure_module_origins
+            .insert(1, "reflect-new-target-owner.mjs".to_string());
+
+        let caller_prototype = core
+            .ensure_function_prototype(&caller, 0)
+            .expect("colliding caller prototype");
+        let argument_list = seed_array_like(&mut core, &[]);
+        core.write_reg(0, Value::Closure(0)).expect("target");
+        core.write_reg(1, Value::Object(argument_list))
+            .expect("arguments list");
+        core.write_reg_with_label(2, Value::Closure(1), Label::TopSecret)
+            .expect("explicit newTarget");
+        core.write_reg_with_label(7, Value::str("caller"), Label::Internal)
+            .expect("unrelated caller state");
+        core.sync_estimated_memory_bytes()
+            .expect("seeded explicit-newTarget fixture accounting");
+
+        let result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 3 },
+                Some(&caller),
+            )
+            .expect("explicit cross-module newTarget should construct");
+        let Value::Object(result_id) = result else {
+            panic!("Reflect.construct should return the allocated object");
+        };
+        assert_eq!(
+            core.heap[result_id.0 as usize]
+                .properties
+                .get("observedNewTarget"),
+            Some(&Value::Closure(1)),
+            "LoadNewTarget must observe the supplied newTarget"
+        );
+        let target_key = (
+            InterpreterCore::closure_prototype_owner_id(&target_owner),
+            0,
+        );
+        let new_target_key = (
+            InterpreterCore::closure_prototype_owner_id(&new_target_owner),
+            1,
+        );
+        let target_prototype = core.function_prototypes[&target_key];
+        let new_target_prototype = core.function_prototypes[&new_target_key];
+        assert_ne!(target_prototype, new_target_prototype);
+        assert_ne!(new_target_prototype, caller_prototype);
+        assert_eq!(
+            core.heap[result_id.0 as usize].prototype,
+            Some(new_target_prototype),
+            "allocation must use the supplied newTarget.prototype owner"
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::TopSecret),
+            "the newTarget label must reach the Reflect.construct result"
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&result_id),
+            Some(&Label::TopSecret),
+            "the newTarget-derived receiver label must reach constructor side effects"
+        );
+        assert_eq!(core.get_register_label(7), Ok(&Label::Internal));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn reflect_construct_rejects_invalid_new_target_bd_36e01() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("target".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let argument_list = seed_array_like(&mut core, &[]);
+        core.write_reg(0, Value::Function(0)).expect("target");
+        core.write_reg(1, Value::Object(argument_list))
+            .expect("arguments list");
+        core.write_reg(2, Value::Int(7)).expect("invalid newTarget");
+
+        let error = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 3 },
+                Some(&module),
+            )
+            .expect_err("non-constructor newTarget must fail closed");
+        assert!(
+            matches!(error, InterpreterError::TypeError { ref expected, .. }
+                if expected.contains("newTarget")),
+            "unexpected invalid-newTarget error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn reflect_construct_rejects_mismatched_new_target_owner_bd_36e01() {
+        let caller = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("local_target".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut mismatched_owner = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("foreign_new_target".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        mismatched_owner.header.source_label = "actual-new-target-owner.mjs".to_string();
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&mismatched_owner, "claimed-new-target-owner.mjs")
+            .expect("placeholder owner record");
+        core.retain_module_program("claimed-new-target-owner.mjs", &mismatched_owner)
+            .expect("install deliberately mismatched retained program");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "claimed-new-target-owner.mjs".to_string());
+        let argument_list = seed_array_like(&mut core, &[]);
+        core.write_reg(0, Value::Function(0)).expect("local target");
+        core.write_reg(1, Value::Object(argument_list))
+            .expect("arguments list");
+        core.write_reg(2, Value::Closure(0))
+            .expect("foreign newTarget");
+
+        let error = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 3 },
+                Some(&caller),
+            )
+            .expect_err("mismatched newTarget owner must fail closed");
+        assert!(
+            matches!(
+                error,
+                InterpreterError::ModuleEvaluationFailed { ref specifier, ref reason }
+                    if specifier == "claimed-new-target-owner.mjs"
+                        && reason.contains("owner mismatch")
+                        && reason.contains("actual-new-target-owner.mjs")
+            ),
+            "unexpected mismatched-newTarget-owner error: {error:?}"
+        );
+    }
+
+    #[test]
     fn foreign_constructor_rejects_mismatched_retained_owner_bd_fw7zd_7() {
         let mut mismatched_owner = test_module_with_functions(
             vec![Ir3Instruction::Return { value: 0 }],
@@ -104499,7 +105425,10 @@ mod function_prototype_call_apply_tests_current {
             .expect("top-level await dependency");
         core.top_level_await_resumption_contexts.insert(
             top_level_result.0,
-            TopLevelAwaitResumptionContext { result_register: 0 },
+            TopLevelAwaitResumptionContext {
+                module_specifier: "terminal-fixture.mjs".to_string(),
+                continuation: ModuleAwaitContinuation::AwaitValue { result_register: 0 },
+            },
         );
         let combinator_descendant = core
             .register_promise_then(waiting_combinator_result, None, None, Label::Confidential)
@@ -126001,6 +126930,8 @@ mod tests {
                 exports: BTreeMap::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,
+                evaluation_promise: None,
+                async_execution: None,
             },
         );
         core.current_module_specifier = Some(specifier.clone());

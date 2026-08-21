@@ -51,6 +51,11 @@ fn run_fixture(name: &str, source: &str) -> (PathBuf, OrchestratorResult) {
         capabilities: vec![
             "vm_dispatch".to_string(),
             "heap_allocate".to_string(),
+            // `Buffer.alloc` rewrites to the `builtin:BufferAlloc` hostcall,
+            // which the registry gates on the canonical Builtin authority —
+            // the same grant the asw4m.3 / zyndq fixtures carry. It is NOT
+            // folded into heap_allocate.
+            "builtin".to_string(),
             "console".to_string(),
             "fs_read".to_string(),
             "fs_write".to_string(),

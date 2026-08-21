@@ -25417,6 +25417,44 @@ fn infer_function_capture_label(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FunctionCaptureOrigin {
+    enclosing_id: BindingId,
+    body_id: BindingId,
+}
+
+/// Decode the same capture-cell identity pair used when the runtime installs a
+/// closure call frame: the encoded id selects the retained enclosing cell,
+/// while `free_var_ids` selects the body-local slot that receives that cell.
+/// Any ambiguity is unsound for a static summary and therefore has no mapping.
+fn canonical_function_capture_origins(
+    free_vars: &[String],
+    free_var_ids: &[BindingId],
+) -> Option<Vec<FunctionCaptureOrigin>> {
+    if free_vars.len() != free_var_ids.len() {
+        return None;
+    }
+
+    let mut enclosing_ids = BTreeSet::<BindingId>::new();
+    let mut body_ids = BTreeSet::<BindingId>::new();
+    free_vars
+        .iter()
+        .zip(free_var_ids)
+        .map(|(runtime_name, body_id)| {
+            let enclosing_id = parse_capture_cell_name(runtime_name)
+                .or_else(|| parse_class_expression_self_capture_name(runtime_name))
+                .map(|(origin_id, _)| origin_id)?;
+            if !enclosing_ids.insert(enclosing_id) || !body_ids.insert(*body_id) {
+                return None;
+            }
+            Some(FunctionCaptureOrigin {
+                enclosing_id,
+                body_id: *body_id,
+            })
+        })
+        .collect()
+}
+
 /// Compute the hidden IFC sources of a function value. `free_var_ids` live in
 /// the detached body namespace; the canonical capture-cell name carries the
 /// enclosing binding origin. Keeping the two aligned here mirrors runtime
@@ -25433,36 +25471,25 @@ fn summarize_function_body(
     const MAX_FUNCTION_SUMMARY_DEPTH: usize = 64;
     const MAX_FUNCTION_SUMMARY_PASSES: usize = 16;
 
-    if summary_depth > MAX_FUNCTION_SUMMARY_DEPTH
-        || free_vars.len() != free_var_ids.len()
-        || body_ops.is_empty()
-    {
+    if summary_depth > MAX_FUNCTION_SUMMARY_DEPTH || body_ops.is_empty() {
         return Label::TopSecret;
     }
 
+    let Some(capture_origins) = canonical_function_capture_origins(free_vars, free_var_ids) else {
+        return Label::TopSecret;
+    };
     let mut body_binding_labels = BTreeMap::<BindingId, Label>::new();
-    let mut capture_origins = BTreeSet::<BindingId>::new();
-    let mut body_capture_ids = BTreeSet::<BindingId>::new();
     let mut capture_label = Label::Public;
-    for (runtime_name, body_id) in free_vars.iter().zip(free_var_ids) {
-        let Some(origin_id) = parse_capture_cell_name(runtime_name)
-            .or_else(|| parse_class_expression_self_capture_name(runtime_name))
-            .map(|(origin_id, _)| origin_id)
-        else {
-            return Label::TopSecret;
-        };
-        if !capture_origins.insert(origin_id) || !body_capture_ids.insert(*body_id) {
-            return Label::TopSecret;
-        }
+    for origin in capture_origins {
         // A closure can be created before the captured binding's first store.
         // Match runtime's retained cell with the ordinary unresolved-binding
         // floor until the enclosing fixed point supplies a stronger label.
         let origin_label = enclosing_labels
-            .get(&origin_id)
+            .get(&origin.enclosing_id)
             .cloned()
             .unwrap_or(Label::Internal);
         capture_label = capture_label.join(&origin_label);
-        body_binding_labels.insert(*body_id, origin_label);
+        body_binding_labels.insert(origin.body_id, origin_label);
     }
 
     let body_ir2_ops = body_ops
@@ -29391,6 +29418,32 @@ mod tests {
     }
 
     #[test]
+    fn canonical_capture_mapping_matches_runtime_frame_slots_bd_qjh7y() {
+        let names = vec![
+            capture_cell_name("captured", 7),
+            class_expression_self_capture_name("Named", 11),
+        ];
+        assert_eq!(
+            canonical_function_capture_origins(&names, &[99, 101]),
+            Some(vec![
+                FunctionCaptureOrigin {
+                    enclosing_id: 7,
+                    body_id: 99,
+                },
+                FunctionCaptureOrigin {
+                    enclosing_id: 11,
+                    body_id: 101,
+                },
+            ])
+        );
+        assert_eq!(
+            canonical_function_capture_origins(&["uncanonical".to_string()], &[99]),
+            None,
+            "a capture without the runtime's enclosing-cell identity must fail high"
+        );
+    }
+
+    #[test]
     fn no_capture_return_summary_survives_call_into_egress_bd_qjh7y() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"qjh7y-call"), "qjh7y_call.js");
         ir1.ops.extend([
@@ -29494,6 +29547,89 @@ mod tests {
         ]);
 
         assert_eq!(network_egress_label(&ir1), Label::Secret);
+    }
+
+    #[test]
+    fn branch_async_and_generator_summaries_reach_egress_bd_qjh7y() {
+        let cases = [
+            (
+                "branch",
+                false,
+                false,
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Boolean(false),
+                    },
+                    Ir1Op::JumpIfFalsyConsume { label_id: 1 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("secret_branch_result".into()),
+                    },
+                    Ir1Op::Return,
+                    Ir1Op::Label { id: 1 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-result".into()),
+                    },
+                    Ir1Op::Return,
+                ],
+            ),
+            (
+                "async",
+                true,
+                false,
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("secret_async_result".into()),
+                    },
+                    Ir1Op::Return,
+                ],
+            ),
+            (
+                "generator",
+                false,
+                true,
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("secret_generator_yield".into()),
+                    },
+                    Ir1Op::Yield { delegate: false },
+                    Ir1Op::Return,
+                ],
+            ),
+        ];
+
+        for (name, is_async, is_generator, body_ops) in cases {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(name.as_bytes()),
+                format!("qjh7y_{name}.js"),
+            );
+            ir1.ops.extend([
+                Ir1Op::CreateFunction {
+                    name: Some(name.to_string()),
+                    param_names: Vec::new(),
+                    body_ops,
+                    free_vars: Vec::new(),
+                    free_var_ids: Vec::new(),
+                    runtime_global_loads: Vec::new(),
+                    child_captured_locals: Vec::new(),
+                    local_lexical_bindings: Vec::new(),
+                    is_generator,
+                    is_async,
+                    rest_param_index: None,
+                },
+                Ir1Op::Call { arg_count: 0 },
+                Ir1Op::HostCall {
+                    capability: "net.write".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Return,
+            ]);
+
+            assert_eq!(
+                network_egress_label(&ir1),
+                Label::Secret,
+                "{name} return/yield sources must survive the call boundary"
+            );
+        }
     }
 
     #[test]

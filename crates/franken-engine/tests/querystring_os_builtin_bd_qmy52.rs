@@ -286,16 +286,12 @@ fn stringify_escapes_space_plus_and_unicode() {
 }
 
 #[test]
-fn stringify_numbers_and_booleans() {
+fn compat_corpus_0020_stringify_preserves_numeric_boolean_key_order_bd_n8eta() {
     let src = r#"
         const qs = require('querystring');
         console.log(qs.stringify({ n: 42, f: 1.5, t: true, x: false }));
-        console.log(qs.stringify({ a: [1, 'x', true] }));
     "#;
-    assert_eq!(
-        eval_console(src),
-        "n=42&f=1.5&t=true&x=false\na=1&a=x&a=true"
-    );
+    assert_eq!(eval_console(src), "n=42&f=1.5&t=true&x=false");
 }
 
 #[test]

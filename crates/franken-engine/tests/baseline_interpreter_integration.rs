@@ -3145,11 +3145,88 @@ fn alternating_cross_module_recursion_result(
         .map(|result| result.value)
 }
 
+fn direct_cross_module_recursion_result(countdown: i64) -> Result<Value, InterpreterError> {
+    let root = temp_module_dir(&format!(
+        "module_import_direct_cross_recursion_depth_{countdown}"
+    ));
+    fs::create_dir_all(&root).expect("create direct-recursion module root");
+    fs::write(
+        root.join("a.mjs"),
+        "import { step } from './b.mjs';\n\
+         export function descend(n) {\n\
+           if (n <= 0) return 0;\n\
+           return step(n - 1);\n\
+         }",
+    )
+    .expect("write direct-recursion module a");
+    fs::write(
+        root.join("b.mjs"),
+        "import { descend } from './a.mjs';\n\
+         export function step(n) {\n\
+           if (n <= 0) return 0;\n\
+           return descend(n - 1);\n\
+         }",
+    )
+    .expect("write direct-recursion module b");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 4,
+                value: countdown,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec!["./a.mjs".to_string(), "descend".to_string()],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.max_call_depth = 8;
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    QuickJsLane::with_config(config)
+        .execute(
+            &module,
+            &format!("module-import-direct-cross-recursion-depth-{countdown}-trace"),
+        )
+        .map(|result| result.value)
+}
+
 #[test]
-fn alternating_cross_module_recursion_one_below_effective_depth_limit_bd_hwjbi() {
+fn callback_mediated_cross_module_recursion_one_below_effective_depth_limit_bd_hwjbi() {
     let value = alternating_cross_module_recursion_result(3, false)
-        .expect("one-below-limit direct/callback recursion must complete");
+        .expect("one-below-limit callback-mediated recursion must complete");
     assert_eq!(value, Value::Int(0));
+}
+
+#[test]
+fn direct_foreign_closure_recursion_hits_exact_effective_depth_limit_bd_hwjbi() {
+    let error = direct_cross_module_recursion_result(7)
+        .expect_err("exact-limit direct foreign-closure recursion must fail closed");
+    assert_eq!(error, InterpreterError::StackOverflow { depth: 8, max: 8 });
 }
 
 #[test]

@@ -24860,6 +24860,10 @@ enum FlowValueShape {
     /// accessors. Any mutation, escape, or control-flow merge clears this
     /// proof through the ordinary shape invalidation paths.
     OwnKeyArray,
+    /// The exact native `Array.prototype.join` method read from an
+    /// authenticated `OwnKeyArray`. Keeping this distinct from a generic
+    /// callable lets CallMethod retain the primitive-string result contract.
+    OwnKeyJoinMethod,
     ClosedResult,
     BufferObject,
     FreshAggregate,
@@ -26301,6 +26305,7 @@ fn simulate_ir2_flow_labels(
                 let callee_is_summarized = matches!(
                     callee_shape,
                     FlowValueShape::Callable
+                        | FlowValueShape::OwnKeyJoinMethod
                         | FlowValueShape::EventEmitterFluentMethod
                         | FlowValueShape::EventEmitterEmitMethod
                 );
@@ -26314,6 +26319,7 @@ fn simulate_ir2_flow_labels(
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 let result_shape = match callee_shape {
+                    FlowValueShape::OwnKeyJoinMethod => FlowValueShape::Primitive,
                     FlowValueShape::EventEmitterFluentMethod => {
                         FlowValueShape::EventEmitterObject
                     }
@@ -26555,7 +26561,7 @@ fn simulate_ir2_flow_labels(
                     (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
                         if key.as_str() == Some("join") =>
                     {
-                        FlowValueShape::Callable
+                        FlowValueShape::OwnKeyJoinMethod
                     }
                     // bd-zco6t: finite engine observations on closed
                     // receivers, mirroring the OwnKeyArray `.join` proof.
@@ -32432,16 +32438,26 @@ mod tests {
 
     #[test]
     fn object_keys_join_keeps_finite_own_key_provenance_bd_n8eta() {
-        for (name, source, expected_querystring_parse) in [
+        for (
+            name,
+            source,
+            expected_querystring_parse,
+            expected_querystring_stringify,
+            expected_console_count,
+        ) in [
             (
                 "querystring_0010",
-                "const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(','));",
+                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
                 false,
+                true,
+                2,
             ),
             (
                 "querystring_0013",
                 "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
                 true,
+                false,
+                1,
             ),
         ] {
             let tree = crate::parser_api_stability::parse_script(source)
@@ -32466,6 +32482,14 @@ mod tests {
                 expected_querystring_parse,
                 "{name} querystring parse lowering"
             );
+            assert_eq!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, .. }
+                        if capability == "builtin:QuerystringStringify"
+                )),
+                expected_querystring_stringify,
+                "{name} querystring stringify lowering"
+            );
             assert!(
                 ir1.ops.iter().any(|op| matches!(op,
                     Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
@@ -32477,20 +32501,28 @@ mod tests {
             let ir2 = lower_ir1_to_ir2(&ir1)
                 .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
                 .module;
-            let console_flow = ir2
+            let console_flows = ir2
                 .ops
                 .iter()
-                .rev()
-                .find(|op| matches!(&op.inner,
-                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
-                ))
-                .and_then(|op| op.flow.as_ref())
-                .unwrap_or_else(|| panic!("console flow for {name}"));
-            assert_eq!(console_flow.data_label, Label::Public, "{name}");
-            assert!(
-                !console_flow.declassification_required,
-                "{name} must not require a TopSecret-to-Internal declassification"
+                .filter_map(|op| match &op.inner {
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log" => {
+                        op.flow.as_ref()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                console_flows.len(),
+                expected_console_count,
+                "{name} console flow count"
             );
+            for console_flow in console_flows {
+                assert_eq!(console_flow.data_label, Label::Public, "{name}");
+                assert!(
+                    !console_flow.declassification_required,
+                    "{name} must not require a TopSecret-to-Internal declassification"
+                );
+            }
         }
 
         let mut unknown_object = Ir1Module::new(

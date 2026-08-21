@@ -26223,6 +26223,10 @@ fn simulate_ir2_flow_labels(
                     crypto_origin: None,
                     shape: object.shape,
                     process_operation: None,
+                    // bd-pafik: DefineMethod/DefineAccessor mutate the object
+                    // after literal construction, so any callback-carrier
+                    // proof it held no longer covers its contents.
+                    stream: None,
                 });
                 label
             }
@@ -28593,6 +28597,336 @@ mod tests {
             .expect("hostcall flow annotation");
         assert_eq!(flow.data_label, Label::Public);
         assert!(!flow.declassification_required);
+    }
+
+    // -- bd-pafik: stream pipeline callback / Promise rejection provenance --
+
+    fn pafik_callback_fn(
+        param_count: usize,
+        body_ops: Vec<Ir1Op>,
+        free: Vec<(String, BindingId)>,
+    ) -> Ir1Op {
+        Ir1Op::CreateFunction {
+            name: None,
+            param_names: (0..param_count).map(|index| format!("p{index}")).collect(),
+            body_ops,
+            free_vars: free.iter().map(|(name, _)| name.clone()).collect(),
+            free_var_ids: free.iter().map(|(_, id)| *id).collect(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            rest_param_index: None,
+        }
+    }
+
+    /// Body of a well-behaved write callback: `callback(new Error("boom"))`.
+    fn pafik_reporting_callback_body() -> Vec<Ir1Op> {
+        vec![
+            Ir1Op::LoadBinding { binding_id: 2 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("boom".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:Error".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Call { arg_count: 1 },
+            Ir1Op::Return,
+        ]
+    }
+
+    /// Module: construct a Writable sink (binding 0) from `sink_callback`, a
+    /// Readable source (binding 1), then `try { await pipeline(src, sink) }
+    /// catch (e)` storing the caught value into binding 2. Returns the IR2
+    /// data label of that catch-side StoreBinding.
+    fn pafik_pipeline_catch_label(sink_callback: Ir1Op, pipeline_stage_is_stream: bool) -> Label {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"bd-pafik"), "bd_pafik.js");
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("write".into()),
+        });
+        ir1.ops.push(sink_callback);
+        ir1.ops.push(Ir1Op::NewObject { count: 1 });
+        if pipeline_stage_is_stream {
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "builtin:StreamWritable".to_string(),
+                arg_count: 1,
+            });
+        }
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 0 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("chunk-a".into()),
+        });
+        ir1.ops.push(Ir1Op::NewArray { count: 1 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "builtin:StreamReadableFrom".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 1 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::BeginTry {
+            catch_label: 1,
+            finally_label: None,
+        });
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id: 1 });
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id: 0 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "builtin:StreamPromisesPipeline".to_string(),
+            arg_count: 2,
+        });
+        ir1.ops.push(Ir1Op::Await);
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::EndTry);
+        ir1.ops.push(Ir1Op::Jump { label_id: 2 });
+        ir1.ops.push(Ir1Op::Label { id: 1 });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 2 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Label { id: 2 });
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("bd-pafik pipeline module must lower")
+            .module;
+        let mut catch_store_labels = ir2
+            .ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op.inner, Ir1Op::StoreBinding { binding_id: 2 }))
+            .map(|(index, op)| {
+                (
+                    index,
+                    op.flow
+                        .as_ref()
+                        .expect("catch StoreBinding flow annotation")
+                        .data_label
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(catch_store_labels.len(), 1, "exactly one catch store");
+        catch_store_labels.pop().expect("catch store present").1
+    }
+
+    #[test]
+    fn pipeline_await_transfers_bounded_rejection_bd_pafik() {
+        // A pipeline of authenticated streams whose only callback reports
+        // errors through its engine continuation must not poison the catch
+        // binding with TopSecret: the Await transfers the static rejection
+        // summary instead. On the pre-bd-pafik simulator this label was
+        // TopSecret (Await had no settlement provenance).
+        let label = pafik_pipeline_catch_label(
+            pafik_callback_fn(3, pafik_reporting_callback_body(), Vec::new()),
+            true,
+        );
+        assert_ne!(label, Label::TopSecret);
+        assert_eq!(
+            label.join(&Label::Internal),
+            Label::Internal,
+            "public-data pipeline rejection must stay at the Internal floor, got {label:?}"
+        );
+    }
+
+    #[test]
+    fn pipeline_with_unknown_stage_keeps_fail_high_bd_pafik() {
+        // The same shape, but the sink stage is a plain object instead of an
+        // authenticated stream: unknown stages keep the fail-high default.
+        let label = pafik_pipeline_catch_label(
+            pafik_callback_fn(3, pafik_reporting_callback_body(), Vec::new()),
+            false,
+        );
+        assert_eq!(label, Label::TopSecret);
+    }
+
+    #[test]
+    fn pipeline_mutating_callback_keeps_fail_high_bd_pafik() {
+        // A callback whose body mutates the heap has no supported summary
+        // (mutation / alias escape fails high), so the pipeline rejection
+        // stays TopSecret.
+        let mutating_body = vec![
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("v".into()),
+            },
+            Ir1Op::LoadBinding { binding_id: 0 },
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static("k".into()),
+            },
+            Ir1Op::Pop,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ];
+        let label =
+            pafik_pipeline_catch_label(pafik_callback_fn(3, mutating_body, Vec::new()), true);
+        assert_eq!(label, Label::TopSecret);
+    }
+
+    #[test]
+    fn pipeline_callback_capture_labels_flow_into_rejection_bd_pafik() {
+        // A callback that throws a captured secret must surface at least that
+        // secret's label on the catch binding (captured-labels correspondence).
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"bd-pafik-cap"), "bd_pafik_cap.js");
+        // binding 3 holds a Secret literal; the callback captures it.
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("my_secret_key".into()),
+        });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 3 });
+        ir1.ops.push(Ir1Op::Pop);
+        let capture_name = format!("{CAPTURE_CELL_NAME_PREFIX}3\0leak");
+        let throwing_body = vec![
+            Ir1Op::LoadBinding { binding_id: 7 },
+            Ir1Op::Throw,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ];
+        let callback = pafik_callback_fn(3, throwing_body, vec![(capture_name, 7)]);
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("write".into()),
+        });
+        ir1.ops.push(callback);
+        ir1.ops.push(Ir1Op::NewObject { count: 1 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "builtin:StreamWritable".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::BeginTry {
+            catch_label: 1,
+            finally_label: None,
+        });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "builtin:StreamPromisesPipeline".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Await);
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::EndTry);
+        ir1.ops.push(Ir1Op::Jump { label_id: 2 });
+        ir1.ops.push(Ir1Op::Label { id: 1 });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 4 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Label { id: 2 });
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("bd-pafik capture module must lower")
+            .module;
+        let label = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::StoreBinding { binding_id: 4 }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("catch StoreBinding flow annotation")
+            .data_label
+            .clone();
+        assert_eq!(
+            label.join(&Label::Secret),
+            label,
+            "captured Secret must reach the catch binding, got {label:?}"
+        );
+    }
+
+    #[test]
+    fn stream_callback_summary_admissions_bd_pafik() {
+        let labels = BTreeMap::new();
+        // Reporting through the engine continuation is supported.
+        assert_eq!(
+            summarize_stream_callback_exceptions(
+                3,
+                None,
+                &pafik_reporting_callback_body(),
+                &[],
+                &[],
+                &BTreeSet::new(),
+                &labels,
+            ),
+            StreamCallbackSummary::Supported(Label::Internal)
+        );
+        // Calling a data parameter (not the continuation) is not.
+        let call_data_param = vec![
+            Ir1Op::LoadBinding { binding_id: 0 },
+            Ir1Op::Call { arg_count: 0 },
+            Ir1Op::Return,
+        ];
+        assert_eq!(
+            summarize_stream_callback_exceptions(
+                3,
+                None,
+                &call_data_param,
+                &[],
+                &[],
+                &BTreeSet::new(),
+                &labels,
+            ),
+            StreamCallbackSummary::Unsupported
+        );
+        // Nested function creation (recursion vector) is not.
+        let nested = vec![
+            pafik_callback_fn(0, vec![Ir1Op::Return], Vec::new()),
+            Ir1Op::Pop,
+            Ir1Op::Return,
+        ];
+        assert_eq!(
+            summarize_stream_callback_exceptions(
+                3,
+                None,
+                &nested,
+                &[],
+                &[],
+                &BTreeSet::new(),
+                &labels,
+            ),
+            StreamCallbackSummary::Unsupported
+        );
+        // A method call on a capture proven to be a fresh plain aggregate is
+        // supported; on any other capture it is not.
+        let push_on_capture = vec![
+            Ir1Op::LoadBinding { binding_id: 9 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("push".into()),
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("entry".into()),
+            },
+            Ir1Op::CallMethod { arg_count: 1 },
+            Ir1Op::Return,
+        ];
+        let capture = vec![(format!("{CAPTURE_CELL_NAME_PREFIX}5\0events"), 9u32)];
+        let free_ids = [9u32];
+        let free_names = [capture[0].0.clone()];
+        assert_eq!(
+            summarize_stream_callback_exceptions(
+                3,
+                None,
+                &push_on_capture,
+                &free_ids,
+                &free_names,
+                &BTreeSet::from([9u32]),
+                &labels,
+            ),
+            StreamCallbackSummary::Supported(Label::Internal)
+        );
+        assert_eq!(
+            summarize_stream_callback_exceptions(
+                3,
+                None,
+                &push_on_capture,
+                &free_ids,
+                &free_names,
+                &BTreeSet::new(),
+                &labels,
+            ),
+            StreamCallbackSummary::Unsupported
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ fn package(id: &str, source: &str) -> ExtensionPackage {
         source: source.to_string(),
         source_file: None,
         module_root: None,
-        capabilities: vec![],
+        capabilities: vec!["builtin".to_string()],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     }

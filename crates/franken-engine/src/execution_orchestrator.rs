@@ -1403,6 +1403,8 @@ struct EvidenceRecordInput<'a> {
     package: &'a ExtensionPackage,
     decision: &'a ActionDecision,
     effective_action: ContainmentAction,
+    effective_expected_loss_millionths: i64,
+    benign_completion_downgrade: bool,
     exec: &'a ExecutionResult,
     update: &'a UpdateResult,
     ir3_schedule_cost: Option<TropicalWeight>,
@@ -2736,10 +2738,27 @@ impl ExecutionOrchestrator {
 
             // Step 8: Decide action.
             let action_decision = self.loss_selector.select(&posterior);
-            let expected_loss_millionths = action_decision.expected_loss_millionths;
             let (stopping_decision, optimal_stopping_certificate) =
                 self.observe_optimal_stopping(&update_result, package, attempt_index);
             let mut containment_action = action_decision.action;
+            // bd-sxh8o.4: a completed run whose MAP risk state is Benign, with
+            // zero denied hostcalls, no hook escalation request, and no
+            // stopping crossing carries no observed risk signal. Expected-loss
+            // selection still picks Challenge there because the residual prior
+            // mass on Unknown/Malicious taxes the Allow column, which turned
+            // Challenge into the default label on every benign hello-world run
+            // and made the escalation ladder uninformative. That case is a
+            // prior tax, not containment: emit Allow. Every observed signal
+            // (denied hostcall, e-process stop, hook request) bypasses this
+            // branch and still escalates below.
+            let benign_completion_downgrade = containment_action == ContainmentAction::Challenge
+                && risk_state == RiskState::Benign
+                && stopping_decision != StoppingDecision::Stop
+                && exec_result.requested_hook_action.is_none()
+                && exec_result.hostcall_decisions.iter().all(|d| d.allowed);
+            if benign_completion_downgrade {
+                containment_action = ContainmentAction::Allow;
+            }
             if stopping_decision == StoppingDecision::Stop
                 && containment_action == ContainmentAction::Allow
             {
@@ -2755,6 +2774,16 @@ impl ExecutionOrchestrator {
             if let Some(action) = self.containment_action_override.take() {
                 containment_action = action;
             }
+            // Report the expected loss of the action actually taken, not the
+            // selector's optimum: when an override diverges the two, labelling
+            // the effective action with the optimum's loss misstates the
+            // decision record.
+            let expected_loss_millionths = action_decision
+                .explanation
+                .all_expected_losses
+                .get(&containment_action.to_string())
+                .copied()
+                .unwrap_or(action_decision.expected_loss_millionths);
             cell_cancel_reason = if containment_action.severity() >= 4 {
                 CancelReason::Quarantine
             } else {
@@ -2776,6 +2805,8 @@ impl ExecutionOrchestrator {
                 package,
                 decision: &action_decision,
                 effective_action: containment_action,
+                effective_expected_loss_millionths: expected_loss_millionths,
+                benign_completion_downgrade,
                 exec: &exec_result,
                 update: &update_result,
                 ir3_schedule_cost,
@@ -3833,6 +3864,8 @@ impl ExecutionOrchestrator {
             package,
             decision,
             effective_action,
+            effective_expected_loss_millionths,
+            benign_completion_downgrade,
             exec,
             update,
             ir3_schedule_cost,
@@ -3856,18 +3889,27 @@ impl ExecutionOrchestrator {
 
         builder = builder.timestamp_ns(0);
 
-        // Add all containment actions as candidates.
+        // Add all containment actions as candidates with the expected loss
+        // the selector actually computed for each (bd-sxh8o.4: previously
+        // hard-coded to 0, which made the candidate list contradict the
+        // chosen action's loss).
         for action in &ContainmentAction::ALL {
-            builder = builder.candidate(CandidateAction::new(format!("{action:?}"), 0));
+            let candidate_loss = decision
+                .explanation
+                .all_expected_losses
+                .get(&action.to_string())
+                .copied()
+                .unwrap_or(0);
+            builder = builder.candidate(CandidateAction::new(format!("{action:?}"), candidate_loss));
         }
 
         // Record chosen action.
-        let stopping_override = effective_action != decision.action;
+        let stopping_override = effective_action != decision.action && !benign_completion_downgrade;
         builder = builder.chosen(ChosenAction {
             action_name: format!("{}", effective_action),
-            expected_loss_millionths: decision.expected_loss_millionths,
+            expected_loss_millionths: effective_expected_loss_millionths,
             rationale: format!(
-                "risk_state={:?}, posterior_benign={}, stopping_override={stopping_override}",
+                "risk_state={:?}, posterior_benign={}, stopping_override={stopping_override}, benign_completion_downgrade={benign_completion_downgrade}",
                 update.posterior.map_estimate(),
                 update.posterior.p_benign
             ),

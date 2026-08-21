@@ -270,6 +270,20 @@ const PROMISE_REACTION_CALLABLE_BASE: u32 = 0x8000_0000;
 /// fail-closed: deeper sub-arrays render as `""` rather than risking stack
 /// exhaustion (bd-sxh8o.3).
 const ARRAY_JOIN_MAX_DEPTH: usize = 128;
+
+/// One queued `process.nextTick(callback, ...args)` job (bd-8nrud). The
+/// callback runs with the forwarded arguments before any Promise microtask at
+/// the next checkpoint, matching Node's next-tick ordering.
+#[derive(Debug, Clone)]
+struct NextTickTask {
+    /// The callable to invoke (closure, plain function, or builtin).
+    callback: Value,
+    /// Arguments forwarded from the `process.nextTick` call site.
+    args: Vec<Value>,
+    /// IFC label joined over the registration arguments; the callback runs
+    /// under this task label.
+    label: Label,
+}
 /// Fixed instruction charge for authenticating and publishing one
 /// `cluster.setupPrimary` replacement in addition to every property visited.
 const CLUSTER_SETUP_FIXED_WORK: usize = 1;
@@ -10070,6 +10084,12 @@ pub struct InterpreterCore {
     /// `ClosureHandle` transport stays unchanged while the id can never
     /// collide with a real closure-table index (bd-sxh8o.1).
     promise_reaction_callables: BTreeMap<u32, Value>,
+    /// Node-compatible `process.nextTick` job queue (bd-8nrud). Drained
+    /// completely before each Promise microtask at every checkpoint, matching
+    /// Node's next-tick-before-Promise ordering. Populated only by the
+    /// statically recognized `builtin:ProcessNextTick` hostcall — the raw
+    /// `process` object is never exposed.
+    next_tick_queue: std::collections::VecDeque<NextTickTask>,
     /// Next unused synthetic id for `promise_reaction_callables`.
     next_promise_reaction_callable_id: u32,
     /// bd-201vt: pending arguments for scheduled async fs callbacks
@@ -10817,6 +10837,7 @@ impl InterpreterCore {
             promise_in_flight_task_bytes: 0,
             promise_reaction_callables: BTreeMap::new(),
             next_promise_reaction_callable_id: PROMISE_REACTION_CALLABLE_BASE,
+            next_tick_queue: std::collections::VecDeque::new(),
             pending_io_callbacks: BTreeMap::new(),
             pending_child_process_tasks: BTreeMap::new(),
             child_process_task_in_flight_bytes: 0,
@@ -29348,6 +29369,7 @@ impl InterpreterCore {
         self.promise_in_flight_task_bytes = 0;
         self.promise_reaction_callables.clear();
         self.next_promise_reaction_callable_id = PROMISE_REACTION_CALLABLE_BASE;
+        self.next_tick_queue.clear();
         self.next_timer_id = 0;
         self.active_timers.clear();
         self.pending_timer_tasks.clear();
@@ -48861,7 +48883,9 @@ impl InterpreterCore {
         const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
         let mut turns = 0;
 
-        while self.event_loop.has_pending_work() && turns < MAX_TURNS {
+        while (self.event_loop.has_pending_work() || !self.next_tick_queue.is_empty())
+            && turns < MAX_TURNS
+        {
             if self
                 .config
                 .cancellation_token
@@ -48876,6 +48900,7 @@ impl InterpreterCore {
             // microtasks are queued, the program is done — exactly Node's
             // process-exit rule (an unref'd timer may simply never fire).
             if self.event_loop.microtasks.is_empty()
+                && self.next_tick_queue.is_empty()
                 && self.only_unref_or_cancelled_timers_pending()
             {
                 break;
@@ -49238,11 +49263,54 @@ impl InterpreterCore {
     /// Each microtask may enqueue additional microtasks; the drain continues
     /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
     /// A safety bound prevents infinite loops from pathological promise chains.
+    /// Drain the `process.nextTick` job queue until it is empty (bd-8nrud).
+    ///
+    /// Node semantics: the tick queue runs to exhaustion — including ticks
+    /// enqueued by tick callbacks — before any Promise microtask. Each
+    /// executed tick counts against the caller's shared drain bound so a
+    /// mutually-feeding tick/microtask pair cannot starve the checkpoint. An
+    /// uncaught exception in a tick callback aborts the drain fail-closed
+    /// (Node's equivalent crashes the process).
+    fn drain_next_tick_queue(
+        &mut self,
+        module: Option<&Ir3Module>,
+        drained: &mut u32,
+        max_drain: u32,
+    ) -> Result<(), InterpreterError> {
+        while *drained < max_drain {
+            let previous_bytes = self.next_tick_queue_memory_bytes();
+            let Some(task) = self.next_tick_queue.pop_front() else {
+                break;
+            };
+            self.apply_memory_component_delta(
+                previous_bytes,
+                self.next_tick_queue_memory_bytes(),
+            )?;
+            *drained += 1;
+            let module = module.ok_or_else(|| InterpreterError::TypeError {
+                expected: "module-backed process.nextTick dispatch".to_string(),
+                got: "missing module context".to_string(),
+            })?;
+            self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                task.callback,
+                Value::Undefined,
+                task.args,
+                Some(task.label),
+            )?;
+        }
+        Ok(())
+    }
+
     fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
         let max_drain = 10_000u32;
         let mut drained = 0u32;
 
         while drained < max_drain {
+            // bd-8nrud: Node ordering — the next-tick queue drains completely
+            // before every Promise microtask, including ticks enqueued by the
+            // microtask executed on the previous iteration.
+            self.drain_next_tick_queue(module, &mut drained, max_drain)?;
             let previous_promise_bytes = self.promise_runtime_memory_bytes();
             let Some(task) = self.event_loop.microtasks.dequeue() else {
                 break;
@@ -69722,6 +69790,56 @@ impl InterpreterCore {
                 self.queue_microtask_from_value(&callback_val)
             }
 
+            "builtin:ProcessNextTick" => {
+                // process.nextTick(cb[, ...args]) — enqueue onto the dedicated
+                // next-tick job queue, which drains before Promise microtasks
+                // (bd-8nrud). Slot-0 convention (no receiver placeholder).
+                if args.count < 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "process.nextTick callback function".to_string(),
+                        got: "undefined".to_string(),
+                    });
+                }
+                let callback = self.read_reg(args.start)?;
+                if !matches!(
+                    callback,
+                    Value::Closure(_)
+                        | Value::Function(_)
+                        | Value::BuiltinFunction(_)
+                        | Value::AsyncFunction(_)
+                ) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "process.nextTick callback function".to_string(),
+                        got: callback.type_name().to_string(),
+                    });
+                }
+                let mut forwarded = Vec::with_capacity(args.count.saturating_sub(1) as usize);
+                for offset in 1..args.count {
+                    let register = args.start.checked_add(offset).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
+                    forwarded.push(self.read_reg(register)?);
+                }
+                let label = self.join_arg_range_label(args)?;
+                let previous_bytes = self.next_tick_queue_memory_bytes();
+                self.next_tick_queue.push_back(NextTickTask {
+                    callback,
+                    args: forwarded,
+                    label,
+                });
+                if let Err(error) = self.apply_memory_component_delta(
+                    previous_bytes,
+                    self.next_tick_queue_memory_bytes(),
+                ) {
+                    self.next_tick_queue.pop_back();
+                    return Err(error);
+                }
+                Ok(Value::Undefined)
+            }
+
             "builtin:TimersPromisesSetTimeout" => {
                 // require('timers/promises').setTimeout(ms[, value]) —
                 // returns a promise fulfilled with `value` after `ms`
@@ -72734,6 +72852,20 @@ impl InterpreterCore {
         }))
     }
 
+    /// Owned footprint of the `process.nextTick` job queue (bd-8nrud).
+    /// Charged as its own component (not part of `promise_runtime_memory_bytes`)
+    /// so the Promise then/fulfill projected-delta preflights stay exact.
+    fn next_tick_queue_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.next_tick_queue.iter().map(|task| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_value_bytes(&task.callback))
+                .saturating_add(Self::saturating_sum(
+                    task.args.iter().map(Self::estimate_value_bytes),
+                ))
+                .saturating_add(Self::estimate_label_bytes(&task.label))
+        }))
+    }
+
     /// Owned footprint of the non-closure reaction-callable side table.
     /// Charged as its own component (not part of `promise_runtime_memory_bytes`)
     /// so the existing then/fulfill projected-delta preflights stay exact.
@@ -73770,6 +73902,7 @@ impl InterpreterCore {
             .saturating_add(self.pending_timer_tasks_memory_bytes())
             .saturating_add(self.promise_runtime_memory_bytes())
             .saturating_add(self.promise_reaction_callables_memory_bytes())
+            .saturating_add(self.next_tick_queue_memory_bytes())
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_once_wrappers_memory_bytes())

@@ -24809,6 +24809,16 @@ enum FlowValueShape {
     Primitive,
     Callable,
     CallableContainer,
+    /// Authenticated constructor reference returned by the finite
+    /// `builtin:EventEmitterConstructorRef` hostcall.
+    EventEmitterConstructor,
+    /// Fresh engine-owned EventEmitter instance produced by constructing the
+    /// authenticated constructor reference.
+    EventEmitterObject,
+    /// Receiver-preserving `EventEmitter.on` / `once` method reference.
+    EventEmitterFluentMethod,
+    /// Boolean-returning `EventEmitter.emit` method reference.
+    EventEmitterEmitMethod,
     /// A fresh engine-owned array returned by `Object.keys`. Its elements are
     /// primitive strings and its prototype is the native Array prototype, so
     /// an immediate static `.join` lookup is finite and cannot invoke guest
@@ -24829,6 +24839,7 @@ impl FlowValueShape {
                 | Self::ClosedResult
                 | Self::BufferObject
                 | Self::FreshAggregate
+                | Self::EventEmitterObject
         )
     }
 }
@@ -24837,7 +24848,9 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
     for value in values {
         if !matches!(
             value.shape,
-            FlowValueShape::Primitive | FlowValueShape::Callable
+            FlowValueShape::Primitive
+                | FlowValueShape::Callable
+                | FlowValueShape::EventEmitterObject
         ) {
             value.shape = FlowValueShape::Unknown;
         }
@@ -24848,7 +24861,12 @@ fn invalidate_nonprimitive_binding_flow_shapes(
     binding_shapes: &mut BTreeMap<BindingId, FlowValueShape>,
 ) {
     for shape in binding_shapes.values_mut() {
-        if !matches!(*shape, FlowValueShape::Primitive | FlowValueShape::Callable) {
+        if !matches!(
+            *shape,
+            FlowValueShape::Primitive
+                | FlowValueShape::Callable
+                | FlowValueShape::EventEmitterObject
+        ) {
             *shape = FlowValueShape::Unknown;
         }
     }
@@ -25889,6 +25907,9 @@ fn hostcall_exception_is_operand_derived(
             && inputs
                 .iter()
                 .all(|value| value.shape == FlowValueShape::Primitive),
+        // The authenticated EventEmitter constructor reference is a finite
+        // engine-owned value with no guest operands or callbacks.
+        "builtin:EventEmitterConstructorRef" => inputs.is_empty(),
         // These constructors are intercepted only for the unshadowed native
         // globals. Closed direct inputs cover primitive lengths/offsets,
         // engine-owned ArrayBuffers/views, and fresh array literals without
@@ -26174,12 +26195,15 @@ fn simulate_ir2_flow_labels(
                 // The binding retains a straight-line closed-shape proof until
                 // an operation below can mutate or escape it. The assignment
                 // expression's stack copy is no longer a fresh value. Preserve
-                // only the dedicated Object.keys result long enough for the
+                // only dedicated finite-method receivers long enough for the
                 // generic method-call lowering's synthetic receiver binding:
-                // it emits StoreBinding, GetProperty("join"), then LoadBinding.
+                // it emits StoreBinding, GetProperty, then LoadBinding.
                 // GetProperty immediately invalidates the stored alias, so the
                 // proof cannot survive a mutation or opaque escape.
-                if value.shape != FlowValueShape::OwnKeyArray {
+                if !matches!(
+                    value.shape,
+                    FlowValueShape::OwnKeyArray | FlowValueShape::EventEmitterObject
+                ) {
                     invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
                 }
                 value_stack.push(value);
@@ -26214,7 +26238,13 @@ fn simulate_ir2_flow_labels(
             Ir1Op::CallMethod { arg_count } => {
                 let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
                 let callee = pop_flow_value(&mut value_stack)?;
-                let callee_is_summarized = callee.shape == FlowValueShape::Callable;
+                let callee_shape = callee.shape;
+                let callee_is_summarized = matches!(
+                    callee_shape,
+                    FlowValueShape::Callable
+                        | FlowValueShape::EventEmitterFluentMethod
+                        | FlowValueShape::EventEmitterEmitMethod
+                );
                 inputs.push(callee);
                 inputs.push(pop_flow_value(&mut value_stack)?);
                 let label = if callee_is_summarized {
@@ -26224,7 +26254,18 @@ fn simulate_ir2_flow_labels(
                 };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                let result_shape = match callee_shape {
+                    FlowValueShape::EventEmitterFluentMethod => {
+                        FlowValueShape::EventEmitterObject
+                    }
+                    FlowValueShape::EventEmitterEmitMethod => FlowValueShape::Primitive,
+                    _ => FlowValueShape::Unknown,
+                };
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    result_shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::Return => {
@@ -26428,6 +26469,16 @@ fn simulate_ir2_flow_labels(
                 let object = pop_flow_value(&mut value_stack)?;
                 let shape = match (&object.shape, key) {
                     (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
+                    (
+                        FlowValueShape::EventEmitterObject,
+                        Ir1PropertyKey::Static(key),
+                    ) if matches!(key.as_str(), Some("on" | "once")) => {
+                        FlowValueShape::EventEmitterFluentMethod
+                    }
+                    (
+                        FlowValueShape::EventEmitterObject,
+                        Ir1PropertyKey::Static(key),
+                    ) if key.as_str() == Some("emit") => FlowValueShape::EventEmitterEmitMethod,
                     (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
                         if key.as_str() == Some("join") =>
                     {
@@ -26695,9 +26746,23 @@ fn simulate_ir2_flow_labels(
                     .ok_or(LoweringPipelineError::ValueStackUnderflow)?;
                 let inputs = pop_flow_values(&mut value_stack, count)?;
                 let label = join_flow_values(&inputs);
+                let result_shape = if inputs
+                    .last()
+                    .is_some_and(|callee| {
+                        callee.shape == FlowValueShape::EventEmitterConstructor
+                    })
+                {
+                    FlowValueShape::EventEmitterObject
+                } else {
+                    FlowValueShape::Unknown
+                };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    result_shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::ConstructSuper { arg_count } => {
@@ -26920,6 +26985,11 @@ fn simulate_ir2_flow_labels(
                 }
                 if hostcall_is_operand_derived && capability == "builtin:ObjectKeys" {
                     result_shape = FlowValueShape::OwnKeyArray;
+                }
+                if hostcall_is_operand_derived
+                    && capability == "builtin:EventEmitterConstructorRef"
+                {
+                    result_shape = FlowValueShape::EventEmitterConstructor;
                 }
                 // bd-zco6t: finite fd-lifecycle results are closed primitives.
                 // Every operand-derived `fs:write` hostcall yields a primitive
@@ -34053,6 +34123,41 @@ mod tests {
             Ir1Op::HostCall { capability, arg_count: 0 }
                 if capability == "builtin:EventEmitterConstructorRef")));
         assert!(ops.iter().any(|op| matches!(op, Ir1Op::Construct { .. })));
+    }
+
+    #[test]
+    fn mixed_event_emitter_this_fixture_lowers_without_unauthorized_flow_bd_asw4m_3() {
+        let source = r#"
+            const { EventEmitter } = require('events');
+            const e = new EventEmitter();
+            e.on('tick', function () { console.log('fn:' + (this === e)); });
+            const holder = {
+                tag: 'H',
+                install(target) {
+                    target.on('tick', () => { console.log('arrow:' + this.tag); });
+                }
+            };
+            holder.install(e);
+            console.log('emitted:' + e.emit('tick'));
+        "#;
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse mixed fixture");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "events_mixed_this_bd_asw4m_3.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("lower mixed EventEmitter fixture to IR1")
+            .module;
+        let ir2 = lower_ir1_to_ir2_with_host_io_exception_provenance(
+            &ir1,
+            HostIoExceptionProvenance::ProviderInternal,
+        )
+        .expect("lower mixed EventEmitter fixture to IR2")
+        .module;
+        let context = LoweringContext::new(
+            "trace-bd-asw4m-3",
+            "decision-bd-asw4m-3",
+            "policy-bd-asw4m-3",
+        );
+        build_ir2_flow_proof_artifact(&ir2, &context)
+            .expect("mixed EventEmitter fixture must not produce UnauthorizedFlow");
     }
 
     #[test]

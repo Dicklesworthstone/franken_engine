@@ -23,7 +23,10 @@ fn package(id: &str, source: &str) -> ExtensionPackage {
         source: source.to_string(),
         source_file: None,
         module_root: None,
-        capabilities: vec![],
+        // `new EventEmitter()` resolves through the EventEmitterConstructorRef
+        // builtin, which the orchestrated capability gate denies for an empty
+        // grant set (observed live in the asw4m.3 isolate at 44e474ea7).
+        capabilities: vec!["builtin".to_string()],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     }

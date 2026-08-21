@@ -1333,12 +1333,18 @@ fn result_action_decision_action_matches_containment_action_or_stopping_override
     let mut orch = ExecutionOrchestrator::with_defaults();
     let pkg = simple_package("ext-ad", "42");
     let result = orch.execute(&pkg).expect("execute");
-    // Containment action can differ from action_decision.action due to stopping override
+    // Containment action can differ from action_decision.action due to the
+    // stopping override (escalates Allow to Sandbox) or the bd-sxh8o.4
+    // benign-completion downgrade (Challenge to Allow when a completed Benign
+    // run produced no risk signal).
     let base_action = result.action_decision.action;
     assert!(
         result.containment_action == base_action
-            || result.containment_action == ContainmentAction::Sandbox,
-        "containment action should match decision or be Sandbox (stopping override)"
+            || result.containment_action == ContainmentAction::Sandbox
+            || (base_action == ContainmentAction::Challenge
+                && result.containment_action == ContainmentAction::Allow),
+        "containment action should match decision, be Sandbox (stopping override), \
+         or be Allow (benign-completion downgrade from Challenge)"
     );
 }
 
@@ -1772,6 +1778,84 @@ fn evidence_entry_candidates_cover_all_containment_actions() {
         entry.candidates.len() >= 6,
         "should have at least 6 candidates (one per ContainmentAction), got {}",
         entry.candidates.len()
+    );
+}
+
+// -- bd-sxh8o.4: benign completion must not be labelled containment -----------
+
+#[test]
+fn benign_completed_run_without_signals_reports_allow() {
+    // Regression for bd-sxh8o.4: the 2026-08-20 binary reported
+    // containment_action=challenge here because expected-loss selection let
+    // residual prior mass on Unknown/Malicious tax the Allow column even
+    // though the run completed with zero hostcalls, no denials, no hook
+    // request, and no stopping crossing.
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = simple_package("ext-benign-allow", "const answer = 40 + 2;");
+    let result = orch.execute(&pkg).expect("execute");
+    assert_eq!(
+        result.risk_state,
+        frankenengine_engine::bayesian_posterior::RiskState::Benign
+    );
+    assert_eq!(result.containment_action, ContainmentAction::Allow);
+    assert!(
+        result.containment_receipt.is_none(),
+        "Allow must not execute containment machinery"
+    );
+    assert!(result.saga_id.is_none());
+}
+
+#[test]
+fn benign_completed_run_chosen_record_matches_allow_candidate() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = simple_package("ext-benign-loss", "const answer = 40 + 2;");
+    let result = orch.execute(&pkg).expect("execute");
+    let entry = &result.evidence_entries[0];
+    assert_eq!(entry.chosen_action.action_name, "allow");
+    let allow_candidate = entry
+        .candidates
+        .iter()
+        .find(|c| c.action_name == "Allow")
+        .expect("Allow candidate must be present");
+    assert_eq!(
+        entry.chosen_action.expected_loss_millionths, allow_candidate.expected_loss_millionths,
+        "chosen record must carry the expected loss of the action it names"
+    );
+    assert!(
+        entry
+            .chosen_action
+            .rationale
+            .contains("benign_completion_downgrade=true"),
+        "downgrade must be audit-visible in the rationale, got: {}",
+        entry.chosen_action.rationale
+    );
+}
+
+#[test]
+fn evidence_candidates_carry_selector_losses_not_zero() {
+    // Regression for bd-sxh8o.4: the 2026-08-20 binary hard-coded every
+    // candidate's expected loss to 0 while the chosen action carried a
+    // non-zero loss, so the candidate list contradicted the decision record.
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = simple_package("ext-cand-losses", "const answer = 40 + 2;");
+    let result = orch.execute(&pkg).expect("execute");
+    let entry = &result.evidence_entries[0];
+    assert!(
+        entry
+            .candidates
+            .iter()
+            .any(|c| c.expected_loss_millionths > 0),
+        "candidate list must reflect the selector's computed expected losses"
+    );
+    let challenge_candidate = entry
+        .candidates
+        .iter()
+        .find(|c| c.action_name == "Challenge")
+        .expect("Challenge candidate must be present");
+    assert_eq!(
+        challenge_candidate.expected_loss_millionths,
+        result.action_decision.explanation.all_expected_losses["challenge"],
+        "candidate loss must equal the selector's expected loss for that action"
     );
 }
 

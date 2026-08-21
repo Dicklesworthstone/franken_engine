@@ -82,7 +82,8 @@ use frankenengine_extension_host::process_spawn::{
 use crate::algebraic_effects::EffectError;
 use crate::ast::ParseGoal;
 use crate::capability::{
-    APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, RuntimeCapability, hostcall_result_contract,
+    APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, HostcallResultContract, RuntimeCapability,
+    hostcall_result_contract,
 };
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
@@ -53818,17 +53819,17 @@ impl InterpreterCore {
     }
 
     /// Clone an `ApplyHostCall` arguments list only after reserving the full
-    /// physical value+label carrier. Every delegated operand inherits the
-    /// invocation join: selecting the target and observing the complete
-    /// arguments list are control dependencies of the inner hostcall, while
-    /// the active callback context preserves the same join for deferred work.
+    /// physical value+label carrier. Each scratch label preserves that exact
+    /// element's property, backing-store, and reachable-value provenance. The
+    /// separate active callback context carries whole-invocation control
+    /// dependence for deferred work without smearing one element's label onto
+    /// every other scratch register.
     fn prepare_delegated_hostcall_arguments(
         &mut self,
         value: Value,
-        invocation_label: &Label,
     ) -> Result<DelegatedHostcallArguments, InterpreterError> {
-        let (length, dynamic_value_bytes) = match &value {
-            Value::Undefined | Value::Null => (0usize, 0u64),
+        let (length, dynamic_value_bytes, dynamic_label_bytes) = match &value {
+            Value::Undefined | Value::Null => (0usize, 0u64, 0u64),
             Value::Object(object_id) => {
                 let length = self.array_like_length(*object_id)?;
                 let count =
@@ -53846,7 +53847,8 @@ impl InterpreterCore {
                     .heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                let dynamic_value_bytes = if object.typed_array.is_some() {
+                let typed_array = object.typed_array.is_some();
+                let dynamic_value_bytes = if typed_array {
                     // Every currently supported typed-array element materializes
                     // as an allocation-free Int/Undefined value.
                     0
@@ -53859,7 +53861,17 @@ impl InterpreterCore {
                             .unwrap_or(0)
                     }))
                 };
-                (length, dynamic_value_bytes)
+                let dynamic_label_bytes = Self::saturating_sum((0..length).map(|index| {
+                    let value = if typed_array {
+                        None
+                    } else {
+                        object.properties.get(&index.to_string())
+                    };
+                    self.delegated_argument_label_ref(*object_id, index, value)
+                        .map(Self::estimate_label_bytes)
+                        .unwrap_or(0)
+                }));
+                (length, dynamic_value_bytes, dynamic_label_bytes)
             }
             other => {
                 return Err(InterpreterError::TypeError {
@@ -53873,23 +53885,29 @@ impl InterpreterCore {
             .unwrap_or(u64::MAX)
             .saturating_mul((std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64)
             .saturating_add(dynamic_value_bytes)
-            .saturating_add(
-                u64::try_from(length)
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(Self::estimate_label_bytes(invocation_label)),
-            );
+            .saturating_add(dynamic_label_bytes);
         self.apply_memory_component_delta(0, carrier_bytes)?;
 
         let extracted = (|| {
             let mut values = Vec::with_capacity(length);
+            let mut labels = Vec::with_capacity(length);
             match value {
                 Value::Undefined | Value::Null => {}
                 Value::Object(object_id) => {
                     for element_index in 0..length {
-                        values.push(
-                            self.array_index_value(object_id, element_index)?
-                                .unwrap_or(Value::Undefined),
+                        let value = self
+                            .array_index_value(object_id, element_index)?
+                            .unwrap_or(Value::Undefined);
+                        labels.push(
+                            self.delegated_argument_label_ref(
+                                object_id,
+                                element_index,
+                                Some(&value),
+                            )
+                            .cloned()
+                            .unwrap_or(Label::Public),
                         );
+                        values.push(value);
                     }
                 }
                 other => {
@@ -53901,7 +53919,6 @@ impl InterpreterCore {
                     });
                 }
             }
-            let labels = vec![invocation_label.clone(); length];
             Ok::<_, InterpreterError>((values, labels))
         })();
 
@@ -53932,6 +53949,63 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    fn delegated_argument_label_ref<'a>(
+        &'a self,
+        arguments_list: ObjectId,
+        element_index: usize,
+        value: Option<&Value>,
+    ) -> Option<&'a Label> {
+        let property_key = JsString::from(element_index.to_string());
+        let mut winner = self
+            .heap
+            .get(arguments_list.0 as usize)
+            .and_then(|object| object.property_labels.get_exact(&property_key));
+        if let Some(candidate) = self.binary_storage_label_ref(arguments_list)
+            && winner.is_none_or(|current| candidate > current)
+        {
+            winner = Some(candidate);
+        }
+        if let Some(candidate) = value
+            .and_then(|value| self.process_dynamic_value_label_ref(value, &mut BTreeSet::new()))
+            && winner.is_none_or(|current| candidate > current)
+        {
+            winner = Some(candidate);
+        }
+        winner
+    }
+
+    /// Borrow the dominant label reachable through a value without allocating
+    /// a temporary `Custom` label. Delegation preflight uses this to reserve
+    /// the exact carrier before the one clone retained in the scratch frame.
+    fn process_dynamic_value_label_ref<'a>(
+        &'a self,
+        value: &Value,
+        visited: &mut BTreeSet<ObjectId>,
+    ) -> Option<&'a Label> {
+        let Value::Object(object_id) = value else {
+            return None;
+        };
+        if !visited.insert(*object_id) {
+            return None;
+        }
+        let mut winner = self.object_mutation_labels.get(object_id);
+        if let Some(candidate) = self.binary_storage_label_ref(*object_id)
+            && winner.is_none_or(|current| candidate > current)
+        {
+            winner = Some(candidate);
+        }
+        if let Some(object) = self.heap.get(object_id.0 as usize) {
+            for property in object.properties.values() {
+                if let Some(candidate) = self.process_dynamic_value_label_ref(property, visited)
+                    && winner.is_none_or(|current| candidate > current)
+                {
+                    winner = Some(candidate);
+                }
+            }
+        }
+        winner
     }
 
     fn release_delegated_hostcall_arguments(&mut self, arguments: DelegatedHostcallArguments) {
@@ -61168,21 +61242,7 @@ impl InterpreterCore {
 
         match outcome {
             Ok(value) => {
-                let runtime_label_bytes = self
-                    .pending_hostcall_result_label
-                    .as_ref()
-                    .map(Self::estimate_label_bytes)
-                    .unwrap_or(0);
-                self.check_temporary_memory_budget(
-                    runtime_label_bytes
-                        .saturating_add(Self::estimate_label_bytes(delegation_inputs))
-                        .saturating_mul(2),
-                )?;
-                let runtime_result_label = self.take_pending_hostcall_result_label();
-                let inner_result_label = hostcall_result_contract(cap)
-                    .result_label(&Label::Public, runtime_result_label.as_ref());
-                let result_label = delegation_inputs.join(&inner_result_label);
-                self.replace_pending_hostcall_result_label(Some(result_label))?;
+                self.publish_delegated_hostcall_result_label(cap, delegation_inputs)?;
                 Ok(value)
             }
             Err(error) => {
@@ -61190,6 +61250,59 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    /// Replace an inner HostCall publication with the delegated result label
+    /// without ever leaving either physically live label uncharged. The old
+    /// publication's retained charge stays in place while the exact winner is
+    /// selected by reference; a second charge is admitted before its one
+    /// required clone, then the old charge is released only after the old
+    /// label is dropped.
+    fn publish_delegated_hostcall_result_label(
+        &mut self,
+        cap: &str,
+        delegation_inputs: &Label,
+    ) -> Result<(), InterpreterError> {
+        let runtime_result_label = self.pending_hostcall_result_label.take();
+        let runtime_label_bytes = runtime_result_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        let public = Label::Public;
+        let top_secret = Label::TopSecret;
+        let contract = hostcall_result_contract(cap);
+        let inner_result_label = match &contract {
+            HostcallResultContract::JoinInputs => runtime_result_label.as_ref().unwrap_or(&public),
+            HostcallResultContract::SourceFloor(floor) => runtime_result_label
+                .as_ref()
+                .filter(|runtime| *runtime >= floor)
+                .unwrap_or(floor),
+            HostcallResultContract::RuntimeDelegated
+            | HostcallResultContract::AuthenticatedRelease => {
+                runtime_result_label.as_ref().unwrap_or(&top_secret)
+            }
+            HostcallResultContract::FailClosed => &top_secret,
+        };
+        let result_label = if delegation_inputs >= inner_result_label {
+            delegation_inputs
+        } else {
+            inner_result_label
+        };
+        let result_label_bytes = Self::estimate_label_bytes(result_label);
+        if let Err(error) = self.apply_memory_component_delta(0, result_label_bytes) {
+            drop(runtime_result_label);
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(runtime_label_bytes);
+            return Err(error);
+        }
+        let result_label = result_label.clone();
+        self.pending_hostcall_result_label = Some(result_label);
+        drop(runtime_result_label);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(runtime_label_bytes);
+        Ok(())
     }
 
     fn dispatch_apply_hostcall(
@@ -61248,16 +61361,15 @@ impl InterpreterCore {
                 return Err(error);
             }
         };
-        let arguments =
-            match self.prepare_delegated_hostcall_arguments(arguments_list, &delegation_inputs) {
-                Ok(arguments) => arguments,
-                Err(error) => {
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(delegation_input_bytes);
-                    return Err(error);
-                }
-            };
+        let arguments = match self.prepare_delegated_hostcall_arguments(arguments_list) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(delegation_input_bytes);
+                return Err(error);
+            }
+        };
         let previous_context = self.active_inline_callback_context_label.take();
         let context_winner = previous_context
             .as_ref()
@@ -83156,6 +83268,12 @@ mod async_runtime_tests_current {
         label_preserving_core
             .write_reg_with_label(0, Value::str("promise:reject"), Label::Public)
             .expect("mismatched delegated target");
+        label_preserving_core
+            .replace_pending_hostcall_result_label(Some(Label::Custom {
+                name: "stale-prefix-publication".repeat(11),
+                level: 4,
+            }))
+            .expect("seed stale prefix publication");
         let mismatch = label_preserving_core
             .dispatch_builtin_hostcall(
                 "builtin:ApplyHostCall:promise:resolve",
@@ -83213,12 +83331,23 @@ mod async_runtime_tests_current {
         success
             .write_reg_with_label(0, scratch_value.clone(), scratch_label.clone())
             .expect("classified scratch register");
+        success
+            .write_reg_with_label(1, Value::Int(99), Label::Confidential)
+            .expect("second scratch register");
         let arguments = success
-            .alloc_array_from_values(&[Value::Int(7)])
+            .alloc_array_from_values(&[Value::Int(7), Value::Int(11)])
             .expect("delegated arguments");
+        success
+            .set_own_property_label(arguments, "0", &Label::Secret)
+            .expect("classify only the first delegated element");
         let prepared = success
-            .prepare_delegated_hostcall_arguments(Value::Object(arguments), &Label::Secret)
+            .prepare_delegated_hostcall_arguments(Value::Object(arguments))
             .expect("account delegated argument carrier");
+        assert_eq!(
+            prepared.labels,
+            vec![Label::Secret, Label::Public],
+            "scratch labels must preserve per-element provenance instead of smearing the aggregate"
+        );
         let delegated = success
             .dispatch_hostcall_with_value_args(
                 "promise:resolve",
@@ -83230,17 +83359,17 @@ mod async_runtime_tests_current {
         let Value::Promise(promise) = delegated else {
             panic!("delegated Promise.resolve must return a Promise")
         };
-        assert_eq!(
+        assert!(
             success
                 .promise_store
                 .get(crate::promise_model::PromiseHandle(promise))
-                .expect("delegated promise record")
-                .label,
-            Label::Secret,
-            "the inner dispatch must observe the installed argument label"
+                .is_ok(),
+            "delegated Promise.resolve must retain its asynchronous state"
         );
         assert_eq!(success.read_reg(0), Ok(scratch_value.clone()));
         assert_eq!(success.get_register_label(0), Ok(&scratch_label));
+        assert_eq!(success.read_reg(1), Ok(Value::Int(99)));
+        assert_eq!(success.get_register_label(1), Ok(&Label::Confidential));
         assert_eq!(
             success.take_pending_hostcall_result_label(),
             Some(Label::Secret)
@@ -83258,7 +83387,7 @@ mod async_runtime_tests_current {
             .alloc_array_from_values(&[Value::Int(7)])
             .expect("throwing delegated arguments");
         let prepared = throwing
-            .prepare_delegated_hostcall_arguments(Value::Object(throwing_arguments), &Label::Secret)
+            .prepare_delegated_hostcall_arguments(Value::Object(throwing_arguments))
             .expect("account throwing arguments");
         throwing
             .replace_pending_hostcall_result_label(Some(Label::Custom {
@@ -83293,16 +83422,16 @@ mod async_runtime_tests_current {
         let one_short_arguments = one_short
             .alloc_array_from_values(&[Value::Int(7)])
             .expect("one-short delegated arguments");
-        let before_prepare = one_short.estimated_memory_bytes();
         let invocation_label = Label::Custom {
             name: "delegated-invocation-label".repeat(31),
             level: 3,
         };
+        one_short
+            .set_own_property_label(one_short_arguments, "0", &invocation_label)
+            .expect("classify one-short delegated element");
+        let before_prepare = one_short.estimated_memory_bytes();
         let prepared = one_short
-            .prepare_delegated_hostcall_arguments(
-                Value::Object(one_short_arguments),
-                &invocation_label,
-            )
+            .prepare_delegated_hostcall_arguments(Value::Object(one_short_arguments))
             .expect("reserve one-short argument carrier");
         let saved_structure_bytes =
             (std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64;

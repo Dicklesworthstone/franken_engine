@@ -12803,6 +12803,26 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
                 if let Some(capability) =
+                    process_next_tick_call_capability(callee, binding_lookup)
+                {
+                    // `process.nextTick(cb, ...args)` — dedicated job-queue
+                    // hostcall; the raw `process` object is never lowered
+                    // (bd-8nrud).
+                    lower_spread_apply_hostcall_to_ir1(
+                        capability,
+                        &[],
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    return Ok(());
+                }
+                if let Some(capability) =
                     number_static_builtin_call_capability(callee, binding_lookup)
                 {
                     lower_spread_apply_hostcall_to_ir1(
@@ -13512,6 +13532,36 @@ fn lower_expression_to_ir1_inner(
                 // static member call to the matching `builtin:Reflect*` hostcall
                 // (no receiver; arg_count equals arguments.len())
                 // (bd-v93ds).
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) = process_next_tick_call_capability(callee, binding_lookup) {
+                // `process.nextTick(cb, ...args)` — dedicated job-queue
+                // hostcall on the function-body path; the raw `process` object
+                // is never lowered (bd-8nrud). Slot-0 convention: the callback
+                // and its forwarded arguments are the hostcall arguments.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -23855,6 +23905,41 @@ fn reflect_builtin_call_capability(
         "apply" => Some("builtin:ReflectApply"),
         "construct" => Some("builtin:ReflectConstruct"),
         "ownKeys" => Some("builtin:ReflectOwnKeys"),
+        _ => None,
+    }
+}
+
+/// Capability for a statically recognized `process.nextTick(...)` member call
+/// (bd-8nrud). Only the exact unshadowed call shape routes to the dedicated
+/// `builtin:ProcessNextTick` job-queue hostcall: a lexical `process` binding
+/// in scope, a computed non-literal key, or any other `process` member falls
+/// through to the ordinary lowering (and its ambient-authority denial), so
+/// raw process authority is never exposed — the recognizer grants exactly the
+/// next-tick scheduling call and nothing else.
+fn process_next_tick_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "process")
+        || is_lexically_shadowed(binding_lookup, "process")
+    {
+        return None;
+    }
+    let method = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    match method {
+        "nextTick" => Some("builtin:ProcessNextTick"),
         _ => None,
     }
 }

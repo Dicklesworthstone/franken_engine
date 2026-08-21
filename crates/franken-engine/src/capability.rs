@@ -204,7 +204,11 @@ impl RuntimeCapability {
             | "builtin:ClearInterval"
             | "builtin:SetImmediate"
             | "builtin:ClearImmediate"
-            | "builtin:QueueMicrotask" => Some(Self::Timer),
+            // `process.nextTick` is the same deterministic job-scheduling
+            // authority family as `queueMicrotask` — it never carries process
+            // control (spawn/exit/env stay denied) (bd-8nrud).
+            | "builtin:QueueMicrotask"
+            | "builtin:ProcessNextTick" => Some(Self::Timer),
 
             // Successful Node crypto entropy never inherits generic Builtin
             // authority. These exact authenticated lowering tags require the
@@ -2025,6 +2029,7 @@ mod tests {
             "builtin:SetImmediate",
             "builtin:ClearImmediate",
             "builtin:QueueMicrotask",
+            "builtin:ProcessNextTick",
         ] {
             assert_eq!(
                 RuntimeCapability::from_tag_str(tag),

@@ -24844,6 +24844,13 @@ enum FlowValueShape {
     Primitive,
     Callable,
     CallableContainer,
+    /// The exact callable-only native returned by
+    /// `builtin:ArrayIsArrayFunction`. Calls are finite and primitive-valued;
+    /// construction deterministically rejects before dispatching arguments.
+    ArrayIsArrayFunction,
+    /// The runtime-injected global `Function` constructor. Construction from
+    /// primitive source fragments produces a summarized callable.
+    FunctionConstructor,
     /// Authenticated constructor reference returned by the finite
     /// `builtin:EventEmitterConstructorRef` hostcall.
     EventEmitterConstructor,
@@ -24889,6 +24896,8 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
             value.shape,
             FlowValueShape::Primitive
                 | FlowValueShape::Callable
+                | FlowValueShape::ArrayIsArrayFunction
+                | FlowValueShape::FunctionConstructor
                 | FlowValueShape::EventEmitterObject
                 // bd-zco6t: BufferObject must survive GetProperty/CallMethod
                 // on unrelated `fs.*` members and `console.log` so
@@ -24909,6 +24918,8 @@ fn invalidate_nonprimitive_binding_flow_shapes(
             *shape,
             FlowValueShape::Primitive
                 | FlowValueShape::Callable
+                | FlowValueShape::ArrayIsArrayFunction
+                | FlowValueShape::FunctionConstructor
                 | FlowValueShape::EventEmitterObject
                 // Named `buf` must still be BufferObject after `fs.readSync`
                 // / `fs.closeSync` so the later `buf.toString` hostcall
@@ -25951,6 +25962,7 @@ fn hostcall_exception_is_operand_derived(
             if matches!(value.shape, FlowValueShape::Primitive
                 | FlowValueShape::FreshAggregate
                 | FlowValueShape::OwnKeyArray)),
+        "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
         "builtin:QuerystringParse" => !inputs.is_empty()
             && inputs
                 .iter()
@@ -26063,6 +26075,9 @@ fn ir1_exception_flow_label(
         Ir1Op::HostCall { .. } => Some(Label::TopSecret),
         // User code, accessors, coercions, iterators, and resumed computations
         // can throw values that direct IR2 operands do not summarize yet.
+        Ir1Op::Construct { .. } if operation_exception_is_operand_derived => {
+            Some(Label::Internal.join(inferred_label))
+        }
         Ir1Op::Call { .. }
         | Ir1Op::CallMethod { .. }
         | Ir1Op::Construct { .. }
@@ -26205,9 +26220,18 @@ fn simulate_ir2_flow_labels(
                 value_stack.push(value);
                 label
             }
-            Ir1Op::LoadName { .. } => {
+            Ir1Op::LoadName { name, .. } => {
                 let label = Label::Internal;
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                let shape = if name == "Function" {
+                    FlowValueShape::FunctionConstructor
+                } else {
+                    FlowValueShape::Unknown
+                };
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::ResolveNameStatus { .. } => Label::Internal,
@@ -26285,7 +26309,11 @@ fn simulate_ir2_flow_labels(
             Ir1Op::Call { arg_count } => {
                 let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
                 let callee = pop_flow_value(&mut value_stack)?;
-                let callee_is_summarized = callee.shape == FlowValueShape::Callable;
+                let callee_shape = callee.shape;
+                let callee_is_summarized = matches!(
+                    callee_shape,
+                    FlowValueShape::Callable | FlowValueShape::ArrayIsArrayFunction
+                );
                 inputs.push(callee);
                 let label = if callee_is_summarized {
                     join_flow_values(&inputs)
@@ -26294,7 +26322,16 @@ fn simulate_ir2_flow_labels(
                 };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                let result_shape = if callee_shape == FlowValueShape::ArrayIsArrayFunction {
+                    FlowValueShape::Primitive
+                } else {
+                    FlowValueShape::Unknown
+                };
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    result_shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::CallMethod { arg_count } => {
@@ -26857,15 +26894,27 @@ fn simulate_ir2_flow_labels(
                     .ok_or(LoweringPipelineError::ValueStackUnderflow)?;
                 let inputs = pop_flow_values(&mut value_stack, count)?;
                 let label = join_flow_values(&inputs);
-                let result_shape = if inputs
+                let callee_shape = inputs
                     .last()
-                    .is_some_and(|callee| {
-                        callee.shape == FlowValueShape::EventEmitterConstructor
-                    })
-                {
-                    FlowValueShape::EventEmitterObject
-                } else {
-                    FlowValueShape::Unknown
+                    .map_or(FlowValueShape::Unknown, |callee| callee.shape);
+                let arguments = &inputs[..inputs.len().saturating_sub(1)];
+                operation_exception_is_operand_derived = match callee_shape {
+                    // Callable-only native construction rejects with an
+                    // engine-owned TypeError before invoking the builtin.
+                    FlowValueShape::ArrayIsArrayFunction => true,
+                    // Function source fragments cannot invoke guest coercion
+                    // when every direct argument is already primitive.
+                    FlowValueShape::FunctionConstructor => arguments
+                        .iter()
+                        .all(|argument| argument.shape == FlowValueShape::Primitive),
+                    _ => false,
+                };
+                let result_shape = match callee_shape {
+                    FlowValueShape::EventEmitterConstructor => {
+                        FlowValueShape::EventEmitterObject
+                    }
+                    FlowValueShape::FunctionConstructor => FlowValueShape::Callable,
+                    _ => FlowValueShape::Unknown,
                 };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
@@ -27096,6 +27145,9 @@ fn simulate_ir2_flow_labels(
                 }
                 if hostcall_is_operand_derived && capability == "builtin:ObjectKeys" {
                     result_shape = FlowValueShape::OwnKeyArray;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:ArrayIsArrayFunction" {
+                    result_shape = FlowValueShape::ArrayIsArrayFunction;
                 }
                 if hostcall_is_operand_derived
                     && capability == "builtin:EventEmitterConstructorRef"

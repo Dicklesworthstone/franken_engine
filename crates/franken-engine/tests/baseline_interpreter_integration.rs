@@ -3152,19 +3152,21 @@ fn direct_cross_module_recursion_result(countdown: i64) -> Result<Value, Interpr
     fs::create_dir_all(&root).expect("create direct-recursion module root");
     fs::write(
         root.join("a.mjs"),
-        "import { step } from './b.mjs';\n\
+        "import { install, step } from './b.mjs';\n\
          export function descend(n) {\n\
            if (n <= 0) return 0;\n\
            return step(n - 1);\n\
-         }",
+         }\n\
+         install(descend);",
     )
     .expect("write direct-recursion module a");
     fs::write(
         root.join("b.mjs"),
-        "import { descend } from './a.mjs';\n\
+        "let fn;\n\
+         export function install(f) { fn = f; }\n\
          export function step(n) {\n\
            if (n <= 0) return 0;\n\
-           return descend(n - 1);\n\
+           return fn(n - 1);\n\
          }",
     )
     .expect("write direct-recursion module b");

@@ -10783,7 +10783,13 @@ impl InterpreterCore {
         // perf: hot path - avoid clone by reusing trace_id for nondeterminism_trace
         let nondeterminism_trace = NondeterminismTrace::new(&trace_id);
         let scope_chain = ScopeChain::new();
-        let estimated_memory_bytes = Self::estimate_scope_chain_bytes(&scope_chain.frames);
+        // Seed exactly what recompute reports for a fresh core: shallow chain
+        // structure plus each (necessarily unaliased) cell payload once.
+        let estimated_memory_bytes = Self::estimate_scope_chain_bytes(&scope_chain.frames)
+            .saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
+                &scope_chain.frames,
+                &mut BTreeSet::new(),
+            ));
         Self {
             config,
             hook: None,
@@ -18802,16 +18808,12 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
-    fn clear_stream_pipeline_execution_state(&mut self) {
+    fn clear_stream_pipeline_execution_state(&mut self) -> Result<(), InterpreterError> {
         let tokens: Vec<u32> = self.stream_pipelines.keys().copied().collect();
         for token in tokens {
-            if let Some(state) = self.stream_pipelines.remove(&token) {
-                self.remove_stream_pipeline_listener_records(token, &state.stages);
-                self.estimated_memory_bytes = self
-                    .estimated_memory_bytes
-                    .saturating_sub(Self::stream_pipeline_state_bytes(&state));
-            }
+            self.abandon_stream_pipeline(token)?;
         }
+        Ok(())
     }
 
     /// Side-table state is execution-local even when the interpreter instance
@@ -24278,6 +24280,28 @@ impl InterpreterCore {
             }))
     }
 
+    /// Relinquish every engine-owned artifact of a pipeline that cannot be
+    /// published or is crossing an execution-reset boundary. Promise handles
+    /// are removed before the authenticated state disappears so a failure can
+    /// never leave an unreachable pending Promise behind.
+    fn abandon_stream_pipeline(&mut self, token: u32) -> Result<(), InterpreterError> {
+        let Some(state) = self.stream_pipelines.get(&token) else {
+            return Ok(());
+        };
+        if let StreamPipelineCompletion::Promise(promise) = state.completion {
+            self.remove_pending_promise_at_execution_boundary(promise)?;
+        }
+        let state = self
+            .stream_pipelines
+            .remove(&token)
+            .expect("validated pipeline remains owned until abandonment commits");
+        self.remove_stream_pipeline_listener_records(token, &state.stages);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::stream_pipeline_state_bytes(&state));
+        Ok(())
+    }
+
     fn construct_stream_pipeline(
         &mut self,
         module: &Ir3Module,
@@ -24409,15 +24433,7 @@ impl InterpreterCore {
                 once: false,
             };
             if let Err(error) = self.insert_event_listener(*stage, "error", error_listener, false) {
-                if let Some(state) = self.stream_pipelines.remove(&token) {
-                    self.remove_stream_pipeline_listener_records(token, &state.stages);
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(Self::stream_pipeline_state_bytes(&state));
-                    if let StreamPipelineCompletion::Promise(promise) = state.completion {
-                        self.rollback_fresh_promise(promise);
-                    }
-                }
+                self.abandon_stream_pipeline(token)?;
                 return Err(error);
             }
         }
@@ -24431,15 +24447,7 @@ impl InterpreterCore {
                 once: true,
             };
             if let Err(error) = self.insert_event_listener(*stage, "close", close_listener, false) {
-                if let Some(state) = self.stream_pipelines.remove(&token) {
-                    self.remove_stream_pipeline_listener_records(token, &state.stages);
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(Self::stream_pipeline_state_bytes(&state));
-                    if let StreamPipelineCompletion::Promise(promise) = state.completion {
-                        self.rollback_fresh_promise(promise);
-                    }
-                }
+                self.abandon_stream_pipeline(token)?;
                 return Err(error);
             }
         }
@@ -24466,15 +24474,7 @@ impl InterpreterCore {
                         self.detach_readable_pipe(source, link.destination, link.token);
                     }
                 }
-                if let Some(state) = self.stream_pipelines.remove(&token) {
-                    self.remove_stream_pipeline_listener_records(token, &state.stages);
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(Self::stream_pipeline_state_bytes(&state));
-                    if let StreamPipelineCompletion::Promise(promise) = state.completion {
-                        self.rollback_fresh_promise(promise);
-                    }
-                }
+                self.abandon_stream_pipeline(token)?;
                 return Err(error);
             }
         }
@@ -27958,7 +27958,7 @@ impl InterpreterCore {
         self.clear_url_execution_state();
         self.clear_cluster_execution_state();
         self.clear_crypto_execution_state();
-        self.clear_stream_pipeline_execution_state();
+        self.clear_stream_pipeline_execution_state()?;
         self.clear_readable_execution_state();
         self.clear_writable_execution_state();
         self.clear_http_execution_state();
@@ -48232,6 +48232,24 @@ impl InterpreterCore {
             self.estimated_memory_bytes =
                 self.estimated_memory_bytes.saturating_sub(released_bytes);
         }
+    }
+
+    fn remove_pending_promise_at_execution_boundary(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        self.promise_store
+            .remove_pending_at_execution_boundary(handle)
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!(
+                    "owned pending Promise {handle} could not be removed at execution boundary: {error}"
+                ),
+            })?;
+        let released_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        Ok(())
     }
 
     fn create_fulfilled_promise(
@@ -73674,13 +73692,120 @@ impl InterpreterCore {
         }))
     }
 
+    /// Per-alias model: structural bytes plus the shared cell payload counted
+    /// for every binding entry. Retained for surfaces deliberately kept
+    /// conservative (realm-global maps, which live outside the deduped payload
+    /// walk) and for tests that pin the per-alias model.
+    #[allow(dead_code)]
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
             .saturating_add(Self::estimate_scope_bindings_bytes(&frame.bindings))
     }
 
+    /// Per-alias structural bytes of a scope chain: frame bases plus binding
+    /// entry bases and names. The shared cell payload behind each binding's
+    /// `Rc` is deliberately excluded — clones of a frame share the physical
+    /// `ScopeBindingState`, so the payload is charged exactly once per
+    /// distinct cell by [`Self::shared_binding_cell_payloads_memory_bytes`]
+    /// instead of once per alias (bd-sblaq).
     fn estimate_scope_chain_bytes(frames: &[ScopeFrame]) -> u64 {
-        Self::saturating_sum(frames.iter().map(Self::estimate_scope_frame_bytes))
+        Self::estimate_scope_chain_shallow_clone_bytes(frames)
+    }
+
+    /// Physical payload owned by one shared lexical binding cell: the
+    /// `ScopeBindingState` allocation plus the estimated bytes of its value
+    /// and IFC label (bd-sblaq).
+    fn estimate_binding_cell_payload_bytes(state: &Rc<RefCell<ScopeBindingState>>) -> u64 {
+        state
+            .try_borrow()
+            .map(|state| {
+                (std::mem::size_of::<ScopeBindingState>() as u64)
+                    .saturating_add(Self::estimate_value_bytes(&state.value))
+                    .saturating_add(Self::estimate_label_bytes(&state.label))
+            })
+            .unwrap_or(u64::MAX)
+    }
+
+    /// Add every not-yet-seen binding cell payload in `frames` to the running
+    /// total, recording each physical cell in `seen` by `Rc` address so
+    /// aliases across frames, closures, and suspended activations charge the
+    /// payload exactly once (bd-sblaq).
+    fn accumulate_scope_frame_cell_payload_bytes(
+        frames: &[ScopeFrame],
+        seen: &mut BTreeSet<usize>,
+    ) -> u64 {
+        let mut total = 0u64;
+        for frame in frames {
+            for binding in frame.bindings.values() {
+                if seen.insert(Rc::as_ptr(&binding.state) as usize) {
+                    total = total
+                        .saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
+                }
+            }
+        }
+        total
+    }
+
+    /// Payloads reachable from one suspended activation: its scope chain plus
+    /// every call frame's saved caller chain.
+    fn accumulate_generator_execution_cell_payload_bytes(
+        execution: &GeneratorExecutionSnapshot,
+        seen: &mut BTreeSet<usize>,
+    ) -> u64 {
+        let mut total = Self::accumulate_scope_frame_cell_payload_bytes(
+            &execution.scope_chain.frames,
+            seen,
+        );
+        for frame in &execution.call_stack {
+            if let Some(saved) = &frame.saved_scope_chain {
+                total = total
+                    .saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(saved, seen));
+            }
+        }
+        total
+    }
+
+    /// Payload bytes of every shared lexical binding cell reachable from the
+    /// deduped accounting surfaces — the live scope chain, call-frame saved
+    /// caller chains, closure captured environments, and suspended
+    /// generator/async activations — charged exactly once per physical
+    /// `Rc<RefCell<ScopeBindingState>>` (bd-sblaq). Realm-global maps stay on
+    /// the conservative per-alias model outside this walk, so a cell aliased
+    /// both here and there is over-counted, never under-counted.
+    fn shared_binding_cell_payloads_memory_bytes(&self) -> u64 {
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut total = Self::accumulate_scope_frame_cell_payload_bytes(
+            &self.scope_chain.frames,
+            &mut seen,
+        );
+        for frame in &self.call_stack {
+            if let Some(saved) = &frame.saved_scope_chain {
+                total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
+                    saved, &mut seen,
+                ));
+            }
+        }
+        for closure in &self.closures {
+            total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
+                &closure.captured_env,
+                &mut seen,
+            ));
+        }
+        for generator in &self.generators {
+            if let Some(execution) = &generator.execution {
+                total = total.saturating_add(
+                    Self::accumulate_generator_execution_cell_payload_bytes(execution, &mut seen),
+                );
+            }
+        }
+        for function in &self.async_functions {
+            if let Some(execution) = &function.isolated_execution {
+                total = total.saturating_add(
+                    Self::accumulate_generator_execution_cell_payload_bytes(execution, &mut seen),
+                );
+            }
+        }
+        total
     }
 
     /// Bytes allocated by cloning scope-frame structure while sharing each
@@ -74036,8 +74161,15 @@ impl InterpreterCore {
         Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes))
     }
 
+    /// Structural bytes of the live scope chain plus the deduped payload of
+    /// every shared binding cell across all accounted surfaces (bd-sblaq).
+    /// Keeping the payload walk inside this component means every existing
+    /// scope-bracketed delta (push/pop/declare/store/call-setup/restore)
+    /// observes payload ownership changes exactly, including a popped frame
+    /// whose cells survive through closure aliases.
     fn scope_chain_memory_bytes(&self) -> u64 {
         Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
+            .saturating_add(self.shared_binding_cell_payloads_memory_bytes())
     }
 
     fn realm_dynamic_globals_memory_bytes(&self) -> u64 {
@@ -74372,7 +74504,7 @@ impl InterpreterCore {
                 self.registers.iter().map(Self::estimate_value_bytes),
             ))
             .saturating_add(self.register_context_labels_memory_bytes())
-            .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
+            .saturating_add(self.scope_chain_memory_bytes())
             .saturating_add(self.realm_dynamic_globals_memory_bytes())
             .saturating_add(self.generated_function_realm_globals_memory_bytes())
             .saturating_add(self.closures_memory_bytes())
@@ -77164,6 +77296,275 @@ impl InterpreterCore {
     }
 }
 
+/// Regressions for shared lexical binding-cell memory accounting (bd-sblaq):
+/// clones of a `ScopeBinding` share one physical `Rc<RefCell<..>>` cell, so
+/// the cell payload must be charged exactly once per physical allocation —
+/// never once per alias — while every alias keeps its structural charge, and
+/// the incremental estimate must track the deduped recompute exactly.
+#[cfg(test)]
+mod shared_binding_cell_accounting_tests_bd_sblaq {
+    use super::*;
+
+    fn accounting_test_core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        InterpreterCore::new(config, "bd-sblaq")
+    }
+
+    /// Install one binding with a large payload in a fresh pushed frame,
+    /// keeping the incremental estimate synchronized. Returns the payload
+    /// bytes of the freshly created cell.
+    fn declare_large_binding(core: &mut InterpreterCore, name: &str, len: usize) -> u64 {
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain
+            .current_mut()
+            .expect("live frame")
+            .bindings
+            .insert(
+                name.to_string(),
+                ScopeBinding::with_state(BindingKind::Var, Value::str("x".repeat(len)), true),
+            );
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("declaration must fit the default budget");
+        let binding = core
+            .scope_chain
+            .current_mut()
+            .expect("live frame")
+            .get(name)
+            .cloned()
+            .expect("declared binding");
+        InterpreterCore::estimate_binding_cell_payload_bytes(&binding.state)
+    }
+
+    fn assert_invariant(core: &InterpreterCore, context: &str) {
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "estimated must equal recompute {context}"
+        );
+    }
+
+    #[test]
+    fn closure_aliases_charge_shared_cell_payload_once_bd_sblaq() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        let payload_bytes = declare_large_binding(&mut core, "shared", 4096);
+        assert!(payload_bytes >= 4096, "payload estimate covers the string");
+        core.sync_estimated_memory_bytes().expect("sync");
+        assert_invariant(&core, "after declaration");
+        let before_aliases = core.estimated_memory_bytes();
+
+        // Three closures alias the same frames (and therefore the same cell).
+        let env = core.scope_chain.snapshot();
+        let shallow_env_bytes = InterpreterCore::estimate_scope_chain_bytes(&env);
+        for _ in 0..3 {
+            let previous_closure_bytes = core.closures_memory_bytes();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.apply_closures_memory_delta(previous_closure_bytes)
+                .expect("closure capture fits");
+        }
+        assert_invariant(&core, "after three closure aliases");
+
+        let growth = core.estimated_memory_bytes() - before_aliases;
+        let expected_structural =
+            (MEMORY_ESTIMATE_CLOSURE_BASE_BYTES.saturating_add(shallow_env_bytes)) * 3;
+        assert_eq!(
+            growth, expected_structural,
+            "aliases must add structural bytes only, never re-charge the {payload_bytes}-byte payload"
+        );
+        assert!(
+            growth < payload_bytes,
+            "regression guard: per-alias payload double-charge is back (growth {growth} >= payload {payload_bytes})"
+        );
+    }
+
+    #[test]
+    fn transitive_capture_chain_charges_payload_once_bd_sblaq() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        let payload_bytes = declare_large_binding(&mut core, "outer", 4096);
+
+        // Closure A captures the frame; closure B recaptures A's environment
+        // plus an extra empty frame (a transitive capture chain).
+        let previous_closure_bytes = core.closures_memory_bytes();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("closure A fits");
+        let mut chained_env = core.closures[0].captured_env.clone();
+        chained_env.push(ScopeFrame::new());
+        let previous_closure_bytes = core.closures_memory_bytes();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: chained_env,
+        });
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("closure B fits");
+        assert_invariant(&core, "after transitive capture chain");
+
+        // The payload appears exactly once in the deduped walk even though
+        // three surfaces (live chain, A, B) alias the cell.
+        let walk = core.shared_binding_cell_payloads_memory_bytes();
+        assert!(
+            walk >= payload_bytes && walk < payload_bytes * 2,
+            "walk must contain the shared payload exactly once (walk {walk}, payload {payload_bytes})"
+        );
+    }
+
+    #[test]
+    fn mutation_through_alias_reprices_payload_once_bd_sblaq() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        declare_large_binding(&mut core, "mutated", 64);
+        let previous_closure_bytes = core.closures_memory_bytes();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("alias fits");
+        assert_invariant(&core, "before mutation");
+        let before = core.estimated_memory_bytes();
+
+        // Grow the shared cell by ~8KB through the closure's alias, mirroring
+        // the StoreScoped bracket.
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let alias = core.closures[0].captured_env[1]
+            .get("mutated")
+            .expect("aliased binding")
+            .clone();
+        {
+            let mut state = alias.state.try_borrow_mut().expect("cell borrow");
+            state.value = Value::str("y".repeat(8192));
+        }
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("mutation fits");
+        assert_invariant(&core, "after mutation through alias");
+
+        let growth = core.estimated_memory_bytes() - before;
+        assert!(
+            growth >= 8192 - 64 && growth < 2 * 8192,
+            "value growth must be charged exactly once, not per alias (growth {growth})"
+        );
+    }
+
+    #[test]
+    fn popped_frame_payload_survives_and_releases_with_last_alias_bd_sblaq() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        let payload_bytes = declare_large_binding(&mut core, "survivor", 4096);
+        let previous_closure_bytes = core.closures_memory_bytes();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("alias fits");
+        assert_invariant(&core, "before pop");
+        let before_pop = core.estimated_memory_bytes();
+
+        // Pop the declaring frame (the PopScope bracket): the closure alias
+        // keeps the cell alive, so only structural bytes may be released.
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let popped = core.scope_chain.pop();
+        assert!(popped.is_some(), "frame must pop");
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("pop accounting");
+        assert_invariant(&core, "after pop with surviving alias");
+        let released_by_pop = before_pop - core.estimated_memory_bytes();
+        assert!(
+            released_by_pop < payload_bytes,
+            "payload must stay charged while the closure alias survives (released {released_by_pop})"
+        );
+        assert!(
+            core.shared_binding_cell_payloads_memory_bytes() >= payload_bytes,
+            "walk still owns the surviving payload"
+        );
+
+        // Dropping the last alias releases the payload exactly once.
+        core.closures.clear();
+        core.sync_estimated_memory_bytes().expect("resync");
+        assert_invariant(&core, "after last alias dropped");
+        assert!(
+            core.shared_binding_cell_payloads_memory_bytes() < payload_bytes,
+            "payload must be uncharged once no accounted alias remains"
+        );
+    }
+
+    #[test]
+    fn budget_boundary_fails_fresh_payload_but_admits_shared_alias_bd_sblaq() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        let payload_bytes = declare_large_binding(&mut core, "budgeted", 4096);
+        core.sync_estimated_memory_bytes().expect("sync");
+        assert_invariant(&core, "before budget clamp");
+
+        // Leave slack for one shallow capture but nowhere near a second
+        // payload. Under the pre-fix per-alias model the capture below was
+        // charged payload_bytes again and refused.
+        let env = core.scope_chain.snapshot();
+        let shallow_env_bytes = InterpreterCore::estimate_scope_chain_bytes(&env);
+        let slack = MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
+            .saturating_add(shallow_env_bytes)
+            .saturating_add(256);
+        assert!(
+            slack < payload_bytes,
+            "test setup: slack must not cover a second payload"
+        );
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes() + slack;
+
+        let previous_closure_bytes = core.closures_memory_bytes();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: env,
+        });
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("a shared alias costs structure only and must fit the slack");
+        assert_invariant(&core, "after alias under tight budget");
+
+        // A second FRESH cell of the same size must still be refused — the
+        // dedup must never under-charge new physical allocations.
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain
+            .current_mut()
+            .expect("live frame")
+            .bindings
+            .insert(
+                "fresh".to_string(),
+                ScopeBinding::with_state(BindingKind::Var, Value::str("z".repeat(4096)), true),
+            );
+        let refusal = core.apply_scope_chain_memory_delta(previous_scope_bytes);
+        assert!(
+            matches!(refusal, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+            "fresh physical payload must hit the budget: {refusal:?}"
+        );
+        core.scope_chain
+            .current_mut()
+            .expect("live frame")
+            .bindings
+            .remove("fresh");
+        assert_invariant(&core, "after refused declaration rollback");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Lane wrappers
 // ---------------------------------------------------------------------------
@@ -78655,6 +79056,91 @@ mod active_builtin_regressions {
             specialization: None,
             required_capabilities: Vec::new(),
         }
+    }
+
+    fn install_pending_pipeline_fixture(
+        core: &mut InterpreterCore,
+        token: u32,
+    ) -> crate::promise_model::PromiseHandle {
+        let promise = core
+            .create_promise()
+            .expect("pipeline fixture Promise allocation must fit");
+        core.stream_pipelines.insert(
+            token,
+            StreamPipelineState {
+                stages: Vec::new(),
+                pending_close: Vec::new(),
+                completion: StreamPipelineCompletion::Promise(promise),
+                registration_label: Label::Custom {
+                    name: "pipeline-owner".to_string(),
+                    level: 2,
+                },
+                first_error: None,
+                phase: StreamPipelinePhase::Running,
+            },
+        );
+        core.sync_estimated_memory_bytes()
+            .expect("pipeline fixture accounting must fit");
+        promise
+    }
+
+    #[test]
+    fn pipeline_reset_removes_owned_promise_and_preserves_process_token_bd_fw7zd_13() {
+        let mut core = test_core();
+        let seed = core
+            .capture_execution_seed()
+            .expect("reset fixture seed capture must fit");
+        core.next_stream_pipeline_token = 41;
+        let pipeline_promise = install_pending_pipeline_fixture(&mut core, 40);
+        let retained_guest_promise = core
+            .create_promise()
+            .expect("later guest Promise allocation must fit");
+        let before_reset = core.estimated_memory_bytes();
+
+        core.reset_execution_state_from_seed(&seed)
+            .expect("execution reset must dispose pipeline ownership");
+
+        assert!(core.stream_pipelines.is_empty());
+        assert_eq!(
+            core.next_stream_pipeline_token, 41,
+            "ObjectId reuse must not reset the process-lifetime pipeline nonce"
+        );
+        assert!(core.promise_store.get(pipeline_promise).is_err());
+        assert!(core.promise_store.get(retained_guest_promise).is_ok());
+        assert!(core.estimated_memory_bytes() < before_reset);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "reset must release the pipeline state, Promise record, and witness exactly"
+        );
+    }
+
+    #[test]
+    fn pipeline_setup_abandonment_removes_non_tail_promise_bd_fw7zd_13() {
+        let mut core = test_core();
+        core.next_stream_pipeline_token = 8;
+        let pipeline_promise = install_pending_pipeline_fixture(&mut core, 7);
+
+        // This later handle models Promise creation by guest code emitted
+        // reentrantly from readable.pipe before setup reports its failure.
+        let reentrant_promise = core
+            .create_promise()
+            .expect("reentrant guest Promise allocation must fit");
+        assert!(reentrant_promise > pipeline_promise);
+        let before_abandonment = core.estimated_memory_bytes();
+
+        core.abandon_stream_pipeline(7)
+            .expect("non-tail pipeline Promise must remain removable");
+
+        assert!(core.promise_store.get(pipeline_promise).is_err());
+        assert!(core.promise_store.get(reentrant_promise).is_ok());
+        assert_eq!(core.next_stream_pipeline_token, 8);
+        assert!(core.estimated_memory_bytes() < before_abandonment);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "non-tail cancellation must update the Promise and pipeline charges exactly"
+        );
     }
 
     fn expect_object_id(value: Value) -> ObjectId {

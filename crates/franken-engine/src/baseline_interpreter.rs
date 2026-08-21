@@ -32656,7 +32656,62 @@ impl InterpreterCore {
         Value::Bool(is_array)
     }
 
+    /// Keep the Writable lifecycle lane out of the monolithic builtin
+    /// dispatcher.  Writable methods can synchronously drive user callbacks;
+    /// retaining the large catch-all dispatch frame while those callbacks run
+    /// makes ordinary callback composition consume the native test-thread
+    /// stack.  This small front dispatcher gives that finite lane a bounded
+    /// frame without changing its ordering or return-value semantics.
+    #[inline(never)]
     fn dispatch_builtin_function(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+    ) -> Result<Value, InterpreterError> {
+        match builtin.kind {
+            BuiltinFunctionKind::StreamWritableWrite
+            | BuiltinFunctionKind::StreamWritableEnd
+            | BuiltinFunctionKind::StreamWritableCork
+            | BuiltinFunctionKind::StreamWritableUncork
+            | BuiltinFunctionKind::StreamWritableDestroy => {
+                self.dispatch_writable_builtin_function(module, builtin.kind, args, receiver)
+            }
+            _ => self.dispatch_builtin_function_inner(
+                module,
+                builtin,
+                args,
+                receiver,
+                receiver_register,
+            ),
+        }
+    }
+
+    #[inline(never)]
+    fn dispatch_writable_builtin_function(
+        &mut self,
+        module: &Ir3Module,
+        kind: BuiltinFunctionKind,
+        args: RegRange,
+        receiver: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        match kind {
+            BuiltinFunctionKind::StreamWritableWrite => self.writable_write(module, receiver, args),
+            BuiltinFunctionKind::StreamWritableEnd => self.writable_end(module, receiver, args),
+            BuiltinFunctionKind::StreamWritableCork => self.writable_cork(receiver, args),
+            BuiltinFunctionKind::StreamWritableUncork => {
+                self.writable_uncork(module, receiver, args)
+            }
+            BuiltinFunctionKind::StreamWritableDestroy => self.writable_destroy(receiver, args),
+            _ => unreachable!("finite Writable lifecycle builtin selected a non-Writable method"),
+        }
+    }
+
+    #[inline(never)]
+    fn dispatch_builtin_function_inner(
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,

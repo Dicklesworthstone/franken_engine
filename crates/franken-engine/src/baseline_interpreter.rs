@@ -84518,10 +84518,11 @@ mod async_runtime_tests_current {
 
         let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
         let mut core = async_module_graph_core_bd_yn3lv(temp.path());
-        core.execute(&module)
+        let result = core
+            .execute(&module)
             .expect("transitive imported top-level await should settle");
 
-        let messages: Vec<&str> = core
+        let messages: Vec<&str> = result
             .console_output
             .iter()
             .map(|entry| entry.message.as_str())

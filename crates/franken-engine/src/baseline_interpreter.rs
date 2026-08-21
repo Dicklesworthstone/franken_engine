@@ -44174,17 +44174,23 @@ impl InterpreterCore {
 
         let iterator_value =
             self.invoke_inline_method_call(Some(module), iterator_method, receiver, Vec::new())?;
-        let iterator_object = match iterator_value {
+        let backing = match iterator_value {
             Value::Iterator(handle) => {
                 return Ok(Some(RuntimeForOfInit::from_existing(handle)));
             }
-            Value::Object(iterator_object) => iterator_object,
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "object returned by @@iterator".to_string(),
-                    got: other.type_name().to_string(),
-                });
+            // bd-es2ra: every object-like carrier is a valid iterator; only
+            // primitives keep the historical TypeError.
+            iterator_value => {
+                self.iterator_carrier_backing_id(&iterator_value, "object returned by @@iterator")?
             }
+        };
+        let Some(iterator_object) = backing else {
+            // Object-like iterator without ordinary-property backing: `next`
+            // reads as undefined.
+            return Err(InterpreterError::TypeError {
+                expected: "callable iterator.next".to_string(),
+                got: "undefined".to_string(),
+            });
         };
         let iterator_receiver = Value::Object(iterator_object);
         let Some(next_method) = self.optional_callable_property(
@@ -44239,19 +44245,47 @@ impl InterpreterCore {
         }
     }
 
+    /// bd-es2ra: resolve the ordinary-property backing object for an
+    /// object-like iterator-protocol carrier. `Value::Object` is its own
+    /// backing; the only function-like values with ordinary-property storage
+    /// in this engine are the builtin kinds that own a property object. Every
+    /// other object-like carrier has no ordinary property storage, so its
+    /// protocol properties read as `undefined` — callers get `Ok(None)`.
+    /// Primitives reject with the caller's TypeError expectation, matching
+    /// the historical messages. Twin: core `iterator_carrier_backing_id`
+    /// (which resolves through core's materialized function objects).
+    fn iterator_carrier_backing_id(
+        &self,
+        value: &Value,
+        expected: &str,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if !value.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: value.type_name().to_string(),
+            });
+        }
+        Ok(match value {
+            Value::Object(object_id) => Some(*object_id),
+            Value::BuiltinFunction(builtin) => Self::builtin_function_property_object(builtin),
+            _ => None,
+        })
+    }
+
     fn iterator_result_property(
         &mut self,
         module: &Ir3Module,
         result: &Value,
         key: &str,
     ) -> Result<Value, InterpreterError> {
-        let Value::Object(result_id) = result else {
-            return Err(InterpreterError::TypeError {
-                expected: "iterator result object".to_string(),
-                got: result.type_name().to_string(),
-            });
+        // bd-es2ra: every object-like carrier is a valid iterator result;
+        // only primitives reject. A carrier without ordinary-property backing
+        // reads its protocol properties as undefined.
+        let Some(result_id) = self.iterator_carrier_backing_id(result, "iterator result object")?
+        else {
+            return Ok(Value::Undefined);
         };
-        self.proxy_aware_get_property(Some(module), *result_id, key, result.clone(), 0)
+        self.proxy_aware_get_property(Some(module), result_id, key, result.clone(), 0)
     }
 
     fn iterator_result_done(

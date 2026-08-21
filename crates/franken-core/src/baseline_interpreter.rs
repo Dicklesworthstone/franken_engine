@@ -10963,32 +10963,40 @@ impl InterpreterCore {
                     let iterator = self.complete_inline_call(iterator_completion)?;
                     match iterator {
                         Value::Iterator(_) => return Ok(iterator),
-                        Value::Object(object_id) => {
-                            let next_property = self.prototype_chain_lookup_runtime_property(
-                                object_id,
-                                &RuntimePropertyKey::String(JsString::from("next")),
+                        iterator => {
+                            // bd-es2ra: every object-like carrier is a valid
+                            // iterator; only primitives reject. A carrier
+                            // without ordinary-property backing reads `next`
+                            // as undefined and fails the callable check.
+                            let backing = self.iterator_carrier_backing_id(
+                                &iterator,
+                                "object returned by Symbol.iterator",
                             )?;
-                            let next_completion = self.read_runtime_property_inline(
-                                module,
-                                Value::Object(object_id),
-                                next_property,
-                            )?;
-                            let next = self.complete_inline_call(next_completion)?;
+                            let next = match backing {
+                                Some(object_id) => {
+                                    let next_property = self
+                                        .prototype_chain_lookup_runtime_property(
+                                            object_id,
+                                            &RuntimePropertyKey::String(JsString::from("next")),
+                                        )?;
+                                    let next_completion = self.read_runtime_property_inline(
+                                        module,
+                                        Value::Object(object_id),
+                                        next_property,
+                                    )?;
+                                    self.complete_inline_call(next_completion)?
+                                }
+                                None => Value::Undefined,
+                            };
                             if !Self::is_sync_callable(&next) {
                                 return Err(InterpreterError::TypeError {
                                     expected: "callable iterator.next".to_string(),
                                     got: next.type_name().to_string(),
                                 });
                             }
-                            iterator_object = Some(object_id);
+                            iterator_object = backing;
                             next_method = Some(next);
                             Vec::new()
-                        }
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object returned by Symbol.iterator".to_string(),
-                                got: other.type_name().to_string(),
-                            });
                         }
                     }
                 }
@@ -11058,11 +11066,14 @@ impl InterpreterCore {
             &[],
         )?;
         let result = self.complete_inline_call(result_completion)?;
-        let Value::Object(result_object) = result else {
-            return Err(InterpreterError::TypeError {
-                expected: "iterator result object".to_string(),
-                got: result.type_name().to_string(),
-            });
+        // bd-es2ra: every object-like carrier is a valid iterator result;
+        // only primitives reject. A carrier without ordinary-property backing
+        // reads `done`/`value` as undefined: the step is not done and yields
+        // undefined.
+        let Some(result_object) =
+            self.iterator_carrier_backing_id(&result, "iterator result object")?
+        else {
+            return Ok(Some(Value::Undefined));
         };
         let done_property = self.prototype_chain_lookup_runtime_property(
             result_object,
@@ -15136,6 +15147,37 @@ impl InterpreterCore {
                     got: other.type_name().to_string(),
                 });
             }
+        };
+        if let Some(object_id) = object_id {
+            self.heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        }
+        Ok(object_id)
+    }
+
+    /// bd-es2ra: resolve the ordinary-property backing object for an
+    /// object-like iterator-protocol carrier. `Value::Object` is its own
+    /// backing; function-like carriers resolve through their materialized
+    /// function object when one exists. Every other object-like carrier (and
+    /// a function that never materialized properties) has no ordinary
+    /// property storage, so its protocol properties read as `undefined` —
+    /// callers get `Ok(None)`. Primitives reject with the caller's TypeError
+    /// expectation, matching the historical messages.
+    fn iterator_carrier_backing_id(
+        &self,
+        value: &Value,
+        expected: &str,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if !value.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: value.type_name().to_string(),
+            });
+        }
+        let object_id = match value {
+            Value::Object(object_id) => Some(*object_id),
+            function_like => self.function_object_id(function_like),
         };
         if let Some(object_id) = object_id {
             self.heap

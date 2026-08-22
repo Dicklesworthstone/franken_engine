@@ -509,7 +509,14 @@ console.log((typeof ks[1]) + "#" + (typeof ks[2]) + "#" + (ks[2] === p1) + "#" +
     // Row 5 (donor + engine only; franken-core has no executable
     // Object.defineProperty): converting a data property to an accessor
     // via defineProperty retains the key's own-key position for string and
-    // Symbol keys, and the accessor is invoked on read.
+    // Symbol keys, and the accessor is invoked on read. The observable is
+    // expressed through the same authenticated shape as Row 1 — manual
+    // index iteration over the fresh Object.keys array — because the static
+    // flow layer deliberately keeps Array.prototype.join fail-closed for
+    // objects reached through mutation or defineProperty (a store may
+    // invoke a guest setter, which voids closed-shape proofs). Key names,
+    // positions, identity, and getter results are observed identically;
+    // only the concatenation mechanism differs.
     assert_stdout_consensus(
         "sym-accessor-conversion-donor",
         r##"const sa = Symbol("acc");
@@ -520,7 +527,11 @@ o.b = 3;
 Object.defineProperty(o, "a", { get() { return 42; }, enumerable: true, configurable: true });
 Object.defineProperty(o, sa, { get() { return 43; }, enumerable: true, configurable: true });
 const syms = Object.getOwnPropertySymbols(o);
-console.log(Object.keys(o).join("|") + "#" + syms.length + "#" + (syms[0] === sa) + "#" + o.a + "#" + o[sa]);
+const ks = Object.keys(o);
+let keysText = "";
+let i = 0;
+while (i < ks.length) { if (i > 0) { keysText = keysText + "|"; } keysText = keysText + ks[i]; i = i + 1; }
+console.log(keysText + "#" + syms.length + "#" + (syms[0] === sa) + "#" + o.a + "#" + o[sa]);
 "##,
         "a|b#1#true#42#43",
         &["node_lts", "bun_stable", "franken_engine"],

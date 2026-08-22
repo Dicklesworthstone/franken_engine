@@ -25954,13 +25954,18 @@ fn hostcall_exception_is_operand_derived(
             .all(|value| value.shape == FlowValueShape::Primitive),
         "builtin:UrlFormat" => inputs.iter().all(|value| value.shape.is_closed()),
         // Object.keys is finite for primitives and for aggregates whose own
-        // properties are still statically authenticated. Querystring.parse is
+        // properties are still statically authenticated. Aggregates holding
+        // summarized callables qualify too: keys() reads structural key
+        // names only — never property values — so callable contents cannot
+        // disclose unsummarized labels through the produced key array,
+        // exactly as for plain fresh aggregates. Querystring.parse is
         // finite for primitive arguments and returns a fresh null-prototype
         // data object. Arbitrary objects remain fail-high: proxy traps,
         // accessors, or coercions can otherwise disclose unsummarized labels.
         "builtin:ObjectKeys" => matches!(inputs, [value]
             if matches!(value.shape, FlowValueShape::Primitive
                 | FlowValueShape::FreshAggregate
+                | FlowValueShape::CallableContainer
                 | FlowValueShape::OwnKeyArray)),
         "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
         "builtin:QuerystringParse" => !inputs.is_empty()
@@ -32664,6 +32669,90 @@ mod tests {
                 })
             ),
             "unknown Object.keys must keep the TopSecret→Internal fail-closed proof"
+        );
+    }
+
+    #[test]
+    fn object_keys_join_stays_finite_over_callable_aggregates_bd_lmchj() {
+        // A literal aggregate holding summarized callables keeps structural
+        // key-name finiteness: keys() never reads property values, so the
+        // callable contents cannot disclose labels through the produced key
+        // array or its immediate authenticated `.join`.
+        let callable_source = "function f() { return 5; } const o = { a: 1, g: f }; console.log(Object.keys(o).join('|'));";
+        let tree = crate::parser_api_stability::parse_script(callable_source)
+            .expect("callable aggregate source parses");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "callable_aggregate_bd_lmchj.js".to_string());
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("callable aggregate lowers to IR1")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("callable aggregate lowers to IR2")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(&op.inner,
+                Ir1Op::HostCall { capability, .. } if capability == "console:log"
+            ))
+            .and_then(|op| op.flow.as_ref())
+            .expect("callable aggregate console flow");
+        assert_eq!(console_flow.data_label, Label::Public);
+        assert!(
+            !console_flow.declassification_required,
+            "callable aggregate keys().join must not require declassification"
+        );
+        let eval_context = LoweringContext::new(
+            "eval-hybrid-callable-aggregate",
+            "eval-decision-callable-aggregate",
+            "eval-policy-hybrid",
+        )
+        .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+        if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
+            panic!("callable aggregate must lower without UnauthorizedFlow: {error}");
+        }
+        lower_ir0_to_ir3(&ir0, &eval_context)
+            .expect("callable aggregate lowers to IR3 under the eval grant");
+
+        // Post-store aggregates stay fail-closed: a SetProperty may invoke a
+        // guest setter, which voids closed-shape proofs, so keys().join over
+        // the mutated binding keeps the TopSecret→Internal contract.
+        let stored_source = "const o = {}; o.a = 1; console.log(Object.keys(o).join('|'));";
+        let stored_tree = crate::parser_api_stability::parse_script(stored_source)
+            .expect("stored aggregate source parses");
+        let stored_ir0 =
+            Ir0Module::from_syntax_tree(stored_tree, "stored_aggregate_bd_lmchj.js".to_string());
+        let stored_ir1 = lower_ir0_to_ir1(&stored_ir0)
+            .expect("stored aggregate lowers to IR1")
+            .module;
+        let stored_ir2 = lower_ir1_to_ir2(&stored_ir1)
+            .expect("stored aggregate lowers to IR2")
+            .module;
+        let stored_console_flow = stored_ir2
+            .ops
+            .iter()
+            .find(|op| matches!(&op.inner,
+                Ir1Op::HostCall { capability, .. } if capability == "console:log"
+            ))
+            .and_then(|op| op.flow.as_ref())
+            .expect("stored aggregate console flow");
+        assert_eq!(stored_console_flow.data_label, Label::TopSecret);
+        assert!(stored_console_flow.declassification_required);
+        let stored_context = LoweringContext::new(
+            "eval-hybrid-stored-aggregate",
+            "eval-decision-stored-aggregate",
+            "eval-policy-hybrid",
+        )
+        .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+        assert!(
+            matches!(
+                build_ir2_flow_proof_artifact(&stored_ir2, &stored_context),
+                Err(LoweringPipelineError::UnauthorizedFlow {
+                    source_label: Label::TopSecret,
+                    sink_clearance: Label::Internal,
+                    ..
+                })
+            ),
+            "post-store keys().join must keep the fail-closed proof"
         );
     }
 

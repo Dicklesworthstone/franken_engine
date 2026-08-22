@@ -130968,18 +130968,22 @@ mod memory_accounting_tests {
 
     #[test]
     fn socket_end_completion_carrier_stays_outside_finish_listeners_bd_asw4m5() {
-        let mut module = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadInt { dst: 0, value: 42 },
-                Ir3Instruction::PutName {
-                    src: 0,
-                    name_pool_index: 0,
-                    strict: false,
-                },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec!["end_marker".to_string()],
+        let mut core =
+            InterpreterCore::new(test_quickjs_config(), "bd-asw4m5-end-carrier");
+        let mut module = Ir3Module::new(
+            ContentHash::compute(b"bd-asw4m5-end-carrier"),
+            "bd_asw4m5_end_carrier.js",
         );
+        module.constant_pool = vec!["end_marker".into()];
+        module.instructions = vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::PutName {
+                src: 0,
+                name_pool_index: 0,
+                strict: false,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
         use crate::ir_contract::Ir3FunctionDesc;
         module.function_table.push(Ir3FunctionDesc {
             entry: 0,

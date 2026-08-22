@@ -19,7 +19,7 @@
       "authority_id": "claim-matrix",
       "path": "docs/claim_to_proof_matrix_v1.json",
       "selector": "complete typed claim matrix, with claim rows sorted by claim_id",
-      "projection_sha256": "6584b36482cdaec6e73c6df07853bf53d4a40df96d8e97db69ed27b133c12cf3",
+      "projection_sha256": "50c2306b5e01f381d4f3a23ff5707c4a757160bf2d7d9ef361c08bf45307d27d",
       "purpose": "Exact public claim scope, current posture, state ordering, freshness policy, and performance-evidence policy."
     },
     {
@@ -366,7 +366,7 @@
       "members": [
         {
           "path": "docs/claim_to_proof_matrix_v1.json",
-          "sha256": "6cc2dec8461f1da3c03c732b3202f796e2cb59684b92597eb45963d7677ecc2a",
+          "sha256": "25174a308ba49cee2d790fac4ba5ec98ffcda1dbe03713925888ea7c4aca5470",
           "bytes": 43044
         },
         {
@@ -375,7 +375,7 @@
           "bytes": 38675
         }
       ],
-      "inventory_sha256": "a1028b6bc3d960155981e9c79f2aaa5e9cefe72d40b3537c03577dc79066ce28",
+      "inventory_sha256": "182612a8f91063b48887a1b9ce0c74be47829e8b7ee6691848380f2a010cf678",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "The gate is not wired into current CI workflows.",
@@ -3596,7 +3596,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "6dfed07228ed8e84fb5892beb60762770cc5f8d06b94806063ccf5bacaa6197d",
+      "inventory_sha256": "6cb82955ea4abdb62ec091ed9de52fdada42a7bcf328de10e1109e0a422c9212",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "A passing library suite does not prove a shipped CLI/runtime branch, required profile, or artifact contract.",
@@ -3964,7 +3964,17 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/array_to_string_orchestrator.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/arrow_function_test262_conformance.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/arrow_lexical_this_bd_asw4m_3.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -5109,6 +5119,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/construct_nonconstructible_orchestrated_bd_zyndq.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/constructor_in_function_body.rs",
           "sha256": null,
           "bytes": 0
@@ -5879,6 +5894,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/events_arrow_this_orchestrated_bd_asw4m_3.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/events_builtin_bd_2dmnn.rs",
           "sha256": null,
           "bytes": 0
@@ -6220,6 +6240,11 @@
         },
         {
           "path": "crates/franken-engine/tests/for_of_iterator_throw_regression.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/for_of_object_like_carriers_bd_es2ra.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -6625,6 +6650,21 @@
         },
         {
           "path": "crates/franken-engine/tests/frx_verification_lane_charter.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/fs_compat_corpus_buffer_bd_zco6t.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/fs_fd_fixtures_bd_zco6t.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/fs_promises_chain_bd_zco6t.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -7874,7 +7914,17 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/native_capsule_fixed_probe_integration.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/net_builtin_bd_7qwej.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/next_tick_orchestrator.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -8970,6 +9020,11 @@
         },
         {
           "path": "crates/franken-engine/tests/promise_pending_state.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/promise_reaction_orchestrator.rs",
           "sha256": null,
           "bytes": 0
         },
@@ -10904,6 +10959,16 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-engine/tests/stream_promises_pipeline_bd_zco6t.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
+          "path": "crates/franken-engine/tests/stream_writable_destroy_bd_zco6t.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-engine/tests/stress_concurrency.rs",
           "sha256": null,
           "bytes": 0
@@ -11874,7 +11939,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "9e8aaabd57273f1ca3b92a055868e7068468250bd4e5255c8e0597a1ba7fb444",
+      "inventory_sha256": "38070759282f32c07f2b6c9f6659f7395ee170b52e17b88bc5ec2fc8c5fae6a2",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "The directory includes disabled, scaffold, static-contract, and production-executing tests; filename presence is not branch proof.",
@@ -12003,6 +12068,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-extension-host/tests/fd_lifecycle_bd_zco6t.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-extension-host/tests/flow_control_and_ifc.rs",
           "sha256": null,
           "bytes": 0
@@ -12043,7 +12113,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "f5296848c0cf11a28db982629fa29a4686bb2adae0e3cfe870982dfe695d7258",
+      "inventory_sha256": "d6b24f060587252ce2dd117e0a4b34ea909f7d80bde86aff78c1b569c6470797",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "The family mixes real host authority with fault doubles and must be selected by named scenario rather than wholesale.",
@@ -12318,6 +12388,11 @@
           "bytes": 0
         },
         {
+          "path": "crates/franken-core/tests/for_of_object_like_carriers_bd_es2ra.rs",
+          "sha256": null,
+          "bytes": 0
+        },
+        {
           "path": "crates/franken-core/tests/function_return_param_clobber_bd_fqlfw_2_11_4.rs",
           "sha256": null,
           "bytes": 0
@@ -12363,7 +12438,7 @@
           "bytes": 0
         }
       ],
-      "inventory_sha256": "ebc02e06d159601b652c4cd6fd234adfc11dc9a66a9f4818791f64e0b66eff08",
+      "inventory_sha256": "868507395b9410acf669ba60f9583fa7d52f1e842e44a1979f18687453feaecc",
       "inventory_basis": "Sorted member paths plus normalized Rust test/function, fuzz/bench, and shell scenario identities; this detects adding or removing a test inside an unchanged file while avoiding a whole-file content claim.",
       "limitations": [
         "Zero module families are formally graduated and semantic changes are still duplicated.",
@@ -15714,8 +15789,8 @@
         },
         {
           "path": "tools/execution-truth-ledger/Cargo.lock",
-          "sha256": "bd52b61a85500e06fabc19fd804a8c84414ec5c54d22d275f6b383c67d0e97b0",
-          "bytes": 31794
+          "sha256": "c8a6f1a4aebc376260b7c1c24ad34797090ac2bd8cb235141cb6acfcacb2431b",
+          "bytes": 31810
         },
         {
           "path": "tools/execution-truth-ledger/Cargo.toml",
@@ -15733,7 +15808,7 @@
           "bytes": 19864
         }
       ],
-      "inventory_sha256": "021f62bf73d03f6035429e7b0cba1c7bbc1f1310676133b608ef1084dc818626",
+      "inventory_sha256": "f105a5971125032f2c6d6eedaebe77276359140e0eb3d21c6d76649143845263",
       "inventory_basis": "Sorted path, byte length, and SHA-256 identities for every required member.",
       "limitations": [
         "Current certification covers the verification contract itself, not completion of future bridge implementation rows.",
@@ -17786,8 +17861,8 @@
       "subject_id": "bd-performance-conformance-bridge-tu32j.1.8",
       "subject_kind": "bridge_task",
       "title": "[BRIDGE-00.8] Correct README structural-inventory drift, three nonexistent module references, and repo hygiene",
-      "authority_state": "open",
-      "evidence_state": "required_future",
+      "authority_state": "closed",
+      "evidence_state": "historical_unrecertified",
       "independent_owner": "bd-performance-conformance-bridge-tu32j.22.6",
       "required_verification_packs": [
         "bd-performance-conformance-bridge-tu32j.22.6"
@@ -17827,7 +17902,7 @@
       ],
       "current_runner_family_ids": [],
       "current_evidence": [],
-      "gap_reason": "The task remains open; its exact runner, branch signals, and complete current artifact bundle are required future evidence."
+      "gap_reason": "The task is closed in historical tracker state, but the owning independent BRIDGE-21 pack has not recertified it under this contract."
     },
     {
       "row_id": "task:bd-performance-conformance-bridge-tu32j.10.1",

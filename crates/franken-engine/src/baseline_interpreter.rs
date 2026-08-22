@@ -8825,7 +8825,12 @@ struct LoopbackSocketState {
     pending_outbound_end: bool,
     tls: Option<HermeticTlsSocketState>,
     lifecycle_label: Label,
-}
+    /// Node keeps `socket.end(callback)` outside the EventEmitter finish
+    /// listener set: the callback is a dedicated write-completion carrier,
+    /// invisible to `listeners("finish")`/`rawListeners("finish")`
+    /// (bd-asw4m.5). Consumed once when the finish emission completes.
+    end_completion_callback: Option<Value>,
+ }
 
 /// TLS session observations that cannot be forged through guest heap writes.
 /// Application bytes still use the loopback socket queues; successful
@@ -13110,7 +13115,6 @@ impl InterpreterCore {
         task: PendingChildProcessTask,
     ) -> Result<(), InterpreterError> {
         let retained_bytes = Self::pending_child_process_task_bytes(&task);
-        self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let sequence = self
             .event_loop
@@ -13184,6 +13188,12 @@ impl InterpreterCore {
             .saturating_add(queued_data(&state.pending_outbound))
             .saturating_add(tls_bytes)
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+            .saturating_add(
+                state
+                    .end_completion_callback
+                    .as_ref()
+                    .map_or(0, |value| Self::estimate_value_bytes(value)),
+            )
     }
 
     fn estimate_pending_loopback_task_bytes(task: &PendingLoopbackTask) -> u64 {
@@ -13584,6 +13594,7 @@ impl InterpreterCore {
             pending_outbound_end: false,
             tls: None,
             lifecycle_label,
+            end_completion_callback: None,
         };
         let retained_bytes = Self::estimate_loopback_socket_state_bytes(&state);
         self.apply_memory_component_delta(0, retained_bytes)?;
@@ -14008,31 +14019,65 @@ impl InterpreterCore {
         drop(host);
         let lifecycle_label = self.writable_invocation_label(args)?;
         let client = self.construct_loopback_socket(false, port, lifecycle_label)?;
+        let connect_event = if is_tls { "secureConnect" } else { "connect" };
+        let mut connect_wrapper = None;
         if let Some(callback) = self.last_callable_arg(args)? {
-            self.add_loopback_listener(
+            // bd-asw4m.5: the connect/secureConnect callback is a public once
+            // registration, so rawListeners must expose a stable wrapper with
+            // .listener identity, and publication must be failure-atomic
+            // across the TLS metadata install and task scheduling below.
+            let (wrapper, property_object, previous_heap_len) =
+                self.create_event_once_wrapper(client, connect_event, callback, None)?;
+            if let Err(error) = self.insert_event_listener(
                 client,
-                if is_tls { "secureConnect" } else { "connect" },
-                callback,
-                true,
-            )?;
+                connect_event,
+                EventListenerRecord {
+                    listener: wrapper,
+                    once: true,
+                },
+                false,
+            ) {
+                self.rollback_event_once_wrapper(property_object, previous_heap_len);
+                return Err(error);
+            }
+            connect_wrapper = Some((property_object, previous_heap_len));
+        }
+        macro_rules! rollback_connect_registration {
+            ($self:expr) => {
+                if let Some((property_object, previous_heap_len)) = connect_wrapper {
+                    $self.rollback_inserted_event_listener(client, connect_event, false);
+                    $self.rollback_event_once_wrapper(property_object, previous_heap_len);
+                }
+            };
         }
         if let Some(tls) = prepared_tls {
-            self.install_tls_socket_metadata(client, tls)?;
+            if let Err(error) = self.install_tls_socket_metadata(client, tls) {
+                rollback_connect_registration!(self);
+                return Err(error);
+            }
         }
         if let Some((server, generation)) = server {
-            self.schedule_loopback_task(PendingLoopbackTask::Connect {
-                client,
-                server,
-                generation,
-            })?;
+            if let Err(error) =
+                self.schedule_loopback_task(PendingLoopbackTask::Connect {
+                    client,
+                    server,
+                    generation,
+                })
+            {
+                rollback_connect_registration!(self);
+                return Err(error);
+            }
         } else {
             let label = self.loopback_socket_label(client);
-            self.schedule_loopback_task(PendingLoopbackTask::Error {
+            if let Err(error) = self.schedule_loopback_task(PendingLoopbackTask::Error {
                 target: client,
                 code: "ECONNREFUSED".to_string(),
                 label,
                 close_after: true,
-            })?;
+            }) {
+                rollback_connect_registration!(self);
+                return Err(error);
+            }
         }
         Ok(Value::Object(client))
     }
@@ -14298,21 +14343,35 @@ impl InterpreterCore {
 
         let previous_total = self.estimated_memory_bytes;
         let sequence = self.schedule_loopback_task(task)?;
-        let listener_added = if let Some(callback) = callback {
-            if let Err(error) = self.add_loopback_listener(server, "listening", callback, true) {
+        let mut listening_wrapper = None;
+        if let Some(callback) = callback {
+            // bd-asw4m.5: the listen callback is a public once registration,
+            // so rawListeners exposes a stable wrapper; publication stays
+            // failure-atomic across task, property, and memory commit below.
+            let (wrapper, property_object, previous_heap_len) =
+                self.create_event_once_wrapper(server, "listening", callback, None)?;
+            if let Err(error) = self.insert_event_listener(
+                server,
+                "listening",
+                EventListenerRecord {
+                    listener: wrapper,
+                    once: true,
+                },
+                false,
+            ) {
+                self.rollback_event_once_wrapper(property_object, previous_heap_len);
                 self.rollback_loopback_task_registration(sequence);
                 self.estimated_memory_bytes = previous_total;
                 return Err(error);
             }
-            true
-        } else {
-            false
-        };
+            listening_wrapper = Some((property_object, previous_heap_len));
+        }
         if let Err(error) =
             self.set_object_property(server, "listening".to_string(), listening_value)
         {
-            if listener_added {
+            if let Some((property_object, previous_heap_len)) = listening_wrapper {
                 self.rollback_inserted_event_listener(server, "listening", false);
+                self.rollback_event_once_wrapper(property_object, previous_heap_len);
             }
             self.rollback_loopback_task_registration(sequence);
             self.estimated_memory_bytes = previous_total;
@@ -14323,8 +14382,9 @@ impl InterpreterCore {
             next_servers_bytes.saturating_add(MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES),
         ) {
             self.restore_loopback_mirror_property(server, "listening", previous_listening);
-            if listener_added {
+            if let Some((property_object, previous_heap_len)) = listening_wrapper {
                 self.rollback_inserted_event_listener(server, "listening", false);
+                self.rollback_event_once_wrapper(property_object, previous_heap_len);
             }
             self.rollback_loopback_task_registration(sequence);
             self.estimated_memory_bytes = previous_total;
@@ -14403,15 +14463,41 @@ impl InterpreterCore {
                 .insert(port, LoopbackPortState::Closed { generation });
         }
         self.set_object_property(server, "listening".to_string(), Value::Bool(false))?;
+        let mut close_wrapper = None;
         if let Some(callback) = self.last_callable_arg(args)? {
-            self.add_loopback_listener(server, "close", callback, true)?;
+            // bd-asw4m.5: the close callback is a public once registration,
+            // so rawListeners exposes a stable wrapper; a scheduling failure
+            // must not leave the wrapper published.
+            let (wrapper, property_object, previous_heap_len) =
+                self.create_event_once_wrapper(server, "close", callback, None)?;
+            if let Err(error) = self.insert_event_listener(
+                server,
+                "close",
+                EventListenerRecord {
+                    listener: wrapper,
+                    once: true,
+                },
+                false,
+            ) {
+                self.rollback_event_once_wrapper(property_object, previous_heap_len);
+                return Err(error);
+            }
+            close_wrapper = Some((property_object, previous_heap_len));
         }
         if should_schedule {
-            self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
-                server,
-                generation,
-                label: lifecycle_label,
-            })?;
+            if let Err(error) =
+                self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
+                    server,
+                    generation,
+                    label: lifecycle_label,
+                })
+            {
+                if let Some((property_object, previous_heap_len)) = close_wrapper {
+                    self.rollback_inserted_event_listener(server, "close", false);
+                    self.rollback_event_once_wrapper(property_object, previous_heap_len);
+                }
+                return Err(error);
+            }
         }
         Ok(Value::Object(server))
     }
@@ -14607,8 +14693,30 @@ impl InterpreterCore {
                 let _ = self.loopback_socket_write(Value::Object(socket), one_arg)?;
             }
         }
+        // bd-asw4m.5: Node keeps socket.end(callback) OUTSIDE the
+        // EventEmitter finish listener set, so the completion carrier is a
+        // dedicated state field — invisible to listeners("finish") and
+        // rawListeners("finish") — instead of a one-shot record.
         if let Some(callback) = self.last_callable_arg(args)? {
-            self.add_loopback_listener(socket, "finish", callback, true)?;
+            let previous_sockets_bytes = self.loopback_sockets_memory_bytes();
+            {
+                let Some(state) = self.loopback_sockets.get_mut(&socket) else {
+                    return Err(InterpreterError::ObjectNotFound { id: socket.0 });
+                };
+                state.end_completion_callback = Some(callback);
+            }
+            let next_sockets_bytes = self.loopback_sockets_memory_bytes();
+            if let Err(error) =
+                self.apply_memory_component_delta(previous_sockets_bytes, next_sockets_bytes)
+            {
+                if let Some(state) = self.loopback_sockets.get_mut(&socket) {
+                    state.end_completion_callback = None;
+                }
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(next_sockets_bytes.saturating_sub(previous_sockets_bytes));
+                return Err(error);
+            }
         }
         let invocation_label = self.writable_invocation_label(args)?;
         let lifecycle_label = self.join_loopback_socket_label(socket, &invocation_label)?;
@@ -14629,6 +14737,31 @@ impl InterpreterCore {
             Vec::new(),
             lifecycle_label.clone(),
         )?;
+        // Node fires the end-completion callback after the finish event, from
+        // the dedicated carrier rather than the listener set (bd-asw4m.5).
+        if let Some(callback) = self
+            .loopback_sockets
+            .get_mut(&socket)
+            .and_then(|state| state.end_completion_callback.take())
+        {
+            let previous_sockets_bytes = self.loopback_sockets_memory_bytes();
+            let completion = self.emit_event_listener_snapshot(
+                module,
+                socket,
+                "finish",
+                Vec::new(),
+                lifecycle_label.clone(),
+                vec![EventListenerRecord {
+                    listener: callback,
+                    once: true,
+                }],
+            );
+            let next_sockets_bytes = self.loopback_sockets_memory_bytes();
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(previous_sockets_bytes.saturating_sub(next_sockets_bytes));
+            completion?;
+        }
         if let Some(target) = peer {
             self.schedule_loopback_task(PendingLoopbackTask::End {
                 target,
@@ -130751,6 +130884,154 @@ mod memory_accounting_tests {
             "loopback labels and queued bytes must be fully accounted"
         );
     }
+
+    #[test]
+    fn net_implicit_callbacks_publish_once_wrappers_bd_asw4m5() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-asw4m5-net-wrappers");
+        let callback = Value::Function(7);
+
+        // Connect site: the callback registers as a stable once wrapper with
+        // .listener identity, not a bare one-shot record.
+        core.write_reg(0, Value::Int(41_000)).expect("port register");
+        core.write_reg(1, callback.clone()).expect("connect callback");
+        let client = core
+            .connect_loopback_socket_with_tls(
+                RegRange {
+                    start: 0,
+                    count: 2,
+                },
+                false,
+            )
+            .expect("loopback connect");
+        let Value::Object(client) = client else {
+            panic!("loopback connect must return the socket object");
+        };
+        let connect_records = core.event_listener_records_for(client, "connect");
+        assert_eq!(connect_records.len(), 1, "connect registers one record");
+        assert!(connect_records[0].once);
+        let wrapper_property = core
+            .event_once_wrapper_listener_property(&connect_records[0].listener)
+            .expect("connect record is a stable once wrapper");
+        assert_eq!(wrapper_property, callback, "wrapper .listener identity");
+
+        // Listen site: same publication shape on the server lifecycle event.
+        let server = core
+            .construct_loopback_server(RegRange {
+                start: 0,
+                count: 0,
+            })
+            .expect("loopback server");
+        let Value::Object(server_id) = server else {
+            panic!("loopback server must return the server object");
+        };
+        core.write_reg(0, Value::Int(0)).expect("wildcard port");
+        core.write_reg(1, callback.clone()).expect("listen callback");
+        core.loopback_server_listen(
+            Value::Object(server_id),
+            RegRange {
+                start: 0,
+                count: 2,
+            },
+        )
+        .expect("loopback listen");
+        let listen_records = core.event_listener_records_for(server_id, "listening");
+        assert!(listen_records[0].once);
+        let listen_property = core
+            .event_once_wrapper_listener_property(&listen_records[0].listener)
+            .expect("listen record is a stable once wrapper");
+        assert_eq!(listen_property, callback, "wrapper .listener identity");
+
+        // Close site: same publication shape, and the wrapper is live before
+        // the scheduled ServerClose task fires.
+        core.write_reg(1, callback.clone()).expect("close callback");
+        core.loopback_server_close(
+            Value::Object(server_id),
+            RegRange {
+                start: 0,
+                count: 2,
+            },
+        )
+        .expect("loopback close");
+        let close_records = core.event_listener_records_for(server_id, "close");
+        assert_eq!(close_records.len(), 1, "close registers one record");
+        assert!(close_records[0].once);
+        let close_property = core
+            .event_once_wrapper_listener_property(&close_records[0].listener)
+            .expect("close record is a stable once wrapper");
+        assert_eq!(close_property, callback, "wrapper .listener identity");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "wrapper publication must stay fully memory-accounted"
+        );
+    }
+
+    #[test]
+    fn socket_end_completion_carrier_stays_outside_finish_listeners_bd_asw4m5() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                Ir3Instruction::PutName {
+                    src: 0,
+                    name_pool_index: 0,
+                    strict: false,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["end_marker".to_string()],
+        );
+        use crate::ir_contract::Ir3FunctionDesc;
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 2,
+            name: Some("on_end".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+
+        let sender = core
+            .construct_loopback_socket(false, Some(41_000), Label::Public)
+            .expect("sender socket");
+        core.write_reg(0, Value::Function(0)).expect("end callback");
+        core.loopback_socket_end(
+            &module,
+            Value::Object(sender),
+            RegRange {
+                start: 0,
+                count: 1,
+            },
+        )
+        .expect("socket end with completion callback");
+
+        // The completion is a dedicated carrier: invisible to the finish
+        // listener set, consumed exactly once by the finish emission.
+        assert!(
+            core.event_listener_records_for(sender, "finish").is_empty(),
+            "socket.end(callback) must not register a finish listener"
+        );
+        assert!(
+            core.loopback_sockets[&sender]
+                .end_completion_callback
+                .is_none(),
+            "carrier must be consumed by the finish emission"
+        );
+        let global = core.scope_chain.frames.first().expect("global frame");
+        assert_eq!(
+            global
+                .bindings
+                .get("end_marker")
+                .map(|binding| binding.state.borrow().value.clone()),
+            Some(Value::Int(42)),
+            "completion callback must run exactly once after finish"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "carrier publication and consumption must stay memory-accounted"
+        );
+    }
+
 
     fn loopback_write_atomicity_fixture(
         linked_peer: bool,

@@ -154,7 +154,6 @@ pub enum TeeQuoteError {
 #[derive(Debug, Clone)]
 enum TeeEnvSource {
     Process,
-    #[cfg_attr(not(test), allow(dead_code))]
     Fixture(std::collections::BTreeMap<String, String>),
 }
 
@@ -185,11 +184,13 @@ impl TeeQuoteGenerator {
     }
 
     /// Construct a generator whose capability-detection environment is an
-    /// isolated fixture rather than the process environment. Test-only: it is
-    /// how the `FRANKEN_TEE_*` detection states are driven without mutating
-    /// process-global state.
-    #[cfg(test)]
-    fn with_env_fixture(
+    /// isolated fixture rather than the process environment. This is the
+    /// injected environment-reader seam (bd-performance-conformance-bridge-
+    /// tu32j.1.9): hermetic hosts, embedders, and tests drive the
+    /// `FRANKEN_TEE_*` detection states through an owned map instead of
+    /// mutating process-global state, so detection stays race-free under
+    /// parallel test execution without `unsafe` env mutators (bd-g63gw).
+    pub fn with_env_fixture(
         config: TeeQuoteConfig,
         signing_key: SigningKey,
         env: std::collections::BTreeMap<String, String>,

@@ -5,11 +5,18 @@
 //! - Safe-mode fallback for non-TEE workers
 //! - Receipt binding and verification
 //! - Policy validation and compliance
+//!
+//! Capability detection is driven through the injected [`TeeQuoteGenerator::
+//! with_env_fixture`] environment-reader seam
+//! (bd-performance-conformance-bridge-tu32j.1.9): each generator owns an
+//! isolated `FRANKEN_TEE_*` view instead of mutating process-global state, so
+//! these tests need neither the Rust-2024 `unsafe` `set_var`/`remove_var`
+//! helpers nor the serializing mutex the shared process environment required
+//! (bd-g63gw).
 
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 
 use frankenengine_engine::evidence_contract::{
     ActionType, AttestationValidityWindow, DecisionAction, ExpectedLossEntry, PosteriorSnapshot,
@@ -26,14 +33,20 @@ use frankenengine_engine::tee_live_quote::{
     TeeQuoteResult,
 };
 
-// `TeeQuoteGenerator::detect_tee_capability` reads the process-global
-// `FRANKEN_TEE_ENABLED` / `FRANKEN_TEE_ERROR` / `FRANKEN_TEE_QUOTE_FAIL` env
-// vars, but `cargo test` runs these integration tests in parallel threads
-// sharing one process. Tests that set/remove those vars therefore clobber each
-// other unless serialized. Every env-mutating test below holds this mutex for
-// its whole body (same pattern as the in-source unit tests, bd-g63gw). Poison
-// is recovered via `into_inner` so one panicking test cannot wedge the rest.
-static ENV_MUTEX: Mutex<()> = Mutex::new(());
+/// Build a generator whose capability-detection environment is the given
+/// isolated fixture map rather than the process environment. Detection states
+/// are driven hermetically per generator, so tests stay race-free under
+/// parallel `cargo test` without any `unsafe` env mutators
+/// (bd-performance-conformance-bridge-tu32j.1.9).
+fn fixture_generator<const N: usize>(pairs: [(&str, &str); N]) -> TeeQuoteGenerator {
+    let config = TeeQuoteConfig::default();
+    let signing_key = frankenengine_engine::signature_preimage::generate_keypair().0;
+    let env: BTreeMap<String, String> = pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    TeeQuoteGenerator::with_env_fixture(config, signing_key, env)
+}
 
 /// Helper to create a valid test receipt without TEE binding.
 fn create_test_receipt() -> ReceiptRecord {
@@ -85,7 +98,9 @@ fn create_test_receipt() -> ReceiptRecord {
     )
 }
 
-/// Helper to create a test TEE quote generator.
+/// Helper to create a test TEE quote generator reading the real process
+/// environment. Only the policy-validation tests use this; every detection-
+/// or quote-driving test builds a [`fixture_generator`] instead.
 fn create_test_generator() -> TeeQuoteGenerator {
     let config = TeeQuoteConfig::default();
     let signing_key = frankenengine_engine::signature_preimage::generate_keypair().0;
@@ -162,15 +177,8 @@ fn valid_attestation_policy() -> TeeAttestationPolicy {
 
 #[test]
 fn test_tee_capability_detection_not_available() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ERROR");
-    }
+    let generator = fixture_generator([]);
 
-    let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
 
     assert_eq!(capability, TeeCapability::NotAvailable);
@@ -178,15 +186,8 @@ fn test_tee_capability_detection_not_available() {
 
 #[test]
 fn test_tee_capability_detection_available() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ERROR");
-    }
+    let generator = fixture_generator([("FRANKEN_TEE_ENABLED", "true")]);
 
-    let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
 
     assert_eq!(
@@ -195,30 +196,15 @@ fn test_tee_capability_detection_available() {
             platform: TeePlatform::IntelSgx
         }
     );
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
 }
 
 #[test]
 fn test_tee_capability_detection_error() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction");
-    }
+    let generator = fixture_generator([("FRANKEN_TEE_ERROR", "Hardware malfunction")]);
 
-    let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
 
     assert!(matches!(capability, TeeCapability::Error { .. }));
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ERROR");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -231,15 +217,7 @@ fn test_tee_capability_detection_error() {
 // real attestation occurred.
 #[test]
 fn test_live_quote_generation_is_simulated() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([("FRANKEN_TEE_ENABLED", "true")]);
     let decision_data = b"test decision data for quote generation";
     let nonce = "test_nonce_12345";
 
@@ -266,43 +244,28 @@ fn test_live_quote_generation_is_simulated() {
             let valid_from =
                 chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_from).unwrap();
             let valid_until =
-                chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until).unwrap();
+                chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until)
+                    .unwrap();
 
             assert!(valid_from.with_timezone(&chrono::Utc) <= now);
             assert!(valid_until.with_timezone(&chrono::Utc) > now);
         }
         _ => panic!("Expected simulated quote generation, got: {:?}", result),
     }
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
 }
 
 #[test]
 fn test_live_quote_generation_failure() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_QUOTE_FAIL", "1");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([
+        ("FRANKEN_TEE_ENABLED", "true"),
+        ("FRANKEN_TEE_QUOTE_FAIL", "1"),
+    ]);
     let decision_data = b"test decision data";
     let nonce = "test_nonce";
 
     let result = generator.generate_quote(decision_data, nonce);
 
     assert!(matches!(result, TeeQuoteResult::Failed { .. }));
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -311,15 +274,7 @@ fn test_live_quote_generation_failure() {
 
 #[test]
 fn test_safe_mode_fallback() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ERROR");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([]);
     let decision_data = b"test decision data for safe mode";
     let nonce = "safe_mode_nonce";
 
@@ -350,16 +305,11 @@ fn test_safe_mode_fallback() {
 
 #[test]
 fn test_safe_mode_attestation_record_structure() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let generator = create_test_generator();
+    let generator = fixture_generator([]);
     let decision_data = b"test decision data";
-    let _reason = "Custom fallback reason";
 
     // Use the internal method for testing
     // Note: In a real implementation, this would be a public testing utility
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
     let result = generator.generate_quote(decision_data, "test_nonce");
 
     match result {
@@ -389,12 +339,7 @@ fn test_safe_mode_attestation_record_structure() {
 
 #[test]
 fn test_receipt_with_tee_attestation_binding() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([("FRANKEN_TEE_ENABLED", "true")]);
     let decision_data = b"receipt integration test data";
     let nonce = "receipt_nonce_123";
 
@@ -419,10 +364,6 @@ fn test_receipt_with_tee_attestation_binding() {
         }
         _ => panic!("Expected successful quote generation for receipt test"),
     }
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
 }
 
 #[test]
@@ -436,12 +377,7 @@ fn test_receipt_without_tee_attestation_binding() {
 
 #[test]
 fn test_receipt_serialization_with_tee_binding() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([("FRANKEN_TEE_ENABLED", "true")]);
     let decision_data = b"serialization test data";
     let nonce = "serialization_nonce";
 
@@ -463,10 +399,6 @@ fn test_receipt_serialization_with_tee_binding() {
             assert_eq!(receipt, deserialized);
         }
         _ => panic!("Expected successful quote generation for serialization test"),
-    }
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
     }
 }
 
@@ -587,12 +519,7 @@ fn test_attestation_binding_validation_unsupported_platform() {
 
 #[test]
 fn test_end_to_end_tee_workflow() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([("FRANKEN_TEE_ENABLED", "true")]);
     let policy = valid_attestation_policy();
 
     // Step 1: Generate decision data
@@ -631,23 +558,11 @@ fn test_end_to_end_tee_workflow() {
         }
         _ => panic!("End-to-end test expected successful TEE quote generation"),
     }
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
 }
 
 #[test]
 fn test_end_to_end_safe_mode_workflow() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ERROR");
-    }
-
-    let generator = create_test_generator();
+    let generator = fixture_generator([]);
 
     // Step 1: Generate decision data
     let decision_data = b"safe mode end-to-end test data";
@@ -691,26 +606,15 @@ fn test_end_to_end_safe_mode_workflow() {
 
 #[test]
 fn test_quote_generation_timeout_simulation() {
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // This test verifies error handling paths
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_QUOTE_FAIL", "1");
-    }
+    let generator = fixture_generator([
+        ("FRANKEN_TEE_ENABLED", "true"),
+        ("FRANKEN_TEE_QUOTE_FAIL", "1"),
+    ]);
 
-    let generator = create_test_generator();
     let result = generator.generate_quote(b"timeout test", "timeout_nonce");
 
     assert!(matches!(result, TeeQuoteResult::Failed { .. }));
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
-    }
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL");
-    }
 }
 
 #[test]
@@ -734,7 +638,6 @@ fn test_tee_error_display() {
 fn test_tee_quote_config_customization() {
     use std::time::Duration;
 
-    let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let custom_config = TeeQuoteConfig {
         platform: TeePlatform::ArmTrustZone,
         freshness_window: Duration::from_secs(600),
@@ -743,13 +646,14 @@ fn test_tee_quote_config_customization() {
     };
 
     let signing_key = frankenengine_engine::signature_preimage::generate_keypair().0;
-    let generator = TeeQuoteGenerator::new(custom_config, signing_key);
+    let env: BTreeMap<String, String> = [("FRANKEN_TEE_ENABLED", "true")]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    let generator = TeeQuoteGenerator::with_env_fixture(custom_config, signing_key, env);
 
     // Verify the configuration is applied
     // (This would be more testable with accessor methods on TeeQuoteGenerator)
-    unsafe {
-        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    }
     let result = generator.generate_quote(b"config test", "config_nonce");
 
     match result {
@@ -762,9 +666,5 @@ fn test_tee_quote_config_customization() {
         _ => {
             // Safe mode fallback or error is also acceptable for this config test
         }
-    }
-
-    unsafe {
-        std::env::remove_var("FRANKEN_TEE_ENABLED");
     }
 }

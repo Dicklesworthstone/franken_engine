@@ -25972,6 +25972,23 @@ fn hostcall_exception_is_operand_derived(
             && inputs
                 .iter()
                 .all(|value| value.shape == FlowValueShape::Primitive),
+        // bd-dmnqx: net loopback constructors build engine-owned server and
+        // socket aggregates from finite inputs — option bags and callbacks
+        // the runtime stores as summarized listeners. Their results are
+        // engine state mirrors, so closed data or summarized callables keep
+        // the whole construction operand-derived; unknown shapes stay
+        // fail-high.
+        "builtin:NetCreateServer"
+        | "builtin:NetConnect"
+        | "builtin:NetCreateConnection"
+        | "builtin:NetServerAddress" => !inputs.is_empty()
+            && inputs.iter().all(|value| {
+                value.shape.is_closed()
+                    || matches!(
+                        value.shape,
+                        FlowValueShape::Callable | FlowValueShape::CallableContainer
+                    )
+            }),
         // qs.stringify walks own enumerable string keys of a closed data
         // object and formats primitive values. Fresh object literals and
         // parse results stay finite; unknown objects remain fail-high.
@@ -27139,7 +27156,6 @@ fn simulate_ir2_flow_labels(
                         capability.as_str(),
                         "builtin:BufferAllocUnsafe"
                             | "builtin:BufferConcat"
-                            | "builtin:ArrayBuffer"
                             | "builtin:Uint8Array"
                             | "builtin:Int32Array"
                             | "builtin:Uint32Array"
@@ -27150,6 +27166,19 @@ fn simulate_ir2_flow_labels(
                 }
                 if hostcall_is_operand_derived && capability == "builtin:ObjectKeys" {
                     result_shape = FlowValueShape::OwnKeyArray;
+                }
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:NetCreateServer"
+                            | "builtin:NetConnect"
+                            | "builtin:NetCreateConnection"
+                            | "builtin:NetServerAddress"
+                    )
+                {
+                    // bd-dmnqx: the constructed server/socket (and the
+                    // address summary) are engine-owned data aggregates.
+                    result_shape = FlowValueShape::FreshAggregate;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:ArrayIsArrayFunction" {
                     result_shape = FlowValueShape::ArrayIsArrayFunction;

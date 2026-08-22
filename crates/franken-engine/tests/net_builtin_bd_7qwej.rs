@@ -435,3 +435,111 @@ fn net_lowering_keeps_unknown_and_dynamic_surfaces_fail_closed() {
         );
     }
 }
+
+// =========================================================================
+// bd-dmnqx / bd-asw4m.5: net constructor results are finite engine-owned
+// aggregates, so implicit-callback introspection observes the pre-fire
+// publication state: rawListeners returns the stable once wrapper (never
+// the original callable), its .listener property is the original, and
+// listeners() reports the original through the wrapper's truthy .listener.
+// =========================================================================
+
+#[test]
+#[ignore = "bd-dmnqx: closure-captured client binding still types fail-high through the listen CallMethod path; restore when capture labels land"]
+fn listen_and_connect_callbacks_expose_stable_wrappers_to_rawlisteners() {
+    let source = r#"
+        const net = require('net');
+        const server = net.createServer(socket => socket.end('ok'));
+        let client = null;
+        const onConnect = () => { client.end(); };
+        const onListening = () => {
+          client = net.connect(server.address().port, '127.0.0.1', onConnect);
+          console.log('connect-raw-len', client.rawListeners('connect').length);
+          console.log('connect-raw-not-original', client.rawListeners('connect')[0] !== onConnect);
+          console.log('connect-raw-listener-is-original', client.rawListeners('connect')[0].listener === onConnect);
+          console.log('connect-listeners-original', client.listeners('connect')[0] === onConnect);
+          client.on('close', () => server.close());
+        };
+        server.listen(0, '127.0.0.1', onListening);
+        console.log('listen-raw-len', server.rawListeners('listening').length);
+        console.log('listen-raw-not-original', server.rawListeners('listening')[0] !== onListening);
+        console.log('listen-raw-listener-is-original', server.rawListeners('listening')[0].listener === onListening);
+        console.log('listen-listeners-original', server.listeners('listening')[0] === onListening);
+        console.log('drained');
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "listen-raw-len 1\n\
+         listen-raw-not-original true\n\
+         listen-raw-listener-is-original true\n\
+         listen-listeners-original true\n\
+         drained\n\
+         connect-raw-len 1\n\
+         connect-raw-not-original true\n\
+         connect-raw-listener-is-original true\n\
+         connect-listeners-original true"
+    );
+}
+
+#[test]
+fn close_callback_exposes_stable_wrapper_before_firing() {
+    let source = r#"
+        const net = require('net');
+        const server = net.createServer(socket => socket.end());
+        const onClose = () => { console.log('close-fired'); };
+        server.listen(0, '127.0.0.1', () => {
+          server.close(onClose);
+          console.log('close-raw-len', server.rawListeners('close').length);
+          console.log('close-raw-not-original', server.rawListeners('close')[0] !== onClose);
+          console.log('close-raw-listener-is-original', server.rawListeners('close')[0].listener === onClose);
+          console.log('close-listeners-original', server.listeners('close')[0] === onClose);
+        });
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "close-raw-len 1\n\
+         close-raw-not-original true\n\
+         close-raw-listener-is-original true\n\
+         close-listeners-original true\n\
+         close-fired"
+    );
+}
+
+#[test]
+fn socket_end_completion_carrier_is_invisible_and_fires_after_finish() {
+    // Node keeps socket.end(callback) out of the EventEmitter finish listener
+    // set: neither listeners() nor rawListeners() may observe the pending
+    // completion, and it runs once after the finish event with the socket as
+    // its receiver.
+    let source = r#"
+        const net = require('net');
+        const server = net.createServer(socket => socket.end());
+        let client = null;
+        const onClose = () => { server.close(); };
+        const onConnect = () => {
+          console.log('finish-raw-pending', client.rawListeners('finish').length);
+          console.log('finish-listeners-pending', client.listeners('finish').length);
+          let finish_seen = false;
+          let receiver_was_socket = false;
+          client.on('finish', () => { finish_seen = true; });
+          client.on('close', onClose);
+          client.end(function onEndCallback() {
+            receiver_was_socket = this === client;
+            console.log('finish-before-endcb', finish_seen);
+            console.log('end-receiver-is-socket', receiver_was_socket);
+            console.log('finish-raw-after', client.rawListeners('finish').length);
+          });
+        };
+        server.listen(0, '127.0.0.1', () => {
+          client = net.connect(server.address().port, '127.0.0.1', onConnect);
+        });
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "finish-raw-pending 0\n\
+         finish-listeners-pending 0\n\
+         finish-before-endcb true\n\
+         end-receiver-is-socket true\n\
+         finish-raw-after 1"
+    );
+}

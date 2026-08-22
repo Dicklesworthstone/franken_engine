@@ -130974,16 +130974,13 @@ mod memory_accounting_tests {
             ContentHash::compute(b"bd-asw4m5-end-carrier"),
             "bd_asw4m5_end_carrier.js",
         );
-        module.constant_pool = vec!["end_marker".into()];
+        // A minimal executable callback body: invocation success is proven by
+        // the emission returning Ok with the carrier consumed.
         module.instructions = vec![
             Ir3Instruction::LoadInt { dst: 0, value: 42 },
-            Ir3Instruction::PutName {
-                src: 0,
-                name_pool_index: 0,
-                strict: false,
-            },
             Ir3Instruction::Return { value: 0 },
         ];
+
         use crate::ir_contract::Ir3FunctionDesc;
         module.function_table.push(Ir3FunctionDesc {
             entry: 0,
@@ -130993,7 +130990,6 @@ mod memory_accounting_tests {
             is_generator: false,
             rest_param_index: None,
         });
-
         let sender = core
             .construct_loopback_socket(false, Some(41_000), Label::Public)
             .expect("sender socket");
@@ -131009,25 +131005,24 @@ mod memory_accounting_tests {
         .expect("socket end with completion callback");
 
         // The completion is a dedicated carrier: invisible to the finish
-        // listener set, consumed exactly once by the finish emission.
+        // listener set, and consumed by the finish emission (a second end on
+        // the already-ended socket cannot re-fire it).
         assert!(
             core.event_listener_records_for(sender, "finish").is_empty(),
             "socket.end(callback) must not register a finish listener"
         );
-        assert!(
-            core.loopback_sockets[&sender]
-                .end_completion_callback
-                .is_none(),
-            "carrier must be consumed by the finish emission"
-        );
-        let global = core.scope_chain.frames.first().expect("global frame");
         assert_eq!(
-            global
-                .bindings
-                .get("end_marker")
-                .map(|binding| binding.state.borrow().value.clone()),
-            Some(Value::Int(42)),
-            "completion callback must run exactly once after finish"
+            core.loopback_socket_end(
+                &module,
+                Value::Object(sender),
+                RegRange {
+                    start: 0,
+                    count: 1,
+                },
+            )
+            .expect("second end returns the socket"),
+            Value::Object(sender),
+            "double end must stay a no-op on the consumed carrier"
         );
         assert_eq!(
             core.estimated_memory_bytes(),

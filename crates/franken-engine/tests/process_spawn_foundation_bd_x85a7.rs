@@ -1741,3 +1741,104 @@ fn non_public_mutation_of_a_public_options_alias_is_blocked_by_static_flow_proof
         "static IFC denial must happen before a host-effect request exists"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn child_kill_flips_killed_flag_and_reports_exit_bd_m42c2() {
+    // Mirror of franken_node compat fixture 0012.
+    let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 30_000);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
+
+    let result = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); \
+             const c = cp.spawn('native-sh', ['-c', 'sleep 30'], { stdio: 'ignore' }); \
+             c.on('spawn', () => { \
+                 console.log('killed-before:' + c.killed); \
+                 const ok = c.kill(); \
+                 console.log('kill-returned:' + ok); \
+                 console.log('killed-after:' + c.killed); \
+             }); \
+             c.on('exit', () => console.log('exited:true'));",
+        ))
+        .expect("kill during the spawn turn must complete the lifecycle");
+
+    assert_eq!(
+        result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "killed-before:false",
+            "kill-returned:true",
+            "killed-after:true",
+            "exited:true",
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn child_kill_reports_sigterm_in_exit_event_bd_m42c2() {
+    // Mirror of franken_node compat fixture 0022.
+    let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 30_000);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
+
+    let result = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); \
+             const c = cp.spawn('native-sh', ['-c', 'sleep 30'], { stdio: 'ignore' }); \
+             c.on('spawn', () => c.kill()); \
+             c.on('exit', (code, signal) => { \
+                 console.log('code:' + code); \
+                 console.log('signal:' + signal); \
+             });",
+        ))
+        .expect("a terminated child must report code null and signal SIGTERM");
+
+    assert_eq!(
+        result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["code:null", "signal:SIGTERM"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn child_stdin_write_and_end_round_trip_bd_m42c2() {
+    // Mirror of franken_node compat fixture 0029.
+    let (provider, _) =
+        native_process_provider("native-cat", &["/bin/cat", "/usr/bin/cat"], 30_000);
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_process_spawn(provider, journal, test_process_authority());
+
+    let result = orchestrator
+        .execute(&process_package(
+            "const cp = require('child_process'); \
+             const c = cp.spawn('native-cat'); \
+             let buf = ''; \
+             c.stdout.on('data', (d) => { buf += d.toString(); }); \
+             c.on('close', () => console.log('roundtrip:' + buf.trim())); \
+             c.stdin.write('through-stdin'); \
+             c.stdin.end();",
+        ))
+        .expect("bounded stdin write plus end must round-trip through cat");
+
+    assert_eq!(
+        result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["roundtrip:through-stdin"]
+    );
+}

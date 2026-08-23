@@ -25,12 +25,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, Sender, SyncSender, channel, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::os::fd::AsRawFd;
@@ -800,7 +799,7 @@ impl Default for ProcessSpawnPolicy {
             fixed_env: BTreeMap::new(),
             jailed_cwd_root: String::new(),
             limits: ProcessSpawnLimits::default(),
-            allowed_signals: BTreeSet::from([ProcessSignal::Kill]),
+            allowed_signals: BTreeSet::from([ProcessSignal::Kill, ProcessSignal::Terminate]),
             allowed_stdio: BTreeSet::from([ProcessStdioMode::Pipe, ProcessStdioMode::Null]),
         }
     }
@@ -987,10 +986,32 @@ struct OutputDrain {
     thread: JoinHandle<std::io::Result<CapturedOutput>>,
 }
 
+/// Command for the bounded background stdin writer of a lifecycle spawn
+/// (bd-m42c2).
+#[derive(Debug)]
+enum StdinWriterCommand {
+    Write(Vec<u8>),
+    Close,
+}
+
+/// Handle to the dedicated thread that owns a lifecycle child's stdin pipe.
+/// Guest `write` calls enqueue bounded chunks and return immediately; the
+/// writer thread absorbs pipe backpressure off the interpreter. Dropping or
+/// `Close` closes the pipe, delivering EOF to the child. Total accepted
+/// bytes stay bounded by the policy `max_stdin_bytes` limit enforced at the
+/// `write_stdin` boundary.
+#[derive(Debug)]
+struct StdinWriter {
+    tx: Option<Sender<StdinWriterCommand>>,
+}
+
 #[derive(Debug)]
 struct RunningChild {
     child: Child,
+    /// One-shot upfront writer owned by the Run lane (`join_stdin_writer`).
+    /// Lifecycle spawns move this into [`StdinWriter`] instead.
     stdin: Option<ChildStdin>,
+    stdin_writer: Option<StdinWriter>,
     stdout: Option<OutputDrain>,
     stderr: Option<OutputDrain>,
     #[cfg(unix)]
@@ -1551,6 +1572,7 @@ impl NativeProcessSpawn {
 
         Ok(RunningChild {
             stdin: child.stdin.take(),
+            stdin_writer: None,
             child,
             stdout,
             stderr,
@@ -1643,7 +1665,15 @@ impl NativeProcessSpawn {
         launch: &ProcessLaunch,
         control: Arc<dyn ProcessSpawnControl>,
     ) -> ProcessSpawnOutcome {
-        let running = self.launch_controlled(launch, control.as_ref())?;
+        let mut running = self.launch_controlled(launch, control.as_ref())?;
+        // bd-m42c2: lifecycle spawns hand the stdin pipe to a dedicated
+        // bounded writer thread so guest write()/end() never block the
+        // interpreter on pipe backpressure.
+        if launch.stdio.stdin == ProcessStdioMode::Pipe {
+            if let Some(child_stdin) = running.stdin.take() {
+                running.stdin_writer = Some(spawn_lifecycle_stdin_writer(child_stdin));
+            }
+        }
         let nonce = self.next_handle.fetch_add(1, Ordering::Relaxed);
         let handle = format!("ps-{}-{nonce:016x}", self.scope);
         lock_unpoison(&self.children).insert(handle.clone(), LifecycleChild::Running(running));
@@ -1783,11 +1813,6 @@ impl NativeProcessSpawn {
 
     fn write_stdin(&self, handle: &str, data: &[u8]) -> ProcessSpawnOutcome {
         let requested = u64::try_from(data.len()).unwrap_or(u64::MAX);
-        if requested != 0 {
-            return Err(ProcessSpawnError::NotImplemented {
-                what: "non-empty lifecycle stdin writes require bounded backpressure".to_string(),
-            });
-        }
         let mut children = lock_unpoison(&self.children);
         let running = match children.get_mut(handle) {
             Some(LifecycleChild::Running(running)) => running,
@@ -1815,11 +1840,27 @@ impl NativeProcessSpawn {
                 partial_stderr,
             });
         }
+        // bd-m42c2: the cumulative accepted-byte bound is the backpressure
+        // contract. Bytes are accounted at accept time even though the
+        // dedicated writer thread may still be draining the pipe, so a guest
+        // can never enqueue more than `max_stdin_bytes` in total.
         let total = running.stdin_written.saturating_add(requested);
         enforce_limit("stdin_bytes", total, self.policy.limits.max_stdin_bytes)?;
-        if running.stdin.is_none() {
+        let Some(writer) = running.stdin_writer.as_mut() else {
             return Err(ProcessSpawnError::InvalidState {
                 detail: format!("stdin is not writable for handle {handle}"),
+            });
+        };
+        let Some(tx) = writer.tx.as_ref() else {
+            return Err(ProcessSpawnError::InvalidState {
+                detail: format!("stdin is already closed or was not piped for handle {handle}"),
+            });
+        };
+        if requested != 0 && tx.send(StdinWriterCommand::Write(data.to_vec())).is_err() {
+            writer.tx = None;
+            return Err(ProcessSpawnError::Io {
+                operation: "write stdin".to_string(),
+                detail: "stdin writer thread is no longer available".to_string(),
             });
         }
         running.stdin_written = total;
@@ -1837,10 +1878,20 @@ impl NativeProcessSpawn {
             }
             None => return Err(unknown_handle(handle)),
         };
-        if running.stdin.take().is_none() {
-            return Err(ProcessSpawnError::InvalidState {
-                detail: format!("stdin is already closed or was not piped for handle {handle}"),
-            });
+        // bd-m42c2: `end()` closes the pipe via the writer thread, delivering
+        // EOF to the child. Already-closed or never-piped stdin stays a
+        // typed InvalidState refusal.
+        match running.stdin_writer.as_mut().and_then(|w| w.tx.take()) {
+            Some(tx) => {
+                // A failed send means the writer already exited (pipe or
+                // child gone); the EOF outcome is identical either way.
+                let _ = tx.send(StdinWriterCommand::Close);
+            }
+            None => {
+                return Err(ProcessSpawnError::InvalidState {
+                    detail: format!("stdin is already closed or was not piped for handle {handle}"),
+                });
+            }
         }
         Ok(ProcessSpawnResponse::StdinClosed)
     }
@@ -1886,12 +1937,16 @@ impl NativeProcessSpawn {
             ));
         }
         if signal != ProcessSignal::Kill {
-            return Err(ProcessSpawnError::NotImplemented {
-                what: format!(
-                    "signal {} requires a platform signal API not available in std",
-                    signal.as_str()
-                ),
-            });
+            #[cfg(not(unix))]
+            {
+                let _ = signal;
+                return Err(ProcessSpawnError::NotImplemented {
+                    what: format!(
+                        "signal {} requires unix process-group signaling",
+                        signal.as_str()
+                    ),
+                });
+            }
         }
         let state = lock_unpoison(&self.children)
             .remove(handle)
@@ -1913,17 +1968,37 @@ impl NativeProcessSpawn {
             }
         };
         if !exited {
-            let group_result = terminate_remaining_process_group(&running);
-            let child_result = running.child.kill();
-            if let (Err(group_error), Err(child_error)) = (group_result, child_result) {
-                // A process may exit between `try_wait` and signalling. Always
-                // reap before reporting the failed containment attempt.
-                let _ = running.child.wait();
-                let _ = collect_outputs(running);
-                return Err(ProcessSpawnError::Io {
-                    operation: "kill process group and child".to_string(),
-                    detail: format!("{group_error}; direct child fallback: {child_error}"),
-                });
+            match signal {
+                ProcessSignal::Kill => {
+                    let group_result = terminate_remaining_process_group(&running);
+                    let child_result = running.child.kill();
+                    if let (Err(group_error), Err(child_error)) = (group_result, child_result) {
+                        // A process may exit between `try_wait` and signalling.
+                        // Always reap before reporting the failed containment
+                        // attempt.
+                        let _ = running.child.wait();
+                        let _ = collect_outputs(running);
+                        return Err(ProcessSpawnError::Io {
+                            operation: "kill process group and child".to_string(),
+                            detail: format!("{group_error}; direct child fallback: {child_error}"),
+                        });
+                    }
+                }
+                ProcessSignal::Terminate | ProcessSignal::Interrupt => {
+                    // bd-m42c2: TERM/INT go to the child's private process
+                    // group via the same rustix surface as containment
+                    // teardown; std's `Child::kill` is SIGKILL-only.
+                    #[cfg(unix)]
+                    if let Err(error) =
+                        signal_process_group_id(running.process_group, rustix_signal(signal))
+                    {
+                        let _ = running.child.wait();
+                        let _ = collect_outputs(running);
+                        return Err(error);
+                    }
+                    #[cfg(not(unix))]
+                    unreachable!("non-unix TERM/INT was refused above");
+                }
             }
         }
         let status = match running.child.wait() {
@@ -1939,12 +2014,29 @@ impl NativeProcessSpawn {
             }
         };
         let (stdout, stderr) = collect_outputs_controlled(running, control)?;
-        Ok(ProcessSpawnResponse::Killed {
+        let outcome = Ok(ProcessSpawnResponse::Killed {
             signal,
             exit: exit_from_status(status),
             stdout,
             stderr,
-        })
+        });
+        // bd-m42c2: the pending lifecycle `Wait` turn must observe the kill
+        // outcome instead of an unknown handle, so the terminal record stays
+        // addressable under the same handle (mirroring watchdog completion).
+        {
+            let mut children = lock_unpoison(&self.children);
+            children.insert(
+                handle.to_string(),
+                LifecycleChild::Terminal(outcome.clone()),
+            );
+            trim_terminal_children(
+                &mut children,
+                usize::try_from(self.policy.limits.max_children)
+                    .unwrap_or(usize::MAX)
+                    .max(1),
+            );
+        }
+        outcome
     }
 }
 
@@ -2508,6 +2600,39 @@ fn join_stdin_writer(
         })
 }
 
+/// Start the dedicated stdin writer thread for a lifecycle spawn (bd-m42c2).
+/// The thread takes ownership of the pipe: queued writes drain off the
+/// interpreter, and `Close` (or sender drop) closes the pipe to deliver EOF.
+/// On thread-spawn failure the returned handle carries no sender, so the
+/// pipe closes immediately instead of leaving an unwritable fd open.
+fn spawn_lifecycle_stdin_writer(stdin: ChildStdin) -> StdinWriter {
+    let (tx, rx) = channel::<StdinWriterCommand>();
+    let spawned = thread::Builder::new()
+        .name("franken-process-stdin".to_string())
+        .spawn(move || {
+            let mut stdin = stdin;
+            // `rx` iteration ends on Close or sender drop; dropping `stdin`
+            // afterwards is what delivers EOF to the child.
+            for command in rx {
+                match command {
+                    StdinWriterCommand::Write(data) => {
+                        if stdin.write_all(&data).is_err() {
+                            // Pipe closed (child exited or containment kill):
+                            // stop consuming. Later sends fail at the write()
+                            // boundary as typed Io errors.
+                            break;
+                        }
+                    }
+                    StdinWriterCommand::Close => break,
+                }
+            }
+        });
+    if spawned.is_err() {
+        return StdinWriter { tx: None };
+    }
+    StdinWriter { tx: Some(tx) }
+}
+
 fn read_bounded(
     mut reader: impl Read,
     maximum: u64,
@@ -2754,6 +2879,32 @@ fn terminate_process_group_id(
             operation: "terminate process group".to_string(),
             detail: error.to_string(),
         }),
+    }
+}
+
+/// Deliver an arbitrary allowed signal to a private process group
+/// (bd-m42c2). ESRCH is success: the group may already be gone.
+#[cfg(unix)]
+fn signal_process_group_id(
+    process_group: rustix::process::Pid,
+    signal: rustix::process::Signal,
+) -> Result<(), ProcessSpawnError> {
+    match rustix::process::kill_process_group(process_group, signal) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(ProcessSpawnError::Io {
+            operation: "signal process group".to_string(),
+            detail: error.to_string(),
+        }),
+    }
+}
+
+/// Map the provider's guest-visible signal vocabulary onto the platform.
+#[cfg(unix)]
+const fn rustix_signal(signal: ProcessSignal) -> rustix::process::Signal {
+    match signal {
+        ProcessSignal::Interrupt => rustix::process::Signal::INT,
+        ProcessSignal::Terminate => rustix::process::Signal::TERM,
+        ProcessSignal::Kill => rustix::process::Signal::KILL,
     }
 }
 
@@ -4137,6 +4288,187 @@ mod tests {
         assert!(debug.contains("partial_stderr_len"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_stdin_write_end_round_trips_through_cat_bd_m42c2() {
+        let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        policy.limits.max_stdin_bytes = 1024;
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let response = provider
+            .perform(
+                &ProcessSpawnRequest::Spawn {
+                    launch: ProcessLaunch {
+                        executable: canonical,
+                        argv: Vec::new(),
+                        env: BTreeMap::new(),
+                        cwd: None,
+                        shell: false,
+                        stdio: ProcessStdio::default(),
+                    },
+                },
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .expect("spawn cat for stdin round trip");
+        let ProcessSpawnResponse::Spawned { handle } = response else {
+            panic!("lifecycle spawn response");
+        };
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::WriteStdin {
+                    handle: handle.clone(),
+                    data: b"through-stdin".to_vec(),
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::StdinWritten { bytes_written: 13 })
+        ));
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::CloseStdin {
+                    handle: handle.clone(),
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::StdinClosed)
+        ));
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::Wait {
+                    handle,
+                    timeout_millis: Some(5_000),
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::Waited {
+                exit: ProcessExit {
+                    success: true,
+                    ..
+                },
+                stdout,
+                ..
+            }) if stdout == b"through-stdin"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_stdin_enforces_the_cumulative_limit_bd_m42c2() {
+        let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        policy.limits.max_stdin_bytes = 8;
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let response = provider
+            .perform(
+                &ProcessSpawnRequest::Spawn {
+                    launch: ProcessLaunch {
+                        executable: canonical,
+                        argv: Vec::new(),
+                        env: BTreeMap::new(),
+                        cwd: None,
+                        shell: false,
+                        stdio: ProcessStdio::default(),
+                    },
+                },
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .expect("spawn cat for stdin bound");
+        let ProcessSpawnResponse::Spawned { handle } = response else {
+            panic!("lifecycle spawn response");
+        };
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::WriteStdin {
+                    handle: handle.clone(),
+                    data: vec![b'a'; 6],
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::StdinWritten { bytes_written: 6 })
+        ));
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::WriteStdin {
+                    handle,
+                    data: vec![b'b'; 3],
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Err(ProcessSpawnError::LimitExceeded {
+                limit,
+                actual: 9,
+                maximum: 8,
+                ..
+            }) if limit == "stdin_bytes"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_with_terminate_signals_the_group_and_reports_sigterm_bd_m42c2() {
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        let canonical = policy
+            .authorize_executable(&sleep)
+            .expect("authorize sleep");
+        policy.allowed_signals.insert(ProcessSignal::Terminate);
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let response = provider
+            .perform(
+                &ProcessSpawnRequest::Spawn {
+                    launch: ProcessLaunch {
+                        executable: canonical,
+                        argv: vec!["30".to_string()],
+                        env: BTreeMap::new(),
+                        cwd: None,
+                        shell: false,
+                        stdio: ProcessStdio::default(),
+                    },
+                },
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .expect("spawn sleep for terminate");
+        let ProcessSpawnResponse::Spawned { handle } = response else {
+            panic!("lifecycle spawn response");
+        };
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::Kill {
+                    handle: handle.clone(),
+                    signal: ProcessSignal::Terminate,
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::Killed {
+                signal: ProcessSignal::Terminate,
+                exit: ProcessExit {
+                    success: false,
+                    code: None,
+                    signal: Some(15),
+                },
+                ..
+            })
+        ));
+        // bd-m42c2: the terminal kill outcome stays addressable so the
+        // pending lifecycle Wait observes it instead of an unknown handle.
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::Wait {
+                    handle,
+                    timeout_millis: Some(1_000),
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::Killed {
+                signal: ProcessSignal::Terminate,
+                ..
+            })
+        ));
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn exited_child_descendant_cannot_hold_capture_pipes_or_escape_group_teardown() {
@@ -4399,7 +4731,7 @@ mod tests {
                 },
                 &[ProcessSpawnCapability::Spawn],
             ),
-            Err(ProcessSpawnError::NotImplemented { .. })
+            Ok(ProcessSpawnResponse::StdinWritten { bytes_written: 11 })
         ));
         assert!(handle.starts_with("ps-"));
         assert!(!handle.contains(&std::process::id().to_string()));
@@ -4414,6 +4746,8 @@ mod tests {
             matches!(kill, Ok(ProcessSpawnResponse::Killed { .. })),
             "unexpected lifecycle kill outcome: {kill:?}"
         );
+        // bd-m42c2: the kill outcome stays terminal-addressable so a pending
+        // lifecycle Wait observes it rather than losing the handle.
         assert!(matches!(
             provider.perform(
                 &ProcessSpawnRequest::Wait {
@@ -4422,7 +4756,7 @@ mod tests {
                 },
                 &[ProcessSpawnCapability::Spawn],
             ),
-            Err(ProcessSpawnError::UnknownHandle { .. })
+            Ok(ProcessSpawnResponse::Killed { .. })
         ));
         assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
         for _ in 0..100 {

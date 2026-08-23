@@ -75,8 +75,8 @@ use frankenengine_extension_host::host_io::{
     HostIoOutcome, HostIoProvider, HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
 };
 use frankenengine_extension_host::process_spawn::{
-    ProcessExit, ProcessLaunch, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRequest,
-    ProcessSpawnResponse, ProcessStdio, ProcessStdioMode,
+    ProcessExit, ProcessLaunch, ProcessSignal, ProcessSpawnError, ProcessSpawnProvider,
+    ProcessSpawnRequest, ProcessSpawnResponse, ProcessStdio, ProcessStdioMode,
 };
 
 use crate::algebraic_effects::{EffectError, HandlerFailurePayload};
@@ -2787,6 +2787,14 @@ pub enum BuiltinFunctionKind {
     NetServerClose,
     NetSocketWrite,
     NetSocketEnd,
+    /// bd-m42c2: provider-backed `ChildProcess.kill` with Node signal
+    /// vocabulary (default SIGTERM).
+    ChildProcessKill,
+    /// bd-m42c2: bounded `child.stdin.write(chunk)` through the lifecycle
+    /// stdin writer.
+    ChildProcessStdinWrite,
+    /// bd-m42c2: `child.stdin.end()` closing the pipe (EOF to the child).
+    ChildProcessStdinEnd,
     NetSocketDestroy,
     NetSocketSetEncoding,
     NetSocketPause,
@@ -4348,6 +4356,9 @@ impl BuiltinFunction {
             | BuiltinFunctionKind::HttpServerResponseWrite => "write",
             BuiltinFunctionKind::HttpClientRequestEnd
             | BuiltinFunctionKind::HttpServerResponseEnd => "end",
+            BuiltinFunctionKind::ChildProcessKill => "kill",
+            BuiltinFunctionKind::ChildProcessStdinWrite => "write",
+            BuiltinFunctionKind::ChildProcessStdinEnd => "end",
             BuiltinFunctionKind::HttpClientRequestSetHeader
             | BuiltinFunctionKind::HttpServerResponseSetHeader => "setHeader",
             BuiltinFunctionKind::HttpIncomingMessageSetEncoding => "setEncoding",
@@ -9028,6 +9039,9 @@ struct ProcessCallOptions {
 enum ChildProcessStreamKind {
     Stdout,
     Stderr,
+    /// Guest-writable stdin facade (bd-m42c2). Registered so `write`/`end`
+    /// can resolve their owning child; it never emits lifecycle events.
+    Stdin,
 }
 
 #[derive(Debug)]
@@ -10170,6 +10184,11 @@ pub struct InterpreterCore {
     /// bounded results without trusting guest tags.
     completed_child_processes: BTreeMap<ObjectId, CompletedChildProcessState>,
     child_process_streams: BTreeMap<ObjectId, (ObjectId, ChildProcessStreamKind)>,
+    /// Provider-scoped opaque handles for live lifecycle children (bd-m42c2),
+    /// keyed by the `ChildProcess` facade object. Entries are charged at
+    /// spawn success and released when the facade's lifecycle state is
+    /// removed, so post-settle `kill`/`stdin.write` fail closed like Node.
+    child_process_handles: BTreeMap<ObjectId, String>,
     /// Non-forgeable WHATWG URL brands and state (bd-8y0gs). These maps are
     /// execution-local and are cleared before a seed can reuse heap ObjectIds.
     url_objects: BTreeMap<ObjectId, UrlRuntimeState>,
@@ -10899,6 +10918,7 @@ impl InterpreterCore {
             next_event_promise_waiter_id: 0,
             completed_child_processes: BTreeMap::new(),
             child_process_streams: BTreeMap::new(),
+            child_process_handles: BTreeMap::new(),
             url_objects: BTreeMap::new(),
             url_search_params: BTreeMap::new(),
             cluster_facades: BTreeMap::new(),
@@ -11653,16 +11673,28 @@ impl InterpreterCore {
                 self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStream"))])?,
             )
         };
+        // bd-m42c2: a piped stdin gets a guest-writable facade backed by the
+        // provider's bounded writer; `write`/`end` resolve through this
+        // object to the owning child's opaque handle.
+        let stdin_stream = if options.stdio.stdin == ProcessStdioMode::Null {
+            None
+        } else {
+            Some(self.alloc_object_with_properties(&[(
+                "__type",
+                Value::str("ChildProcessStdin"),
+            )])?)
+        };
         let child = self.alloc_object_with_properties(&[
             ("__type", Value::str("ChildProcess")),
             ("pid", Value::Int(1)),
             ("killed", Value::Bool(false)),
             ("stdout", stdout_stream.map_or(Value::Null, Value::Object)),
             ("stderr", stderr_stream.map_or(Value::Null, Value::Object)),
-            ("stdin", Value::Undefined),
+            ("stdin", stdin_stream.map_or(Value::Undefined, Value::Object)),
         ])?;
-        let stream_entries =
-            u64::from(stdout_stream.is_some()) + u64::from(stderr_stream.is_some());
+        let stream_entries = u64::from(stdout_stream.is_some())
+            + u64::from(stderr_stream.is_some())
+            + u64::from(stdin_stream.is_some());
         let retained_stream_bytes =
             stream_entries.saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
                 std::mem::size_of::<(ObjectId, (ObjectId, ChildProcessStreamKind))>() as u64,
@@ -11675,6 +11707,10 @@ impl InterpreterCore {
         if let Some(stream) = stderr_stream {
             self.child_process_streams
                 .insert(stream, (child, ChildProcessStreamKind::Stderr));
+        }
+        if let Some(stream) = stdin_stream {
+            self.child_process_streams
+                .insert(stream, (child, ChildProcessStreamKind::Stdin));
         }
         Ok(child)
     }
@@ -11714,6 +11750,15 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
                 .saturating_sub(Self::estimate_completed_child_process_state_bytes(&state));
+        }
+        // bd-m42c2: the opaque provider handle dies with the facade's
+        // lifecycle state, so post-settle kill()/stdin.write fail closed.
+        if let Some(handle) = self.child_process_handles.remove(&child) {
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_string_bytes(
+                    &handle,
+                )),
+            );
         }
     }
 
@@ -11806,9 +11851,12 @@ impl InterpreterCore {
                 .map_or_else(Vec::new, |error| vec![error]),
             (None, "spawn") if state.error.is_none() => Vec::new(),
             (None, "exit") if state.error.is_none() => {
-                vec![state.exit_code.clone(), state.signal.clone()]
+                vec![state.exit_code.clone(), Self::child_signal_event_value(&state.signal)]
             }
-            (None, "close") => vec![state.exit_code.clone(), state.signal.clone()],
+            (None, "close") => vec![
+                state.exit_code.clone(),
+                Self::child_signal_event_value(&state.signal),
+            ],
             _ => return Ok(None),
         };
         let event_key_bytes =
@@ -11865,10 +11913,14 @@ impl InterpreterCore {
                 let thrown = self.native_error_to_thrown_value(&error)?;
                 (Err(error), vec![thrown, Value::str(""), Value::str("")])
             }
-            Ok(ProcessSpawnResponse::Waited {
+            // bd-m42c2: a lifecycle kill is a final outcome; the provider
+            // reports it as `Killed` with the same exit/output payload shape
+            // as a natural `Waited` completion.
+            Ok(ProcessSpawnResponse::Killed {
                 exit,
                 stdout,
                 stderr,
+                ..
             }) => {
                 let (stdout_value, stderr_value) =
                     if let Some(encoding) = task.callback_encoding.as_deref() {
@@ -11890,9 +11942,11 @@ impl InterpreterCore {
                     vec![error_value, stdout_value, stderr_value],
                 )
             }
-            Ok(_) => {
+            Ok(response) => {
                 let error = InterpreterError::InternalError {
-                    details: "process wait returned a non-wait response".to_string(),
+                    // ProcessSpawnResponse's custom Debug prints byte
+                    // lengths only, so this stays redaction-safe.
+                    details: format!("process wait returned a non-wait response: {response:?}"),
                 };
                 return Err(self.cleanup_process_handle_after_error(&task.handle, error));
             }
@@ -11903,6 +11957,14 @@ impl InterpreterCore {
             }
         };
         self.settle_child_process(task.child, settlement)?;
+        // bd-m42c2: the native lifecycle is over; drop the opaque handle so
+        // later kill()/stdin.write from guest code fail closed.
+        if let Some(handle) = self.child_process_handles.remove(&task.child) {
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(&handle)),
+            );
+        }
         let streams = self
             .child_process_streams
             .iter()
@@ -11936,6 +11998,141 @@ impl InterpreterCore {
         }
         self.activate_completed_child_process_event(task.child, "close")?;
         Ok(())
+    }
+
+    /// Resolve the owning child facade and its opaque provider handle for a
+    /// `ChildProcess` or `ChildProcessStdin` receiver (bd-m42c2). Fails
+    /// closed when no live lifecycle is registered.
+    fn child_process_receiver(
+        &self,
+        receiver: &Value,
+    ) -> Result<(ObjectId, String), InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::InternalError {
+                details: "child process method called without an object receiver".to_string(),
+            });
+        };
+        let child = self
+            .child_process_streams
+            .get(object_id)
+            .map(|(child, _)| *child)
+            .unwrap_or(*object_id);
+        let Some(handle) = self.child_process_handles.get(&child) else {
+            return Err(InterpreterError::ObjectNotFound { id: child.0 });
+        };
+        Ok((child, handle.clone()))
+    }
+
+    /// Node-compatible signal spelling for child-process exit/close events
+    /// (bd-m42c2): known unix signals report their `SIG*` name; unknown or
+    /// absent values pass through unchanged.
+    fn child_signal_event_value(signal: &Value) -> Value {
+        match signal {
+            Value::Int(code) => match code {
+                1 => Value::str("SIGHUP"),
+                2 => Value::str("SIGINT"),
+                3 => Value::str("SIGQUIT"),
+                6 => Value::str("SIGABRT"),
+                9 => Value::str("SIGKILL"),
+                15 => Value::str("SIGTERM"),
+                _ => signal.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Provider-backed `child.kill([signal])` (bd-m42c2). The default signal
+    /// is SIGTERM like Node. Denials and capability failures surface as
+    /// typed errors; a dead or unknown lifecycle reports `false` instead of
+    /// throwing, matching kill-after-exit semantics.
+    fn child_process_kill(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_child, handle) = self.child_process_receiver(&receiver)?;
+        let signal = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Null) | Some(Value::Undefined) => ProcessSignal::Terminate,
+            Some(value @ Value::Str(_)) => {
+                let upper = self.value_to_string(&value).to_ascii_uppercase();
+                match upper.as_str() {
+                    "SIGTERM" | "TERM" => ProcessSignal::Terminate,
+                    "SIGKILL" | "KILL" => ProcessSignal::Kill,
+                    "SIGINT" | "INT" => ProcessSignal::Interrupt,
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: format!("a known child-process signal, got {other}"),
+                            got: self.value_to_string(&value),
+                        });
+                    }
+                }
+            }
+            Some(other) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "a signal name string".to_string(),
+                    got: self.value_to_string(&other),
+                });
+            }
+        };
+        let killed = self.perform_process_request(
+            ProcessSpawnRequest::Kill { handle, signal },
+            &Label::Public,
+        );
+        // bd-m42c2: denials stay typed refusals; a dead or unknown lifecycle
+        // reports `false` like Node's kill-after-exit.
+        let denial = matches!(
+            &killed,
+            Err(InterpreterError::HostProcess { code, .. })
+                if code == "EACCES" || code == "FLOW_POLICY_BLOCKED"
+        ) || matches!(
+            killed,
+            Err(InterpreterError::CapabilityDenied { .. })
+                | Err(InterpreterError::InternalError { .. })
+        );
+        if denial {
+            return Err(killed.unwrap_err());
+        }
+        if killed.is_ok()
+            && let Value::Object(child) = receiver
+            && self.completed_child_processes.contains_key(&child)
+        {
+            self.set_object_property(child, "killed".to_string(), Value::Bool(true))?;
+        }
+        Ok(Value::Bool(killed.is_ok()))
+    }
+
+    /// Bounded `child.stdin.write(chunk)` (bd-m42c2). Bytes are accepted
+    /// against the cumulative `max_stdin_bytes` bound and drained by the
+    /// provider's dedicated writer thread; the interpreter never blocks on
+    /// pipe backpressure.
+    fn child_process_stdin_write(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_child, handle) = self.child_process_receiver(&receiver)?;
+        let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::str(""));
+        let data = self.fs_value_bytes(&chunk)?;
+        match self.perform_process_request(
+            ProcessSpawnRequest::WriteStdin { handle, data },
+            &Label::Public,
+        ) {
+            Ok(_) => Ok(Value::Bool(true)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `child.stdin.end()` (bd-m42c2): closes the pipe through the writer
+    /// thread, delivering EOF to the child.
+    fn child_process_stdin_end(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
+        let (_child, handle) = self.child_process_receiver(&receiver)?;
+        match self.perform_process_request(
+            ProcessSpawnRequest::CloseStdin { handle },
+            &Label::Public,
+        ) {
+            Ok(_) => Ok(Value::Undefined),
+            Err(error) => Err(error),
+        }
     }
 
     fn dispatch_process_spawn_hostcall(
@@ -12090,6 +12287,14 @@ impl InterpreterCore {
                 .perform_process_request(ProcessSpawnRequest::Spawn { launch }, &request_label)
             {
                 Ok(ProcessSpawnResponse::Spawned { handle }) => {
+                    // bd-m42c2: keep the opaque handle reachable for
+                    // kill/stdin while the lifecycle is pending. Charged here,
+                    // released with the facade state.
+                    let handle_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_string_bytes(&handle));
+                    self.apply_memory_component_delta(0, handle_bytes)?;
+                    self.child_process_handles
+                        .insert(child, handle.clone());
                     if let Err(error) =
                         self.replace_child_process_state(child, Self::pending_child_process_state())
                     {
@@ -33466,6 +33671,15 @@ impl InterpreterCore {
             BuiltinFunctionKind::NetSocketWrite => {
                 self.loopback_socket_write(receiver.unwrap_or(Value::Undefined), args)
             }
+            BuiltinFunctionKind::ChildProcessKill => {
+                self.child_process_kill(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::ChildProcessStdinWrite => {
+                self.child_process_stdin_write(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::ChildProcessStdinEnd => {
+                self.child_process_stdin_end(receiver.unwrap_or(Value::Undefined))
+            }
             BuiltinFunctionKind::NetSocketEnd => self.loopback_socket_end(
                 module,
                 receiver.unwrap_or(Value::Undefined),
@@ -47272,6 +47486,16 @@ impl InterpreterCore {
             )),
             ("NetSocket" | "TlsSocket", "write") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::NetSocketWrite,
+            )),
+            // bd-m42c2: lifecycle kill and bounded stdin bridge.
+            ("ChildProcess", "kill") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ChildProcessKill,
+            )),
+            ("ChildProcessStdin", "write") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ChildProcessStdinWrite,
+            )),
+            ("ChildProcessStdin", "end") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ChildProcessStdinEnd,
             )),
             ("NetSocket" | "TlsSocket", "end") => {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::NetSocketEnd))

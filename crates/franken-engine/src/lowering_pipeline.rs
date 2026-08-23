@@ -26665,6 +26665,16 @@ fn simulate_ir2_flow_labels(
                     {
                         FlowValueShape::Callable
                     }
+                    (
+                        FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
+                        Ir1PropertyKey::Static(key),
+                    ) if matches!(key.as_str(), Some("toString" | "valueOf")) => {
+                        // bd-dign3: engine-owned closed data and fresh
+                        // aggregates coerce through the engine's own
+                        // ToString, never guest code, so the method value is
+                        // summarized exactly like the Buffer lane above.
+                        FlowValueShape::Callable
+                    }
                     (FlowValueShape::BufferObject, Ir1PropertyKey::Static(key))
                         if matches!(key.as_str(), Some("toString" | "readUInt32LE")) =>
                     {

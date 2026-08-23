@@ -24904,6 +24904,16 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
                 // `buf.toString` still sees the engine receiver. StoreBinding
                 // of a new value still overwrites the binding shape.
                 | FlowValueShape::BufferObject
+                // bd-dign3: ClosedResult is engine-vouched closed data
+                // (catalog arrays, typed-array views, cipher results). It
+                // must survive unrelated GetProperty/CallMethod invalidation
+                // exactly as BufferObject does: the synthetic receiver path
+                // (`StoreBinding` -> `GetProperty` -> `LoadBinding`) reads
+                // the stack copy immediately, and wiping it here turns every
+                // finite method call on such a value into an unknown-callee
+                // fail-high. Mutation and escape paths still clear it via
+                // their own explicit invalidations.
+                | FlowValueShape::ClosedResult
         ) {
             value.shape = FlowValueShape::Unknown;
         }
@@ -24925,6 +24935,11 @@ fn invalidate_nonprimitive_binding_flow_shapes(
                 // / `fs.closeSync` so the later `buf.toString` hostcall
                 // authenticates (bd-zco6t).
                 | FlowValueShape::BufferObject
+                // bd-dign3: named bindings holding engine-vouched closed
+                // data keep their proof across unrelated invalidation for
+                // the synthetic-receiver and later-read paths, exactly as
+                // BufferObject does.
+                | FlowValueShape::ClosedResult
         ) {
             *shape = FlowValueShape::Unknown;
         }
@@ -26311,6 +26326,10 @@ fn simulate_ir2_flow_labels(
                         // GetProperty/CallMethod invalidation so `buf.toString`
                         // after `fs.readSync` still sees the engine receiver.
                         | FlowValueShape::BufferObject
+                        // bd-dign3: ClosedResult receivers (catalog arrays,
+                        // typed-array views, cipher results) use the same
+                        // synthetic-receiver seam for their finite methods.
+                        | FlowValueShape::ClosedResult
                 ) {
                     invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
                 }
@@ -26639,8 +26658,10 @@ fn simulate_ir2_flow_labels(
                     // are engine-owned implementations, so the method value
                     // is a summarized callable and the subsequent CallMethod
                     // stays JoinInputs instead of the fail-high TopSecret.
-                    (FlowValueShape::Primitive, Ir1PropertyKey::Static(key))
-                        if key.as_str() == Some("includes") =>
+                    (
+                        FlowValueShape::Primitive | FlowValueShape::ClosedResult,
+                        Ir1PropertyKey::Static(key),
+                    ) if key.as_str() == Some("includes") =>
                     {
                         FlowValueShape::Callable
                     }
@@ -27171,6 +27192,24 @@ fn simulate_ir2_flow_labels(
                     result_shape = FlowValueShape::BufferObject;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:BufferIsBuffer" {
+                    result_shape = FlowValueShape::Primitive;
+                }
+                // bd-dign3: hash/cipher catalogs are engine-owned arrays of
+                // primitive strings, `crypto.constants` is an engine-owned
+                // bag of numeric primitives, and timing-safe comparison
+                // yields a boolean. All closed, all runtime-truthful.
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:CryptoGetHashes" | "builtin:CryptoGetCiphers"
+                    )
+                {
+                    result_shape = FlowValueShape::ClosedResult;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:CryptoConstants" {
+                    result_shape = FlowValueShape::FreshAggregate;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:CryptoTimingSafeEqual" {
                     result_shape = FlowValueShape::Primitive;
                 }
                 if matches!(

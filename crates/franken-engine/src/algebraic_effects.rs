@@ -286,6 +286,19 @@ pub struct EffectTelemetry {
     pub metadata: BTreeMap<String, String>,
 }
 
+/// Structured guest-facing payload for
+/// [`EffectError::HandlerStructuredFailure`] (bd-k709s). Boxed behind the
+/// variant so `EffectError` stays under the large-`Err` lint threshold:
+/// bounded partial stream bytes and the terminating signal live behind the
+/// allocation rather than in every effect result.
+#[derive(Debug, Clone)]
+pub struct HandlerFailurePayload {
+    /// Terminating signal observed during containment, when available.
+    pub signal: Option<i32>,
+    pub partial_stdout: Vec<u8>,
+    pub partial_stderr: Vec<u8>,
+}
+
 /// Error types for effect handling.
 #[derive(Debug, Clone)]
 pub enum EffectError {
@@ -303,6 +316,17 @@ pub enum EffectError {
         message: String,
         code: Option<String>,
     },
+    /// Handler-specific failure that additionally carries structured
+    /// guest-facing fields `HandlerError` cannot express (bd-k709s):
+    /// currently the process-spawn handler's bounded partial child output
+    /// and the terminating signal observed during containment. The bytes
+    /// travel only in the typed payload; `message` stays redacted.
+    HandlerStructuredFailure {
+        handler: String,
+        message: String,
+        code: String,
+        payload: Box<HandlerFailurePayload>,
+    },
     /// Effect parameters are invalid.
     InvalidParameters { effect_name: String, reason: String },
     /// Stack overflow in handler composition.
@@ -310,7 +334,6 @@ pub enum EffectError {
     /// Circular dependency in handlers.
     CircularDependency { path: Vec<String> },
 }
-
 impl fmt::Display for EffectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -328,6 +351,21 @@ impl fmt::Display for EffectError {
             } => {
                 write!(f, "Handler error in {}: {}", handler, message)
             }
+            Self::HandlerStructuredFailure {
+                handler,
+                message,
+                code,
+                payload,
+            } => write!(
+                f,
+                "Handler error in {}: {} (code {}, signal {:?}, partial stdout ({} bytes), stderr ({} bytes))",
+                handler,
+                message,
+                code,
+                payload.signal,
+                payload.partial_stdout.len(),
+                payload.partial_stderr.len()
+            ),
             Self::InvalidParameters {
                 effect_name,
                 reason,

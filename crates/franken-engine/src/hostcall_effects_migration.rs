@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::algebraic_effects::{
     Effect, EffectCapabilities, EffectError, EffectPriority, EffectResult, ErasedEffect, Handler,
-    HandlerStack, ProcSpawnEffect,
+    HandlerFailurePayload, HandlerStack, ProcSpawnEffect,
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
 use crate::ifc_artifacts::Label;
@@ -735,6 +735,7 @@ pub(crate) const PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE: &str =
 
 fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
     match error {
+        ProcessSpawnError::PartialOutputFailed { failure, .. } => process_spawn_error_code(failure),
         ProcessSpawnError::Denied { .. } => "PROCESS_SPAWN_DENIED",
         ProcessSpawnError::FlowPolicyBlocked => "PROCESS_SPAWN_FLOW_POLICY_BLOCKED",
         ProcessSpawnError::CapabilityMissing { .. } => "PROCESS_SPAWN_CAPABILITY_MISSING",
@@ -756,6 +757,42 @@ fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
         }
         ProcessSpawnError::Io { .. } => "PROCESS_SPAWN_IO",
         ProcessSpawnError::ReplayDivergence { .. } => "PROCESS_SPAWN_REPLAY_DIVERGENCE",
+    }
+}
+/// Convert a typed provider outcome failure into the handler error the
+/// interpreter maps onto Node's catchable child-process error shape
+/// (bd-k709s). Failures without captured containment output keep the plain
+/// `HandlerError` shape so every pre-existing denial path is unchanged;
+/// only capture-bearing failures carry the structured partial-output
+/// payload. The human message stays byte-free; partial bytes travel only in
+/// typed fields.
+fn process_spawn_handler_failure(error: ProcessSpawnError) -> EffectError {
+    let code = process_spawn_error_code(&error).to_string();
+    let message = error.to_string();
+    let Some((signal, partial_stdout, partial_stderr)) = (match &error {
+        ProcessSpawnError::PartialOutputFailed {
+            signal,
+            partial_stdout,
+            partial_stderr,
+            ..
+        } => Some((*signal, partial_stdout.clone(), partial_stderr.clone())),
+        _ => None,
+    }) else {
+        return EffectError::HandlerError {
+            handler: "process_spawn_handler".to_string(),
+            message,
+            code: Some(code),
+        };
+    };
+    EffectError::HandlerStructuredFailure {
+        handler: "process_spawn_handler".to_string(),
+        message,
+        code,
+        payload: Box::new(HandlerFailurePayload {
+            signal,
+            partial_stdout,
+            partial_stderr,
+        }),
     }
 }
 
@@ -1159,11 +1196,7 @@ impl ProcessSpawnHandler {
             // Converting policy denials back into `CapabilityDenied` here would
             // erase `executable_alias_denied`, timeout, and ENOENT-relevant
             // evidence after the real capability gate had already succeeded.
-            Err(error) => Err(EffectError::HandlerError {
-                handler: "process_spawn_handler".to_string(),
-                message: error.to_string(),
-                code: Some(process_spawn_error_code(&error).to_string()),
-            }),
+            Err(error) => Err(process_spawn_handler_failure(error)),
         }
     }
 }
@@ -2355,6 +2388,51 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct PartialOutputFailingProcessSpawn {
+        perform_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ProcessSpawnProvider for PartialOutputFailingProcessSpawn {
+        fn name(&self) -> &str {
+            "partial-output-failing-process-spawn"
+        }
+
+        fn preflight_request(
+            &self,
+            _request: &ProcessSpawnRequest,
+        ) -> Result<(), ProcessSpawnError> {
+            Ok(())
+        }
+
+        fn prepare_request(
+            &self,
+            request: &ProcessSpawnRequest,
+        ) -> Result<ProcessSpawnRequest, ProcessSpawnError> {
+            Ok(request.clone())
+        }
+
+        fn perform(
+            &self,
+            _request: &ProcessSpawnRequest,
+            granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+            self.perform_calls
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Err(ProcessSpawnError::PartialOutputFailed {
+                failure: Box::new(ProcessSpawnError::TimedOut { runtime_millis: 25 }),
+                signal: Some(9),
+                partial_stdout: b"fixture-partial-out".to_vec(),
+                partial_stderr: b"fixture-partial-err".to_vec(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        }
+    }
+
     impl ProcessSpawnProvider for PreparationDenyingProcessSpawn {
         fn name(&self) -> &str {
             "preparation-denying-test-process-spawn"
@@ -2731,6 +2809,82 @@ mod tests {
         replay_stack
             .handle_effect(create_process_spawn_effect(request).as_ref())
             .expect_err("the exact prepared-request refusal must replay as a guest error");
+        assert_eq!(
+            replay_provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        assert_eq!(replay.finish_execution().unwrap(), entries);
+    }
+
+    #[test]
+    fn process_timeout_failure_retains_partial_output_through_the_handler_bd_k709s() {
+        let request = process_run_request();
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().expect("begin global journal");
+        let provider = Arc::new(PartialOutputFailingProcessSpawn::default());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+
+        let error = stack
+            .handle_effect(create_process_spawn_effect(request.clone()).as_ref())
+            .expect_err("the wrapped timeout must surface as a guest error");
+        assert!(matches!(
+            error,
+            EffectError::HandlerStructuredFailure {
+                ref code,
+                ref payload,
+                ..
+            } if code == "PROCESS_SPAWN_TIMED_OUT"
+                && payload.signal == Some(9)
+                && payload.partial_stdout == b"fixture-partial-out"
+                && payload.partial_stderr == b"fixture-partial-err"
+        ));
+        assert_eq!(
+            provider
+                .perform_calls
+                .load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
+        // The journal retains the exact typed outcome including the capture.
+        let entries = journal.finish_execution().expect("finish global journal");
+        assert!(matches!(
+            entries.as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn {
+                request: recorded,
+                outcome: Err(ProcessSpawnError::PartialOutputFailed { .. }),
+            }] if recorded == &request
+        ));
+
+        // Exact replay returns the recorded wrapped outcome verbatim without
+        // dispatching the live provider again.
+        let replay = Arc::new(InMemoryHostEffectJournal::replaying(entries.clone()));
+        replay.begin_execution().expect("begin exact replay");
+        let replay_provider = Arc::new(PartialOutputFailingProcessSpawn::default());
+        let mut replay_stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(replay_provider.clone()),
+            None,
+            Some(replay.clone()),
+        );
+        let replay_error = replay_stack
+            .handle_effect(create_process_spawn_effect(request).as_ref())
+            .expect_err("the recorded timeout must replay as a guest error");
+        assert!(matches!(
+            replay_error,
+            EffectError::HandlerStructuredFailure { ref payload, .. }
+                if payload.signal == Some(9)
+                    && payload.partial_stdout == b"fixture-partial-out"
+        ));
         assert_eq!(
             replay_provider
                 .perform_calls

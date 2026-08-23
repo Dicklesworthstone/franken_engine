@@ -25155,10 +25155,10 @@ fn summarize_stream_callback_exceptions(
 
     let mut label_targets = BTreeMap::<u32, usize>::new();
     for (index, body_op) in body_ops.iter().enumerate() {
-        if let Ir1Op::Label { id } = body_op {
-            if label_targets.insert(*id, index).is_some() {
-                return StreamCallbackSummary::Unsupported;
-            }
+        if let Ir1Op::Label { id } = body_op
+            && label_targets.insert(*id, index).is_some()
+        {
+            return StreamCallbackSummary::Unsupported;
         }
     }
 
@@ -29662,7 +29662,7 @@ mod tests {
             Ir1Op::CallMethod { arg_count: 1 },
             Ir1Op::Return,
         ];
-        let capture = vec![(format!("{CAPTURE_CELL_NAME_PREFIX}5\0events"), 9u32)];
+        let capture = [(format!("{CAPTURE_CELL_NAME_PREFIX}5\0events"), 9u32)];
         let free_ids = [9u32];
         let free_names = [capture[0].0.clone()];
         assert_eq!(

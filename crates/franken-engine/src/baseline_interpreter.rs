@@ -79,7 +79,7 @@ use frankenengine_extension_host::process_spawn::{
     ProcessSpawnResponse, ProcessStdio, ProcessStdioMode,
 };
 
-use crate::algebraic_effects::EffectError;
+use crate::algebraic_effects::{EffectError, HandlerFailurePayload};
 use crate::ast::ParseGoal;
 use crate::capability::{
     APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, HostcallDispatchBinding,
@@ -11318,28 +11318,52 @@ impl InterpreterCore {
                 message,
                 code: Some(code),
                 ..
+            } => InterpreterError::HostProcess {
+                code: Self::node_code_for_process_spawn(&code).to_string(),
+                message,
+                status: None,
+                signal: None,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+            EffectError::HandlerStructuredFailure {
+                message,
+                code,
+                payload,
+                ..
             } => {
-                let node_code = match code.as_str() {
-                    PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE => "ENOENT",
-                    "PROCESS_SPAWN_TIMED_OUT" => "ETIMEDOUT",
-                    "PROCESS_SPAWN_LIMIT_EXCEEDED" => "ENOBUFS",
-                    "PROCESS_SPAWN_POLICY_VIOLATION"
-                    | "PROCESS_SPAWN_DENIED"
-                    | "PROCESS_SPAWN_CAPABILITY_MISSING" => "EACCES",
-                    _ => code.as_str(),
-                };
+                let HandlerFailurePayload {
+                    signal,
+                    partial_stdout,
+                    partial_stderr,
+                } = payload.as_ref();
                 InterpreterError::HostProcess {
-                    code: node_code.to_string(),
+                    code: Self::node_code_for_process_spawn(&code).to_string(),
                     message,
                     status: None,
-                    signal: None,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
+                    signal: *signal,
+                    stdout: partial_stdout.clone(),
+                    stderr: partial_stderr.clone(),
                 }
             }
             error => InterpreterError::InternalError {
                 details: format!("process effect dispatch failed: {error}"),
             },
+        }
+    }
+
+    /// Map a stable process-spawn domain code onto Node's guest-visible
+    /// `err.code` spelling. Shared by the plain and structured handler
+    /// failure arms so both shapes stay in lockstep (bd-k709s).
+    fn node_code_for_process_spawn(code: &str) -> &str {
+        match code {
+            PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE => "ENOENT",
+            "PROCESS_SPAWN_TIMED_OUT" => "ETIMEDOUT",
+            "PROCESS_SPAWN_LIMIT_EXCEEDED" => "ENOBUFS",
+            "PROCESS_SPAWN_POLICY_VIOLATION"
+            | "PROCESS_SPAWN_DENIED"
+            | "PROCESS_SPAWN_CAPABILITY_MISSING" => "EACCES",
+            other => other,
         }
     }
 
@@ -11540,20 +11564,77 @@ impl InterpreterCore {
     fn process_spawn_sync_failure(
         &mut self,
         error: InterpreterError,
+        encoding: Option<&str>,
     ) -> Result<Value, InterpreterError> {
         let thrown = self.native_error_to_thrown_value(&error)?;
+        // bd-k709s: when the failure carries bounded partial stream output
+        // (timeout, containment capture cap, or provider I/O), the sync
+        // result exposes it Node-style instead of reporting null streams.
+        let fields = match &error {
+            InterpreterError::HostProcess {
+                status,
+                signal,
+                stdout,
+                stderr,
+                ..
+            } => Some((status, signal, stdout, stderr)),
+            _ => None,
+        };
+        let (status_value, signal_value, stdout_value, stderr_value) = match fields {
+            Some((status, signal, stdout, stderr)) => (
+                status.map_or(Value::Null, |code| Value::Int(i64::from(code))),
+                signal.map_or(Value::Null, |sig| Value::Int(i64::from(sig))),
+                if stdout.is_empty() {
+                    Value::Null
+                } else {
+                    self.process_output_value(stdout, encoding)?
+                },
+                if stderr.is_empty() {
+                    Value::Null
+                } else {
+                    self.process_output_value(stderr, encoding)?
+                },
+            ),
+            None => (Value::Null, Value::Null, Value::Null, Value::Null),
+        };
         let result = self.alloc_object_with_properties(&[
             ("pid", Value::Int(0)),
-            ("status", Value::Null),
-            ("signal", Value::Null),
-            ("stdout", Value::Null),
-            ("stderr", Value::Null),
+            ("status", status_value),
+            ("signal", signal_value),
+            ("stdout", stdout_value),
+            ("stderr", stderr_value),
             ("output", Value::Null),
             ("error", thrown),
         ])?;
         Ok(Value::Object(result))
     }
 
+    /// Decode the bounded partial stream output carried by a child-process
+    /// failure into Node's exec-callback `(error, stdout, stderr)` argument
+    /// pair (bd-k709s). Failures without captured output keep the historic
+    /// empty-string arguments.
+    fn process_failure_callback_args(
+        &mut self,
+        error: &InterpreterError,
+        options: &ProcessCallOptions,
+    ) -> Result<(Value, Value), InterpreterError> {
+        match error {
+            InterpreterError::HostProcess { stdout, stderr, .. } => {
+                let stdout_value = if stdout.is_empty() {
+                    Value::str("")
+                } else {
+                    self.process_output_value(stdout, options.encoding.as_deref())?
+                };
+                let stderr_value = if stderr.is_empty() {
+                    Value::str("")
+                } else {
+                    self.process_output_value(stderr, options.encoding.as_deref())?
+                };
+                Ok((stdout_value, stderr_value))
+            }
+            _ => Ok((Value::str(""), Value::str(""))),
+        }
+    }
     fn allocate_child_process_facade(
         &mut self,
         options: &ProcessCallOptions,
@@ -12093,14 +12174,19 @@ impl InterpreterCore {
         let response = match self.perform_process_request(request, &request_label) {
             Ok(response) => response,
             Err(error) if discriminator == "\0processop:spawn_sync" => {
-                return self.process_spawn_sync_failure(error);
+                return self.process_spawn_sync_failure(error, options.encoding.as_deref());
             }
             Err(error) => {
                 if let Some(Value::Closure(callback)) = callback {
+                    // Node's exec callback receives (error, stdout, stderr);
+                    // bd-k709s retains the bounded partial bytes captured
+                    // before containment so they reach the callback args and
+                    // the thrown error's stdout/stderr properties alike.
+                    let callback_args = self.process_failure_callback_args(&error, &options)?;
                     let thrown = self.native_error_to_thrown_value(&error)?;
                     self.schedule_io_callback_with_label(
                         *callback,
-                        vec![thrown, Value::str(""), Value::str("")],
+                        vec![thrown, callback_args.0, callback_args.1],
                         hostcall_result_contract("process_spawn")
                             .result_label(&callback_label, None),
                     )?;
@@ -12125,13 +12211,14 @@ impl InterpreterCore {
         {
             let error = Self::process_max_buffer_error(exit, stdout, stderr);
             if discriminator == "\0processop:spawn_sync" {
-                return self.process_spawn_sync_failure(error);
+                return self.process_spawn_sync_failure(error, options.encoding.as_deref());
             }
             if let Some(Value::Closure(callback)) = callback {
+                let callback_args = self.process_failure_callback_args(&error, &options)?;
                 let thrown = self.native_error_to_thrown_value(&error)?;
                 self.schedule_io_callback_with_label(
                     *callback,
-                    vec![thrown, Value::str(""), Value::str("")],
+                    vec![thrown, callback_args.0, callback_args.1],
                     hostcall_result_contract("process_spawn").result_label(&callback_label, None),
                 )?;
             }
@@ -13192,7 +13279,7 @@ impl InterpreterCore {
                 state
                     .end_completion_callback
                     .as_ref()
-                    .map_or(0, |value| Self::estimate_value_bytes(value)),
+                    .map_or(0, Self::estimate_value_bytes),
             )
     }
 
@@ -78131,8 +78218,8 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
             )
             .expect("frame installs");
         // A hostile/nested path shrank both files below the frame's window.
-        core.mutate_registers(|registers| registers.truncate(0));
-        core.register_labels.truncate(0);
+        core.mutate_registers(|registers| registers.clear());
+        core.register_labels.clear();
 
         core.restore_delegated_hostcall_scratch(frame);
         assert_eq!(

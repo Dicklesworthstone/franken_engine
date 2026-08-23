@@ -425,6 +425,22 @@ pub enum ProcessSpawnError {
         /// Digest of the expected request, or `None` when the transcript ended.
         recorded_request_digest: Option<[u8; 32]>,
     },
+    /// A containment failure that also retains the bounded partial stream
+    /// output captured before teardown completed (bd-k709s). The wrapped
+    /// failure is the primary typed outcome; the captured prefixes are
+    /// evidence for guest-visible Node-compatible error fields and are
+    /// already capped by the policy per-stream output limit. Timeout and
+    /// capture-capable I/O lanes always wrap, even when both captures are
+    /// empty, so the outcome shape never depends on how much the child
+    /// happened to print.
+    PartialOutputFailed {
+        failure: Box<ProcessSpawnError>,
+        /// Terminating signal observed during the containment reap, when
+        /// the platform exposes one.
+        signal: Option<i32>,
+        partial_stdout: Vec<u8>,
+        partial_stderr: Vec<u8>,
+    },
 }
 
 /// Stable `Io.operation` discriminator for an executable canonicalization
@@ -536,6 +552,18 @@ impl fmt::Debug for ProcessSpawnError {
                     &recorded_request_digest.as_ref().map(hex_digest),
                 )
                 .finish(),
+            Self::PartialOutputFailed {
+                failure,
+                signal,
+                partial_stdout,
+                partial_stderr,
+            } => f
+                .debug_struct("ProcessSpawnError::PartialOutputFailed")
+                .field("failure", failure)
+                .field("signal", signal)
+                .field("partial_stdout_len", &partial_stdout.len())
+                .field("partial_stderr_len", &partial_stderr.len())
+                .finish(),
         }
     }
 }
@@ -606,6 +634,18 @@ impl fmt::Display for ProcessSpawnError {
                 recorded_request_digest
                     .as_ref()
                     .map_or_else(|| "end_of_transcript".to_string(), hex_digest)
+            ),
+            Self::PartialOutputFailed {
+                failure,
+                signal,
+                partial_stdout,
+                partial_stderr,
+            } => write!(
+                f,
+                "process failure with retained partial output: {failure}; signal {:?}; partial stdout ({} bytes), stderr ({} bytes)",
+                signal,
+                partial_stdout.len(),
+                partial_stderr.len()
             ),
         }
     }
@@ -1631,7 +1671,13 @@ impl NativeProcessSpawn {
                 if let Some(LifecycleChild::Running(mut running)) = running {
                     let _ = terminate_remaining_process_group(&running);
                     kill_and_reap(&mut running.child);
-                    let _ = collect_outputs(running);
+                    let (partial_stdout, partial_stderr) = collect_outputs_lossy(running);
+                    return Err(ProcessSpawnError::PartialOutputFailed {
+                        failure: Box::new(error),
+                        signal: None,
+                        partial_stdout,
+                        partial_stderr,
+                    });
                 }
                 return Err(error);
             }
@@ -1695,18 +1741,30 @@ impl NativeProcessSpawn {
                     ),
                     Ok(None) => {
                         let _ = terminate_remaining_process_group(&running);
-                        kill_and_reap(&mut running.child);
+                        let signal = kill_and_reap_capture(&mut running.child);
                         let runtime_millis = elapsed_millis(running.started);
-                        let _ = collect_outputs(running);
-                        Err(stop_error.unwrap_or(ProcessSpawnError::TimedOut { runtime_millis }))
+                        let (partial_stdout, partial_stderr) = collect_outputs_lossy(running);
+                        Err(
+                            stop_error.unwrap_or(ProcessSpawnError::PartialOutputFailed {
+                                failure: Box::new(ProcessSpawnError::TimedOut { runtime_millis }),
+                                signal,
+                                partial_stdout,
+                                partial_stderr,
+                            }),
+                        )
                     }
                     Err(error) => {
                         let _ = terminate_remaining_process_group(&running);
                         kill_and_reap(&mut running.child);
-                        let _ = collect_outputs(running);
-                        Err(ProcessSpawnError::Io {
-                            operation: "watchdog poll child".to_string(),
-                            detail: error.to_string(),
+                        let (partial_stdout, partial_stderr) = collect_outputs_lossy(running);
+                        Err(ProcessSpawnError::PartialOutputFailed {
+                            failure: Box::new(ProcessSpawnError::Io {
+                                operation: "watchdog poll child".to_string(),
+                                detail: error.to_string(),
+                            }),
+                            signal: None,
+                            partial_stdout,
+                            partial_stderr,
                         })
                     }
                 };
@@ -1745,11 +1803,16 @@ impl NativeProcessSpawn {
             };
             drop(children);
             let _ = terminate_remaining_process_group(&running);
-            kill_and_reap(&mut running.child);
+            let signal = kill_and_reap_capture(&mut running.child);
             let elapsed = elapsed_millis(running.started);
-            let _ = collect_outputs(running);
-            return Err(ProcessSpawnError::TimedOut {
-                runtime_millis: elapsed,
+            let (partial_stdout, partial_stderr) = collect_outputs_lossy(running);
+            return Err(ProcessSpawnError::PartialOutputFailed {
+                failure: Box::new(ProcessSpawnError::TimedOut {
+                    runtime_millis: elapsed,
+                }),
+                signal,
+                partial_stdout,
+                partial_stderr,
             });
         }
         let total = running.stdin_written.saturating_add(requested);
@@ -2525,6 +2588,39 @@ fn collect_outputs_controlled(
     collect_outputs_inner(&mut running, Some(control))
 }
 
+/// Best-effort bounded capture for failure lanes (bd-k709s): keeps whatever
+/// prefix bytes the drain threads produced before containment teardown
+/// finished. Bytes were already capped by the policy per-stream limit inside
+/// [`read_bounded`], so no additional truncation is required. Never fails and
+/// never reports overflow state: the caller returns the primary typed
+/// failure separately.
+fn collect_outputs_lossy(mut running: RunningChild) -> (Vec<u8>, Vec<u8>) {
+    cancel_watchdog(&mut running);
+    let _ = terminate_remaining_process_group(&running);
+    let _ = wait_for_output_drains_controlled(&running, Duration::from_millis(250), None);
+    (
+        join_reader_lossy(running.stdout.take()),
+        join_reader_lossy(running.stderr.take()),
+    )
+}
+
+/// Lossy counterpart of [`join_reader`]: on drain-thread panic, drain I/O
+/// failure, or post-teardown containment violation the captured prefix is
+/// still preferred over an empty buffer, and no secondary error is raised.
+fn join_reader_lossy(reader: Option<OutputDrain>) -> Vec<u8> {
+    let Some(reader) = reader else {
+        return Vec::new();
+    };
+    let forced_cancel = !reader.thread.is_finished();
+    if forced_cancel {
+        reader.cancel.store(true, Ordering::Release);
+    }
+    match reader.thread.join() {
+        Ok(Ok(captured)) => captured.bytes,
+        Ok(Err(_)) | Err(_) => Vec::new(),
+    }
+}
+
 fn collect_outputs_inner(
     running: &mut RunningChild,
     control: Option<&dyn ProcessSpawnControl>,
@@ -2548,18 +2644,28 @@ fn collect_outputs_inner(
     group_teardown?;
     let stdout = stdout?;
     let stderr = stderr?;
-    if stdout.overflowed {
-        return Err(ProcessSpawnError::LimitExceeded {
-            limit: "stdout_bytes".to_string(),
-            actual: stdout.maximum.saturating_add(1),
-            maximum: stdout.maximum,
-        });
-    }
-    if stderr.overflowed {
-        return Err(ProcessSpawnError::LimitExceeded {
-            limit: "stderr_bytes".to_string(),
-            actual: stderr.maximum.saturating_add(1),
-            maximum: stderr.maximum,
+    if stdout.overflowed || stderr.overflowed {
+        let failure = if stdout.overflowed {
+            ProcessSpawnError::LimitExceeded {
+                limit: "stdout_bytes".to_string(),
+                actual: stdout.maximum.saturating_add(1),
+                maximum: stdout.maximum,
+            }
+        } else {
+            ProcessSpawnError::LimitExceeded {
+                limit: "stderr_bytes".to_string(),
+                actual: stderr.maximum.saturating_add(1),
+                maximum: stderr.maximum,
+            }
+        };
+        // bd-k709s: the captured prefixes are already bounded by the policy
+        // per-stream cap, so they are retained on the failure outcome instead
+        // of being discarded with the drained pipes.
+        return Err(ProcessSpawnError::PartialOutputFailed {
+            failure: Box::new(failure),
+            signal: None,
+            partial_stdout: stdout.bytes,
+            partial_stderr: stderr.bytes,
         });
     }
     Ok((stdout.bytes, stderr.bytes))
@@ -2685,10 +2791,15 @@ fn wait_and_collect_controlled(
             Err(error) => {
                 let _ = terminate_remaining_process_group(&running);
                 kill_and_reap(&mut running.child);
-                let _ = collect_outputs(running);
-                return Err(ProcessSpawnError::Io {
-                    operation: "poll child".to_string(),
-                    detail: error.to_string(),
+                let (partial_stdout, partial_stderr) = collect_outputs_lossy(running);
+                return Err(ProcessSpawnError::PartialOutputFailed {
+                    failure: Box::new(ProcessSpawnError::Io {
+                        operation: "poll child".to_string(),
+                        detail: error.to_string(),
+                    }),
+                    signal: None,
+                    partial_stdout,
+                    partial_stderr,
                 });
             }
             Ok(Some(status)) => break status,
@@ -2702,11 +2813,16 @@ fn wait_and_collect_controlled(
         }
         if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
             let _ = terminate_remaining_process_group(&running);
-            kill_and_reap(&mut running.child);
+            let signal = kill_and_reap_capture(&mut running.child);
             let elapsed = elapsed_millis(running.started);
-            let _ = collect_outputs(running);
-            return Err(ProcessSpawnError::TimedOut {
-                runtime_millis: elapsed,
+            let (partial_stdout, partial_stderr) = collect_outputs_lossy(running);
+            return Err(ProcessSpawnError::PartialOutputFailed {
+                failure: Box::new(ProcessSpawnError::TimedOut {
+                    runtime_millis: elapsed,
+                }),
+                signal,
+                partial_stdout,
+                partial_stderr,
             });
         }
         thread::sleep(Duration::from_millis(2));
@@ -2752,6 +2868,19 @@ fn kill_and_reap_fallible(child: &mut Child) -> Result<(), ProcessSpawnError> {
 
 fn kill_and_reap(child: &mut Child) {
     let _ = kill_and_reap_fallible(child);
+}
+
+/// Kill and reap the child, returning the observed terminating signal when
+/// the platform exposes one (bd-k709s). Best-effort like [`kill_and_reap`]:
+/// containment must never depend on the capture.
+fn kill_and_reap_capture(child: &mut Child) -> Option<i32> {
+    let status = if let Ok(Some(status)) = child.try_wait() {
+        status
+    } else {
+        let _ = child.kill();
+        child.wait().ok()?
+    };
+    exit_from_status(status).signal
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -3742,11 +3871,20 @@ mod tests {
                 &run_request(canonical, vec!["too-long"]),
                 &[ProcessSpawnCapability::Spawn],
             ),
-            Err(ProcessSpawnError::LimitExceeded {
-                ref limit,
-                maximum: 4,
-                ..
-            }) if limit == "stdout_bytes"
+            Err(ProcessSpawnError::PartialOutputFailed {
+                ref failure,
+                signal: None,
+                ref partial_stdout,
+                ref partial_stderr,
+            }) if matches!(
+                failure.as_ref(),
+                ProcessSpawnError::LimitExceeded {
+                    limit,
+                    maximum: 4,
+                    ..
+                } if limit == "stdout_bytes"
+            ) && partial_stdout == b"too-"
+                && partial_stderr.is_empty()
         ));
         assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
     }
@@ -3879,9 +4017,124 @@ mod tests {
         *timeout_millis = Some(10);
         assert!(matches!(
             provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
-            Err(ProcessSpawnError::TimedOut { .. })
+            Err(ProcessSpawnError::PartialOutputFailed { failure, .. })
+                if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
         ));
         assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_timeout_retains_partial_streams_and_terminating_signal() {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let (provider, canonical) = provider_for(&shell);
+        let mut request = run_request(
+            canonical,
+            vec![
+                "-c",
+                "echo partial-stdout-marker; echo partial-stderr-marker >&2; sleep 30",
+            ],
+        );
+        let ProcessSpawnRequest::Run { timeout_millis, .. } = &mut request else {
+            unreachable!()
+        };
+        // Long enough that both drain threads have certainly captured the
+        // echoes before containment fires; short enough to keep the suite fast.
+        *timeout_millis = Some(300);
+        let stdout_marker = b"partial-stdout-marker";
+        let stderr_marker = b"partial-stderr-marker";
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Err(ProcessSpawnError::PartialOutputFailed {
+                failure,
+                signal: Some(9),
+                ref partial_stdout,
+                ref partial_stderr,
+            }) if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
+                && partial_stdout.windows(stdout_marker.len()).any(|w| w == stdout_marker)
+                && partial_stderr.windows(stderr_marker.len()).any(|w| w == stderr_marker)
+        ));
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_cap_retains_prefix_bytes_on_limit_failure() {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        let canonical = policy.authorize_executable(&shell).expect("authorize sh");
+        policy.limits.max_output_bytes = 16;
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let mut request = run_request(
+            canonical,
+            vec!["-c", "printf 0123456789abcdef0123456789abcdef"],
+        );
+        let ProcessSpawnRequest::Run { timeout_millis, .. } = &mut request else {
+            unreachable!()
+        };
+        *timeout_millis = Some(5_000);
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Err(ProcessSpawnError::PartialOutputFailed {
+                failure,
+                signal: None,
+                ref partial_stdout,
+                ref partial_stderr,
+            }) if matches!(
+                failure.as_ref(),
+                ProcessSpawnError::LimitExceeded {
+                    limit,
+                    actual: 17,
+                    maximum: 16,
+                    ..
+                } if limit == "stdout_bytes"
+            ) && partial_stdout == b"0123456789abcdef"
+                && partial_stderr.is_empty()
+        ));
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn partial_output_failed_round_trips_through_serialization() {
+        let error = ProcessSpawnError::PartialOutputFailed {
+            failure: Box::new(ProcessSpawnError::TimedOut { runtime_millis: 42 }),
+            signal: Some(9),
+            partial_stdout: b"captured-out".to_vec(),
+            partial_stderr: b"captured-err".to_vec(),
+        };
+        let encoded = serde_json::to_string(&error).expect("serialize typed process failure");
+        let decoded: ProcessSpawnError =
+            serde_json::from_str(&encoded).expect("deserialize typed process failure");
+        assert_eq!(decoded, error);
+    }
+
+    #[test]
+    fn legacy_timeout_records_still_deserialize_without_partial_fields() {
+        let decoded: ProcessSpawnError =
+            serde_json::from_str(r#"{"kind":"timed_out","runtime_millis":7}"#)
+                .expect("legacy timed_out shape stays readable");
+        assert_eq!(decoded, ProcessSpawnError::TimedOut { runtime_millis: 7 });
+    }
+
+    #[test]
+    fn partial_output_failed_formatting_never_embeds_captured_bytes() {
+        let secret_stdout = b"TOPSECRET-PARTIAL-STDOUT".to_vec();
+        let secret_stderr = b"TOPSECRET-PARTIAL-STDERR".to_vec();
+        let error = ProcessSpawnError::PartialOutputFailed {
+            failure: Box::new(ProcessSpawnError::Io {
+                operation: "poll child".to_string(),
+                detail: "fixture".to_string(),
+            }),
+            signal: Some(9),
+            partial_stdout: secret_stdout,
+            partial_stderr: secret_stderr,
+        };
+        let debug = format!("{error:?}");
+        let display = format!("{error}");
+        assert!(!debug.contains("TOPSECRET-PARTIAL"));
+        assert!(!display.contains("TOPSECRET-PARTIAL"));
+        assert!(debug.contains("partial_stdout_len"));
+        assert!(debug.contains("partial_stderr_len"));
     }
 
     #[cfg(target_os = "linux")]
@@ -4042,6 +4295,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn no_reader_cannot_block_run_stdin_past_timeout() {
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        let canonical = policy
+            .authorize_executable(&sleep)
+            .expect("authorize sleep");
+        policy.limits.max_stdin_bytes = 1024 * 1024;
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let mut request = run_request(canonical, vec!["5"]);
+        let ProcessSpawnRequest::Run {
+            stdin,
+            timeout_millis,
+            ..
+        } = &mut request
+        else {
+            unreachable!()
+        };
+        // Exceed an ordinary Linux pipe capacity while keeping the test's
+        // preflight serialization cost well below the teardown deadline.
+        *stdin = vec![b'x'; 128 * 1024];
+        *timeout_millis = Some(10);
+        let started = Instant::now();
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Err(ProcessSpawnError::PartialOutputFailed { failure, .. })
+                if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn watchdog_timeout_remains_observable_until_wait_consumes_it() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
@@ -4077,40 +4363,9 @@ mod tests {
                 },
                 &[ProcessSpawnCapability::Spawn],
             ),
-            Err(ProcessSpawnError::TimedOut { .. })
+            Err(ProcessSpawnError::PartialOutputFailed { failure, .. })
+                if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
         ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn no_reader_cannot_block_run_stdin_past_timeout() {
-        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
-        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy
-            .authorize_executable(&sleep)
-            .expect("authorize sleep");
-        policy.limits.max_stdin_bytes = 1024 * 1024;
-        let provider = NativeProcessSpawn::new(policy).expect("native provider");
-        let mut request = run_request(canonical, vec!["5"]);
-        let ProcessSpawnRequest::Run {
-            stdin,
-            timeout_millis,
-            ..
-        } = &mut request
-        else {
-            unreachable!()
-        };
-        // Exceed an ordinary Linux pipe capacity while keeping the test's
-        // preflight serialization cost well below the teardown deadline.
-        *stdin = vec![b'x'; 128 * 1024];
-        *timeout_millis = Some(10);
-        let started = Instant::now();
-        assert!(matches!(
-            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
-            Err(ProcessSpawnError::TimedOut { .. })
-        ));
-        assert!(started.elapsed() < Duration::from_secs(2));
-        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
     }
 
     #[cfg(unix)]

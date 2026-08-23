@@ -8898,10 +8898,10 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         .validate_for_replay()
         .map_err(|error| format!("run report randomness transcript is invalid: {error}"))?;
 
-    if args.mode == ReplayMode::Strict {
-        if let Some(divergence) = divergences.first() {
-            return Err(format!("strict re-execution divergence: {divergence}"));
-        }
+    if args.mode == ReplayMode::Strict
+        && let Some(divergence) = divergences.first()
+    {
+        return Err(format!("strict re-execution divergence: {divergence}"));
     }
 
     let parse_goal = parse_goal(&input.parse_goal)?;
@@ -8959,10 +8959,10 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     if !randomness_transcript_match {
         divergences.push("re-executed randomness transcript differs".to_string());
     }
-    if args.mode == ReplayMode::Strict {
-        if let Some(divergence) = divergences.first() {
-            return Err(format!("strict re-execution divergence: {divergence}"));
-        }
+    if args.mode == ReplayMode::Strict
+        && let Some(divergence) = divergences.first()
+    {
+        return Err(format!("strict re-execution divergence: {divergence}"));
     }
 
     let session_id = input.randomness_transcript.session_id.clone();

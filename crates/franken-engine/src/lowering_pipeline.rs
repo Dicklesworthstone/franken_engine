@@ -27075,7 +27075,20 @@ fn simulate_ir2_flow_labels(
                                 ) {
                                     result_origin = Some(origin);
                                 } else {
-                                    result_shape = FlowValueShape::ClosedResult;
+                                    // bd-dign3: `cipher.update(data)` yields a
+                                    // Buffer; only a supplied output encoding
+                                    // (arity >= 2 beyond the receiver) yields a
+                                    // string. Arity alone cannot misreport a
+                                    // Buffer as text, so ambiguous forms stay
+                                    // closed rather than primitive.
+                                    let arguments = &inputs[..inputs.len() - 1];
+                                    result_shape = if arguments.len() == 1
+                                        && arguments[0].shape == FlowValueShape::Primitive
+                                    {
+                                        FlowValueShape::BufferObject
+                                    } else {
+                                        FlowValueShape::ClosedResult
+                                    };
                                 }
                             }
                             "builtin:CryptoObjectCopy" => {
@@ -27090,9 +27103,7 @@ fn simulate_ir2_flow_labels(
                                     result_origin = Some(op_index);
                                 }
                             }
-                            "builtin:CryptoObjectDigest"
-                            | "builtin:CryptoObjectFinal"
-                            | "builtin:CryptoObjectGetAuthTag" => {
+                            "builtin:CryptoObjectDigest" | "builtin:CryptoObjectFinal" => {
                                 crypto_flow_states.insert(
                                     origin,
                                     CryptoFlowObjectState {
@@ -27100,7 +27111,29 @@ fn simulate_ir2_flow_labels(
                                         lifecycle_label: result_label.clone(),
                                     },
                                 );
-                                result_shape = FlowValueShape::ClosedResult;
+                                // bd-dign3: `digest()` / `final()` yield a
+                                // Buffer; `digest('hex')` and friends yield the
+                                // encoded string. Arity is authoritative here
+                                // because the optional argument IS the output
+                                // encoding.
+                                let arguments = &inputs[..inputs.len() - 1];
+                                result_shape = match arguments {
+                                    [] => FlowValueShape::BufferObject,
+                                    [encoding] if encoding.shape == FlowValueShape::Primitive => {
+                                        FlowValueShape::Primitive
+                                    }
+                                    _ => FlowValueShape::ClosedResult,
+                                };
+                            }
+                            "builtin:CryptoObjectGetAuthTag" => {
+                                crypto_flow_states.insert(
+                                    origin,
+                                    CryptoFlowObjectState {
+                                        kind: prior.kind,
+                                        lifecycle_label: result_label.clone(),
+                                    },
+                                );
+                                result_shape = FlowValueShape::BufferObject;
                             }
                             "builtin:CryptoObjectSetAuthTag" => {
                                 crypto_flow_states.insert(
@@ -27122,6 +27155,23 @@ fn simulate_ir2_flow_labels(
                         result_label = Label::TopSecret;
                         operation_exception_label_override = Some(Label::TopSecret);
                     }
+                }
+                // bd-dign3: KDF results are engine-owned Buffers at runtime.
+                // Carrying the authenticated BufferObject shape routes their
+                // `toString([encoding])` reads through the existing audited
+                // finite-method lane instead of failing high as unknown-
+                // callee calls, without vouching for anything beyond the
+                // buffer itself.
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:CryptoPbkdf2Sync" | "builtin:CryptoScryptSync"
+                    )
+                {
+                    result_shape = FlowValueShape::BufferObject;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:BufferIsBuffer" {
+                    result_shape = FlowValueShape::Primitive;
                 }
                 if matches!(
                     capability.as_str(),

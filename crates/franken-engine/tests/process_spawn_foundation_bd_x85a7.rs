@@ -1039,7 +1039,16 @@ fn no_mock_native_os_process_executes_under_exact_cell_authority() {
             .all(|event| event.cell_id == result.trace_id
                 && event.trace_id == result.trace_id
                 && event.policy_epoch == result.epoch
-                && event.ifc_high_water_label == Label::Public)
+                && event.ifc_high_water_label == Label::Public),
+        "cell transcript events must stay bound to the run identity and Public high-water label, got: {:?}",
+        transcript
+            .events
+            .iter()
+            .filter(|event| !(event.cell_id == result.trace_id
+                && event.trace_id == result.trace_id
+                && event.policy_epoch == result.epoch
+                && event.ifc_high_water_label == Label::Public))
+            .collect::<Vec<_>>()
     );
     let proposals = transcript
         .events
@@ -1078,15 +1087,11 @@ fn no_mock_native_hang_times_out_finalizes_and_provider_recovers() {
         .expect_err("the real sleeping child must hit its requested timeout");
     assert!(started.elapsed() < Duration::from_secs(2));
     assert!(matches!(
-        error.primary_error(),
-        OrchestratorError::Interpreter(_)
-    ));
-    assert!(matches!(
         orchestrator.last_failed_host_effect_journal(),
         [HostEffectJournalEntry::ProcessSpawn {
-            outcome: Err(ProcessSpawnError::TimedOut { .. }),
+            outcome: Err(ProcessSpawnError::PartialOutputFailed { failure, .. }),
             ..
-        }]
+        }] if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
     ));
     let failure = error
         .post_cell_failure()

@@ -11679,10 +11679,7 @@ impl InterpreterCore {
         let stdin_stream = if options.stdio.stdin == ProcessStdioMode::Null {
             None
         } else {
-            Some(self.alloc_object_with_properties(&[(
-                "__type",
-                Value::str("ChildProcessStdin"),
-            )])?)
+            Some(self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStdin"))])?)
         };
         let child = self.alloc_object_with_properties(&[
             ("__type", Value::str("ChildProcess")),
@@ -11690,7 +11687,10 @@ impl InterpreterCore {
             ("killed", Value::Bool(false)),
             ("stdout", stdout_stream.map_or(Value::Null, Value::Object)),
             ("stderr", stderr_stream.map_or(Value::Null, Value::Object)),
-            ("stdin", stdin_stream.map_or(Value::Undefined, Value::Object)),
+            (
+                "stdin",
+                stdin_stream.map_or(Value::Undefined, Value::Object),
+            ),
         ])?;
         let stream_entries = u64::from(stdout_stream.is_some())
             + u64::from(stderr_stream.is_some())
@@ -11755,9 +11755,8 @@ impl InterpreterCore {
         // lifecycle state, so post-settle kill()/stdin.write fail closed.
         if let Some(handle) = self.child_process_handles.remove(&child) {
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
-                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_string_bytes(
-                    &handle,
-                )),
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(&handle)),
             );
         }
     }
@@ -11851,7 +11850,10 @@ impl InterpreterCore {
                 .map_or_else(Vec::new, |error| vec![error]),
             (None, "spawn") if state.error.is_none() => Vec::new(),
             (None, "exit") if state.error.is_none() => {
-                vec![state.exit_code.clone(), Self::child_signal_event_value(&state.signal)]
+                vec![
+                    state.exit_code.clone(),
+                    Self::child_signal_event_value(&state.signal),
+                ]
             }
             (None, "close") => vec![
                 state.exit_code.clone(),
@@ -11916,12 +11918,24 @@ impl InterpreterCore {
             // bd-m42c2: a lifecycle kill is a final outcome; the provider
             // reports it as `Killed` with the same exit/output payload shape
             // as a natural `Waited` completion.
-            Ok(ProcessSpawnResponse::Killed {
-                exit,
-                stdout,
-                stderr,
-                ..
-            }) => {
+            Ok(
+                response @ (ProcessSpawnResponse::Waited { .. }
+                | ProcessSpawnResponse::Killed { .. }),
+            ) => {
+                let (exit, stdout, stderr) = match response {
+                    ProcessSpawnResponse::Waited {
+                        exit,
+                        stdout,
+                        stderr,
+                    }
+                    | ProcessSpawnResponse::Killed {
+                        exit,
+                        stdout,
+                        stderr,
+                        ..
+                    } => (exit, stdout, stderr),
+                    _ => unreachable!("arm pattern above"),
+                };
                 let (stdout_value, stderr_value) =
                     if let Some(encoding) = task.callback_encoding.as_deref() {
                         (
@@ -12074,10 +12088,8 @@ impl InterpreterCore {
                 });
             }
         };
-        let killed = self.perform_process_request(
-            ProcessSpawnRequest::Kill { handle, signal },
-            &Label::Public,
-        );
+        let killed = self
+            .perform_process_request(ProcessSpawnRequest::Kill { handle, signal }, &Label::Public);
         // bd-m42c2: denials stay typed refusals; a dead or unknown lifecycle
         // reports `false` like Node's kill-after-exit.
         let denial = matches!(
@@ -12126,10 +12138,9 @@ impl InterpreterCore {
     /// thread, delivering EOF to the child.
     fn child_process_stdin_end(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
         let (_child, handle) = self.child_process_receiver(&receiver)?;
-        match self.perform_process_request(
-            ProcessSpawnRequest::CloseStdin { handle },
-            &Label::Public,
-        ) {
+        match self
+            .perform_process_request(ProcessSpawnRequest::CloseStdin { handle }, &Label::Public)
+        {
             Ok(_) => Ok(Value::Undefined),
             Err(error) => Err(error),
         }

@@ -1669,10 +1669,10 @@ impl NativeProcessSpawn {
         // bd-m42c2: lifecycle spawns hand the stdin pipe to a dedicated
         // bounded writer thread so guest write()/end() never block the
         // interpreter on pipe backpressure.
-        if launch.stdio.stdin == ProcessStdioMode::Pipe {
-            if let Some(child_stdin) = running.stdin.take() {
-                running.stdin_writer = Some(spawn_lifecycle_stdin_writer(child_stdin));
-            }
+        if launch.stdio.stdin == ProcessStdioMode::Pipe
+            && let Some(child_stdin) = running.stdin.take()
+        {
+            running.stdin_writer = Some(spawn_lifecycle_stdin_writer(child_stdin));
         }
         let nonce = self.next_handle.fetch_add(1, Ordering::Relaxed);
         let handle = format!("ps-{}-{nonce:016x}", self.scope);

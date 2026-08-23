@@ -60503,20 +60503,19 @@ impl InterpreterCore {
         iterations: u32,
         output: &mut [u8],
     ) -> Result<(), InterpreterError> {
-        match algorithm {
-            CryptoHashAlgorithm::Sha1 => {
-                pbkdf2::pbkdf2_hmac::<Sha1>(password, salt, iterations, output)
-            }
-            CryptoHashAlgorithm::Sha256 => {
-                pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, output)
-            }
-            CryptoHashAlgorithm::Sha512 => {
-                pbkdf2::pbkdf2_hmac::<Sha512>(password, salt, iterations, output)
-            }
-            CryptoHashAlgorithm::Md5 => {
-                pbkdf2::pbkdf2_hmac::<Md5>(password, salt, iterations, output)
-            }
-        }
+        let prf_hash = match algorithm {
+            CryptoHashAlgorithm::Sha1 => crate::crypto_kdf_zeroized::PrfHash::Sha1,
+            CryptoHashAlgorithm::Sha256 => crate::crypto_kdf_zeroized::PrfHash::Sha256,
+            CryptoHashAlgorithm::Sha512 => crate::crypto_kdf_zeroized::PrfHash::Sha512,
+            CryptoHashAlgorithm::Md5 => crate::crypto_kdf_zeroized::PrfHash::Md5,
+        };
+        crate::crypto_kdf_zeroized::pbkdf2_zeroized(
+            prf_hash,
+            password,
+            salt,
+            iterations,
+            output,
+        );
         Ok(())
     }
 
@@ -60753,11 +60752,10 @@ impl InterpreterCore {
         self.charge_crypto_work(work)?;
         let mut output = Zeroizing::new(vec![0u8; key_len]);
         if !output.is_empty() {
-            scrypt::scrypt(&password, &salt, &params, &mut output).map_err(|_| {
-                InterpreterError::InternalError {
+            crate::crypto_kdf_zeroized::scrypt_zeroized_run(&password, &salt, &params, &mut output)
+                .map_err(|_| InterpreterError::InternalError {
                     details: "scrypt computation failed after parameter preflight".to_string(),
-                }
-            })?;
+                })?;
         }
         drop(password);
         drop(salt);

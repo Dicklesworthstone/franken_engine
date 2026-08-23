@@ -297,12 +297,14 @@ proptest = "1.6"
 regex = "1.0"
 ryu-js = "1.0"
 url = "2.5.8"
+digest = "0.10"
 sha2 = "0.10"
 sha1 = "0.10.6"
 md-5 = "0.10.6"
 hmac = "0.12"
 pbkdf2 = "0.12.2"
 scrypt = { version = "0.11.0", default-features = false }
+salsa20 = { version = "0.10.2", default-features = false }
 aes = { version = "0.8.4", features = ["zeroize"] }
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "zeroize"] }
 ghash = { version = "0.5.1", default-features = false, features = ["zeroize"] }

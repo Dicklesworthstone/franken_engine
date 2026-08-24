@@ -1008,6 +1008,10 @@ impl PromiseStore {
             return Err(PromiseError::AlreadySettled { handle: source });
         }
         let record = self.get_mut(source)?;
+        // Adopting a promise handles it, exactly like PerformPromiseThen and
+        // then_for_await: a later rejection flows into `target` through the
+        // forwarding reaction below and must never surface as unhandled.
+        record.rejection_handled = true;
         for kind in [ReactionKind::Fulfill, ReactionKind::Reject] {
             record.reactions.push(PromiseReaction {
                 kind,

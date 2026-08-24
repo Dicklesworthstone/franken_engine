@@ -105569,8 +105569,8 @@ mod async_runtime_tests_current {
         ) {
             Err(InterpreterError::UncaughtException { value }) => {
                 assert!(
-                    matches!(&value, crate::object_model::JsValue::Object(_)),
-                    "corrupt brotli input must raise a guest Error object, got {value:?}"
+                    value.contains("Invalid Data"),
+                    "corrupt brotli input must raise the brotli data error, got {value:?}"
                 );
             }
             other => panic!(

@@ -163,7 +163,6 @@ fn fixture_0030_chain_interleaves_with_plain_microtasks_bd_zco6t() {
     );
 }
 
-
 /// An async function returning a native fs.promises promise must adopt its
 /// eventual value (ES2020 async-function-completion semantics).
 #[test]

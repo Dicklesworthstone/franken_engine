@@ -733,7 +733,7 @@ while IFS= read -r claim; do
       # or whose bytes no longer match its committed seal, is not evidence.
       # Unlike staleness this is never a downgrade: it is a hard refusal, and
       # the remedy is regenerating the receipt through a live producer run.
-      local receipt_violation=""
+      receipt_violation=""
       if receipt_violation="$(receipt_integrity_reason "$artifact_path")"; then
         status="fail"
         local_reason="evidence receipt integrity failure for ${artifact_path}: ${receipt_violation}"

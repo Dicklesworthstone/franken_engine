@@ -17884,6 +17884,8 @@ fn zlib_method_capability(method: &str) -> Option<&'static str> {
         "gunzip" => Some("builtin:ZlibGunzip"),
         "deflate" => Some("builtin:ZlibDeflate"),
         "inflate" => Some("builtin:ZlibInflate"),
+        "brotliCompressSync" => Some("builtin:ZlibBrotliCompressSync"),
+        "brotliDecompressSync" => Some("builtin:ZlibBrotliDecompressSync"),
         _ => None,
     }
 }

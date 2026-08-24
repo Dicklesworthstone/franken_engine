@@ -316,6 +316,7 @@ flate2 = "1.1"
 zlib-rs = { version = "0.6.3", default-features = false, features = ["std", "rust-allocator"] }
 lz4_flex = "0.11"
 zstd = "0.13"
+brotli = "8.0"
 subtle = "2.6"
 ed25519-dalek = "2.0"
 rand = "0.8"

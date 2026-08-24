@@ -251,7 +251,7 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 725 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | 4,521 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
+| Tracked beads in `.beads/issues.jsonl` | ≈4,530 records (open + closed); closed-bead history with reasons is the durable journal (historical session journals are not checked in) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -1733,7 +1733,7 @@ The project ships a layered test stack; each layer answers a different question.
 
 | Layer | Where it lives | What it proves |
 |---|---|---|
-| **Lib unit tests** | `crates/franken-engine/src/**/*.rs` `#[cfg(test)]` modules | Per-module invariants where present. Test density varies materially by module; the running journal in `memory/enrichment_sessions.md` records 35,000+ landed by 2026-03-19. |
+| **Lib unit tests** | `crates/franken-engine/src/**/*.rs` `#[cfg(test)]` modules | Per-module invariants where present. Test density varies materially by module; historical journals recorded 35,000+ lib tests landed by 2026-03-19 (journals not checked in; trust `git log`). |
 | **Integration tests** | `crates/franken-engine/tests/*.rs` (1,643 Rust files; 1,654 top-level files total) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
 | **Control-plane integration tests** | `crates/franken-engine-control-plane-integration-tests/` | Tests that need `frankenengine-test-support` mock adapters, held in a sibling crate so the engine lib-test target doesn't drag them in. |
 | **RGC gate tests** | `crates/franken-engine/tests/rgc_*.rs` (41 files) | Each major RGC gate has a matching `cargo test` target plus a `scripts/run_*.sh` operator runner. |
@@ -2027,21 +2027,21 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
-The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,511 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
+The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently ≈4,530 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
 
-### Project-memory files (`memory/`)
+### Project Memory Status
 
-The repo-local `memory/` tree (loaded into agent context per session) contains:
+The repo-local `memory/` tree described by earlier revisions of this README is not checked in — do not look for `MEMORY.md`, `enrichment_sessions.md`, `completed_beads.md`, or session journals.
+The durable, authoritative state surfaces are:
 
-| File | Purpose |
+| Surface | Role |
 |---|---|
-| `MEMORY.md` | Index, one line per topic. Cap is ~200 lines. |
-| `enrichment_sessions.md` | Per-session journal of large test landings (Sessions 14–21 documented as of 2026-03-19). |
-| `completed_beads.md` | Long-form record of closed beads with context the JSONL doesn't capture. |
-| `session_<date>_<topic>.md` | Frozen-in-time field notes for major work sessions. |
-| `orchestrator_session_*.md` | Multi-agent orchestration retros (Agent Mail patterns, NTM swarm convergence, pane-recovery patterns). |
+| `.beads/issues.jsonl` + `br`/`bv` | Unit-of-work history, dependencies, and live ready-work queue. |
+| `docs/CLAIM_TO_PROOF_MATRIX_V1.md` + JSON | Binding claim states with owning beads and verification commands. |
+| `git log` / `CHANGELOG.md` | What actually landed, wave by wave. |
+| `artifacts/<gate>/<timestamp>/` bundles | Execution evidence per gate run. |
 
-These files are field notes, not current state. When in doubt, trust `git log` and the current source over the memory snapshot.
+Treat any untracked local notes as field notes, never current state: when in doubt, trust `git log` and the current source over any memory snapshot.
 
 ---
 

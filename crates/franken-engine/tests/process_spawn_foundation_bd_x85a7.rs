@@ -17,7 +17,9 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::checkpoint::CancellationToken;
 #[cfg(unix)]
 use frankenengine_engine::execution_cell::CellInterpreterOutcome;
-use frankenengine_engine::execution_cell::{CellError, CellExecutionError, CellExecutionEventKind};
+use frankenengine_engine::execution_cell::{
+    CellError, CellExecutionError, CellExecutionEvent, CellExecutionEventKind,
+};
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
@@ -1032,23 +1034,68 @@ fn no_mock_native_os_process_executes_under_exact_cell_authority() {
             .capabilities
             .contains(&RuntimeCapability::ProcessSpawn)
     );
+    // bd-ifc-internal-label-cell-transcript-hplvg, aligned with the audited
+    // bd-z1peg per-capability result contracts: OS stdout is engine-observed
+    // external data, so the `process_spawn` contract floors the execFileSync
+    // result at Internal (capability.rs `result_contract_for_authority`) and
+    // the completion observation records exactly that floor. The transcript
+    // must therefore prove monotonicity and a single sourced raise — Public
+    // high-water until that one observation, Internal afterwards — instead of
+    // an unconditional all-Public claim.
+    let bound_to_run = |event: &CellExecutionEvent| {
+        event.cell_id == result.trace_id
+            && event.trace_id == result.trace_id
+            && event.policy_epoch == result.epoch
+    };
     assert!(
+        transcript.events.iter().all(bound_to_run),
+        "cell transcript events must stay bound to the run identity, got: {:?}",
         transcript
             .events
             .iter()
-            .all(|event| event.cell_id == result.trace_id
-                && event.trace_id == result.trace_id
-                && event.policy_epoch == result.epoch
-                && event.ifc_high_water_label == Label::Public),
-        "cell transcript events must stay bound to the run identity and Public high-water label, got: {:?}",
-        transcript
-            .events
-            .iter()
-            .filter(|event| !(event.cell_id == result.trace_id
-                && event.trace_id == result.trace_id
-                && event.policy_epoch == result.epoch
-                && event.ifc_high_water_label == Label::Public))
+            .filter(|event| !bound_to_run(*event))
             .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        transcript
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(&event.kind, CellExecutionEventKind::IfcLabelObserved { .. })
+            })
+            .count(),
+        1,
+        "exactly one IFC observation must be recorded, got: {:?}",
+        transcript.events
+    );
+    let raise_index = transcript
+        .events
+        .iter()
+        .position(|event| event.ifc_high_water_label != Label::Public)
+        .expect("process_spawn contract must observe its Internal floor");
+    assert!(
+        matches!(
+            &transcript.events[raise_index].kind,
+            CellExecutionEventKind::IfcLabelObserved {
+                label: Label::Internal
+            }
+        ),
+        "the high-water raise must be the audited process-output observation, got: {:?}",
+        transcript.events[raise_index]
+    );
+    assert!(
+        transcript.events[..raise_index]
+            .iter()
+            .all(|event| event.ifc_high_water_label == Label::Public),
+        "pre-observation events must carry Public high-water, got: {:?}",
+        &transcript.events[..raise_index]
+    );
+    assert!(
+        transcript.events[raise_index..]
+            .iter()
+            .all(|event| event.ifc_high_water_label == Label::Internal),
+        "post-observation events must stay monotone at the observed floor, got: {:?}",
+        &transcript.events[raise_index..]
     );
     let proposals = transcript
         .events

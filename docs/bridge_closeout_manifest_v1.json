@@ -1,0 +1,3363 @@
+{
+  "schema_version": "franken-engine.bridge-closeout-manifest.v1",
+  "owning_bead": "bd-performance-conformance-bridge-tu32j.22.61",
+  "program_root": "bd-performance-conformance-bridge-tu32j",
+  "enforcement": {
+    "policy_file": ".beads/policy.yaml",
+    "gate_id": "bridge_closeout",
+    "gate_label": "bridge-manifest",
+    "gate_provider": "bridge-closeout-verifier",
+    "allow_bypass": false
+  },
+  "typed_exception_kinds": {
+    "pre_harness_architecture": "architecture/approval contract exempt from red-first ordering; never implementation",
+    "post_cert_research": "does not block production parent; required by explicitly listed downstream closures",
+    "external_owner": "required node with recorded external owner; never silently omitted"
+  },
+  "nodes": {
+    "bd-performance-conformance-bridge-tu32j": {
+      "id": "bd-performance-conformance-bridge-tu32j",
+      "title": "[BRIDGE-2026] Minimize raw Node/Bun gap, reach ES2020, and make fleet/TEE evidence real",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.1",
+        "bd-performance-conformance-bridge-tu32j.10",
+        "bd-performance-conformance-bridge-tu32j.11",
+        "bd-performance-conformance-bridge-tu32j.12",
+        "bd-performance-conformance-bridge-tu32j.13",
+        "bd-performance-conformance-bridge-tu32j.14",
+        "bd-performance-conformance-bridge-tu32j.15",
+        "bd-performance-conformance-bridge-tu32j.16",
+        "bd-performance-conformance-bridge-tu32j.17",
+        "bd-performance-conformance-bridge-tu32j.18",
+        "bd-performance-conformance-bridge-tu32j.19",
+        "bd-performance-conformance-bridge-tu32j.2",
+        "bd-performance-conformance-bridge-tu32j.20",
+        "bd-performance-conformance-bridge-tu32j.21",
+        "bd-performance-conformance-bridge-tu32j.22",
+        "bd-performance-conformance-bridge-tu32j.23",
+        "bd-performance-conformance-bridge-tu32j.24",
+        "bd-performance-conformance-bridge-tu32j.25",
+        "bd-performance-conformance-bridge-tu32j.26",
+        "bd-performance-conformance-bridge-tu32j.27",
+        "bd-performance-conformance-bridge-tu32j.3",
+        "bd-performance-conformance-bridge-tu32j.4",
+        "bd-performance-conformance-bridge-tu32j.5",
+        "bd-performance-conformance-bridge-tu32j.6",
+        "bd-performance-conformance-bridge-tu32j.7",
+        "bd-performance-conformance-bridge-tu32j.8",
+        "bd-performance-conformance-bridge-tu32j.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.1",
+      "title": "[BRIDGE-00] Truth recertification and historical claim correction",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.1.1",
+        "bd-performance-conformance-bridge-tu32j.1.10",
+        "bd-performance-conformance-bridge-tu32j.1.11",
+        "bd-performance-conformance-bridge-tu32j.1.12",
+        "bd-performance-conformance-bridge-tu32j.1.2",
+        "bd-performance-conformance-bridge-tu32j.1.3",
+        "bd-performance-conformance-bridge-tu32j.1.4",
+        "bd-performance-conformance-bridge-tu32j.1.5",
+        "bd-performance-conformance-bridge-tu32j.1.6",
+        "bd-performance-conformance-bridge-tu32j.1.7",
+        "bd-performance-conformance-bridge-tu32j.1.8",
+        "bd-performance-conformance-bridge-tu32j.1.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.1.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.1",
+      "title": "[BRIDGE-00.1] Build the executable-vs-scaffold evidence truth ledger",
+      "status_at_gen": "closed",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.10",
+      "title": "[BRIDGE-00] Recertify FE-CLAIM-016/017 from current E6 proof artifacts",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.11",
+      "title": "[FRESH-REALITY][DOCS] Regenerate architecture inventory after uniform lib.rs line drift",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.12",
+      "title": "[FRESH-REALITY][MOCK] Remove simulated timer success from FullCapsHandler",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.2",
+      "title": "[BRIDGE-00.2] Correct claim language and add executable-output truth gates",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.3",
+      "title": "[BRIDGE-00.3] Crosswalk legacy open beads into the bridge without duplication",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.4",
+      "title": "[BRIDGE-00.4] G0 historical-truth recertification capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.5",
+      "title": "[BRIDGE-00.5] Publish dependency-safe execution, ownership, and reservation lanes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.6",
+      "title": "[BRIDGE-00.6] Correct FE-CLAIM-005 from simulated fleet evidence to a real-topology TARGET",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.7",
+      "title": "[BRIDGE-00.7] Correct FE-CLAIM-023 target-neutral versus target-specific byte identity",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.8",
+      "title": "[BRIDGE-00.8] Correct README structural-inventory drift, three nonexistent module references, and repo hygiene",
+      "status_at_gen": "closed",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.1.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.1.9",
+      "title": "[BRIDGE-00.9] Restore repository-wide unsafe-code prohibition in test builds",
+      "status_at_gen": "closed",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.10",
+      "title": "[BRIDGE-09] Security-proof-guided cost removal",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.10.1",
+        "bd-performance-conformance-bridge-tu32j.10.10",
+        "bd-performance-conformance-bridge-tu32j.10.2",
+        "bd-performance-conformance-bridge-tu32j.10.3",
+        "bd-performance-conformance-bridge-tu32j.10.4",
+        "bd-performance-conformance-bridge-tu32j.10.5",
+        "bd-performance-conformance-bridge-tu32j.10.6",
+        "bd-performance-conformance-bridge-tu32j.10.7",
+        "bd-performance-conformance-bridge-tu32j.10.8",
+        "bd-performance-conformance-bridge-tu32j.10.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.10.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.1",
+      "title": "[BRIDGE-09.1] Close and recertify IFC prerequisites for any check elision",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.10",
+      "title": "[BRIDGE-09.10] Instrument and prove live signal-to-effective-containment latency",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.2",
+      "title": "[BRIDGE-09.2] Replace per-instruction static budget work with effect-safe block reservation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.3",
+      "title": "[BRIDGE-09.3] Intern IFC labels and prove regional transfer summaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.4",
+      "title": "[BRIDGE-09.4] Generate manifest-pruned capability dispatch with capability-first authorization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.5",
+      "title": "[BRIDGE-09.5] Batch ordered evidence outside the instruction loop",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.6",
+      "title": "[BRIDGE-09.6] Emit proof-specialization receipts and atomic epoch invalidation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.7",
+      "title": "[BRIDGE-09.7] Full-security profile performance and adversarial capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.8",
+      "title": "[BRIDGE-09.8] Elide guardplane instruction hooks only under a proved static execution profile",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.10.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.10.9",
+      "title": "[BRIDGE-09.9] Optimize the hostcall data plane with exact effect and security ordering",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.11",
+      "title": "[BRIDGE-10] Apple M4/M5 JIT operations and AArch64 frontier",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.11.1",
+        "bd-performance-conformance-bridge-tu32j.11.2",
+        "bd-performance-conformance-bridge-tu32j.11.3",
+        "bd-performance-conformance-bridge-tu32j.11.4",
+        "bd-performance-conformance-bridge-tu32j.11.5",
+        "bd-performance-conformance-bridge-tu32j.11.6",
+        "bd-performance-conformance-bridge-tu32j.11.7"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.11.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.1",
+      "title": "[BRIDGE-10.1] Implement Apple hardened-runtime JIT deployment contract",
+      "status_at_gen": "open",
+      "children": [],
+      "exception": {
+        "kind": "external_owner",
+        "blocks_parent": true,
+        "external_owner": "apple_adapter",
+        "note": "External Apple adapter owner; requirement retained, ownership recorded."
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.11.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.2",
+      "title": "[BRIDGE-10.2] Profile and tune AArch64 VM/JIT code shapes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.11.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.3",
+      "title": "[BRIDGE-10.3] Build bounded M4/M5 target variants and Apple PGO/layout artifacts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.11.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.4",
+      "title": "[BRIDGE-10.4] Measure Apple single-agent and multi-cell scaling separately",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.11.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.5",
+      "title": "[BRIDGE-10.5] Apple JIT safety, performance, and fallback capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.11.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.6",
+      "title": "[BRIDGE-10.6] Audit and prove memory-ordering correctness on AArch64: x86-TSO has been hiding our lock-free bugs",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.11.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.11.7",
+      "title": "[BRIDGE-10.7] Make page size a runtime property: 16 KiB Apple pages invalidate x86-tuned allocator and code-cache granularity",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.12",
+      "title": "[BRIDGE-11] AMD Zen 5, Threadripper/EPYC, NUMA, and high-core scaling",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.12.1",
+        "bd-performance-conformance-bridge-tu32j.12.2",
+        "bd-performance-conformance-bridge-tu32j.12.3",
+        "bd-performance-conformance-bridge-tu32j.12.4",
+        "bd-performance-conformance-bridge-tu32j.12.5",
+        "bd-performance-conformance-bridge-tu32j.12.6"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.12.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.12.1",
+      "title": "[BRIDGE-11.1] Capture exact AMD topology, PMU, frequency, and NUMA fingerprints",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.12.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.12.2",
+      "title": "[BRIDGE-11.2] Profile and tune generic/Zen4/Zen5 x86-64 JIT code shapes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.12.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.12.3",
+      "title": "[BRIDGE-11.3] Implement deterministic share-nothing extension-cell shards",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.12.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.12.4",
+      "title": "[BRIDGE-11.4] Build the NUMA-local Tier-I/B compile, validate, and immutable-artifact service",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.12.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.12.5",
+      "title": "[BRIDGE-11.5] AMD 1-to-all-core throughput, tail, and overload capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.12.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.12.6",
+      "title": "[BRIDGE-11.6] Integrate the optional Tier-O optimizer queue with the portable NUMA compilation service",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.13",
+      "title": "[BRIDGE-12] Test262 harness oracle and exact ES2020 profile",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.13.1",
+        "bd-performance-conformance-bridge-tu32j.13.10",
+        "bd-performance-conformance-bridge-tu32j.13.11",
+        "bd-performance-conformance-bridge-tu32j.13.12",
+        "bd-performance-conformance-bridge-tu32j.13.13",
+        "bd-performance-conformance-bridge-tu32j.13.2",
+        "bd-performance-conformance-bridge-tu32j.13.3",
+        "bd-performance-conformance-bridge-tu32j.13.4",
+        "bd-performance-conformance-bridge-tu32j.13.5",
+        "bd-performance-conformance-bridge-tu32j.13.6",
+        "bd-performance-conformance-bridge-tu32j.13.7",
+        "bd-performance-conformance-bridge-tu32j.13.8",
+        "bd-performance-conformance-bridge-tu32j.13.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.13.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.1",
+      "title": "[BRIDGE-12.1] Replace line metadata parsing with lossless Test262 YAML model",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.10",
+      "title": "[BRIDGE-12.10] Isolate Test262 crashes, hangs, resource leaks, and worker recovery",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.11",
+      "title": "[BRIDGE-12.11] Build a clause-aware Test262 failure atlas and hierarchical minimizer",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.12",
+      "title": "[BRIDGE-12.12] Replace result-time waivers with reviewed pre-run profile dispositions",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.13",
+      "title": "[BRIDGE-12.13] Enforce exact discovery, variant, and terminal-result accounting",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.2",
+      "title": "[BRIDGE-12.2] Implement exact strict/raw variants, ordered includes, and fresh realms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.3",
+      "title": "[BRIDGE-12.3] Classify positive and negative parse/resolution/runtime outcomes exactly",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.4",
+      "title": "[BRIDGE-12.4] Implement module fixtures and deterministic async completion",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.5",
+      "title": "[BRIDGE-12.5] Implement required $262 host, realm, detach, GC, and agent surface",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.6",
+      "title": "[BRIDGE-12.6] Generate an exact audited ES2020 selected-test manifest",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.7",
+      "title": "[BRIDGE-12.7] Meta-validate harness classification against two reference runners",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.8",
+      "title": "[BRIDGE-12.8] Run corrected full corpus and publish semantic baseline",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.13.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.13.9",
+      "title": "[BRIDGE-12.9] Govern Test262 and Unicode-data upgrades and profile drift",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.14",
+      "title": "[BRIDGE-13] ES2020 abstract operations and execution-model foundation",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.14.1",
+        "bd-performance-conformance-bridge-tu32j.14.10",
+        "bd-performance-conformance-bridge-tu32j.14.2",
+        "bd-performance-conformance-bridge-tu32j.14.3",
+        "bd-performance-conformance-bridge-tu32j.14.4",
+        "bd-performance-conformance-bridge-tu32j.14.5",
+        "bd-performance-conformance-bridge-tu32j.14.6",
+        "bd-performance-conformance-bridge-tu32j.14.7",
+        "bd-performance-conformance-bridge-tu32j.14.8",
+        "bd-performance-conformance-bridge-tu32j.14.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.14.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.1",
+      "title": "[BRIDGE-13.1] Generate reviewed ES2020 clause and abstract-operation dependency graph",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.10",
+      "title": "[BRIDGE-13.10] Freeze SharedArrayBuffer/Atomics public-API versus agent-memory ownership",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.2",
+      "title": "[BRIDGE-13.2] Centralize Completion Records, conversions, and comparisons",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.3",
+      "title": "[BRIDGE-13.3] Implement realms, execution contexts, and lexical/variable environments",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.4",
+      "title": "[BRIDGE-13.4] Implement ordinary/exotic internal methods and descriptor algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.5",
+      "title": "[BRIDGE-13.5] Implement callable/constructable, this/super/new.target, and arguments semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.6",
+      "title": "[BRIDGE-13.6] Define job, module-record, and host-operation foundational contracts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.7",
+      "title": "[BRIDGE-13.7] Abstract-operation foundation Test262 and tier capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.8",
+      "title": "[BRIDGE-13.8] Centralize latest-Unicode data, generation, and freshness governance",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.14.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.14.9",
+      "title": "[BRIDGE-13.9] Implement lossless SourceCharacter ingress, spans, and encoding identity",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.15",
+      "title": "[BRIDGE-14] ES2020 parser, static semantics, and language completion",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.15.1",
+        "bd-performance-conformance-bridge-tu32j.15.10",
+        "bd-performance-conformance-bridge-tu32j.15.11",
+        "bd-performance-conformance-bridge-tu32j.15.12",
+        "bd-performance-conformance-bridge-tu32j.15.13",
+        "bd-performance-conformance-bridge-tu32j.15.14",
+        "bd-performance-conformance-bridge-tu32j.15.2",
+        "bd-performance-conformance-bridge-tu32j.15.3",
+        "bd-performance-conformance-bridge-tu32j.15.4",
+        "bd-performance-conformance-bridge-tu32j.15.5",
+        "bd-performance-conformance-bridge-tu32j.15.6",
+        "bd-performance-conformance-bridge-tu32j.15.7",
+        "bd-performance-conformance-bridge-tu32j.15.8",
+        "bd-performance-conformance-bridge-tu32j.15.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.15.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.1",
+      "title": "[BRIDGE-14.1] Complete lexical grammar, Unicode identifiers, trivia, and ASI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.10",
+      "title": "[BRIDGE-14.10] Freeze language suspension versus job-queue and Promise ownership",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.11",
+      "title": "[BRIDGE-14.11] Complete ordinary functions, arrows, methods, closures, and invocation language semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.12",
+      "title": "[BRIDGE-14.12] Complete classes, constructors, inheritance, super, and field-free ES2020 class semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.13",
+      "title": "[BRIDGE-14.13] Complete generator functions, yield, yield-star, and resume semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.14",
+      "title": "[BRIDGE-14.14] Complete async-function and async-generator language suspension semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.2",
+      "title": "[BRIDGE-14.2] Complete expressions, precedence, cover grammar, and early errors",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.3",
+      "title": "[BRIDGE-14.3] Complete declarations, binding instantiation, TDZ, and control completions",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.4",
+      "title": "[BRIDGE-14.4] Complete functions, classes, generators, and async language semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.5",
+      "title": "[BRIDGE-14.5] Complete destructuring, spread/rest, templates, and BigInt syntax paths",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.6",
+      "title": "[BRIDGE-14.6] Implement direct/indirect eval, Function constructors, and full sloppy mode",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.7",
+      "title": "[BRIDGE-14.7] Script-language, static-semantics, and downstream residual capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.8",
+      "title": "[BRIDGE-14.8] Implement an explicit opt-in ES2020 Annex B compatibility profile",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.15.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.15.9",
+      "title": "[BRIDGE-14.9] Implement ES2020 proper-tail-call static and cross-tier execution semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.16",
+      "title": "[BRIDGE-15] ES2020 builtins dependency campaign",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.16.1",
+        "bd-performance-conformance-bridge-tu32j.16.10",
+        "bd-performance-conformance-bridge-tu32j.16.11",
+        "bd-performance-conformance-bridge-tu32j.16.12",
+        "bd-performance-conformance-bridge-tu32j.16.13",
+        "bd-performance-conformance-bridge-tu32j.16.14",
+        "bd-performance-conformance-bridge-tu32j.16.15",
+        "bd-performance-conformance-bridge-tu32j.16.16",
+        "bd-performance-conformance-bridge-tu32j.16.17",
+        "bd-performance-conformance-bridge-tu32j.16.18",
+        "bd-performance-conformance-bridge-tu32j.16.19",
+        "bd-performance-conformance-bridge-tu32j.16.2",
+        "bd-performance-conformance-bridge-tu32j.16.20",
+        "bd-performance-conformance-bridge-tu32j.16.21",
+        "bd-performance-conformance-bridge-tu32j.16.22",
+        "bd-performance-conformance-bridge-tu32j.16.23",
+        "bd-performance-conformance-bridge-tu32j.16.24",
+        "bd-performance-conformance-bridge-tu32j.16.25",
+        "bd-performance-conformance-bridge-tu32j.16.3",
+        "bd-performance-conformance-bridge-tu32j.16.4",
+        "bd-performance-conformance-bridge-tu32j.16.5",
+        "bd-performance-conformance-bridge-tu32j.16.6",
+        "bd-performance-conformance-bridge-tu32j.16.7",
+        "bd-performance-conformance-bridge-tu32j.16.8",
+        "bd-performance-conformance-bridge-tu32j.16.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.16.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.1",
+      "title": "[BRIDGE-15.1] Extend IntrinsicRow into a spec-exact builtin installation generator",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.10",
+      "title": "[BRIDGE-15.10] Builtin metadata, weakest-view, and full pass-set capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.11",
+      "title": "[BRIDGE-15.11] Complete Error families, URI algorithms, and omitted ES2020 intrinsic tails",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.12",
+      "title": "[BRIDGE-15.12] Optimize measured builtin kernels with guarded exact fallbacks",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.13",
+      "title": "[BRIDGE-15.13] Complete global object bindings and global utility functions",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.14",
+      "title": "[BRIDGE-15.14] Complete Object constructor, prototype, and static algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.15",
+      "title": "[BRIDGE-15.15] Complete Function constructor, prototype, bind, call, and apply algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.16",
+      "title": "[BRIDGE-15.16] Complete Boolean constructor and prototype algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.17",
+      "title": "[BRIDGE-15.17] Complete Symbol constructor, registry, well-known symbols, and prototype algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.18",
+      "title": "[BRIDGE-15.18] Complete Number constructor, parsing, formatting, and prototype algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.19",
+      "title": "[BRIDGE-15.19] Complete BigInt constructor, parsing, arithmetic-facing statics, and prototype algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.2",
+      "title": "[BRIDGE-15.2] Complete global, Object, Function, Boolean, and Symbol builtins",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.20": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.20",
+      "title": "[BRIDGE-15.20] Complete Math constants and algorithms with exact edge semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.21": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.21",
+      "title": "[BRIDGE-15.21] Complete Date algorithms and pinned timezone policy",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.22": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.22",
+      "title": "[BRIDGE-15.22] Complete JSON parse and stringify with well-formed surrogate output",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.23": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.23",
+      "title": "[BRIDGE-15.23] Complete ArrayBuffer and DataView builtin algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.24": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.24",
+      "title": "[BRIDGE-15.24] Complete TypedArray constructors, integer-indexed methods, and prototype algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.25": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.25",
+      "title": "[BRIDGE-15.25] Complete SharedArrayBuffer and Atomics public builtin algorithms",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.3",
+      "title": "[BRIDGE-15.3] Complete Array and iterator builtins",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.4",
+      "title": "[BRIDGE-15.4] Complete String builtins and iterator semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.5",
+      "title": "[BRIDGE-15.5] Complete Number, BigInt, Math, Date, and JSON builtins",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.6",
+      "title": "[BRIDGE-15.6] Complete Map, Set, WeakMap, and WeakSet builtins",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.7",
+      "title": "[BRIDGE-15.7] Complete ArrayBuffer, SharedArrayBuffer, DataView, TypedArrays, and Atomics builtins",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.8",
+      "title": "[BRIDGE-15.8] Complete Promise intrinsic and API algorithms with typed enqueue requests",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.16.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.16.9",
+      "title": "[BRIDGE-15.9] Complete Reflect and Proxy internal-method observability",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.17",
+      "title": "[BRIDGE-16] Conformance-grade ECMAScript RegExp engine",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.17.1",
+        "bd-performance-conformance-bridge-tu32j.17.2",
+        "bd-performance-conformance-bridge-tu32j.17.3",
+        "bd-performance-conformance-bridge-tu32j.17.4",
+        "bd-performance-conformance-bridge-tu32j.17.5"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.17.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.17.1",
+      "title": "[BRIDGE-16.1] Specify and parse the ES2020 RegExp grammar and flags",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.17.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.17.2",
+      "title": "[BRIDGE-16.2] Implement conformance-grade matcher and capture/backtracking semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.17.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.17.3",
+      "title": "[BRIDGE-16.3] Integrate RegExp objects, lastIndex, symbols, and String methods",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.17.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.17.4",
+      "title": "[BRIDGE-16.4] Optimize measured RegExp hot paths with exact fallback",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.17.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.17.5",
+      "title": "[BRIDGE-16.5] RegExp semantic Test262, fuzz, resource, and tier capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.18",
+      "title": "[BRIDGE-17] Modules, jobs, async, agents, SAB, and Atomics",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.18.1",
+        "bd-performance-conformance-bridge-tu32j.18.10",
+        "bd-performance-conformance-bridge-tu32j.18.11",
+        "bd-performance-conformance-bridge-tu32j.18.12",
+        "bd-performance-conformance-bridge-tu32j.18.13",
+        "bd-performance-conformance-bridge-tu32j.18.2",
+        "bd-performance-conformance-bridge-tu32j.18.3",
+        "bd-performance-conformance-bridge-tu32j.18.4",
+        "bd-performance-conformance-bridge-tu32j.18.5",
+        "bd-performance-conformance-bridge-tu32j.18.6",
+        "bd-performance-conformance-bridge-tu32j.18.7",
+        "bd-performance-conformance-bridge-tu32j.18.8",
+        "bd-performance-conformance-bridge-tu32j.18.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.18.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.1",
+      "title": "[BRIDGE-17.1] Complete SourceTextModule parse, link, instantiate, and evaluate",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.10",
+      "title": "[BRIDGE-17.10] Implement Test262 agent lifecycle, isolation, broadcast, and report queues",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.11",
+      "title": "[BRIDGE-17.11] Implement SharedArrayBuffer sharing and the ES memory-model substrate",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.12",
+      "title": "[BRIDGE-17.12] Implement Atomics read-modify-write, compareExchange, and memory ordering",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.13",
+      "title": "[BRIDGE-17.13] Implement Atomics wait/notify, CanBlock, timeouts, and replayable wake scheduling",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.2",
+      "title": "[BRIDGE-17.2] Implement dynamic import and deterministic module jobs",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.3",
+      "title": "[BRIDGE-17.3] Complete Promise jobs, async functions, and async generators end to end",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.4",
+      "title": "[BRIDGE-17.4] Implement Test262 agents and SharedArrayBuffer/Atomics execution model",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.5",
+      "title": "[BRIDGE-17.5] Prove module/async/agent security, replay, and failure atomicity",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.6",
+      "title": "[BRIDGE-17.6] Modules/async/agents full Test262 and cross-tier capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.7",
+      "title": "[BRIDGE-17.7] Implement Promise reaction jobs and await bridging",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.8",
+      "title": "[BRIDGE-17.8] Complete async-function return, throw, finally, and cancellation integration",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.18.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.18.9",
+      "title": "[BRIDGE-17.9] Complete async-generator queues, yield-await, and async iteration",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.19",
+      "title": "[BRIDGE-18] Cross-tier differential, fuzz, metamorphic, and translation validation",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.19.1",
+        "bd-performance-conformance-bridge-tu32j.19.10",
+        "bd-performance-conformance-bridge-tu32j.19.2",
+        "bd-performance-conformance-bridge-tu32j.19.3",
+        "bd-performance-conformance-bridge-tu32j.19.4",
+        "bd-performance-conformance-bridge-tu32j.19.5",
+        "bd-performance-conformance-bridge-tu32j.19.6",
+        "bd-performance-conformance-bridge-tu32j.19.7",
+        "bd-performance-conformance-bridge-tu32j.19.8",
+        "bd-performance-conformance-bridge-tu32j.19.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.19.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.1",
+      "title": "[BRIDGE-18.1] Build the full tier, architecture, and security-profile matrix runner",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.10",
+      "title": "[BRIDGE-18.10] Cross-ISA bit-identity gate for every architecture-specific path (bd-2noh9 class defects)",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.2",
+      "title": "[BRIDGE-18.2] Harden Node/Bun differential classification and minimization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.3",
+      "title": "[BRIDGE-18.3] Build AST/IR generative fuzzing and metamorphic oracle families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.4",
+      "title": "[BRIDGE-18.4] Implement optimizer and codegen translation validation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.5",
+      "title": "[BRIDGE-18.5] Isolate native-code fuzzing and replay compiler failures",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.6",
+      "title": "[BRIDGE-18.6] Detect semantic and performance regressions across tiers",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.7",
+      "title": "[BRIDGE-18.7] Joint G6 verification capstone with zero unowned divergence",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.8",
+      "title": "[BRIDGE-18.8] Implement shadow execution, canary cohorts, and bounded rollback",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.19.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.19.9",
+      "title": "[BRIDGE-18.9] Model-check concurrent compile, activation, invalidation, eviction, GC, and deopt",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.2",
+      "title": "[BRIDGE-01] Canonical semantic ownership and generated-semantics contract",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.2.1",
+        "bd-performance-conformance-bridge-tu32j.2.10",
+        "bd-performance-conformance-bridge-tu32j.2.11",
+        "bd-performance-conformance-bridge-tu32j.2.12",
+        "bd-performance-conformance-bridge-tu32j.2.13",
+        "bd-performance-conformance-bridge-tu32j.2.14",
+        "bd-performance-conformance-bridge-tu32j.2.2",
+        "bd-performance-conformance-bridge-tu32j.2.3",
+        "bd-performance-conformance-bridge-tu32j.2.4",
+        "bd-performance-conformance-bridge-tu32j.2.5",
+        "bd-performance-conformance-bridge-tu32j.2.6",
+        "bd-performance-conformance-bridge-tu32j.2.7",
+        "bd-performance-conformance-bridge-tu32j.2.8",
+        "bd-performance-conformance-bridge-tu32j.2.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.2.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.1",
+      "title": "[BRIDGE-01.1] Classify ownership of all 42 franken-core module families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.10",
+      "title": "[BRIDGE-01.10] Extract call, construct, closure, and invocation boundaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.11",
+      "title": "[BRIDGE-01.11] Extract exception, generator, async, and suspension runtime boundaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.12",
+      "title": "[BRIDGE-01.12] Extract hostcall, security, resource, tier-routing, and diagnostic boundaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.13",
+      "title": "[BRIDGE-01.13] Establish the interpreter extraction shell and serialized monolith-integration protocol",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.14",
+      "title": "[BRIDGE-01.14] Scale generated semantics ownership to every IR3 opcode",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.2",
+      "title": "[BRIDGE-01.2] Enforce single-owner mutation and dual-lane drift detection",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.3",
+      "title": "[BRIDGE-01.3] Specify the declarative bytecode-semantics schema",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.4",
+      "title": "[BRIDGE-01.4] Generate Tier R/I/B/O support artifacts from representative semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.5",
+      "title": "[BRIDGE-01.5] Canonical-owner and semantics-generator conformance capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.6",
+      "title": "[BRIDGE-01.6] Carve the 98k interpreter into generated semantic and runtime boundaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.7",
+      "title": "[BRIDGE-01.7] Extract generated instruction semantics and dispatch ownership",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.8",
+      "title": "[BRIDGE-01.8] Extract frame, register, control-flow, and completion boundaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.2.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.2.9",
+      "title": "[BRIDGE-01.9] Extract object, property, environment, and heap-operation boundaries",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20": {
+      "id": "bd-performance-conformance-bridge-tu32j.20",
+      "title": "[BRIDGE-19] CI ratchets, benchmark standard, neutral verifier, and external reproduction",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.20.1",
+        "bd-performance-conformance-bridge-tu32j.20.10",
+        "bd-performance-conformance-bridge-tu32j.20.11",
+        "bd-performance-conformance-bridge-tu32j.20.12",
+        "bd-performance-conformance-bridge-tu32j.20.13",
+        "bd-performance-conformance-bridge-tu32j.20.14",
+        "bd-performance-conformance-bridge-tu32j.20.15",
+        "bd-performance-conformance-bridge-tu32j.20.16",
+        "bd-performance-conformance-bridge-tu32j.20.17",
+        "bd-performance-conformance-bridge-tu32j.20.18",
+        "bd-performance-conformance-bridge-tu32j.20.2",
+        "bd-performance-conformance-bridge-tu32j.20.3",
+        "bd-performance-conformance-bridge-tu32j.20.4",
+        "bd-performance-conformance-bridge-tu32j.20.5",
+        "bd-performance-conformance-bridge-tu32j.20.6",
+        "bd-performance-conformance-bridge-tu32j.20.7",
+        "bd-performance-conformance-bridge-tu32j.20.8",
+        "bd-performance-conformance-bridge-tu32j.20.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.20.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.1",
+      "title": "[BRIDGE-19.1] Wire executable-tier, pass-set, waiver, perf, and claim gates into CI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.10",
+      "title": "[BRIDGE-19.10] Guarantee N/N-1/N+1 artifact, cache, receipt, and trace compatibility",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.11",
+      "title": "[BRIDGE-19.11] Make compilation progress, cancellation, offline, no-JIT, and low-resource modes first-class",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.12",
+      "title": "[BRIDGE-19.12] Build auditable policy-isolation-evidence-equivalent Node and Bun reference adapters",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.13",
+      "title": "[BRIDGE-19.13] Execute and publish Extension-Heavy Benchmark Suite v1 against pinned Node and Bun",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.14",
+      "title": "[BRIDGE-19.14] Prove Windows x64 build, execution, native-tier, and evidence reproducibility",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.15",
+      "title": "[BRIDGE-19.15] Bring up the pinned native Windows x64/MSVC execution cell and red-first tier harness",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.16",
+      "title": "[BRIDGE-19.16] Integrate the Windows capsule adapter into portability and release proof",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.17",
+      "title": "[BRIDGE-19.17] Obtain genuine external adoption of the versioned category benchmark standard",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.18",
+      "title": "[BRIDGE-19.18] Schedule evidence refresh and decide the freshness model: all 16 OBSERVED claims are currently provisional",
+      "status_at_gen": "closed",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.2",
+      "title": "[BRIDGE-19.2] Freeze Extension-Heavy Benchmark Suite v1 and fairness contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.3",
+      "title": "[BRIDGE-19.3] Ship one-command neutral verifier for artifacts and scoring",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.4",
+      "title": "[BRIDGE-19.4] Govern core/category claim promotion only from scoped live reproducible gates",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.5",
+      "title": "[BRIDGE-19.5] Publish external rerun kits and conduct two independent reproductions",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.6",
+      "title": "[BRIDGE-19.6] G7/G8 category-claim and external-validation capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.7",
+      "title": "[BRIDGE-19.7] Ship operator tier, fallback, deopt, and conformance diagnostics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.8",
+      "title": "[BRIDGE-19.8] Prove the real extension-author user journey and operational SLOs",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.20.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.20.9",
+      "title": "[BRIDGE-19.9] Integrate workload doctor, tier explain, and deterministic support bundles",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21": {
+      "id": "bd-performance-conformance-bridge-tu32j.21",
+      "title": "[BRIDGE-20] Alien/SOTA research reproduction and promote-hold-kill portfolio",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.21.1",
+        "bd-performance-conformance-bridge-tu32j.21.2",
+        "bd-performance-conformance-bridge-tu32j.21.3",
+        "bd-performance-conformance-bridge-tu32j.21.4",
+        "bd-performance-conformance-bridge-tu32j.21.5",
+        "bd-performance-conformance-bridge-tu32j.21.6",
+        "bd-performance-conformance-bridge-tu32j.21.7"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.21.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.1",
+      "title": "[BRIDGE-20.1] Operate six-week primary-literature and backend research radar",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.2",
+      "title": "[BRIDGE-20.2] Reproduce Deegen generated-VM mechanisms on Franken semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.3",
+      "title": "[BRIDGE-20.3] Reproduce Copy-and-Patch, whole-interpreter PE, and Druid claims",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.4",
+      "title": "[BRIDGE-20.4] Prototype bounded e-graphs and tiny-kernel superoptimization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.5",
+      "title": "[BRIDGE-20.5] Evaluate Swiss layouts, allocators, S3-FIFO, and AMAC under traces",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.6",
+      "title": "[BRIDGE-20.6] Prototype reusable optimized IR, compilation service, and offline autotuning",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.21.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.21.7",
+      "title": "[BRIDGE-20.7] Research portfolio promote-hold-kill and proof capstone",
+      "status_at_gen": "open",
+      "children": [],
+      "requires_closed": [
+        "bd-performance-conformance-bridge-tu32j.6.33"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22": {
+      "id": "bd-performance-conformance-bridge-tu32j.22",
+      "title": "[BRIDGE-21] Executable verification packs, E2E scenarios, and evidence-grade logging",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.22.1",
+        "bd-performance-conformance-bridge-tu32j.22.10",
+        "bd-performance-conformance-bridge-tu32j.22.11",
+        "bd-performance-conformance-bridge-tu32j.22.12",
+        "bd-performance-conformance-bridge-tu32j.22.13",
+        "bd-performance-conformance-bridge-tu32j.22.14",
+        "bd-performance-conformance-bridge-tu32j.22.15",
+        "bd-performance-conformance-bridge-tu32j.22.16",
+        "bd-performance-conformance-bridge-tu32j.22.17",
+        "bd-performance-conformance-bridge-tu32j.22.18",
+        "bd-performance-conformance-bridge-tu32j.22.19",
+        "bd-performance-conformance-bridge-tu32j.22.2",
+        "bd-performance-conformance-bridge-tu32j.22.20",
+        "bd-performance-conformance-bridge-tu32j.22.21",
+        "bd-performance-conformance-bridge-tu32j.22.22",
+        "bd-performance-conformance-bridge-tu32j.22.23",
+        "bd-performance-conformance-bridge-tu32j.22.24",
+        "bd-performance-conformance-bridge-tu32j.22.25",
+        "bd-performance-conformance-bridge-tu32j.22.26",
+        "bd-performance-conformance-bridge-tu32j.22.27",
+        "bd-performance-conformance-bridge-tu32j.22.28",
+        "bd-performance-conformance-bridge-tu32j.22.29",
+        "bd-performance-conformance-bridge-tu32j.22.3",
+        "bd-performance-conformance-bridge-tu32j.22.30",
+        "bd-performance-conformance-bridge-tu32j.22.31",
+        "bd-performance-conformance-bridge-tu32j.22.32",
+        "bd-performance-conformance-bridge-tu32j.22.33",
+        "bd-performance-conformance-bridge-tu32j.22.34",
+        "bd-performance-conformance-bridge-tu32j.22.35",
+        "bd-performance-conformance-bridge-tu32j.22.36",
+        "bd-performance-conformance-bridge-tu32j.22.37",
+        "bd-performance-conformance-bridge-tu32j.22.38",
+        "bd-performance-conformance-bridge-tu32j.22.39",
+        "bd-performance-conformance-bridge-tu32j.22.4",
+        "bd-performance-conformance-bridge-tu32j.22.40",
+        "bd-performance-conformance-bridge-tu32j.22.41",
+        "bd-performance-conformance-bridge-tu32j.22.42",
+        "bd-performance-conformance-bridge-tu32j.22.43",
+        "bd-performance-conformance-bridge-tu32j.22.44",
+        "bd-performance-conformance-bridge-tu32j.22.45",
+        "bd-performance-conformance-bridge-tu32j.22.46",
+        "bd-performance-conformance-bridge-tu32j.22.47",
+        "bd-performance-conformance-bridge-tu32j.22.48",
+        "bd-performance-conformance-bridge-tu32j.22.49",
+        "bd-performance-conformance-bridge-tu32j.22.5",
+        "bd-performance-conformance-bridge-tu32j.22.50",
+        "bd-performance-conformance-bridge-tu32j.22.51",
+        "bd-performance-conformance-bridge-tu32j.22.52",
+        "bd-performance-conformance-bridge-tu32j.22.53",
+        "bd-performance-conformance-bridge-tu32j.22.54",
+        "bd-performance-conformance-bridge-tu32j.22.55",
+        "bd-performance-conformance-bridge-tu32j.22.56",
+        "bd-performance-conformance-bridge-tu32j.22.57",
+        "bd-performance-conformance-bridge-tu32j.22.58",
+        "bd-performance-conformance-bridge-tu32j.22.59",
+        "bd-performance-conformance-bridge-tu32j.22.6",
+        "bd-performance-conformance-bridge-tu32j.22.60",
+        "bd-performance-conformance-bridge-tu32j.22.61",
+        "bd-performance-conformance-bridge-tu32j.22.62",
+        "bd-performance-conformance-bridge-tu32j.22.63",
+        "bd-performance-conformance-bridge-tu32j.22.64",
+        "bd-performance-conformance-bridge-tu32j.22.65",
+        "bd-performance-conformance-bridge-tu32j.22.66",
+        "bd-performance-conformance-bridge-tu32j.22.67",
+        "bd-performance-conformance-bridge-tu32j.22.68",
+        "bd-performance-conformance-bridge-tu32j.22.69",
+        "bd-performance-conformance-bridge-tu32j.22.7",
+        "bd-performance-conformance-bridge-tu32j.22.70",
+        "bd-performance-conformance-bridge-tu32j.22.71",
+        "bd-performance-conformance-bridge-tu32j.22.8",
+        "bd-performance-conformance-bridge-tu32j.22.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1",
+      "title": "[BRIDGE-21.1] Recertify and unify the verification coverage contract",
+      "status_at_gen": "in_progress",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.22.1.1",
+        "bd-performance-conformance-bridge-tu32j.22.1.2",
+        "bd-performance-conformance-bridge-tu32j.22.1.3",
+        "bd-performance-conformance-bridge-tu32j.22.1.4",
+        "bd-performance-conformance-bridge-tu32j.22.1.5",
+        "bd-performance-conformance-bridge-tu32j.22.1.6",
+        "bd-performance-conformance-bridge-tu32j.22.1.7"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.1",
+      "title": "[BRIDGE-21.1.1] Generate the live coverage matrix from authoritative beads, claims and harness inventory",
+      "status_at_gen": "closed",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.2",
+      "title": "[BRIDGE-21.1.2] Validate the gate phase journal, structured test result and child-log bindings",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.3",
+      "title": "[BRIDGE-21.1.3] Make integrity validation single-snapshot and race-free",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.4",
+      "title": "[BRIDGE-21.1.4] Bind the real Tier-R probe to exact source and descriptive build provenance",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.5",
+      "title": "[BRIDGE-21.1.5] Encode integrity-only trust and separate archive validity from claim freshness",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.6",
+      "title": "[BRIDGE-21.1.6] Complete the baseline bundle validator mutation and bounds suite",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.1.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.1.7",
+      "title": "[BRIDGE-21.1.7] Publish and exercise the baseline VCC gate, docs and operator journey",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.10",
+      "title": "[BRIDGE-21.10] Verify BRIDGE-04: Tier-I bytecode, frames, quickening, IC, and routing verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.11",
+      "title": "[BRIDGE-21.11] Verify BRIDGE-05: Native capsule, ABI, W^X, resources, and debug verification",
+      "status_at_gen": "open",
+      "children": [],
+      "markers": {
+        "stage": "post_implementation_independent_verdict"
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.22.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.12",
+      "title": "[BRIDGE-21.12] Verify BRIDGE-06: Tier-B backend, IC, OSR, and break-even verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.13",
+      "title": "[BRIDGE-21.13] Verify BRIDGE-07: Tier-O SSA, optimization, controller, and exact-deopt verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.14",
+      "title": "[BRIDGE-21.14] Verify BRIDGE-08: Tier-A AOT, PGO, receipt, and code-cache verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.15",
+      "title": "[BRIDGE-21.15] Verify BRIDGE-09: Capability, IFC, budget, guardplane, and evidence-elision verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.16",
+      "title": "[BRIDGE-21.16] Verify BRIDGE-10: Apple M4/M5 hardened-runtime and AArch64 verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.17",
+      "title": "[BRIDGE-21.17] Verify BRIDGE-11: AMD Zen, NUMA, and high-core scaling verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.18",
+      "title": "[BRIDGE-21.18] Verify BRIDGE-12: Test262 harness, ES2020 manifest, and worker-isolation verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.19",
+      "title": "[BRIDGE-21.19] Verify BRIDGE-13: abstract operations, Unicode, and lossless source ingress",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.2",
+      "title": "[BRIDGE-21.2] Standardize test JSONL, artifact graphs, redaction, and reproducibility packs",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.20": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.20",
+      "title": "[BRIDGE-21.20] Verify BRIDGE-14: parser, language, eval, sloppy mode, and proper tail calls",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.21": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.21",
+      "title": "[BRIDGE-21.21] Verify BRIDGE-15: Builtin installation and algorithm verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.22": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.22",
+      "title": "[BRIDGE-21.22] Verify BRIDGE-16: ECMAScript RegExp grammar, matcher, integration, and budget verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.23": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.23",
+      "title": "[BRIDGE-21.23] Verify BRIDGE-17: Modules, jobs, async, agents, SAB, and Atomics verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.24": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.24",
+      "title": "[BRIDGE-21.24] Verify BRIDGE-18: Cross-tier differential, fuzz, translation, shadow, and concurrency verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.25": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.25",
+      "title": "[BRIDGE-21.25] Verify BRIDGE-19: CI, neutral verification, external rerun, and user-journey verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.26": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.26",
+      "title": "[BRIDGE-21.26] Verify BRIDGE-20: Alien/SOTA research reproduction and promotion-policy verification",
+      "status_at_gen": "open",
+      "children": [],
+      "requires_closed": [
+        "bd-performance-conformance-bridge-tu32j.6.33"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22.27": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.27",
+      "title": "[BRIDGE-21.27] Execute and publish clean-room aggregate and seeded-failure results",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.28": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.28",
+      "title": "[BRIDGE-21.28] Verify BRIDGE-22 cold frontend, caches, and exact source retention",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.29": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.29",
+      "title": "[BRIDGE-21.29] Verify the opt-in Annex B compatibility profile independently",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.3",
+      "title": "[BRIDGE-21.3] Build the reusable no-mock E2E scenario driver and shell contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.30": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.30",
+      "title": "[BRIDGE-21.30] Independently review and rerun the clean-room aggregate evidence",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.31": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.31",
+      "title": "[BRIDGE-21.31] Independently verify the real distributed fleet containment pack",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.32": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.32",
+      "title": "[BRIDGE-21.32] Independently verify real hardware TEE attestation and receipt binding",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.33": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.33",
+      "title": "[BRIDGE-21.33] Publish the scoped core performance and ES2020 conformance evidence aggregate",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.34": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.34",
+      "title": "[BRIDGE-21.34] Publish the scoped independently reviewed real-fleet evidence aggregate",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.35": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.35",
+      "title": "[BRIDGE-21.35] Publish the scoped independently reviewed hardware-TEE evidence aggregate",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.36": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.36",
+      "title": "[BRIDGE-21-R6] Author the red-first harness for BRIDGE-00 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.37": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.37",
+      "title": "[BRIDGE-21-R7] Author the red-first harness for BRIDGE-01 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.38": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.38",
+      "title": "[BRIDGE-21-R8] Author the red-first harness for BRIDGE-02 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.39": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.39",
+      "title": "[BRIDGE-21-R9] Author the red-first harness for BRIDGE-03 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.4",
+      "title": "[BRIDGE-21.4] Add lineage-driven fault injection, deterministic schedules, and hierarchical reduction",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.40": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.40",
+      "title": "[BRIDGE-21-R10] Author the red-first harness for BRIDGE-04 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.41": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.41",
+      "title": "[BRIDGE-21-R11] Author the red-first harness for BRIDGE-05 certification",
+      "status_at_gen": "open",
+      "children": [],
+      "markers": {
+        "stage": "red_first_harness"
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.22.42": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.42",
+      "title": "[BRIDGE-21-R12] Author the red-first harness for BRIDGE-06 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.43": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.43",
+      "title": "[BRIDGE-21-R13] Author the red-first harness for BRIDGE-07 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.44": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.44",
+      "title": "[BRIDGE-21-R14] Author the red-first harness for BRIDGE-08 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.45": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.45",
+      "title": "[BRIDGE-21-R15] Author the red-first harness for BRIDGE-09 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.46": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.46",
+      "title": "[BRIDGE-21-R16] Author the red-first harness for BRIDGE-10 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.47": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.47",
+      "title": "[BRIDGE-21-R17] Author the red-first harness for BRIDGE-11 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.48": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.48",
+      "title": "[BRIDGE-21-R18] Author the red-first harness for BRIDGE-12 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.49": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.49",
+      "title": "[BRIDGE-21-R19] Author the red-first harness for BRIDGE-13 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.5",
+      "title": "[BRIDGE-21.5] Enforce execution coverage, mutation sensitivity, flake triage, and quarantine expiry",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.50": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.50",
+      "title": "[BRIDGE-21-R20] Author the red-first harness for BRIDGE-14 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.51": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.51",
+      "title": "[BRIDGE-21-R21] Author the red-first harness for BRIDGE-15 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.52": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.52",
+      "title": "[BRIDGE-21-R22] Author the red-first harness for BRIDGE-16 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.53": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.53",
+      "title": "[BRIDGE-21-R23] Author the red-first harness for BRIDGE-17 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.54": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.54",
+      "title": "[BRIDGE-21-R24] Author the red-first harness for BRIDGE-18 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.55": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.55",
+      "title": "[BRIDGE-21-R25] Author the red-first harness for BRIDGE-19 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.56": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.56",
+      "title": "[BRIDGE-21-R26] Author the red-first harness for BRIDGE-20 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.57": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.57",
+      "title": "[BRIDGE-21-R28] Author the red-first harness for BRIDGE-22 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58",
+      "title": "[BRIDGE-21.58] Add typed RCH remote-execution receipts and a fleet-pinned Rust toolchain",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.22.58.1",
+        "bd-performance-conformance-bridge-tu32j.22.58.10",
+        "bd-performance-conformance-bridge-tu32j.22.58.2",
+        "bd-performance-conformance-bridge-tu32j.22.58.3",
+        "bd-performance-conformance-bridge-tu32j.22.58.4",
+        "bd-performance-conformance-bridge-tu32j.22.58.5",
+        "bd-performance-conformance-bridge-tu32j.22.58.6",
+        "bd-performance-conformance-bridge-tu32j.22.58.7",
+        "bd-performance-conformance-bridge-tu32j.22.58.8",
+        "bd-performance-conformance-bridge-tu32j.22.58.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.1",
+      "title": "[BRIDGE-21.58.1] Specify remote-build trust boundaries and the canonical receipt state machine",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.10",
+      "title": "[BRIDGE-21.58.10] Establish upstream RCH ownership, compatibility and pinned release consumption",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.2",
+      "title": "[BRIDGE-21.58.2] Implement atomic typed terminal receipts in RCH",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.3",
+      "title": "[BRIDGE-21.58.3] Bind receipts to daemon and worker identities with nonce, signing and replay control",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.4",
+      "title": "[BRIDGE-21.58.4] Capture the exact hermetic compiler, Cargo, linker, CPU and source material graph",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.5",
+      "title": "[BRIDGE-21.58.5] Consume receipts in the VCC gate and remove heuristic remote-success claims",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.6",
+      "title": "[BRIDGE-21.58.6] Build the receipt and material mutation, property and parser-fuzz corpus",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.7",
+      "title": "[BRIDGE-21.58.7] Run real-worker receipt chaos and retrieval E2E scenarios",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.8",
+      "title": "[BRIDGE-21.58.8] Ratchet remote receipt support in CI and expose actionable operator diagnostics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.58.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.58.9",
+      "title": "[BRIDGE-21.58.9] Add authenticated software-worker receipt mode without TEE overclaim",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59",
+      "title": "[BRIDGE-21.59] Ship a relocatable offline verification capsule and clean-room rerun",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.22.59.1",
+        "bd-performance-conformance-bridge-tu32j.22.59.2",
+        "bd-performance-conformance-bridge-tu32j.22.59.3",
+        "bd-performance-conformance-bridge-tu32j.22.59.4",
+        "bd-performance-conformance-bridge-tu32j.22.59.5",
+        "bd-performance-conformance-bridge-tu32j.22.59.6"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59.1",
+      "title": "[BRIDGE-21.59.1] Specify capsule boundaries, bootstrap trust and historical-versus-fresh verdicts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59.2",
+      "title": "[BRIDGE-21.59.2] Extend path-independent Tier-R identity with explicit retained-source verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59.3",
+      "title": "[BRIDGE-21.59.3] Assemble the exact source, dependency, toolchain and license capsule",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59.4",
+      "title": "[BRIDGE-21.59.4] Implement externally bootstrapped offline verify-bundle and separate live reproduction",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59.5",
+      "title": "[BRIDGE-21.59.5] Add capsule relocation, path, archive and offline mutation coverage",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.59.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.59.6",
+      "title": "[BRIDGE-21.59.6] Certify moved-capsule clean-room verification across supported hosts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.6",
+      "title": "[BRIDGE-21.6] Verify BRIDGE-00: Truth, claim, overlap, and execution-lane verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60",
+      "title": "[BRIDGE-21.60] Add signed evidence roots and explicit bundle trust modes",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.22.60.1",
+        "bd-performance-conformance-bridge-tu32j.22.60.2",
+        "bd-performance-conformance-bridge-tu32j.22.60.3",
+        "bd-performance-conformance-bridge-tu32j.22.60.4",
+        "bd-performance-conformance-bridge-tu32j.22.60.5",
+        "bd-performance-conformance-bridge-tu32j.22.60.6"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60.1",
+      "title": "[BRIDGE-21.60.1] Define the stable race-free content-root snapshot API",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60.2",
+      "title": "[BRIDGE-21.60.2] Specify signed bundle statements, trust modes and canonical domains",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60.3",
+      "title": "[BRIDGE-21.60.3] Implement constrained signing and independent trust-root verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60.4",
+      "title": "[BRIDGE-21.60.4] Implement signing-key rotation, revocation, expiry and replay policy",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60.5",
+      "title": "[BRIDGE-21.60.5] Build coordinated-rewrite, signature and trust-downgrade mutation coverage",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.60.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.60.6",
+      "title": "[BRIDGE-21.60.6] Certify signed and authenticated software-worker bundles in a clean room",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.61": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.61",
+      "title": "[BRIDGE-21.61] Enforce decomposed-parent closeout and exact required-child completion",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.62": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.62",
+      "title": "[BRIDGE-21-R31] Author the red-first harness for BRIDGE-23 real-fleet certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.63": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.63",
+      "title": "[BRIDGE-21-R32] Author the red-first harness for BRIDGE-24 real-hardware TEE certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.64": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.64",
+      "title": "[BRIDGE-21-R29] Author the red-first harness for the opt-in Annex B profile",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.65": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.65",
+      "title": "[BRIDGE-21-R30] Author the red-first harness for BRIDGE-25 GA release-candidate certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.66": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.66",
+      "title": "[BRIDGE-21.66] Independently verify the immutable GA release candidate and publication preconditions",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.67": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.67",
+      "title": "[BRIDGE-21-R33] Author the red-first harness for Intl preservation and ECMA-402 certification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.68": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.68",
+      "title": "[BRIDGE-21.68] Independently verify no-regression for every exposed Intl and locale-sensitive behavior",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.69": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.69",
+      "title": "[BRIDGE-21.69] Independently verify the separate full ECMA-402 2020 conformance profile",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.7",
+      "title": "[BRIDGE-21.7] Verify BRIDGE-01: Canonical ownership, generator, and interpreter-boundary verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.70": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.70",
+      "title": "[BRIDGE-21-R34] Author the red-first harness for complete shipped-feature preservation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.71": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.71",
+      "title": "[BRIDGE-21.71] Independently verify complete shipped-feature preservation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.8",
+      "title": "[BRIDGE-21.8] Verify BRIDGE-02: Benchmark, profiling, statistics, and fairness verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.22.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.22.9",
+      "title": "[BRIDGE-21.9] Verify BRIDGE-03: Value, object, string, array, heap, and GC verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23": {
+      "id": "bd-performance-conformance-bridge-tu32j.23",
+      "title": "[BRIDGE-22] Cold-start frontend, package graph, and incremental compilation",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.23.1",
+        "bd-performance-conformance-bridge-tu32j.23.10",
+        "bd-performance-conformance-bridge-tu32j.23.2",
+        "bd-performance-conformance-bridge-tu32j.23.3",
+        "bd-performance-conformance-bridge-tu32j.23.4",
+        "bd-performance-conformance-bridge-tu32j.23.5",
+        "bd-performance-conformance-bridge-tu32j.23.6",
+        "bd-performance-conformance-bridge-tu32j.23.7",
+        "bd-performance-conformance-bridge-tu32j.23.8",
+        "bd-performance-conformance-bridge-tu32j.23.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.23.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.1",
+      "title": "[BRIDGE-22.1] Profile frontend time, memory, copies, dependencies, and semantic obligations",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.10",
+      "title": "[BRIDGE-22.10] Protect source, compiler/native caches, workers, and fault artifacts across tenants",
+      "status_at_gen": "open",
+      "children": [],
+      "exception": {
+        "kind": "external_owner",
+        "blocks_parent": true,
+        "external_owner": "confidentiality_owner",
+        "note": "External confidentiality owner; requirement retained, ownership recorded."
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.23.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.2",
+      "title": "[BRIDGE-22.2] Implement compact source, token, AST, IR arenas, and canonical interning",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.3",
+      "title": "[BRIDGE-22.3] Add validated lazy function lowering and demand-driven frontend work",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.4",
+      "title": "[BRIDGE-22.4] Build content-addressed incremental parse, lower, and module-graph artifacts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.5",
+      "title": "[BRIDGE-22.5] Parallelize target-independent frontend DAG work deterministically",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.6",
+      "title": "[BRIDGE-22.6] Emit prelinked immutable package images and fast realm instantiation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.7",
+      "title": "[BRIDGE-22.7] Frontend cold-start, incremental rebuild, and package-scale capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.8",
+      "title": "[BRIDGE-22.8] Preserve exact function source text across lazy, cached, and AOT artifacts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.23.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.23.9",
+      "title": "[BRIDGE-22.9] Build the exact content-addressed source-retention substrate",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24": {
+      "id": "bd-performance-conformance-bridge-tu32j.24",
+      "title": "[BRIDGE-23] Real distributed fleet containment and authenticated convergence",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.24.1",
+        "bd-performance-conformance-bridge-tu32j.24.2",
+        "bd-performance-conformance-bridge-tu32j.24.3",
+        "bd-performance-conformance-bridge-tu32j.24.4",
+        "bd-performance-conformance-bridge-tu32j.24.5",
+        "bd-performance-conformance-bridge-tu32j.24.6",
+        "bd-performance-conformance-bridge-tu32j.24.7"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.24.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.1",
+      "title": "[BRIDGE-23.1] Freeze fleet threat model, protocol, authority, and convergence contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.2",
+      "title": "[BRIDGE-23.2] Ship authenticated bounded fleet transport and authority cutover",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.3",
+      "title": "[BRIDGE-23.3] Implement real multi-process membership and containment dissemination",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.4",
+      "title": "[BRIDGE-23.4] Prove partition, Byzantine, replay, and convergence behavior on real topology",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.5",
+      "title": "[BRIDGE-23.5] Ship fleet operator lifecycle, persistence, upgrade, and recovery",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.6",
+      "title": "[BRIDGE-23.6] Execute real fleet topology, convergence, security, and operator capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.24.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.24.7",
+      "title": "[BRIDGE-23.7] Govern fleet-scoped claim promotion only after real-topology independent review",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25": {
+      "id": "bd-performance-conformance-bridge-tu32j.25",
+      "title": "[BRIDGE-24] Real hardware TEE attestation and receipt-bound execution cells",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.25.1",
+        "bd-performance-conformance-bridge-tu32j.25.10",
+        "bd-performance-conformance-bridge-tu32j.25.11",
+        "bd-performance-conformance-bridge-tu32j.25.12",
+        "bd-performance-conformance-bridge-tu32j.25.13",
+        "bd-performance-conformance-bridge-tu32j.25.14",
+        "bd-performance-conformance-bridge-tu32j.25.2",
+        "bd-performance-conformance-bridge-tu32j.25.3",
+        "bd-performance-conformance-bridge-tu32j.25.4",
+        "bd-performance-conformance-bridge-tu32j.25.5",
+        "bd-performance-conformance-bridge-tu32j.25.6",
+        "bd-performance-conformance-bridge-tu32j.25.7",
+        "bd-performance-conformance-bridge-tu32j.25.8",
+        "bd-performance-conformance-bridge-tu32j.25.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.25.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.1",
+      "title": "[BRIDGE-24.1] Freeze TEE threat model, provider matrix, measurement, and claim contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.10",
+      "title": "[BRIDGE-24.10] Implement the AMD SEV-SNP evidence and collateral verifier",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.11",
+      "title": "[BRIDGE-24.11] Implement the Intel TDX evidence and collateral verifier",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.12",
+      "title": "[BRIDGE-24.12] Prove common nonce, channel, epoch, and anti-relay policy",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.13",
+      "title": "[BRIDGE-24.13] Close measured-image, SBOM, configuration, and update provenance",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.14",
+      "title": "[BRIDGE-24.14] Govern TEE-scoped claim promotion only after real-hardware independent review",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.2",
+      "title": "[BRIDGE-24.2] Implement audited safe real-quote providers for AMD SEV-SNP and Intel TDX",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.3",
+      "title": "[BRIDGE-24.3] Verify endorsement chains, TCB status, revocation, freshness, and anti-relay properties",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.4",
+      "title": "[BRIDGE-24.4] Bind attested execution-cell measurements and signer keys into decision receipts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.5",
+      "title": "[BRIDGE-24.5] Ship TEE credential, collateral, rollout, outage, and recovery operations",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.6",
+      "title": "[BRIDGE-24.6] Execute real AMD and Intel TEE receipt capstone on hardware",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.7",
+      "title": "[BRIDGE-24.7] Own and audit the safe vendor-device capsule boundary",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.8",
+      "title": "[BRIDGE-24.8] Implement and prove the AMD SEV-SNP quote provider",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.25.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.25.9",
+      "title": "[BRIDGE-24.9] Implement and prove the Intel TDX quote provider",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26": {
+      "id": "bd-performance-conformance-bridge-tu32j.26",
+      "title": "[BRIDGE-25] Final GA evidence, release candidate, and explicitly authorized release",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.26.1",
+        "bd-performance-conformance-bridge-tu32j.26.2",
+        "bd-performance-conformance-bridge-tu32j.26.3",
+        "bd-performance-conformance-bridge-tu32j.26.4",
+        "bd-performance-conformance-bridge-tu32j.26.5",
+        "bd-performance-conformance-bridge-tu32j.26.6",
+        "bd-performance-conformance-bridge-tu32j.26.7",
+        "bd-performance-conformance-bridge-tu32j.26.8",
+        "bd-performance-conformance-bridge-tu32j.26.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.26.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.1",
+      "title": "[BRIDGE-25.1] Freeze the GA scope, approvals, signing identities, failure policy, and rollback contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.2",
+      "title": "[BRIDGE-25.2] Assemble the signed GA-exit evidence package from one immutable program snapshot",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.3",
+      "title": "[BRIDGE-25.3] Build, sign, notarize, and verify GA platform artifacts with source-build fallback",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.4",
+      "title": "[BRIDGE-25.4] Run install, upgrade, rollback, offline, no-JIT, low-resource, and recovery release E2E",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.5",
+      "title": "[BRIDGE-25.5] Form the immutable release candidate and operator go/no-go decision package",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.6",
+      "title": "[BRIDGE-25.6] Complete the implementation-side GA release-candidate capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.7",
+      "title": "[BRIDGE-25.7] Publish the exact authorized GA tag and perform post-release verification",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.8",
+      "title": "[BRIDGE-25.8] Freeze the complete shipped feature and user-compatibility surface",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.26.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.26.9",
+      "title": "[BRIDGE-25.9] Prove zero shipped-feature loss on exact release artifacts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.27": {
+      "id": "bd-performance-conformance-bridge-tu32j.27",
+      "title": "[BRIDGE-26] Preserve exposed Intl behavior and pursue a separate ECMA-402 conformance track",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.27.1",
+        "bd-performance-conformance-bridge-tu32j.27.2",
+        "bd-performance-conformance-bridge-tu32j.27.3",
+        "bd-performance-conformance-bridge-tu32j.27.4",
+        "bd-performance-conformance-bridge-tu32j.27.5",
+        "bd-performance-conformance-bridge-tu32j.27.6"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.27.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.27.1",
+      "title": "[BRIDGE-26.1] Freeze the exposed Intl and locale-sensitive compatibility surface",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.27.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.27.2",
+      "title": "[BRIDGE-26.2] Pin the ECMA-402 2020 profile, intl402 corpus, Unicode/CLDR/tzdb data, and licenses",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.27.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.27.3",
+      "title": "[BRIDGE-26.3] Preserve every exposed Intl and locale-sensitive behavior through production paths",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.27.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.27.4",
+      "title": "[BRIDGE-26.4] Implement ECMA-402 locale, option, matching, and data-provider abstract operations",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.27.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.27.5",
+      "title": "[BRIDGE-26.5] Complete every constructor, prototype, and locale-sensitive hook in the selected ECMA-402 2020 profile",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.27.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.27.6",
+      "title": "[BRIDGE-26.6] Execute and publish the separate full ECMA-402 2020 conformance capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.3",
+      "title": "[BRIDGE-02] Decomposed benchmark, profiling, statistics, and artifact platform",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.3.1",
+        "bd-performance-conformance-bridge-tu32j.3.10",
+        "bd-performance-conformance-bridge-tu32j.3.11",
+        "bd-performance-conformance-bridge-tu32j.3.2",
+        "bd-performance-conformance-bridge-tu32j.3.3",
+        "bd-performance-conformance-bridge-tu32j.3.4",
+        "bd-performance-conformance-bridge-tu32j.3.5",
+        "bd-performance-conformance-bridge-tu32j.3.6",
+        "bd-performance-conformance-bridge-tu32j.3.7",
+        "bd-performance-conformance-bridge-tu32j.3.8",
+        "bd-performance-conformance-bridge-tu32j.3.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.3.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.1",
+      "title": "[BRIDGE-02.1] Define raw benchmark and profiling workload-phase contracts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.10",
+      "title": "[BRIDGE-02.10] Establish thermal, frequency, energy, and hardware-lab measurement discipline",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.11",
+      "title": "[BRIDGE-02.11] Build the native hardware and fault-domain executor registry",
+      "status_at_gen": "open",
+      "children": [],
+      "markers": {
+        "authority": "physical_executor"
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.3.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.2",
+      "title": "[BRIDGE-02.2] Instrument representative production costs with bounded overhead",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.3",
+      "title": "[BRIDGE-02.3] Build Linux and macOS CPU/allocation/contention collectors",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.4",
+      "title": "[BRIDGE-02.4] Unify statistical runner and evidence bundle with legacy perf infra",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.5",
+      "title": "[BRIDGE-02.5] Rerun the 28-case denominator as cold, warm, and steady phases",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.6",
+      "title": "[BRIDGE-02.6] Produce production-profile hotspot and hypothesis ledgers",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.7",
+      "title": "[BRIDGE-02.7] MEASURE-0 truth-layer capstone across available hardware",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.8",
+      "title": "[BRIDGE-02.8] Adversarially validate benchmark timers, work, and fairness",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.3.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.3.9",
+      "title": "[BRIDGE-02.9] Derive architecture-specific roofline, Amdahl, and impossibility envelopes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.4",
+      "title": "[BRIDGE-03] Compact values, shapes, arrays, strings, heap, and GC substrate",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.4.1",
+        "bd-performance-conformance-bridge-tu32j.4.10",
+        "bd-performance-conformance-bridge-tu32j.4.11",
+        "bd-performance-conformance-bridge-tu32j.4.12",
+        "bd-performance-conformance-bridge-tu32j.4.13",
+        "bd-performance-conformance-bridge-tu32j.4.14",
+        "bd-performance-conformance-bridge-tu32j.4.15",
+        "bd-performance-conformance-bridge-tu32j.4.16",
+        "bd-performance-conformance-bridge-tu32j.4.17",
+        "bd-performance-conformance-bridge-tu32j.4.18",
+        "bd-performance-conformance-bridge-tu32j.4.19",
+        "bd-performance-conformance-bridge-tu32j.4.2",
+        "bd-performance-conformance-bridge-tu32j.4.20",
+        "bd-performance-conformance-bridge-tu32j.4.21",
+        "bd-performance-conformance-bridge-tu32j.4.3",
+        "bd-performance-conformance-bridge-tu32j.4.4",
+        "bd-performance-conformance-bridge-tu32j.4.5",
+        "bd-performance-conformance-bridge-tu32j.4.6",
+        "bd-performance-conformance-bridge-tu32j.4.7",
+        "bd-performance-conformance-bridge-tu32j.4.8",
+        "bd-performance-conformance-bridge-tu32j.4.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.4.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.1",
+      "title": "[BRIDGE-03.1] Capture runtime representation traces and non-negotiable semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.10",
+      "title": "[BRIDGE-03.10] Freeze representation versus builtin and agent-memory ownership",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.11",
+      "title": "[BRIDGE-03.11] Implement packed, holey, and dictionary array element storage",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.12",
+      "title": "[BRIDGE-03.12] Implement exact UTF-16 string storage, slices, atoms, and ropes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.13",
+      "title": "[BRIDGE-03.13] Implement ArrayBuffer, DataView, and TypedArray backing storage primitives",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.14",
+      "title": "[BRIDGE-03.14] Implement generation-checked heap handles, roots, and stale-handle rejection",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.15",
+      "title": "[BRIDGE-03.15] Implement typed arenas, allocation failure, and memory accounting",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.16",
+      "title": "[BRIDGE-03.16] Implement barrier, weak-reference, finalization, and deterministic-GC seams",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.17",
+      "title": "[BRIDGE-03.17] Implement the selected allocation and young-or-unified-space policy",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.18",
+      "title": "[BRIDGE-03.18] Implement selected mature-or-unified space, large objects and fragmentation control",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.19",
+      "title": "[BRIDGE-03.19] Implement weak reachability, ephemerons, and finalization for the selected collector",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.2",
+      "title": "[BRIDGE-03.2] Prototype 64-bit handle ValueWord versus 128-bit tagged fallback",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.20": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.20",
+      "title": "[BRIDGE-03.20] Implement deterministic GC scheduling, safepoint forcing, and cancellation recovery",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.21": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.21",
+      "title": "[BRIDGE-03.21] Ecosystem Scan Rule: adopt-or-justify MMTk, Immix, LXR, snmalloc and mimalloc before hand-rolling collector and allocator",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.3",
+      "title": "[BRIDGE-03.3] Implement hidden classes, slots, watchpoints, and exact property order",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.4",
+      "title": "[BRIDGE-03.4] Implement element kinds, fast strings, and typed backing stores",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.5",
+      "title": "[BRIDGE-03.5] Build generation-checked heap handles, arenas, and deterministic GC mode",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.6",
+      "title": "[BRIDGE-03.6] Representation, proxy, GC, and deopt differential capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.7",
+      "title": "[BRIDGE-03.7] Run collector pause, fragmentation, leak, and weak-lifecycle soak",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.8",
+      "title": "[BRIDGE-03.8] Bake off collector architectures on real lifetime and pause traces",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.4.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.4.9",
+      "title": "[BRIDGE-03.9] Integrate the selected collector architecture with deterministic replay mode",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.5",
+      "title": "[BRIDGE-04] Tier I generated quickened interpreter",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.5.1",
+        "bd-performance-conformance-bridge-tu32j.5.2",
+        "bd-performance-conformance-bridge-tu32j.5.3",
+        "bd-performance-conformance-bridge-tu32j.5.4",
+        "bd-performance-conformance-bridge-tu32j.5.5",
+        "bd-performance-conformance-bridge-tu32j.5.6",
+        "bd-performance-conformance-bridge-tu32j.5.7"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.5.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.1",
+      "title": "[BRIDGE-04.1] Define compact decoded bytecode and constant-pool ABI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.2",
+      "title": "[BRIDGE-04.2] Generate and execute Tier I handlers without per-op allocation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.3",
+      "title": "[BRIDGE-04.3] Implement flat frames, constant access, and preallocated feedback arrays",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.4",
+      "title": "[BRIDGE-04.4] Add type/shape quickening and monomorphic property/call ICs",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.5",
+      "title": "[BRIDGE-04.5] Select superinstructions, slow-path outlining, and handler layout from profiles",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.6",
+      "title": "[BRIDGE-04.6] Wire real Tier-I routing, profiling, and safe-mode selection",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.5.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.5.7",
+      "title": "[BRIDGE-04.7] Tier-I full differential, security, and performance capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.6",
+      "title": "[BRIDGE-05] Audited safe native-code capsule and VM ABI",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.6.1",
+        "bd-performance-conformance-bridge-tu32j.6.10",
+        "bd-performance-conformance-bridge-tu32j.6.11",
+        "bd-performance-conformance-bridge-tu32j.6.12",
+        "bd-performance-conformance-bridge-tu32j.6.13",
+        "bd-performance-conformance-bridge-tu32j.6.14",
+        "bd-performance-conformance-bridge-tu32j.6.15",
+        "bd-performance-conformance-bridge-tu32j.6.16",
+        "bd-performance-conformance-bridge-tu32j.6.17",
+        "bd-performance-conformance-bridge-tu32j.6.18",
+        "bd-performance-conformance-bridge-tu32j.6.19",
+        "bd-performance-conformance-bridge-tu32j.6.2",
+        "bd-performance-conformance-bridge-tu32j.6.20",
+        "bd-performance-conformance-bridge-tu32j.6.21",
+        "bd-performance-conformance-bridge-tu32j.6.22",
+        "bd-performance-conformance-bridge-tu32j.6.23",
+        "bd-performance-conformance-bridge-tu32j.6.24",
+        "bd-performance-conformance-bridge-tu32j.6.25",
+        "bd-performance-conformance-bridge-tu32j.6.26",
+        "bd-performance-conformance-bridge-tu32j.6.27",
+        "bd-performance-conformance-bridge-tu32j.6.28",
+        "bd-performance-conformance-bridge-tu32j.6.29",
+        "bd-performance-conformance-bridge-tu32j.6.3",
+        "bd-performance-conformance-bridge-tu32j.6.30",
+        "bd-performance-conformance-bridge-tu32j.6.31",
+        "bd-performance-conformance-bridge-tu32j.6.32",
+        "bd-performance-conformance-bridge-tu32j.6.33",
+        "bd-performance-conformance-bridge-tu32j.6.34",
+        "bd-performance-conformance-bridge-tu32j.6.35",
+        "bd-performance-conformance-bridge-tu32j.6.36",
+        "bd-performance-conformance-bridge-tu32j.6.37",
+        "bd-performance-conformance-bridge-tu32j.6.38",
+        "bd-performance-conformance-bridge-tu32j.6.4",
+        "bd-performance-conformance-bridge-tu32j.6.5",
+        "bd-performance-conformance-bridge-tu32j.6.6",
+        "bd-performance-conformance-bridge-tu32j.6.7",
+        "bd-performance-conformance-bridge-tu32j.6.8",
+        "bd-performance-conformance-bridge-tu32j.6.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.6.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.1",
+      "title": "[BRIDGE-05.1] Approve the native-code capsule ADR and repository split contract",
+      "status_at_gen": "in_progress",
+      "children": [],
+      "exception": {
+        "kind": "pre_harness_architecture",
+        "blocks_parent": false,
+        "note": "BRIDGE-05.6.1 is the sole architecture/approval pre-harness exception; explicitly not implementation."
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.6.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.10",
+      "title": "[BRIDGE-05.10] Freeze shared native ABI ownership across Tier B, Tier O, OSR, and deopt",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.11",
+      "title": "[BRIDGE-05.11] Implement precise stack maps and root-location validation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.12",
+      "title": "[BRIDGE-05.12] Implement safepoint polls, interrupts, budgets, and typed status ABI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.13",
+      "title": "[BRIDGE-05.13] Implement bytecode-native OSR entry and exit mappings",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.14",
+      "title": "[BRIDGE-05.14] Implement exact deopt materialization and exception transfer ABI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.15",
+      "title": "[BRIDGE-05.15] Implement and audit the production Windows x64 native-code capsule adapter",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.16",
+      "title": "[BRIDGE-05.16] Bootstrap the audited capsule sibling, safe API, and supply-chain boundary",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.17",
+      "title": "[BRIDGE-05.17] Freeze Native Region Protocol, RegionCodeObject, and receipt wire schemas",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.18",
+      "title": "[BRIDGE-05.18] Implement Linux x86-64 executable-memory and raw-call adapter",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.19",
+      "title": "[BRIDGE-05.19] Implement Linux AArch64 executable-memory and raw-call adapter",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.2",
+      "title": "[BRIDGE-05.2] Specify versioned VmContext, frame, helper, and native-call ABI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.20": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.20",
+      "title": "[BRIDGE-05.20] Implement whole-cell supervisor, authenticated IPC, and hard watchdog contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.21": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.21",
+      "title": "[BRIDGE-05.21] Enforce Linux execution-cell sandbox and descendant containment",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.22": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.22",
+      "title": "[BRIDGE-05.22] Enforce Apple execution-cell XPC sandbox and authority boundary",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.23": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.23",
+      "title": "[BRIDGE-05.23] Enforce Windows execution-cell token, AppContainer, and Job boundary",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.24": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.24",
+      "title": "[BRIDGE-05.24] Implement authority-free compiler-worker core and Linux reference deployment",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.25": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.25",
+      "title": "[BRIDGE-05.25] Define durable recovery classes, checkpoints, and commit-unknown semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.26": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.26",
+      "title": "[BRIDGE-05.26] Implement the out-of-cell effect/evidence broker and recovery executor",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.27": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.27",
+      "title": "[BRIDGE-05.27] Implement out-of-cell key custody and two-phase native authorization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.28": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.28",
+      "title": "[BRIDGE-05.28] Implement transactional activation, publication, retirement, and receipts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.29": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.29",
+      "title": "[BRIDGE-05.29] Ship native operator modes, quarantine, and upgrade negotiation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.3",
+      "title": "[BRIDGE-05.3] Implement platform-neutral RCO validation and executable-image lifecycle",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.30": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.30",
+      "title": "[BRIDGE-05.30] Optimize broker IPC with authenticated bounded fast paths",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.31": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.31",
+      "title": "[BRIDGE-05.31] Build pristine pre-native cell pools and one-shot tenant lifecycle",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.32": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.32",
+      "title": "[BRIDGE-05.32] Define and verify the high-assurance side-channel profile",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.33": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.33",
+      "title": "[BRIDGE-05.33] Research lower-overhead native containment without weakening claims",
+      "status_at_gen": "open",
+      "children": [],
+      "exception": {
+        "kind": "post_cert_research",
+        "blocks_parent": false,
+        "note": "Post-cert research: depends on tu32j.22.11, does not block production epic/pack closure, and is required instead by BRIDGE-20.7 / BRIDGE-21.26 / frontier closure."
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.6.34": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.34",
+      "title": "[BRIDGE-05.34] Prove pinned Cranelift object extraction and metadata completeness",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.35": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.35",
+      "title": "[BRIDGE-05.35] Enforce resource accounting on the first real fixed-RCO compiler path",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.36": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.36",
+      "title": "[BRIDGE-05.36] Preserve IFC and user-visible effect semantics across native cells",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.37": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.37",
+      "title": "[BRIDGE-05.37] Verify the native-code capsule beyond fuzzing: Miri, loom, sanitizers, and a model-checked RCO validator",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.38": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.38",
+      "title": "[FRESH-REALITY][CONTAINMENT] Make ExecutionCell own interpreter and host-effect execution",
+      "status_at_gen": "in_progress",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.4",
+      "title": "[BRIDGE-05.4] Integrate common native maps, transitions, and status ABI on fixed probes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.5",
+      "title": "[BRIDGE-05.5] Harden code cache, helper access, CFI, and hostile guest limits",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.6",
+      "title": "[BRIDGE-05.6] Capsule adversarial fuzz and fixed-RCO executable proof capstone",
+      "status_at_gen": "open",
+      "children": [],
+      "markers": {
+        "capstone": "fixed_rco"
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.6.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.7",
+      "title": "[BRIDGE-05.7] Certify cross-platform capsule and franken_node product integration",
+      "status_at_gen": "open",
+      "children": [],
+      "markers": {
+        "capstone": "cross_platform_product"
+      }
+    },
+    "bd-performance-conformance-bridge-tu32j.6.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.8",
+      "title": "[BRIDGE-05.8] Emit cross-platform native debug metadata and privacy-safe fault diagnostics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.6.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.6.9",
+      "title": "[BRIDGE-05.9] Define deterministic native compilation and residency accounting ABI",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.7",
+      "title": "[BRIDGE-06] Tier B baseline JIT backend bakeoff and implementation",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.7.1",
+        "bd-performance-conformance-bridge-tu32j.7.10",
+        "bd-performance-conformance-bridge-tu32j.7.11",
+        "bd-performance-conformance-bridge-tu32j.7.12",
+        "bd-performance-conformance-bridge-tu32j.7.13",
+        "bd-performance-conformance-bridge-tu32j.7.14",
+        "bd-performance-conformance-bridge-tu32j.7.15",
+        "bd-performance-conformance-bridge-tu32j.7.16",
+        "bd-performance-conformance-bridge-tu32j.7.17",
+        "bd-performance-conformance-bridge-tu32j.7.18",
+        "bd-performance-conformance-bridge-tu32j.7.19",
+        "bd-performance-conformance-bridge-tu32j.7.2",
+        "bd-performance-conformance-bridge-tu32j.7.3",
+        "bd-performance-conformance-bridge-tu32j.7.4",
+        "bd-performance-conformance-bridge-tu32j.7.5",
+        "bd-performance-conformance-bridge-tu32j.7.6",
+        "bd-performance-conformance-bridge-tu32j.7.7",
+        "bd-performance-conformance-bridge-tu32j.7.8",
+        "bd-performance-conformance-bridge-tu32j.7.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.7.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.1",
+      "title": "[BRIDGE-06.1] Freeze the S1 opcode island and backend bakeoff protocol",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.10",
+      "title": "[BRIDGE-06.10] Land Tier-B arithmetic, conversion, comparison, and control opcode families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.11",
+      "title": "[BRIDGE-06.11] Land Tier-B object, property, element, and allocation opcode families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.12",
+      "title": "[BRIDGE-06.12] Land Tier-B call, construct, closure, and environment opcode families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.13",
+      "title": "[BRIDGE-06.13] Land Tier-B exception, iterator, generator, and async opcode families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.14",
+      "title": "[BRIDGE-06.14] Land Tier-B hostcall, security, resource, evidence, and replay families",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.15",
+      "title": "[BRIDGE-06.15] Integrate Tier-B OSR entry, exit, and tier-transition state",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.16",
+      "title": "[BRIDGE-06.16] Integrate Tier-B GC roots, barriers, and safepoint handshakes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.17",
+      "title": "[BRIDGE-06.17] Integrate Tier-B exceptions, interrupts, budgets, and cancellation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.18",
+      "title": "[BRIDGE-06.18] Integrate Tier-B deopt, policy invalidation, and exact materialization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.19",
+      "title": "[BRIDGE-06.19] Integrate Tier-B code lifecycle, eviction, rollback, and break-even routing",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.2",
+      "title": "[BRIDGE-06.2] Prototype Deegen-style copy-and-patch stencils on x86-64 and AArch64",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.3",
+      "title": "[BRIDGE-06.3] Prototype direct Cranelift lowering for the same opcode island",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.4",
+      "title": "[BRIDGE-06.4] Prototype whole-interpreter PE and Druid-style meta-compilation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.5",
+      "title": "[BRIDGE-06.5] Select Tier-B backend with an evidence-backed ADR",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.6",
+      "title": "[BRIDGE-06.6] Integrate Tier-B opcode families through the selected backend",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.7",
+      "title": "[BRIDGE-06.7] Implement polymorphic property and call IC stubs",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.8",
+      "title": "[BRIDGE-06.8] Integrate Tier-B OSR, GC, status, deopt, and code-lifecycle components",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.7.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.7.9",
+      "title": "[BRIDGE-06.9] Tier-B production, break-even, and equivalence capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.8",
+      "title": "[BRIDGE-07] Tier O optimizing region JIT and exact deoptimization",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.8.1",
+        "bd-performance-conformance-bridge-tu32j.8.10",
+        "bd-performance-conformance-bridge-tu32j.8.11",
+        "bd-performance-conformance-bridge-tu32j.8.12",
+        "bd-performance-conformance-bridge-tu32j.8.13",
+        "bd-performance-conformance-bridge-tu32j.8.14",
+        "bd-performance-conformance-bridge-tu32j.8.15",
+        "bd-performance-conformance-bridge-tu32j.8.16",
+        "bd-performance-conformance-bridge-tu32j.8.17",
+        "bd-performance-conformance-bridge-tu32j.8.18",
+        "bd-performance-conformance-bridge-tu32j.8.19",
+        "bd-performance-conformance-bridge-tu32j.8.2",
+        "bd-performance-conformance-bridge-tu32j.8.20",
+        "bd-performance-conformance-bridge-tu32j.8.21",
+        "bd-performance-conformance-bridge-tu32j.8.22",
+        "bd-performance-conformance-bridge-tu32j.8.23",
+        "bd-performance-conformance-bridge-tu32j.8.24",
+        "bd-performance-conformance-bridge-tu32j.8.25",
+        "bd-performance-conformance-bridge-tu32j.8.26",
+        "bd-performance-conformance-bridge-tu32j.8.3",
+        "bd-performance-conformance-bridge-tu32j.8.4",
+        "bd-performance-conformance-bridge-tu32j.8.5",
+        "bd-performance-conformance-bridge-tu32j.8.6",
+        "bd-performance-conformance-bridge-tu32j.8.7",
+        "bd-performance-conformance-bridge-tu32j.8.8",
+        "bd-performance-conformance-bridge-tu32j.8.9"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.8.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.1",
+      "title": "[BRIDGE-07.1] Build deterministic hot-region selection and side-exit formation",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.10": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.10",
+      "title": "[BRIDGE-07.10] Validate tier policy with deterministic simulation, OPE, tail risk, and controller interference",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.11": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.11",
+      "title": "[BRIDGE-07.11] Implement verified SSA canonicalization and constant folding",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.12": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.12",
+      "title": "[BRIDGE-07.12] Implement verified GVN, CSE, copy propagation, and dead-code elimination",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.13": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.13",
+      "title": "[BRIDGE-07.13] Implement verified alias, load-store, and effect refinements",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.14": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.14",
+      "title": "[BRIDGE-07.14] Implement optimization-pass verification, receipts, and deterministic replay",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.15": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.15",
+      "title": "[BRIDGE-07.15] Implement guarded basic-block versioning and type specialization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.16": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.16",
+      "title": "[BRIDGE-07.16] Implement guarded inlining with exact call and deopt semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.17": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.17",
+      "title": "[BRIDGE-07.17] Implement polymorphic shape, call, and element specialization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.18": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.18",
+      "title": "[BRIDGE-07.18] Implement loop canonicalization, LICM, induction, and bounds elimination",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.19": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.19",
+      "title": "[BRIDGE-07.19] Implement escape analysis, scalar replacement, and allocation sinking",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.2",
+      "title": "[BRIDGE-07.2] Define optimizing SSA IR with effect and deopt semantics",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.20": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.20",
+      "title": "[BRIDGE-07.20] Implement guarded vectorization and target-specific loop lowering",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.21": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.21",
+      "title": "[BRIDGE-07.21] Select the Tier-O backend with an evidence-backed ADR",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.22": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.22",
+      "title": "[BRIDGE-07.22] Legalize optimizing SSA into the selected backend LIR contract",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.23": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.23",
+      "title": "[BRIDGE-07.23] Select constrained target instructions through the chosen backend",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.24": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.24",
+      "title": "[BRIDGE-07.24] Allocate registers, spills, frames, roots and deopt locations through the chosen backend",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.25": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.25",
+      "title": "[BRIDGE-07.25] Expand, schedule, relax and emit validated Tier-O region code objects",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.26": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.26",
+      "title": "[BRIDGE-07.26] Enforce confidentiality and noninterference for specialization facts and native artifacts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.3",
+      "title": "[BRIDGE-07.3] Implement foundational verified optimization passes",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.4",
+      "title": "[BRIDGE-07.4] Implement guarded BBV, inlining, and polymorphic specialization",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.5",
+      "title": "[BRIDGE-07.5] Implement loop, bounds, escape, and scalar-replacement waves",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.6",
+      "title": "[BRIDGE-07.6] Implement exact deoptimization, invalidation, and OSR for Tier O",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.7": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.7",
+      "title": "[BRIDGE-07.7] Add compilation replay and layered JIT performance-bug detection",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.8": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.8",
+      "title": "[BRIDGE-07.8] Tier-O equivalence, resource, and raw-frontier capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.8.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.8.9",
+      "title": "[BRIDGE-07.9] Implement calibrated compile and tier-promotion controller",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.9": {
+      "id": "bd-performance-conformance-bridge-tu32j.9",
+      "title": "[BRIDGE-08] Tier A content-addressed AOT, PGO, and code cache",
+      "status_at_gen": "open",
+      "children": [
+        "bd-performance-conformance-bridge-tu32j.9.1",
+        "bd-performance-conformance-bridge-tu32j.9.2",
+        "bd-performance-conformance-bridge-tu32j.9.3",
+        "bd-performance-conformance-bridge-tu32j.9.4",
+        "bd-performance-conformance-bridge-tu32j.9.5",
+        "bd-performance-conformance-bridge-tu32j.9.6"
+      ]
+    },
+    "bd-performance-conformance-bridge-tu32j.9.1": {
+      "id": "bd-performance-conformance-bridge-tu32j.9.1",
+      "title": "[BRIDGE-08.1] Emit real content-addressed native AOT package images",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.9.2": {
+      "id": "bd-performance-conformance-bridge-tu32j.9.2",
+      "title": "[BRIDGE-08.2] Bind canonical AOT packages, activation and signing in separate receipts",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.9.3": {
+      "id": "bd-performance-conformance-bridge-tu32j.9.3",
+      "title": "[BRIDGE-08.3] Crosswalk and evaluate trusted build-time Cargo PGO without duplicating bd-o4cbn",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.9.4": {
+      "id": "bd-performance-conformance-bridge-tu32j.9.4",
+      "title": "[BRIDGE-08.4] Bake off S3-FIFO, LRU, and TinyLFU code-cache policies",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.9.5": {
+      "id": "bd-performance-conformance-bridge-tu32j.9.5",
+      "title": "[BRIDGE-08.5] Tier-A cold-start, cache integrity, and rollback capstone",
+      "status_at_gen": "open",
+      "children": []
+    },
+    "bd-performance-conformance-bridge-tu32j.9.6": {
+      "id": "bd-performance-conformance-bridge-tu32j.9.6",
+      "title": "[BRIDGE-08.6] Secure runtime JIT/AOT profile collection, aging, poisoning resistance, and holdout evaluation",
+      "status_at_gen": "open",
+      "children": []
+    }
+  },
+  "stats": {
+    "node_count": 466,
+    "reachable_node_count": 466,
+    "decomposed_parent_count": 32,
+    "leaf_count": 434,
+    "exception_count": 4
+  },
+  "content_hash": "sha256:8a294e5fb43bbc18a7356e4e0920dad7b25ce6a2f71ceb2defedee7695ffe421"
+}

@@ -1,0 +1,30 @@
+{
+  "allow_bypass": false,
+  "close_policy": {},
+  "workflow": {
+    "strict": true,
+    "statuses": [],
+    "gates": {
+      "open -> closed": {
+        "require_if": [
+          {"label": "bridge-manifest", "gate": "bridge_closeout"}
+        ]
+      },
+      "in_progress -> closed": {
+        "require_if": [
+          {"label": "bridge-manifest", "gate": "bridge_closeout"}
+        ]
+      },
+      "blocked -> closed": {
+        "require_if": [
+          {"label": "bridge-manifest", "gate": "bridge_closeout"}
+        ]
+      },
+      "deferred -> closed": {
+        "require_if": [
+          {"label": "bridge-manifest", "gate": "bridge_closeout"}
+        ]
+      }
+    }
+  }
+}

@@ -24485,6 +24485,7 @@ fn buffer_object_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "toString" => Some("builtin:BufferObjectToString"),
         "readUInt32LE" => Some("builtin:BufferObjectReadUInt32LE"),
+        "equals" => Some("builtin:BufferObjectEquals"),
         _ => None,
     }
 }
@@ -26715,7 +26716,10 @@ fn simulate_ir2_flow_labels(
                         FlowValueShape::Callable
                     }
                     (FlowValueShape::BufferObject, Ir1PropertyKey::Static(key))
-                        if matches!(key.as_str(), Some("toString" | "readUInt32LE")) =>
+                        if matches!(
+                            key.as_str(),
+                            Some("toString" | "readUInt32LE" | "equals")
+                        ) =>
                     {
                         FlowValueShape::Callable
                     }
@@ -27283,6 +27287,24 @@ fn simulate_ir2_flow_labels(
                 }
                 if hostcall_is_operand_derived && capability == "builtin:CryptoTimingSafeEqual" {
                     result_shape = FlowValueShape::Primitive;
+                }
+                // bd-dign3 follow-up: the zlib sync family returns
+                // engine-owned Buffers; the authenticated BufferObject shape
+                // routes their toString/equals reads through the audited
+                // finite-method lane instead of unknown-callee fail-high.
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:ZlibGzipSync"
+                            | "builtin:ZlibGunzipSync"
+                            | "builtin:ZlibDeflateSync"
+                            | "builtin:ZlibInflateSync"
+                            | "builtin:ZlibDeflateRawSync"
+                            | "builtin:ZlibInflateRawSync"
+                            | "builtin:ZlibUnzipSync"
+                    )
+                {
+                    result_shape = FlowValueShape::BufferObject;
                 }
                 if matches!(
                     capability.as_str(),

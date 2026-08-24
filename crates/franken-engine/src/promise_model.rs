@@ -965,6 +965,60 @@ impl PromiseStore {
         Ok(result_promise)
     }
 
+    /// Projected store-byte growth of [`Self::register_native_adoption`] on a
+    /// still-pending `source`: two reaction slots plus their labels. Nothing is
+    /// enqueued at registration time — the settlement paths preflight and
+    /// enqueue the forwarding jobs when `source` actually settles.
+    pub fn projected_native_adoption_memory_bytes(
+        &self,
+        source: PromiseHandle,
+        label: &Label,
+    ) -> Result<u64, PromiseError> {
+        let record = self.get(source)?;
+        if record.state.is_settled() {
+            return Err(PromiseError::AlreadySettled { handle: source });
+        }
+        let previous_reactions_bytes =
+            estimate_vector_slot_bytes::<PromiseReaction>(record.reactions.len());
+        let next_reactions_bytes =
+            estimate_vector_slot_bytes::<PromiseReaction>(record.reactions.len() + 2);
+        Ok(self.estimated_memory_bytes().saturating_add(
+            next_reactions_bytes
+                .saturating_sub(previous_reactions_bytes)
+                .saturating_add(2u64.saturating_mul(estimate_label_memory_bytes(label))),
+        ))
+    }
+
+    /// Register identity-forwarding reactions so that `target` adopts the
+    /// eventual settlement of a still-pending native `source` promise
+    /// (ES2020 25.6.3.2 promise resolution specialized to internal promises:
+    /// the fulfillment value and the rejection reason each propagate through
+    /// unchanged via the existing handler-less identity lanes).
+    ///
+    /// The caller must copy state directly instead when `source` has already
+    /// settled; this method fails closed on settled sources so a stale
+    /// registration can never silently drop an adoption.
+    pub fn register_native_adoption(
+        &mut self,
+        source: PromiseHandle,
+        target: PromiseHandle,
+        label: Label,
+    ) -> Result<(), PromiseError> {
+        if self.get(source)?.state.is_settled() {
+            return Err(PromiseError::AlreadySettled { handle: source });
+        }
+        let record = self.get_mut(source)?;
+        for kind in [ReactionKind::Fulfill, ReactionKind::Reject] {
+            record.reactions.push(PromiseReaction {
+                kind,
+                handler: None,
+                result_promise: target,
+                label: label.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// Register the internal identity/thrower reactions used by `await`.
     ///
     /// Await has no user-visible closure handle, but it still observes and

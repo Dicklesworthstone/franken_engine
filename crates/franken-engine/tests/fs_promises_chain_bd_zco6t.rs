@@ -162,3 +162,32 @@ fn fixture_0030_chain_interleaves_with_plain_microtasks_bd_zco6t() {
         "the chained write must have really landed"
     );
 }
+
+
+/// An async function returning a native fs.promises promise must adopt its
+/// eventual value (ES2020 async-function-completion semantics).
+#[test]
+fn async_function_returning_native_promise_adopts_value_bd_zco6t() {
+    let (root, result) = run_fixture(
+        "fe_zco6t_async_adopt",
+        "const fs = require('fs');\n\
+         async function main() {\n\
+           await fs.promises.mkdir('ad');\n\
+           await fs.promises.writeFile('ad/x.txt', 'v');\n\
+           return fs.promises.readdir('ad');\n\
+         }\n\
+         main().then((names) => console.log(names.join(',')));\n",
+    );
+
+    assert_eq!(
+        console_messages(&result),
+        vec!["x.txt"],
+        "the async function's returned readdir promise must be adopted so its \
+         resolved names array reaches the chain"
+    );
+    assert_eq!(
+        std::fs::read(root.join("ad/x.txt")).expect("async-chained write on disk"),
+        b"v",
+        "the awaited write must have really landed"
+    );
+}

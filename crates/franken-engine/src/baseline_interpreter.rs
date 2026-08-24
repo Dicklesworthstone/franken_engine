@@ -36785,8 +36785,18 @@ impl InterpreterCore {
 
         match resolution {
             Ok(value) => {
-                let js_value = Self::value_to_js_value(&value);
-                self.fulfill_promise(promise_handle, js_value, label)?;
+                if let Value::Promise(source) = value {
+                    // `return <promise>` from an async function must adopt the
+                    // promise's state (ES2020 25.7.4), not fulfill with it.
+                    self.resolve_promise_to_native(
+                        promise_handle,
+                        crate::promise_model::PromiseHandle(source),
+                        label,
+                    )?;
+                } else {
+                    let js_value = Self::value_to_js_value(&value);
+                    self.fulfill_promise(promise_handle, js_value, label)?;
+                }
             }
             Err(error_value) => {
                 let js_reason = Self::value_to_js_value(&error_value);
@@ -50290,7 +50300,7 @@ impl InterpreterCore {
         handler: crate::closure_model::ClosureHandle,
         argument: crate::object_model::JsValue,
         task_label: Label,
-    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+    ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Promise reaction handler dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -50339,7 +50349,10 @@ impl InterpreterCore {
             }
         }
         let (result, _) = result?;
-        Ok(Self::value_to_js_value(&result))
+        // Return the interpreter Value unchanged: the reaction drain routes a
+        // native-promise completion into state adoption instead of letting the
+        // JsValue conversion flatten it through the Display catch-all.
+        Ok(result)
     }
 
     /// Whether a promise handle has left the pending state.
@@ -50348,6 +50361,70 @@ impl InterpreterCore {
             .get(handle)
             .map(|record| record.state.is_settled())
             .unwrap_or(false)
+    }
+
+    /// Resolve `target` to a native promise `source` (ES2020 25.6.3.2 promise
+    /// resolution specialized to internal promises): a settled source copies
+    /// its state directly, a pending source registers identity-forwarding
+    /// reactions via [`crate::promise_model::PromiseStore::register_native_adoption`],
+    /// and self-resolution rejects with a TypeError per spec.
+    fn resolve_promise_to_native(
+        &mut self,
+        target: crate::promise_model::PromiseHandle,
+        source: crate::promise_model::PromiseHandle,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        if target == source {
+            let reason = crate::object_model::JsValue::Str(
+                "Chaining cycle detected for promise".to_string(),
+            );
+            return self.reject_promise(target, reason, label);
+        }
+        let source_state = self
+            .promise_store
+            .get(source)
+            .map(|record| record.state.clone())
+            .map_err(|_| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: "invalid promise resolution source".to_string(),
+            })?;
+        match source_state {
+            crate::promise_model::PromiseState::Fulfilled(value) => {
+                self.fulfill_promise(target, value, label)
+            }
+            crate::promise_model::PromiseState::Rejected(reason) => {
+                self.reject_promise(target, reason, label)
+            }
+            crate::promise_model::PromiseState::Pending => {
+                let previous_promise_bytes = self.promise_runtime_memory_bytes();
+                let next_store_bytes = self
+                    .promise_store
+                    .projected_native_adoption_memory_bytes(source, &label)
+                    .map_err(|error| InterpreterError::TypeError {
+                        expected: "pending native promise adoption source".to_string(),
+                        got: error.to_string(),
+                    })?;
+                // Registration enqueues nothing; the queue term is carried
+                // through unchanged so the composition mirrors
+                // [`Self::register_promise_then`].
+                let next_queue_bytes = self.event_loop.microtasks.estimated_memory_bytes();
+                let next_promise_bytes = next_store_bytes
+                    .saturating_add(
+                        self.event_loop
+                            .estimated_memory_bytes()
+                            .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                            .saturating_add(next_queue_bytes),
+                    )
+                    .saturating_add(self.promise_combinators_memory_bytes())
+                    .saturating_add(self.promise_combinator_watchers_memory_bytes())
+                    .saturating_add(self.promise_in_flight_task_bytes);
+                self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+                self.promise_store
+                    .register_native_adoption(source, target, label)
+                    .expect("preflighted native promise adoption must remain valid");
+                Ok(())
+            }
+        }
     }
 
     /// ES2020 25.6.1.3.2 Promise Resolve Function: resolve `promise` with
@@ -50366,6 +50443,15 @@ impl InterpreterCore {
         value: Value,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        if let Value::Promise(source_handle) = value {
+            // Resolving with a native promise adopts its state (ES2020
+            // 25.6.3.2); it must never be flattened into a fulfillment value.
+            return self.resolve_promise_to_native(
+                promise,
+                crate::promise_model::PromiseHandle(source_handle),
+                label,
+            );
+        }
         if matches!(value, Value::Object(_)) {
             let then = self.simple_callback_get_property(value.clone(), &Value::str("then"))?;
             if let Value::Closure(then_id) = then {
@@ -50585,12 +50671,26 @@ impl InterpreterCore {
                                 argument.clone(),
                                 task_label.clone(),
                             ) {
-                                Ok(result) => {
-                                    self.fulfill_promise(
-                                        *result_promise,
-                                        result,
-                                        task_label.clone(),
-                                    )?;
+                                Ok(result) => match result {
+                                    Value::Promise(source) => {
+                                        // A handler returned a native promise:
+                                        // the chain result adopts its state
+                                        // (ES2020 PromiseReactionJob + 25.6.3.2)
+                                        // rather than fulfilling with the
+                                        // promise object itself.
+                                        self.resolve_promise_to_native(
+                                            *result_promise,
+                                            crate::promise_model::PromiseHandle(source),
+                                            task_label.clone(),
+                                        )?;
+                                    }
+                                    other => {
+                                        self.fulfill_promise(
+                                            *result_promise,
+                                            Self::value_to_js_value(&other),
+                                            task_label.clone(),
+                                        )?;
+                                    }
                                 }
                                 Err(err) => {
                                     let reason = Self::promise_rejection_from_error(&err);

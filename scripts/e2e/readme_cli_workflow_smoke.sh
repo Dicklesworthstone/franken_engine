@@ -8,6 +8,7 @@ source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 workflow_id="readme-cli-workflow-smoke-v1"
 manifest_schema="franken-engine.readme-cli-workflow-smoke.v1"
 frankenctl_schema="franken-engine.frankenctl.v1"
+frankenctl_run_schema="franken-engine.frankenctl.run.v2"
 compile_artifact_schema="franken-engine.frankenctl.compile-artifact.v1"
 fixture_schema="franken-engine.readme-cli-workflow.fixture.v1"
 version_stdout_schema="franken-engine.frankenctl.version.stdout.v1"
@@ -231,7 +232,7 @@ validate_step_artifact() {
       jq -e --arg schema "$frankenctl_schema" '.schema_version == $schema and .passed == true' "$stdout_path" >/dev/null
       ;;
     run)
-      jq -e --arg schema "$frankenctl_schema" '.schema_version == $schema and .extension_id == "demo-ext"' "$artifact_path" >/dev/null
+      jq -e --arg schema "$frankenctl_run_schema" '.schema_version == $schema and .extension_id == "demo-ext"' "$artifact_path" >/dev/null
       ;;
     replay_run)
       jq -e --arg schema "$frankenctl_schema" '.schema_version == $schema and .complete == true' "$artifact_path" >/dev/null
@@ -435,7 +436,7 @@ assert_readme_contains "printf 'const answer = 40 + 2;\\n' > ./demo.js"
 assert_readme_contains "./target/release/frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script"
 assert_readme_contains "./target/release/frankenctl verify compile-artifact --input ./artifacts/demo.compile.json"
 assert_readme_contains "./target/release/frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json"
-assert_readme_contains "./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json"
+assert_readme_contains "./target/release/frankenctl replay run --trace ./artifacts/demo.run.json --mode strict --out ./artifacts/replay_report.json"
 
 frankenctl_bin="$(resolve_frankenctl_bin)"
 
@@ -481,23 +482,23 @@ run_step 4 verify_compile_artifact \
 run_step 5 run \
   "./target/release/frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json" \
   "artifacts/demo.run.json" \
-  "$frankenctl_schema" \
+  "$frankenctl_run_schema" \
   0 \
   "$frankenctl_bin" run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 
-run_step 6 prepare_replay_trace \
-  "./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
+run_step 6 stage_replay_fixture \
+  "cp ${root_dir}/examples/05_replay_demo/sample_trace.json ./examples/05_replay_demo/sample_trace.json" \
   "examples/05_replay_demo/sample_trace.json" \
   "$fixture_schema" \
   0 \
   bash -c "mkdir -p ./examples/05_replay_demo && cp \"${root_dir}/examples/05_replay_demo/sample_trace.json\" ./examples/05_replay_demo/sample_trace.json"
 
 run_step 7 replay_run \
-  "./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
+  "./target/release/frankenctl replay run --trace ./artifacts/demo.run.json --mode strict --out ./artifacts/replay_report.json" \
   "artifacts/replay_report.json" \
   "$frankenctl_schema" \
   0 \
-  "$frankenctl_bin" replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
+  "$frankenctl_bin" replay run --trace ./artifacts/demo.run.json --mode strict --out ./artifacts/replay_report.json
 
 write_manifest
 frankenctl_bin_rel="$(proof_contract_repo_relative_path "$frankenctl_bin")"

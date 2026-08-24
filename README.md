@@ -242,14 +242,14 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 ### Code Surface At A Glance
 
-| Surface | Count / size (tracked HEAD, verified 2026-08-16) |
+| Surface | Count / size (tracked HEAD, verified 2026-08-24) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 616 top-level `.rs` files / 613 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.0 MB / 131,581 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
+| Source modules in `crates/franken-engine/src/` | 616 top-level `.rs` files / 619 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.3 MB / 132,181 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
-| Integration tests in `crates/franken-engine/tests/` | 1,666 top-level files (41 are RGC gate tests) |
-| Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
+| Integration tests in `crates/franken-engine/tests/` | 1,654 top-level files (41 are RGC gate tests) |
+| Operator gate scripts in `scripts/run_*.sh` | 292 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
-| Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
+| Architecture / contract docs in `docs/` | 725 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
 | Tracked beads in `.beads/issues.jsonl` | 4,521 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
@@ -263,19 +263,18 @@ franken_engine/
 ├── AGENTS.md                        # Hard rules for AI coding agents
 ├── CHANGELOG.md                     # Synthesized 4-month history
 ├── crates/
-│   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 615 modules
+│   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 616 modules
 │   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 61 internal operator binaries)
-│   │   ├── src/baseline_interpreter.rs   # Core VM (121,148 LoC)
+│   │   ├── src/baseline_interpreter.rs   # Core VM (132,181 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
-│   │   └── tests/                   # 1,653 integration tests (41 RGC gate tests)
-│   ├── franken-extension-host/      # Ed25519-signed extension manifests + capability model
+│   │   └── tests/                   # 1,654 integration tests (41 RGC gate tests)
 │   ├── franken-engine-test-support/ # Mock control-plane adapters + injection helpers
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)
 │   └── franken-core/                # Extracted runtime; included in workspace and standalone compileable
-├── docs/                            # Charters, contracts, audits, gate specs (727 top-level files + subdirs including docs/planning/)
+├── docs/                            # Charters, contracts, audits, gate specs (725 top-level files + subdirs including docs/planning/)
 ├── examples/                        # 13 impossible-by-default capabilities across 24 numbered demo dirs (01..26, gaps at 08/10) + live runtime examples
-├── scripts/                         # 293 run_*.sh gate runners + e2e/*_replay.sh wrappers
+├── scripts/                         # 292 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
 ├── fuzz/                            # cargo-fuzz harnesses (parser, ts_module_resolution, shadow_panel)
 ├── benchmarks/                      # Benchmark inputs and goldens
@@ -954,7 +953,7 @@ The clippy gate at `cargo clippy --all-targets -- -D warnings` is configured to 
 
 ## Internal Operator Binaries
 
-In addition to the six release binaries listed in *Build From Source*, the `crates/franken-engine/src/bin/` directory ships 57 *internal* operator binaries that are built on demand for specific gates and audits. They are not in the release-binary list because they have narrower scope and stricter audience.
+In addition to the six release binaries listed above, the `crates/franken-engine/src/bin/` directory ships 61 *internal* operator binaries that are built on demand for specific gates and audits. They are not in the release-binary list because they have narrower scope and stricter audience.
 
 A partial inventory grouped by purpose:
 
@@ -1491,9 +1490,9 @@ printf 'const answer = 40 + 2;\n' > ./demo.js
   --extension-id demo-ext \
   --out          ./artifacts/demo.run.json
 
-# 7) Replay a captured nondeterminism trace
+# 7) Re-execute the run report under strict replay
 ./target/release/frankenctl replay run \
-  --trace ./examples/05_replay_demo/sample_trace.json \
+  --trace ./artifacts/demo.run.json \
   --mode  strict \
   --out   ./artifacts/replay_report.json
 
@@ -1640,7 +1639,7 @@ The reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`)
 
 ## Gate Scripts and Evidence Workflow
 
-Every claim that backs a release ships behind an explicit gate. The 293 `scripts/run_*.sh` runners are grouped into families; 106 of them have an exact `scripts/e2e/<gate>_replay.sh` partner for preserved-bundle replay, and the remaining replay surface (186 wrappers total) covers composite-gate replays and sub-gate vectors.
+Every claim that backs a release ships behind an explicit gate. The 292 `scripts/run_*.sh` runners are grouped into families; 106 of them have an exact `scripts/e2e/<gate>_replay.sh` partner for preserved-bundle replay, and the remaining replay surface (186 wrappers total) covers composite-gate replays and sub-gate vectors.
 
 | Family | Count | What it covers |
 |---|---|---|
@@ -1734,7 +1733,7 @@ The project ships a layered test stack; each layer answers a different question.
 | Layer | Where it lives | What it proves |
 |---|---|---|
 | **Lib unit tests** | `crates/franken-engine/src/**/*.rs` `#[cfg(test)]` modules | Per-module invariants where present. Test density varies materially by module; the running journal in `memory/enrichment_sessions.md` records 35,000+ landed by 2026-03-19. |
-| **Integration tests** | `crates/franken-engine/tests/*.rs` (1,641 Rust files; 1,653 top-level files total) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
+| **Integration tests** | `crates/franken-engine/tests/*.rs` (1,643 Rust files; 1,654 top-level files total) | Cross-module end-to-end paths. The `*_enrichment_integration.rs` files are deeper-coverage successors to the original `*_integration.rs` suites. |
 | **Control-plane integration tests** | `crates/franken-engine-control-plane-integration-tests/` | Tests that need `frankenengine-test-support` mock adapters, held in a sibling crate so the engine lib-test target doesn't drag them in. |
 | **RGC gate tests** | `crates/franken-engine/tests/rgc_*.rs` (41 files) | Each major RGC gate has a matching `cargo test` target plus a `scripts/run_*.sh` operator runner. |
 | **Test262 conformance** | `frankenctl test test262`, `crates/franken-engine/tests/test262_*` | Real Test262 conformance (since April 2026, when `21b485a0` replaced the hardcoded fake test data with real JS execution). |
@@ -2251,7 +2250,7 @@ Project-specific jargon, defined once.
 | **Allowed state** | The claim-to-proof matrix's permitted wording state for a specific README/PLAN line range (`observed`, `target`, or `hypothesis`). Stronger wording is rejected by the gate. |
 | **Artifact bundle** | The timestamped directory a gate emits under `artifacts/<gate>/<timestamp>/`. The replay-shaped, self-describing record of what a gate run produced. |
 | **Authenticity hash** | A keyed-HMAC hash (`AuthenticityHash::compute_keyed`) used where content binding alone is insufficient (for example, binding a decision receipt to the originating runtime's persistent identity). |
-| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.0 MB, 121,148 LoC). The runtime's load-bearing VM. |
+| **Baseline interpreter** | The native Rust IR3 dispatch loop in `baseline_interpreter.rs` (~5.3 MB, 132,181 LoC). The runtime's load-bearing VM. |
 | **Bead** | A unit of work in `br` (the Rust beads tracker). Identified as `bd-<base36>` with `.N` children for sub-tasks. Stored in `.beads/issues.jsonl`. |
 | **`br`** | `beads_rust` CLI; the in-tree task tracker. Closes via `br close <id> --reason "..."`. |
 | **Charter** | `docs/RUNTIME_CHARTER.md`, the non-negotiable governance contract for this repo. |

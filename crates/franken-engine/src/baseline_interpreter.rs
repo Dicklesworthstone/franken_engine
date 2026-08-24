@@ -59499,6 +59499,11 @@ impl InterpreterCore {
             ZlibFormat::Raw => self.zlib_inflate_stream(input, dictionary, false),
             ZlibFormat::Auto if input.starts_with(&[0x1f, 0x8b]) => self.zlib_gunzip_bytes(input),
             ZlibFormat::Auto => self.zlib_inflate_stream(input, dictionary, true),
+            // Brotli never reaches the shared flate paths: dispatch_zlib_hostcall
+            // routes it through brotli_decompress_bytes before this helper.
+            ZlibFormat::Brotli => Err(ZlibOperationFailure::data(
+                "brotli inflate must use the dedicated brotli codec",
+            )),
         }
     }
 
@@ -59887,8 +59892,10 @@ impl InterpreterCore {
     ) -> Result<Vec<u8>, ZlibOperationFailure> {
         let mut params =
             brotli::enc::backward_references::BrotliEncoderParams::default();
-        params.quality = quality;
-        params.lgwin = lgwin;
+        // brotli 8.x stores both knobs as i32; the parser above already
+        // range-checked quality into 0..=11 and lgwin into 10..=24.
+        params.quality = quality as i32;
+        params.lgwin = lgwin as i32;
         let mut output = Vec::new();
         let mut writer =
             brotli::CompressorWriter::with_params(&mut output, 4096, &params);

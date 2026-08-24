@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -346,6 +347,18 @@ def reemit(claim_id: str, command: str, commit: str, dirty: list[str]) -> None:
         source_revision["dirty_covered_paths"] = dirty
     else:
         source_revision.pop("dirty_covered_paths", None)
+
+    # bd-q0cwt: replace the inherited placeholder ``schema_hash`` with a seal
+    # anyone can recompute from the committed bytes alone: sha256 over the
+    # compact, key-sorted JSON of the manifest with the ``schema_hash`` key
+    # itself removed. ``run_claim_to_proof_matrix_gate.sh`` enforces exactly
+    # this computation, so a hand-edited receipt (or a legacy boilerplate one)
+    # fails closed instead of reading as evidence.
+    sealed = {k: v for k, v in manifest.items() if k != "schema_hash"}
+    canonical = json.dumps(sealed, sort_keys=True, separators=(",", ":"))
+    manifest["schema_hash"] = "sha256:" + hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
 
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 

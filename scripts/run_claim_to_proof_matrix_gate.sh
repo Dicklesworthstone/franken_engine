@@ -169,6 +169,45 @@ artifact_timestamp_epoch() {
   return 1
 }
 
+# bd-q0cwt: receipt-layer integrity. A docs/evidence-style manifest must not
+# read as evidence unless it was produced by a live run and its bytes still
+# match the seal the writer committed. Prints a violation reason and exits 0
+# when the receipt fails integrity; exits 1 when clean or not applicable.
+receipt_integrity_reason() {
+  local artifact_path="$1"
+  local manifest="${artifact_path}/manifest.json"
+  [[ -f "$manifest" ]] || return 1
+  local reason=""
+  if ! reason="$(python3 - "$manifest" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+result = (manifest.get("outputs") or {}).get("verification_result")
+if result is not None and result != "passed":
+    print(f"verification_result={result!r} (receipt not backed by a passed live run)")
+    sys.exit(0)
+
+seal = manifest.get("schema_hash")
+if isinstance(seal, str) and seal.startswith("sha256:"):
+    sealed = {k: v for k, v in manifest.items() if k != "schema_hash"}
+    canonical = json.dumps(sealed, sort_keys=True, separators=(",", ":"))
+    actual = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if actual != seal:
+        print("schema_hash does not match recomputed receipt content")
+        sys.exit(0)
+
+sys.exit(1)
+PY
+)"; then
+    return 1
+  fi
+  printf '%s\n' "$reason"
+}
+
 classify_quality_candidate() {
   local candidate_json="$1"
   local outcome
@@ -688,6 +727,17 @@ while IFS= read -r claim; do
         freshness_status="unknown"
         printf "WARNING: %s: Cannot determine proof freshness from artifact manifest - assuming fresh\n" \
           "$claim_id" >&2
+      fi
+
+      # bd-q0cwt: an execution-claiming receipt whose result is not "passed",
+      # or whose bytes no longer match its committed seal, is not evidence.
+      # Unlike staleness this is never a downgrade: it is a hard refusal, and
+      # the remedy is regenerating the receipt through a live producer run.
+      local receipt_violation=""
+      if receipt_violation="$(receipt_integrity_reason "$artifact_path")"; then
+        status="fail"
+        local_reason="evidence receipt integrity failure for ${artifact_path}: ${receipt_violation}"
+        printf "FAIL: %s: %s\n" "$claim_id" "$local_reason" >&2
       fi
 
       if [[ "$claim_scope" == "performance" && "$status" == "pass" ]]; then

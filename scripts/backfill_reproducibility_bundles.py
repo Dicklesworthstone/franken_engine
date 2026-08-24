@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-Backfill missing reproducibility bundles for OBSERVED rows
+Execution-derived receipt refresh entry point (bd-q0cwt).
 
-For every row flagged by bd-cixqu.4.1 audit, regenerate its gate to emit a complete
-reproducibility bundle with env.json + manifest.json + repro.lock per
-docs/REPRODUCIBILITY_CONTRACT.md.
-
-Implements bd-cixqu.4.2
+Historically this script generated docs/evidence bundles in-process with
+placeholder hashes and asserted booleans; bd-q0cwt removed those generators.
+The writer of record is now ``reemit_evidence_receipts.py``: it executes each
+claim's verification_command at HEAD and writes a receipt ONLY on success.
+This entry point stays for callers of the old name and simply delegates,
+propagating per-claim failures as a non-zero exit.
 """
 
 import json
-import os
+import subprocess
 import sys
-import hashlib
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 # OBSERVED claims that need backfill (from bd-cixqu.4.1 audit)
 OBSERVED_CLAIMS = [
@@ -134,217 +133,37 @@ def get_git_commit_hash() -> str:
     except subprocess.CalledProcessError:
         return "unknown"
 
-def compute_file_hash(file_path: str) -> str:
-    """Compute SHA-256 hash of file content."""
-    if not Path(file_path).exists():
-        return "missing"
+def reemit_receipt(claim_id: str) -> int:
+    """Run the honest receipt writer for one claim (bd-q0cwt).
 
-    with open(file_path, 'rb') as f:
-        return hashlib.sha256(f.read()).hexdigest()
+    The in-process generators that used to live here emitted placeholder
+    ``schema_hash`` values, unconditional validation booleans, and
+    ``verification_result = "pending"`` without ever executing a producer --
+    exactly the fixture-as-evidence class AGENTS.md bans. Bundles now come
+    ONLY from ``reemit_evidence_receipts.py``, which runs each claim's
+    verification_command at HEAD and writes nothing on a non-zero exit.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parent / "reemit_evidence_receipts.py"),
+            "--only",
+            claim_id,
+        ],
+    )
+    return result.returncode
 
-def generate_env_json(claim_id: str, claim_scope: str) -> Dict:
-    """Generate env.json per reproducibility contract."""
-    return {
-        "schema_version": "frankenengine.reproducibility.env.v1",
-        "schema_hash": "sha256:7f8a9b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
-        "captured_at_utc": datetime.now(timezone.utc).isoformat(),
-        "project": {
-            "name": "franken_engine",
-            "version": "0.1.0",
-            "repository": "https://github.com/anthropics/franken_engine.git",
-            "commit": get_git_commit_hash(),
-            "claim_scope": claim_scope
-        },
-        "host": {
-            "platform": "linux",
-            "architecture": "x86_64",
-            "os_version": "Ubuntu 22.04 LTS",
-            "kernel": "6.17.0-22-generic"
-        },
-        "toolchain": {
-            "rust_version": "1.81.0-nightly",
-            "cargo_version": "1.81.0",
-            "rustc_target": "x86_64-unknown-linux-gnu"
-        },
-        "runtime": {
-            "engine_core_profile": True,
-            "capability_profile": "engine_core",
-            "deterministic_mode": True,
-            "replay_enabled": True
-        },
-        "policy": {
-            "security_epoch": "current",
-            "ifc_enabled": True,
-            "capability_enforcement": "strict",
-            "isolation_level": "process"
-        }
-    }
 
-def generate_manifest_json(claim_id: str, claim_scope: str, original_artifact_path: str) -> Dict:
-    """Generate manifest.json per reproducibility contract."""
-    manifest_id = f"manifest-{claim_id.lower()}-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-
-    return {
-        "schema_version": "frankenengine.reproducibility.manifest.v1",
-        "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
-        "manifest_id": manifest_id,
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "claim": {
-            "id": claim_id,
-            "scope": claim_scope,
-            "state": "observed",
-            "original_artifact_path": original_artifact_path
-        },
-        "source_revision": {
-            "commit": get_git_commit_hash(),
-            "branch": "main",
-            "repository": "franken_engine"
-        },
-        "provenance": {
-            "generated_by": "backfill_reproducibility_bundles.py",
-            "bead_id": "bd-cixqu.4.2",
-            "audit_source": "bd-cixqu.4.1"
-        },
-        "artifacts": {
-            "primary": original_artifact_path,
-            "bundle_path": f"artifacts/reproducibility_bundles/{claim_id}",
-            "env_json": "env.json",
-            "manifest_json": "manifest.json",
-            "repro_lock": "repro.lock"
-        },
-        "inputs": {
-            "source_files": [original_artifact_path] if Path(original_artifact_path).exists() else [],
-            "dependencies": ["frankenengine-engine", "franken-extension-host"]
-        },
-        "outputs": {
-            "verification_result": "pending",
-            "execution_trace": "deterministic",
-            "decision_artifacts": "generated"
-        },
-        "canonicalization": {
-            "encoding": "utf-8",
-            "format": "json",
-            "key_ordering": "lexicographic",
-            "newline": "lf"
-        },
-        "validation": {
-            "schema_validated": True,
-            "hash_verified": True,
-            "provenance_linked": True
-        },
-        "retention": {
-            "policy": "permanent",
-            "backup_required": True,
-            "immutable": True
-        }
-    }
-
-def generate_repro_lock(
-    claim_id: str,
-    original_artifact_path: str,
-    verification_command: str,
-    replay_commands: List[str],
-) -> Dict:
-    """Generate repro.lock per reproducibility contract."""
-    lock_id = f"lock-{claim_id.lower()}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    manifest_id = f"manifest-{claim_id.lower()}-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-
-    return {
-        "schema_version": "frankenengine.reproducibility.lock.v1",
-        "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "lock_id": lock_id,
-        "manifest_id": manifest_id,
-        "source_commit": get_git_commit_hash(),
-        "determinism": {
-            "mode": "strict",
-            "seed_control": "fixed",
-            "environment_isolation": "containerized",
-            "reproducible_builds": True
-        },
-        "commands": {
-            "verification": verification_command,
-            "environment_setup": "export CARGO_INCREMENTAL=0",
-            "cleanup": "cargo clean"
-        },
-        "inputs": {
-            "primary_artifact": {
-                "path": original_artifact_path,
-                "hash": compute_file_hash(original_artifact_path),
-                "size_bytes": Path(original_artifact_path).stat().st_size if Path(original_artifact_path).exists() else 0
-            },
-            "dependencies": [
-                "Cargo.toml",
-                "Cargo.lock",
-                "crates/franken-engine/Cargo.toml"
-            ]
-        },
-        "expected_outputs": {
-            "verification_success": True,
-            "exit_code": 0,
-            "deterministic_trace": True,
-            "evidence_generated": True
-        },
-        "replay": {
-            # The verifier owns the deterministic environment and wraps bare
-            # Cargo commands with rch. Keep the operator-oriented command above
-            # as metadata, but never copy its inline env/rch envelope here.
-            "command_sequence": replay_commands,
-            "environment_vars": {
-                "CARGO_INCREMENTAL": "0",
-                "RUSTFLAGS": "-C linker=cc -Clinker-features=-lld"
-            },
-            "working_directory": "/data/projects/franken_engine"
-        },
-        "verification": {
-            "hash_algorithm": "sha256",
-            "signature_required": False,
-            "replay_validation": "automated",
-            "freshness_check": "required"
-        }
-    }
-
-def create_bundle_directory(claim_id: str) -> Path:
-    """Create bundle directory for a claim."""
-    bundle_dir = Path(f"artifacts/reproducibility_bundles/{claim_id}")
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    return bundle_dir
-
-def write_json_file(file_path: Path, data: Dict) -> None:
-    """Write JSON data to file with canonical formatting."""
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
-        f.write('\n')  # LF newline
-
-def backfill_claim(claim: Dict) -> None:
-    """Backfill reproducibility bundle for a single claim."""
+def backfill_claim(claim: Dict) -> bool:
+    """Backfill one claim's receipt through the execution-derived writer."""
     claim_id = claim["claim_id"]
-    print(f"Backfilling {claim_id}...")
-
-    # Create bundle directory
-    bundle_dir = create_bundle_directory(claim_id)
-
-    # Generate env.json
-    env_data = generate_env_json(claim_id, claim["claim_scope"])
-    write_json_file(bundle_dir / "env.json", env_data)
-
-    # Generate manifest.json
-    manifest_data = generate_manifest_json(
-        claim_id, claim["claim_scope"], claim["original_artifact_path"]
-    )
-    write_json_file(bundle_dir / "manifest.json", manifest_data)
-
-    # Generate repro.lock
-    lock_data = generate_repro_lock(
-        claim_id,
-        claim["original_artifact_path"],
-        claim["verification_command"],
-        claim["replay_commands"],
-    )
-    write_json_file(bundle_dir / "repro.lock", lock_data)
-
-    print(f"  ✓ Created bundle: {bundle_dir}")
-    print(f"  ✓ Files: env.json, manifest.json, repro.lock")
+    print(f"Backfilling {claim_id} via reemit_evidence_receipts.py...")
+    code = reemit_receipt(claim_id)
+    if code == 0:
+        print(f"  ✓ {claim_id}: execution-derived receipt refreshed")
+    else:
+        print(f"  ✗ {claim_id}: reemit exited {code}; no bundle was written")
+    return code == 0
 
 def update_claim_matrix() -> None:
     """Update claim_to_proof_matrix_v1.json to point to bundle directories."""
@@ -399,30 +218,29 @@ def verify_bundles() -> None:
             print(f"  ✓ {claim_id}: Complete bundle")
 
 def main():
-    """Main backfill function."""
-    print("Starting reproducibility bundle backfill for OBSERVED FE-CLAIM-* rows...")
+    """Refresh every listed claim's receipt through the execution-derived writer."""
+    print("Refreshing reproducibility receipts for OBSERVED FE-CLAIM-* rows...")
     print(f"Target claims: {len(OBSERVED_CLAIMS)}")
     print()
 
-    # Create bundles for all claims
+    failed = []
     for claim in OBSERVED_CLAIMS:
-        backfill_claim(claim)
+        if not backfill_claim(claim):
+            failed.append(claim["claim_id"])
         print()
 
-    # Update claim matrix
     update_claim_matrix()
     print()
 
-    # Verify results
     verify_bundles()
     print()
 
-    print("Backfill complete!")
-    print(f"Generated {len(OBSERVED_CLAIMS)} reproducibility bundles")
-    print("Next steps:")
-    print("- Run integration tests to verify bundle shape")
-    print("- Update claim-to-proof gate to validate bundles")
-    print("- Verify bd-cixqu.4.3 enforcement of repro.lock requirement")
+    if failed:
+        print(f"FAILED ({len(failed)}): no receipt written for {', '.join(failed)}")
+        return 1
+    print("Receipt refresh complete: every claim re-verified by live producer runs.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

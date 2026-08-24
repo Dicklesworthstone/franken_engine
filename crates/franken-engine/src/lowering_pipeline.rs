@@ -27255,6 +27255,12 @@ fn simulate_ir2_flow_labels(
                         capability.as_str(),
                         "builtin:BufferAllocUnsafe"
                             | "builtin:BufferConcat"
+                            // bd-dign3: an engine-owned zero-filled ArrayBuffer
+                            // is a closed aggregate of primitive bytes, same as
+                            // its typed-array views; leaving it Unknown made the
+                            // crypto lifecycle exception contract fail high on
+                            // valid binary-like inputs.
+                            | "builtin:ArrayBuffer"
                             | "builtin:Uint8Array"
                             | "builtin:Int32Array"
                             | "builtin:Uint32Array"

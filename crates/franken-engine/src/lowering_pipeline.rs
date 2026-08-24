@@ -25908,6 +25908,24 @@ fn hostcall_exception_is_operand_derived(
 ) -> bool {
     let all_inputs_are_closed = || inputs.iter().all(|value| value.shape.is_closed());
 
+    // bd-dign3: entropy completion callbacks stay inside the interpreter's
+    // deterministic bd-opsnv macrotask lane; the typed random-read request
+    // carries only size/count operands. A deferred-callback argument is an
+    // engine-consumed reference, not disclosed data, so it must not defeat
+    // the operand-derived exception contract (its own body summary governs
+    // the later macrotask invocation instead).
+    if matches!(
+        capability,
+        "builtin:CryptoRandomBytes"
+            | "builtin:CryptoRandomInt"
+            | "builtin:CryptoRandomFillSync"
+            | "builtin:CryptoRandomUUID"
+    ) {
+        return inputs
+            .iter()
+            .all(|value| value.shape == FlowValueShape::Callable || value.shape.is_closed());
+    }
+
     if matches!(capability, "fs:read" | "fs:write") {
         return host_io_exception_provenance == HostIoExceptionProvenance::ProviderInternal
             && all_inputs_are_closed();
@@ -27035,8 +27053,31 @@ fn simulate_ir2_flow_labels(
                 // egress. The runtime process dispatcher performs the exact
                 // request-field join (command/argv/options only) and blocks a
                 // non-Public request before the provider is called.
+                //
+                // bd-dign3: entropy APIs share the shape of problem. The
+                // completion callback never crosses the typed random-read
+                // boundary - the engine schedules it on the bd-opsnv
+                // macrotask lane and labels the delivered payload at
+                // schedule time (invocation label joined with Secret) - so
+                // joining the callback value's fail-high function summary
+                // into the effect data misclassified every deferred-entropy
+                // form as TopSecret -> Internal egress.
                 let operation_data_label = if capability == "process_spawn" {
                     process_spawn_request_label(&inputs)
+                } else if matches!(
+                    capability.as_str(),
+                    "builtin:CryptoRandomBytes"
+                        | "builtin:CryptoRandomInt"
+                        | "builtin:CryptoRandomFillSync"
+                        | "builtin:CryptoRandomUUID"
+                ) {
+                    join_flow_values(
+                        &inputs
+                            .iter()
+                            .filter(|value| value.shape != FlowValueShape::Callable)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    )
                 } else {
                     join_flow_values(&inputs)
                 };

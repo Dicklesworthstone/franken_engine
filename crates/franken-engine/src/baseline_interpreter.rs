@@ -50692,7 +50692,7 @@ impl InterpreterCore {
                                             task_label.clone(),
                                         )?;
                                     }
-                                }
+                                },
                                 Err(err) => {
                                     let reason = Self::promise_rejection_from_error(&err);
                                     self.reject_promise(
@@ -64139,21 +64139,6 @@ impl InterpreterCore {
             "builtin:NetCreateServer" => self.construct_loopback_server(args),
             "builtin:NetConnect" | "builtin:NetCreateConnection" => {
                 self.connect_loopback_socket(args)
-            }
-            "builtin:ZlibConstants" => {
-                if args.count != 0 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "zero zlib.constants hostcall arguments".to_string(),
-                        got: format!("{} argument(s)", args.count),
-                    });
-                }
-                let constants = self.alloc_object_with_properties(&[
-                    ("Z_BEST_COMPRESSION", Value::Int(9)),
-                    ("Z_NO_COMPRESSION", Value::Int(0)),
-                    ("Z_DEFAULT_COMPRESSION", Value::Int(-1)),
-                    ("BROTLI_PARAM_QUALITY", Value::Int(1)),
-                ])?;
-                Ok(Value::Object(constants))
             }
             "builtin:ZlibGzipSync" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibGunzipSync" => self.dispatch_zlib_hostcall(cap, args),

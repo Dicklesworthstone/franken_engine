@@ -1157,3 +1157,46 @@ fn computed_escaped_and_excluded_fluent_crypto_objects_cannot_dynamic_dispatch()
         );
     }
 }
+
+#[test]
+fn zz_diag_entropy_error_dump() {
+    let source = r#"
+        const crypto = require('crypto');
+        const order = [];
+        crypto.randomBytes(4, (error, bytes) => {
+          if (error !== null || !Buffer.isBuffer(bytes) || bytes.length !== 4) {
+            throw new Error('invalid randomBytes callback');
+          }
+          order.push('bytes');
+        });
+        crypto.randomInt(3, (error, value) => {
+          if (error !== null || !Number.isInteger(value) || value < 0 || value >= 3) {
+            throw new Error('invalid randomInt callback');
+          }
+          order.push('int');
+        });
+        order.push('sync');
+        crypto.randomBytes(0, (error, bytes) => {
+          if (error !== null || !Buffer.isBuffer(bytes) || bytes.length !== 0) {
+            throw new Error('invalid zero-length randomBytes callback');
+          }
+          if (order.join(',') !== 'sync,bytes,int') {
+            throw new Error(`unexpected callback order: ${order.join(',')}`);
+          }
+          throw new Error('bd-z1peg entropy callbacks completed in order');
+        });
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![1, 2, 3, 4], vec![0; 6]]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider.clone(), Some(recorder_dyn));
+    let result = orchestrator.execute(&crypto_package(source, true));
+    eprintln!("=== entropy diag ===");
+    eprintln!("provider_calls={}", provider.calls.load(Ordering::Acquire));
+    eprintln!("recorded_entries={}", recorder.recorded_entries().len());
+    match result {
+        Ok(outcome) => eprintln!("OK console={:?}", outcome.console_output),
+        Err(error) => eprintln!("ERR debug={error:#?}"),
+    }
+}

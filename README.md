@@ -268,6 +268,7 @@ franken_engine/
 │   │   ├── src/baseline_interpreter.rs   # Core VM (132,181 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
 │   │   └── tests/                   # 1,654 integration tests (41 RGC gate tests)
+│   ├── franken-extension-host/      # Ed25519-signed extension manifests + capability model
 │   ├── franken-engine-test-support/ # Mock control-plane adapters + injection helpers
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)

@@ -25973,7 +25973,16 @@ fn hostcall_exception_is_operand_derived(
         | "console:error"
         | "console:warn"
         | "console:info"
-        | "builtin:ZlibGunzipSync" => all_inputs_are_closed(),
+        // bd-dign3 follow-up: the whole zlib sync family shares this arm -
+        // pure-compute engine implementations over closed inputs whose only
+        // exceptional outcomes are engine-owned validation errors.
+        | "builtin:ZlibGunzipSync"
+        | "builtin:ZlibGzipSync"
+        | "builtin:ZlibDeflateSync"
+        | "builtin:ZlibInflateSync"
+        | "builtin:ZlibDeflateRawSync"
+        | "builtin:ZlibInflateRawSync"
+        | "builtin:ZlibUnzipSync" => all_inputs_are_closed(),
         // These exact pure-compute entry points validate only primitive
         // arguments. Object inputs remain fail-high because their coercion or
         // transitive state does not yet have a complete static summary.
@@ -26046,16 +26055,14 @@ fn hostcall_exception_is_operand_derived(
         // outcomes are engine-owned (allocation) and operand-derived. Object
         // arguments — including an options/cause bag — keep the fail-high
         // default because ToString / property reads on them can run guest
-        | "builtin:ZlibGunzipSync"
-        // bd-dign3 follow-up: the whole zlib sync family shares the console
-        // contract - pure-compute engine implementations over closed inputs
-        // whose only exceptional outcomes are engine-owned validation errors.
-        | "builtin:ZlibGzipSync"
-        | "builtin:ZlibDeflateSync"
-        | "builtin:ZlibInflateSync"
-        | "builtin:ZlibDeflateRawSync"
-        | "builtin:ZlibInflateRawSync"
-        | "builtin:ZlibUnzipSync" => all_inputs_are_closed(),
+        // code whose thrown values are not summarized here (bd-8y64t: this
+        // is what lets `try { throw new Error("m") } catch (e) { e.message }`
+        // work).
+        "builtin:Error"
+        | "builtin:TypeError"
+        | "builtin:RangeError"
+        | "builtin:ReferenceError"
+        | "builtin:SyntaxError"
         | "builtin:EvalError"
         | "builtin:URIError" => inputs
             .iter()
@@ -27670,7 +27677,12 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
     // audit.
     if matches!(
         normalized.as_str(),
-        "builtin:bufferobjecttostring" | "builtin:bufferobjectreaduint32le"
+        "builtin:bufferobjecttostring"
+            | "builtin:bufferobjectreaduint32le"
+            // bd-dign3 follow-up: equality over authenticated Buffer bytes is
+            // a boolean oracle on possibly-secret content, so it carries the
+            // same TopSecret clearance as the other byte-observing methods.
+            | "builtin:bufferobjectequals"
     ) {
         return Label::TopSecret;
     }
@@ -31382,8 +31394,9 @@ mod tests {
             Label::TopSecret
         );
         assert_eq!(
-            sink_clearance_from_capability("builtin:BufferObjectReadUInt32LE"),
-            Label::TopSecret
+            sink_clearance_from_capability("builtin:BufferObjectEquals"),
+            Label::TopSecret,
+            "bd-dign3 follow-up: equality is a byte-content oracle"
         );
         assert_eq!(
             sink_clearance_from_capability("builtin:BufferObjectFutureMethod"),

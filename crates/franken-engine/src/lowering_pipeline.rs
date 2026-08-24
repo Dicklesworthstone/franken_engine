@@ -26046,15 +26046,16 @@ fn hostcall_exception_is_operand_derived(
         // outcomes are engine-owned (allocation) and operand-derived. Object
         // arguments — including an options/cause bag — keep the fail-high
         // default because ToString / property reads on them can run guest
-        // code whose thrown values are not summarized here (bd-8y64t: this
-        // is what lets `try { throw new Error("m") } catch (e) { e.message }`
-        // reach the completion sink instead of poisoning the catch binding
-        // with TopSecret).
-        "builtin:Error"
-        | "builtin:TypeError"
-        | "builtin:RangeError"
-        | "builtin:ReferenceError"
-        | "builtin:SyntaxError"
+        | "builtin:ZlibGunzipSync"
+        // bd-dign3 follow-up: the whole zlib sync family shares the console
+        // contract - pure-compute engine implementations over closed inputs
+        // whose only exceptional outcomes are engine-owned validation errors.
+        | "builtin:ZlibGzipSync"
+        | "builtin:ZlibDeflateSync"
+        | "builtin:ZlibInflateSync"
+        | "builtin:ZlibDeflateRawSync"
+        | "builtin:ZlibInflateRawSync"
+        | "builtin:ZlibUnzipSync" => all_inputs_are_closed(),
         | "builtin:EvalError"
         | "builtin:URIError" => inputs
             .iter()
@@ -26069,6 +26070,17 @@ fn hostcall_exception_is_operand_derived(
                     && arguments
                         .iter()
                         .all(|value| value.shape == FlowValueShape::Primitive)
+            })
+        }
+        // bd-dign3 follow-up: `buf.equals(other)` never throws for Buffer
+        // operands and rejects non-buffer operands with an engine-owned
+        // TypeError before any byte comparison, so a closed receiver plus
+        // closed arguments bounds every exceptional outcome.
+        "builtin:BufferObjectEquals" => {
+            inputs.split_last().is_some_and(|(receiver, arguments)| {
+                receiver.shape == FlowValueShape::BufferObject
+                    && !arguments.is_empty()
+                    && arguments.iter().all(|value| value.shape.is_closed())
             })
         }
         // Buffer.from and Buffer.alloc/allocUnsafe have a closed exception
@@ -27278,6 +27290,24 @@ fn simulate_ir2_flow_labels(
                     } else {
                         // Hand-authored or malformed IR must not be able to
                         // manufacture the source-level Buffer proof.
+                        result_label = Label::TopSecret;
+                        result_shape = FlowValueShape::Unknown;
+                        operation_exception_label_override = Some(Label::TopSecret);
+                    }
+                }
+                // bd-dign3 follow-up: `buf.equals(other)` yields a boolean
+                // derived from both operands' bytes. Authenticated receivers
+                // with closed operands are finite; anything else keeps the
+                // fail-high contract.
+                if capability == "builtin:BufferObjectEquals" {
+                    let authenticated = inputs.split_last().is_some_and(|(receiver, arguments)| {
+                        receiver.shape == FlowValueShape::BufferObject
+                            && !arguments.is_empty()
+                            && arguments.iter().all(|value| value.shape.is_closed())
+                    });
+                    if authenticated && hostcall_is_operand_derived {
+                        result_shape = FlowValueShape::Primitive;
+                    } else {
                         result_label = Label::TopSecret;
                         result_shape = FlowValueShape::Unknown;
                         operation_exception_label_override = Some(Label::TopSecret);

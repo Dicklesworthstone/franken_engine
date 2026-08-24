@@ -391,8 +391,38 @@ def main() -> int:
         help="do not retry an infrastructure-classified failure in an isolated "
         "target dir (bd-566x4); still classifies and reports it as infrastructure",
     )
+    ap.add_argument(
+        "--seal-only",
+        action="store_true",
+        help="bd-q0cwt bootstrap: for the selected claims, recompute and write "
+        "schema_hash from the committed bytes WITHOUT running any producer and "
+        "without touching any other field. Exists only because a claim whose "
+        "verification_command IS the claim-to-proof gate cannot regenerate its "
+        "own receipt until that receipt passes the gate's integrity check. A "
+        "seal-only write asserts nothing about execution; the next real run "
+        "rewrites the whole receipt.",
+    )
     args = ap.parse_args()
     only = {s.strip() for s in args.only.split(",") if s.strip()}
+
+    if args.seal_only:
+        if not only:
+            print("error: --seal-only requires --only", file=sys.stderr)
+            return 2
+        for cid in sorted(only):
+            path = EVIDENCE_DIR / cid / "manifest.json"
+            if not path.exists():
+                print(f"[{cid}] seal-only skipped: no manifest at {path}")
+                continue
+            manifest = json.loads(path.read_text())
+            sealed = {k: v for k, v in manifest.items() if k != "schema_hash"}
+            canonical = json.dumps(sealed, sort_keys=True, separators=(",", ":"))
+            manifest["schema_hash"] = (
+                "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            )
+            path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+            print(f"[{cid}] sealed (content-only; no execution asserted)")
+        return 0
 
     # Per-claim progress is the whole point of the --json/per-claim reporting this
     # script grew for the scheduled job (BRIDGE-19.18): one aggregate exit code

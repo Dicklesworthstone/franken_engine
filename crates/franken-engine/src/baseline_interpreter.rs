@@ -59910,23 +59910,27 @@ impl InterpreterCore {
         Ok(output)
     }
 
-    /// One-shot Brotli decompression. Corrupt input surfaces as a data
-    /// failure so the guest observes a thrown Error (Node semantics), never
-    /// partial silent output.
+    /// One-shot Brotli decompression via the pull-based reader so decoder
+    /// faults actually surface: the push-style DecompressorWriter buffers
+    /// internally and its write/flush pair can return Ok while swallowing a
+    /// corrupt stream, which would hand guests a silent empty Buffer where
+    /// Node throws. Corrupt or truncated input must always fail as a data
+    /// error (fixture 0009 semantics).
     fn brotli_decompress_bytes(input: &[u8]) -> Result<Vec<u8>, ZlibOperationFailure> {
+        use std::io::Read as _;
+        if input.is_empty() {
+            // A valid Brotli stream is never zero bytes; Node rejects this.
+            return Err(ZlibOperationFailure::data(
+                "unexpected end of brotli input",
+            ));
+        }
+        let mut reader = brotli::Decompressor::new(input, 4096);
         let mut output = Vec::new();
-        let mut writer = brotli::DecompressorWriter::new(&mut output, 4096);
-        use std::io::Write as _;
-        writer
-            .write_all(input)
+        reader
+            .read_to_end(&mut output)
             .map_err(|error| ZlibOperationFailure::data(error.to_string()))?;
-        writer
-            .flush()
-            .map_err(|error| ZlibOperationFailure::data(error.to_string()))?;
-        drop(writer);
         Ok(output)
     }
-
     // ---------------------------------------------------------------------
     // Deterministic Node crypto builtins (bd-2z157)
     // ---------------------------------------------------------------------
@@ -105455,6 +105459,150 @@ mod async_runtime_tests_current {
             execution.instructions_executed, 3,
             "InstanceOf, Halt, and the empty Writable checkpoint scan are charged"
         );
+    }
+
+    #[test]
+    fn zlib_brotli_round_trip_through_direct_hostcall_bd_zlib_residual() {
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::str("brotli roundtrip content"))
+            .expect("input register");
+
+        let Value::Object(compressed) = core
+            .dispatch_zlib_hostcall(
+                "builtin:ZlibBrotliCompressSync",
+                RegRange {
+                    start: 0,
+                    count: 1,
+                },
+            )
+            .expect("brotli compress must succeed")
+        else {
+            panic!("brotli compress must return a Buffer");
+        };
+        core.write_reg(0, Value::Object(compressed))
+            .expect("compressed register");
+
+        let Value::Object(decompressed) = core
+            .dispatch_zlib_hostcall(
+                "builtin:ZlibBrotliDecompressSync",
+                RegRange {
+                    start: 0,
+                    count: 1,
+                },
+            )
+            .expect("brotli decompress must succeed")
+        else {
+            panic!("brotli decompress must return a Buffer");
+        };
+        let bytes = core
+            .bytes_for_buffer_like(&Value::Object(decompressed))
+            .expect("decompressed bytes");
+        assert_eq!(bytes, b"brotli roundtrip content");
+    }
+
+    #[test]
+    fn zlib_brotli_params_option_selects_quality_bd_zlib_residual() {
+        // Fixture 0016 shape: { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }
+        // — the computed numeric constant (4) becomes the property name "4".
+        let mut core = test_interpreter();
+        let params = core
+            .alloc_object_with_properties(&[("4", Value::Int(5))])
+            .expect("params object");
+        let options = core
+            .alloc_object_with_properties(&[("params", Value::Object(params))])
+            .expect("options object");
+        core.write_reg(0, Value::str("brotli with quality option"))
+            .expect("input register");
+        core.write_reg(1, Value::Object(options))
+            .expect("options register");
+
+        let Value::Object(compressed) = core
+            .dispatch_zlib_hostcall(
+                "builtin:ZlibBrotliCompressSync",
+                RegRange {
+                    start: 0,
+                    count: 2,
+                },
+            )
+            .expect("quality-5 brotli compress must succeed")
+        else {
+            panic!("compress must return a Buffer");
+        };
+        core.write_reg(0, Value::Object(compressed))
+            .expect("compressed register");
+
+        let Value::Object(decompressed) = core
+            .dispatch_zlib_hostcall(
+                "builtin:ZlibBrotliDecompressSync",
+                RegRange {
+                    start: 0,
+                    count: 1,
+                },
+            )
+            .expect("decompress must succeed")
+        else {
+            panic!("decompress must return a Buffer");
+        };
+        let bytes = core
+            .bytes_for_buffer_like(&Value::Object(decompressed))
+            .expect("decompressed bytes");
+        assert_eq!(bytes, b"brotli with quality option");
+    }
+
+    #[test]
+    fn zlib_brotli_invalid_input_throws_data_error_bd_zlib_residual() {
+        // Fixture 0009 semantics: brotliDecompressSync on invalid brotli bytes
+        // throws an Error rather than returning data or failing silently.
+        let mut core = test_interpreter();
+        let input = core
+            .alloc_buffer_from_bytes(&[1, 2, 3, 4, 5])
+            .expect("invalid payload Buffer");
+        core.write_reg(0, Value::Object(input))
+            .expect("input register");
+
+        match core.dispatch_zlib_hostcall(
+            "builtin:ZlibBrotliDecompressSync",
+            RegRange {
+                start: 0,
+                count: 1,
+            },
+        ) {
+            Err(InterpreterError::UncaughtException { value }) => {
+                assert!(
+                    matches!(&value, crate::object_model::JsValue::Object(_)),
+                    "corrupt brotli input must raise a guest Error object, got {value:?}"
+                );
+            }
+            other => panic!(
+                "corrupt brotli input must throw a guest Error, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn zlib_brotli_quality_outside_range_rejected_bd_zlib_residual() {
+        let mut core = test_interpreter();
+        let params = core
+            .alloc_object_with_properties(&[("4", Value::Int(12))])
+            .expect("params object");
+        let options = core
+            .alloc_object_with_properties(&[("params", Value::Object(params))])
+            .expect("options object");
+        core.write_reg(0, Value::str("payload"))
+            .expect("input register");
+        core.write_reg(1, Value::Object(options))
+            .expect("options register");
+
+        assert!(matches!(
+            core.dispatch_zlib_hostcall(
+                "builtin:ZlibBrotliCompressSync",
+                RegRange {
+                    start: 0,
+                    count: 2,
+                },
+            ),
+            Err(InterpreterError::RangeError { .. })
+        ));
     }
 
     #[test]

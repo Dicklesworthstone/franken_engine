@@ -459,6 +459,7 @@ enum ZlibFormat {
     Zlib,
     Raw,
     Auto,
+    Brotli,
 }
 
 enum ZlibOperationFailure {
@@ -52625,6 +52626,9 @@ impl InterpreterCore {
         let method_name = match capability {
             "builtin:BufferObjectToString" => "toString",
             "builtin:BufferObjectReadUInt32LE" => "readUInt32LE",
+            // bd-dign3 follow-up: the runtime equals implementation predates
+            // this route; only the static capability string was missing.
+            "builtin:BufferObjectEquals" => "equals",
             _ => {
                 return Err(InterpreterError::InternalError {
                     details: format!(
@@ -52663,6 +52667,7 @@ impl InterpreterCore {
             "builtin:BufferObjectReadUInt32LE" => {
                 self.buffer_read_integer(receiver, method_args, BufferIntegerKind::UInt32, true)
             }
+            "builtin:BufferObjectEquals" => self.buffer_equals(receiver, method_args),
             _ => unreachable!("authenticated Buffer capability matched above"),
         };
         match outcome {
@@ -59632,6 +59637,8 @@ impl InterpreterCore {
             "builtin:ZlibDeflateRawSync" => (true, ZlibFormat::Raw, false),
             "builtin:ZlibInflateRawSync" => (false, ZlibFormat::Raw, false),
             "builtin:ZlibUnzipSync" => (false, ZlibFormat::Auto, false),
+            "builtin:ZlibBrotliCompressSync" => (true, ZlibFormat::Brotli, false),
+            "builtin:ZlibBrotliDecompressSync" => (false, ZlibFormat::Brotli, false),
             "builtin:ZlibGzip" => (true, ZlibFormat::Gzip, true),
             "builtin:ZlibGunzip" => (false, ZlibFormat::Gzip, true),
             "builtin:ZlibDeflate" => (true, ZlibFormat::Zlib, true),
@@ -59735,7 +59742,17 @@ impl InterpreterCore {
             .as_ref()
             .map(|value| self.bytes_for_buffer_like(value))
             .transpose()?;
-        let result = if compress {
+        let result = if format == ZlibFormat::Brotli {
+            // bd-zlib-residual-l6ev2: Brotli has its own parameter surface
+            // (options.params keyed by zlib.constants.BROTLI_PARAM_*) and its
+            // own codec; it never shares the deflate dictionary/level path.
+            let (quality, lgwin) = self.zlib_brotli_params(options.as_ref())?;
+            if compress {
+                Self::brotli_compress_bytes(&input, quality, lgwin)
+            } else {
+                Self::brotli_decompress_bytes(&input)
+            }
+        } else if compress {
             self.zlib_deflate_bytes(format, &input, dictionary.as_deref(), level)
         } else {
             self.zlib_inflate_bytes(format, &input, dictionary.as_deref())
@@ -59779,6 +59796,128 @@ impl InterpreterCore {
             (Err(ZlibOperationFailure::OutputLimit), _) => Err(self.zlib_output_limit_error()),
             (Err(ZlibOperationFailure::Resource(error)), _) => Err(error),
         }
+    }
+
+    /// Read one `options.params` entry keyed by a `zlib.constants.BROTLI_PARAM_*`
+    /// numeric constant (the fixture shape is
+    /// `{ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }`, so the
+    /// property name is the decimal form of the constant).
+    fn zlib_brotli_param(
+        &self,
+        options: Option<&Value>,
+        key: f64,
+    ) -> Result<Option<i64>, InterpreterError> {
+        let Some(params) = options.and_then(|value| self.fs_object_property(value, "params"))
+        else {
+            return Ok(None);
+        };
+        if matches!(params, Value::Undefined) {
+            return Ok(None);
+        }
+        let Value::Object(_) = &params else {
+            return Err(InterpreterError::TypeError {
+                expected: "object zlib brotli params".to_string(),
+                got: params.type_name().to_string(),
+            });
+        };
+        let key_name = if key.fract() == 0.0 {
+            format!("{}", key as i64)
+        } else {
+            format!("{key}")
+        };
+        match self.fs_object_property(&params, &key_name) {
+            None | Some(Value::Undefined) => Ok(None),
+            Some(Value::Int(value)) => Ok(Some(value)),
+            Some(Value::Float(value)) if value.inner().fract() == 0.0 => {
+                Ok(Some(value.inner() as i64))
+            }
+            Some(other) => Err(InterpreterError::RangeError {
+                message: format!(
+                    "zlib brotli parameter {key_name} must be an integer, got {}",
+                    other.type_name()
+                ),
+            }),
+        }
+    }
+
+    /// Parse the (quality, lgwin) pair for Brotli compression from
+    /// `options.params`. Unspecified parameters fall back to the Brotli
+    /// defaults Node exposes (`BROTLI_DEFAULT_QUALITY` = 11,
+    /// `BROTLI_DEFAULT_WINDOW` = 22).
+    fn zlib_brotli_params(
+        &self,
+        options: Option<&Value>,
+    ) -> Result<(u32, u32), InterpreterError> {
+        const BROTLI_PARAM_QUALITY: f64 = 4.0;
+        const BROTLI_PARAM_LGWIN: f64 = 6.0;
+        let mut quality = 11u32;
+        let mut lgwin = 22u32;
+        if let Some(parsed) = self.zlib_brotli_param(options, BROTLI_PARAM_QUALITY)? {
+            let parsed =
+                u32::try_from(parsed).map_err(|_| InterpreterError::RangeError {
+                    message: format!("zlib brotli quality {parsed} is outside 0..=11"),
+                })?;
+            if parsed > 11 {
+                return Err(InterpreterError::RangeError {
+                    message: format!("zlib brotli quality {parsed} is outside 0..=11"),
+                });
+            }
+            quality = parsed;
+        }
+        if let Some(parsed) = self.zlib_brotli_param(options, BROTLI_PARAM_LGWIN)? {
+            let parsed =
+                u32::try_from(parsed).map_err(|_| InterpreterError::RangeError {
+                    message: format!("zlib brotli lgwin {parsed} is outside 10..=24"),
+                })?;
+            if !(10..=24).contains(&parsed) {
+                return Err(InterpreterError::RangeError {
+                    message: format!("zlib brotli lgwin {parsed} is outside 10..=24"),
+                });
+            }
+            lgwin = parsed;
+        }
+        Ok((quality, lgwin))
+    }
+
+    /// One-shot Brotli compression with explicit (quality, lgwin) parameters.
+    fn brotli_compress_bytes(
+        input: &[u8],
+        quality: u32,
+        lgwin: u32,
+    ) -> Result<Vec<u8>, ZlibOperationFailure> {
+        let mut params =
+            brotli::enc::backward_references::BrotliEncoderParams::default();
+        params.quality = quality;
+        params.lgwin = lgwin;
+        let mut output = Vec::new();
+        let mut writer =
+            brotli::CompressorWriter::with_params(&mut output, 4096, &params);
+        use std::io::Write as _;
+        writer
+            .write_all(input)
+            .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+        writer
+            .flush()
+            .map_err(|_| ZlibOperationFailure::OutputLimit)?;
+        drop(writer);
+        Ok(output)
+    }
+
+    /// One-shot Brotli decompression. Corrupt input surfaces as a data
+    /// failure so the guest observes a thrown Error (Node semantics), never
+    /// partial silent output.
+    fn brotli_decompress_bytes(input: &[u8]) -> Result<Vec<u8>, ZlibOperationFailure> {
+        let mut output = Vec::new();
+        let mut writer = brotli::DecompressorWriter::new(&mut output, 4096);
+        use std::io::Write as _;
+        writer
+            .write_all(input)
+            .map_err(|error| ZlibOperationFailure::data(error.to_string()))?;
+        writer
+            .flush()
+            .map_err(|error| ZlibOperationFailure::data(error.to_string()))?;
+        drop(writer);
+        Ok(output)
     }
 
     // ---------------------------------------------------------------------
@@ -63940,6 +64079,31 @@ impl InterpreterCore {
                 }
                 result
             }
+            "builtin:ZlibConstants" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero zlib.constants hostcall arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                let constants = self.alloc_object_with_properties(&[
+                    ("Z_BEST_COMPRESSION", Value::Int(9)),
+                    ("Z_NO_COMPRESSION", Value::Int(0)),
+                    ("Z_DEFAULT_COMPRESSION", Value::Int(-1)),
+                    // Node's numeric brotli parameter/mode constants; the
+                    // corpus keys options.params by these exact values.
+                    ("BROTLI_PARAM_QUALITY", Value::Int(4)),
+                    ("BROTLI_PARAM_LGWIN", Value::Int(6)),
+                    ("BROTLI_PARAM_LGBLOCK", Value::Int(7)),
+                    ("BROTLI_PARAM_SIZE_HINT", Value::Int(9)),
+                    ("BROTLI_MODE_GENERIC", Value::Int(0)),
+                    ("BROTLI_MODE_TEXT", Value::Int(1)),
+                    ("BROTLI_MODE_FONT", Value::Int(2)),
+                    ("BROTLI_DEFAULT_QUALITY", Value::Int(11)),
+                    ("BROTLI_DEFAULT_WINDOW", Value::Int(22)),
+                ])?;
+                Ok(Value::Object(constants))
+            }
             "builtin:NetIsIP" | "builtin:NetIsIPv4" | "builtin:NetIsIPv6" => {
                 let candidate = self
                     .builtin_arg(args, 0)?
@@ -63987,6 +64151,8 @@ impl InterpreterCore {
             "builtin:ZlibDeflateRawSync" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibInflateRawSync" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibUnzipSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibBrotliCompressSync" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:ZlibBrotliDecompressSync" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibGzip" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibGunzip" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibDeflate" => self.dispatch_zlib_hostcall(cap, args),

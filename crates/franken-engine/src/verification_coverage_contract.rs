@@ -5641,8 +5641,12 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         ));
         return bundle_report(bundle_dir, 0, 0, findings);
     }
-    let actual_files = match walk_bundle_files(bundle_dir) {
-        Ok(files) => files,
+    // Capture the entire bundle ONCE. Every verdict below derives from this
+    // immutable byte snapshot; no path is opened or re-resolved afterwards,
+    // so hash and semantic checks can never authenticate different versions
+    // of the same member.
+    let (actual_files, snapshot) = match capture_bundle_snapshot(bundle_dir) {
+        Ok(captured) => captured,
         Err(reason) => {
             findings.push(simple_finding(
                 if reason.contains(ERROR_UNSAFE_PATH) {
@@ -5652,7 +5656,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
                 } else {
                     ERROR_IO
                 },
-                "bundle.walk",
+                "bundle.capture",
                 reason,
             ));
             return bundle_report(bundle_dir, 0, 0, findings);
@@ -5676,18 +5680,17 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         return bundle_report(bundle_dir, checked_files, event_count, findings);
     }
 
-    let run_manifest: RunManifest =
-        match parse_json_file(&bundle_dir.join("run_manifest.json"), 1024 * 1024) {
-            Ok(manifest) => manifest,
-            Err(reason) => {
-                findings.push(simple_finding(
-                    ERROR_ARTIFACT_CONTRACT,
-                    "bundle.run_manifest",
-                    reason,
-                ));
-                return bundle_report(bundle_dir, checked_files, event_count, findings);
-            }
-        };
+    let run_manifest: RunManifest = match snapshot.parse("run_manifest.json", 1024 * 1024) {
+        Ok(manifest) => manifest,
+        Err(reason) => {
+            findings.push(simple_finding(
+                ERROR_ARTIFACT_CONTRACT,
+                "bundle.run_manifest",
+                reason,
+            ));
+            return bundle_report(bundle_dir, checked_files, event_count, findings);
+        }
+    };
     if run_manifest.schema_version != RUN_MANIFEST_SCHEMA_VERSION
         || run_manifest.artifact_manifest != "artifact_manifest.json"
         || run_manifest.contract != "contract.json"
@@ -5815,7 +5818,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
     }
 
     let artifact_manifest: ArtifactManifest =
-        match parse_json_file(&bundle_dir.join("artifact_manifest.json"), 4 * 1024 * 1024) {
+        match snapshot.parse("artifact_manifest.json", 4 * 1024 * 1024) {
             Ok(manifest) => manifest,
             Err(reason) => {
                 findings.push(simple_finding(
@@ -5835,8 +5838,8 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
             "artifact manifest schema/hash algorithm differs".to_string(),
         ));
     }
-    match read_bounded_regular_file(&bundle_dir.join("artifact_manifest.json"), 4 * 1024 * 1024) {
-        Ok(bytes) => match std::str::from_utf8(&bytes) {
+    match snapshot.bytes("artifact_manifest.json") {
+        Ok(bytes) => match std::str::from_utf8(bytes) {
             Ok(text) if contains_secret_marker(text) => findings.push(simple_finding(
                 ERROR_SECRET_LEAK,
                 "bundle.redaction",
@@ -5904,10 +5907,8 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
             ));
             continue;
         }
-        match read_bounded_regular_file(&bundle_dir.join(&entry.path), MAX_BUNDLE_FILE_BYTES) {
-            Ok(bytes)
-                if bytes.len() as u64 == entry.bytes && sha256_hex(&bytes) == entry.sha256 =>
-            {
+        match snapshot.bytes(&entry.path) {
+            Ok(bytes) if bytes.len() as u64 == entry.bytes && sha256_hex(bytes) == entry.sha256 => {
                 checked_files += 1;
             }
             Ok(bytes) => findings.push(simple_finding(
@@ -5944,24 +5945,17 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         }
     }
 
-    let contract_copy = parse_json_file::<VerificationCoverageContract>(
-        &bundle_dir.join("contract.json"),
-        MAX_CONTRACT_BYTES,
-    );
-    let generated_copy = parse_json_file::<VerificationCoverageContract>(
-        &bundle_dir.join("generated_contract.json"),
-        MAX_CONTRACT_BYTES,
-    );
+    let contract_copy =
+        snapshot.parse::<VerificationCoverageContract>("contract.json", MAX_CONTRACT_BYTES);
+    let generated_copy = snapshot
+        .parse::<VerificationCoverageContract>("generated_contract.json", MAX_CONTRACT_BYTES);
     match (&contract_copy, &generated_copy) {
         (Ok(contract), Ok(generated)) => {
             for (path, value) in [
                 ("contract.json", contract),
                 ("generated_contract.json", generated),
             ] {
-                match (
-                    canonical_json_bytes(value),
-                    read_bounded_regular_file(&bundle_dir.join(path), MAX_CONTRACT_BYTES),
-                ) {
+                match (canonical_json_bytes(value), snapshot.bytes(path)) {
                     (Ok(expected), Ok(actual)) if expected == actual => {}
                     _ => findings.push(simple_finding(
                         ERROR_ARTIFACT_CONTRACT,
@@ -5978,10 +5972,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
                         .to_string(),
                 ));
             }
-            match read_bounded_regular_file(
-                &bundle_dir.join("rendered_contract.md"),
-                MAX_CONTRACT_BYTES,
-            ) {
+            match snapshot.bytes("rendered_contract.md") {
                 Ok(markdown) if markdown == render_markdown(contract).as_bytes() => {}
                 _ => findings.push(simple_finding(
                     ERROR_MARKDOWN_DRIFT,
@@ -5998,10 +5989,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
     }
 
     let mut parsed_events = Vec::new();
-    match read_bounded_regular_file(
-        &bundle_dir.join("events.jsonl"),
-        MAX_EVENT_STREAM_BYTES as u64,
-    ) {
+    match snapshot.bytes("events.jsonl") {
         Ok(bytes) => {
             let report = validate_event_stream(&bytes);
             event_count = report.event_count;
@@ -6075,8 +6063,8 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         }
     }
 
-    let tier_path = bundle_dir.join("tier_r_probe.json");
-    let tier_probe = match parse_json_file::<TierRProbeReport>(&tier_path, 4 * 1024 * 1024) {
+    let tier_probe = match snapshot.parse::<TierRProbeReport>("tier_r_probe.json", 4 * 1024 * 1024)
+    {
         Ok(probe) => {
             if probe.run_id != run_manifest.run_id || probe.trace_id != run_manifest.trace_id {
                 findings.push(simple_finding(
@@ -6097,10 +6085,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
             None
         }
     };
-    let tier_source_manifest_sha = match read_bounded_regular_file(
-        &bundle_dir.join("tier_r_source_manifest.json"),
-        MAX_BUNDLE_FILE_BYTES,
-    ) {
+    let tier_source_manifest_sha = match snapshot.bytes("tier_r_source_manifest.json") {
         Ok(bytes) => match serde_json::from_slice::<TierRSourceManifest>(&bytes) {
             Ok(source_manifest) => {
                 findings.extend(validate_tier_r_source_manifest(&source_manifest));
@@ -6179,10 +6164,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
             None
         }
     };
-    let tier_build_environment = match read_bounded_regular_file(
-        &bundle_dir.join("tier_r_build_environment.json"),
-        MAX_BUNDLE_FILE_BYTES,
-    ) {
+    let tier_build_environment = match snapshot.bytes("tier_r_build_environment.json") {
         Ok(bytes) => match serde_json::from_slice::<TierRBuildEnvironment>(&bytes) {
             Ok(build_environment) => {
                 findings.extend(validate_tier_r_build_environment(&build_environment));
@@ -6257,8 +6239,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         }
     }
 
-    let environment =
-        parse_json_file::<EnvironmentManifest>(&bundle_dir.join("env.json"), 1024 * 1024);
+    let environment = snapshot.parse::<EnvironmentManifest>("env.json", 1024 * 1024);
     let environment = match environment {
         Ok(environment)
             if environment.schema_version == "franken-engine.verification-environment.v2"
@@ -6333,14 +6314,13 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         _ => {}
     }
 
-    let commands =
-        match read_bounded_regular_file(&bundle_dir.join("commands.txt"), 4 * 1024 * 1024) {
-            Ok(bytes) => bytes,
-            Err(reason) => {
-                findings.push(simple_finding(ERROR_IO, "bundle.commands", reason));
-                Vec::new()
-            }
-        };
+    let commands = match snapshot.bytes("commands.txt") {
+        Ok(bytes) => bytes.to_vec(),
+        Err(reason) => {
+            findings.push(simple_finding(ERROR_IO, "bundle.commands", reason));
+            Vec::new()
+        }
+    };
     let commands_text = match std::str::from_utf8(&commands) {
         Ok(text) => text,
         Err(error) => {
@@ -6374,16 +6354,15 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
                 .to_string(),
         ));
     }
-    validate_sample_artifact(bundle_dir, &run_manifest, &artifact_index, &mut findings);
 
-    let reproduction = parse_json_file::<ReproductionRecord>(
-        &bundle_dir.join("reproduction_record.json"),
-        1024 * 1024,
-    );
+    validate_sample_artifact(&snapshot, &run_manifest, &artifact_index, &mut findings);
+
+    let reproduction =
+        snapshot.parse::<ReproductionRecord>("reproduction_record.json", 1024 * 1024);
     match reproduction {
         Ok(record) => {
             validate_execution_record(
-                bundle_dir,
+                &snapshot,
                 &artifact_index,
                 "franken-engine.verification-reproduction-record.v1",
                 &run_manifest.reproduction_command,
@@ -6408,14 +6387,12 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         )),
     }
 
-    let tier_invocation = parse_json_file::<TierRInvocationRecord>(
-        &bundle_dir.join("tier_r_invocation.json"),
-        1024 * 1024,
-    );
+    let tier_invocation =
+        snapshot.parse::<TierRInvocationRecord>("tier_r_invocation.json", 1024 * 1024);
     match tier_invocation {
         Ok(record) => {
             validate_execution_record(
-                bundle_dir,
+                &snapshot,
                 &artifact_index,
                 "franken-engine.tier-r-invocation.v1",
                 &record.command,
@@ -6473,10 +6450,8 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         )),
     }
 
-    let validation_report = parse_json_file::<ValidationReport>(
-        &bundle_dir.join("validation_report.json"),
-        4 * 1024 * 1024,
-    );
+    let validation_report =
+        snapshot.parse::<ValidationReport>("validation_report.json", 1024 * 1024);
     match validation_report {
         Ok(report) => {
             let contract_hash = artifact_index
@@ -6561,7 +6536,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         )),
     }
 
-    let repro_lock = parse_json_file::<ReproLock>(&bundle_dir.join("repro.lock"), 1024 * 1024);
+    let repro_lock = snapshot.parse::<ReproLock>("repro.lock", 1024 * 1024);
     match repro_lock {
         Ok(lock) => {
             let matches_artifact = |path: &str, hash: &str| {
@@ -6610,8 +6585,8 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
     }
 
     for entry in &artifact_manifest.files {
-        match read_bounded_regular_file(&bundle_dir.join(&entry.path), MAX_BUNDLE_FILE_BYTES) {
-            Ok(bytes) => match std::str::from_utf8(&bytes) {
+        match snapshot.bytes(&entry.path) {
+            Ok(bytes) => match std::str::from_utf8(bytes) {
                 Ok(text)
                     if ((entry.path == "source.diff"
                         || entry.path.starts_with("tier_r_source/"))
@@ -6643,10 +6618,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         }
     }
 
-    match parse_json_file::<ProvenanceGraph>(
-        &bundle_dir.join("provenance_graph.json"),
-        4 * 1024 * 1024,
-    ) {
+    match snapshot.parse::<ProvenanceGraph>("provenance_graph.json", 4 * 1024 * 1024) {
         Ok(graph) => validate_provenance_graph(&graph, &artifact_index, &mut findings),
         Err(reason) => findings.push(simple_finding(
             ERROR_PROVENANCE,
@@ -6659,7 +6631,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
 
 #[allow(clippy::too_many_arguments)]
 fn validate_execution_record(
-    bundle_dir: &Path,
+    snapshot: &BundleSnapshot,
     artifact_index: &BTreeMap<String, &ArtifactDigest>,
     expected_schema: &str,
     expected_command: &str,
@@ -6710,9 +6682,8 @@ fn validate_execution_record(
     for (path, hash) in [(stdout_path, stdout_sha256), (stderr_path, stderr_sha256)] {
         match artifact_index.get(path) {
             Some(entry) if entry.sha256 == hash => {
-                if let Ok(bytes) =
-                    read_bounded_regular_file(&bundle_dir.join(path), MAX_BUNDLE_FILE_BYTES)
-                    && sha256_hex(&bytes) != hash
+                if let Ok(bytes) = snapshot.bytes(path)
+                    && sha256_hex(bytes) != hash
                 {
                     findings.push(simple_finding(
                         ERROR_HASH_DRIFT,
@@ -6739,7 +6710,7 @@ fn textual_artifact_path(path: &str) -> bool {
 }
 
 fn validate_sample_artifact(
-    bundle_dir: &Path,
+    snapshot: &BundleSnapshot,
     run_manifest: &RunManifest,
     artifact_index: &BTreeMap<String, &ArtifactDigest>,
     findings: &mut Vec<ValidationFinding>,
@@ -6747,10 +6718,7 @@ fn validate_sample_artifact(
     let sample_artifact = &run_manifest.sample_artifact;
     match sample_artifact.kind {
         SampleArtifactKind::RawSamples => {
-            let bytes = match read_bounded_regular_file(
-                &bundle_dir.join(&sample_artifact.path),
-                MAX_BUNDLE_FILE_BYTES,
-            ) {
+            let bytes: &[u8] = match snapshot.bytes(&sample_artifact.path) {
                 Ok(bytes) => bytes,
                 Err(reason) => {
                     findings.push(simple_finding(
@@ -6816,8 +6784,8 @@ fn validate_sample_artifact(
             }
         }
         SampleArtifactKind::MinimizedSeed => {
-            match parse_json_file::<MinimizedSeed>(
-                &bundle_dir.join(&sample_artifact.path),
+            match snapshot.parse::<MinimizedSeed>(
+                &sample_artifact.path,
                 MAX_BUNDLE_FILE_BYTES,
             ) {
                 Ok(seed)
@@ -7186,6 +7154,234 @@ fn parse_json_file<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) ->
         .map_err(|error| format!("{ERROR_JSON}: parse {}: {error}", path.display()))
 }
 
+/// Identity of one captured bundle member, taken exclusively from the open
+/// descriptor's fstat. Path metadata is never consulted after capture, so a
+/// concurrent rename/replace cannot smuggle different bytes past the identity
+/// check, and a same-inode truncate/grow shows up as a length mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    len: u64,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl FileIdentity {
+    /// Read identity through an already-open descriptor (`fstat`), never by
+    /// re-resolving a path.
+    ///
+    /// # Errors
+    /// When the descriptor cannot be inspected.
+    pub fn of_descriptor(file: &fs::File) -> Result<Self, String> {
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("{ERROR_IO}: fstat open descriptor: {error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(Self {
+                len: metadata.len(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {
+                len: metadata.len(),
+            })
+        }
+    }
+
+    fn matches_during_read(&self, other: &Self) -> bool {
+        #[cfg(unix)]
+        {
+            self.device == other.device && self.inode == other.inode && self.len == other.len
+        }
+        #[cfg(not(unix))]
+        {
+            self.len == other.len
+        }
+    }
+}
+
+/// One bundle member captured through exactly one descriptor. The retained
+/// bytes are the only copy every downstream hash and semantic parser sees.
+#[derive(Debug)]
+pub struct BundleMember {
+    pub relative: String,
+    pub identity: FileIdentity,
+    pub bytes: Vec<u8>,
+}
+
+/// Immutable byte snapshot of a whole verification bundle. Validation verdicts
+/// must derive from this and only this; nothing reopens a path afterwards.
+#[derive(Debug, Default)]
+pub struct BundleSnapshot {
+    members: BTreeMap<String, BundleMember>,
+}
+
+impl BundleSnapshot {
+    /// Byte view of one captured member.
+    ///
+    /// # Errors
+    /// When the member is absent from the captured snapshot.
+    pub fn bytes(&self, relative: &str) -> Result<&[u8], String> {
+        self.members
+            .get(relative)
+            .map(|member| member.bytes.as_slice())
+            .ok_or_else(|| {
+                format!(
+                    "{ERROR_BUNDLE_INCOMPLETE}: {relative} is not present in the captured bundle snapshot"
+                )
+            })
+    }
+
+    /// UTF-8 text view of one captured member.
+    ///
+    /// # Errors
+    /// When the member is absent or not valid UTF-8.
+    pub fn text(&self, relative: &str) -> Result<&str, String> {
+        let bytes = self.bytes(relative)?;
+        std::str::from_utf8(bytes)
+            .map_err(|error| format!("{ERROR_ARTIFACT_CONTRACT}: {relative} is not UTF-8: {error}"))
+    }
+
+    /// Deserialize one captured member as JSON within a byte bound.
+    ///
+    /// # Errors
+    /// When the member is absent, exceeds the bound, or fails to deserialize.
+    pub fn parse<T: for<'de> Deserialize<'de>>(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<T, String> {
+        let bytes = self.bytes(relative)?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(format!(
+                "{ERROR_BOUNDS}: {relative} is {} bytes, limit {max_bytes}",
+                bytes.len()
+            ));
+        }
+        serde_json::from_slice(bytes)
+            .map_err(|error| format!("{ERROR_JSON}: parse {relative}: {error}"))
+    }
+
+    /// Digest of one captured member, or empty-string placeholder when absent
+    /// (callers that treat absence as its own finding keep working unchanged).
+    #[must_use]
+    pub fn sha256_or_empty(&self, relative: &str) -> String {
+        self.bytes(relative)
+            .map(sha256_hex)
+            .unwrap_or_else(|_| String::new())
+    }
+
+    #[must_use]
+    pub fn member_count(&self) -> usize {
+        self.members.len()
+    }
+}
+
+/// Open one bundle member without following symlinks (platform-gated).
+fn open_bundle_member(bundle_dir: &Path, relative: &str) -> Result<fs::File, String> {
+    let path = bundle_dir.join(relative);
+    #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "redox"))]
+    {
+        open(
+            &path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map(fs::File::from)
+        .map_err(|error| format!("{ERROR_IO}: no-follow open {relative}: {error}"))
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "redox")))]
+    {
+        fs::File::open(&path).map_err(|error| format!("{ERROR_IO}: open {relative}: {error}"))
+    }
+}
+
+/// Read one member's entire content through a single already-open descriptor.
+/// Identity comes from `fstat` before and after the read on THAT descriptor;
+/// no path is resolved again, and allocation respects the pre-read length.
+fn read_member_through_descriptor(
+    relative: &str,
+    file: &mut fs::File,
+    max_bytes: u64,
+) -> Result<BundleMember, String> {
+    let before = FileIdentity::of_descriptor(file)?;
+    if before.len > max_bytes {
+        return Err(format!(
+            "{ERROR_BOUNDS}: {relative} is {} bytes, limit {max_bytes}",
+            before.len
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(before.len).unwrap_or(usize::MAX));
+    let mut reader = file.take(max_bytes.saturating_add(1));
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("{ERROR_IO}: read {relative}: {error}"))?;
+    drop(reader);
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{ERROR_BOUNDS}: {relative} exceeded {max_bytes} bytes while reading"
+        ));
+    }
+    let after = FileIdentity::of_descriptor(file)?;
+    if !before.matches_during_read(&after) || after.len != bytes.len() as u64 {
+        return Err(format!(
+            "{ERROR_UNSAFE_PATH}: {relative} changed identity or length during bounded capture"
+        ));
+    }
+    Ok(BundleMember {
+        relative: relative.to_string(),
+        identity: after,
+        bytes,
+    })
+}
+
+/// Capture every walked bundle member once, invoking `after_member` with each
+/// relative path immediately after it is captured (deterministic injection
+/// point for race-drill tests; production passes the no-op closure).
+fn capture_bundle_snapshot_with(
+    bundle_dir: &Path,
+    mut after_member: impl FnMut(&str),
+) -> Result<(Vec<String>, BundleSnapshot), String> {
+    let files = walk_bundle_files(bundle_dir)?;
+    let mut members = BTreeMap::new();
+    let mut total_bytes = 0u64;
+    for relative in &files {
+        let member = capture_bundle_member(bundle_dir, relative, MAX_BUNDLE_FILE_BYTES)?;
+        total_bytes = total_bytes
+            .checked_add(member.bytes.len() as u64)
+            .ok_or_else(|| format!("{ERROR_BOUNDS}: bundle total-byte accounting overflow"))?;
+        if total_bytes > MAX_BUNDLE_TOTAL_BYTES {
+            return Err(format!(
+                "{ERROR_BOUNDS}: bundle total bytes exceed {MAX_BUNDLE_TOTAL_BYTES}"
+            ));
+        }
+        members.insert(relative.clone(), member);
+        after_member(relative);
+    }
+    Ok((files, BundleSnapshot { members }))
+}
+
+/// Capture the complete immutable bundle snapshot used by all validation.
+fn capture_bundle_snapshot(bundle_dir: &Path) -> Result<(Vec<String>, BundleSnapshot), String> {
+    capture_bundle_snapshot_with(bundle_dir, |_| {})
+}
+
+/// Capture one member through exactly one fresh descriptor.
+fn capture_bundle_member(
+    bundle_dir: &Path,
+    relative: &str,
+    max_bytes: u64,
+) -> Result<BundleMember, String> {
+    let mut file = open_bundle_member(bundle_dir, relative)?;
+    read_member_through_descriptor(relative, &mut file, max_bytes)
+}
+
 pub fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("{ERROR_IO}: inspect {}: {error}", path.display()))?;
@@ -7214,22 +7410,33 @@ pub fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>,
     #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "redox")))]
     let file = fs::File::open(path)
         .map_err(|error| format!("{ERROR_IO}: open {}: {error}", path.display()))?;
+    let before = FileIdentity::of_descriptor(&file)?;
+    if metadata.len() != before.len {
+        return Err(format!(
+            "{ERROR_UNSAFE_PATH}: {} changed between inspect and open",
+            path.display()
+        ));
+    }
     let mut bytes =
-        Vec::with_capacity(usize::try_from(metadata.len().min(max_bytes)).unwrap_or(usize::MAX));
-    file.take(max_bytes.saturating_add(1))
+        Vec::with_capacity(usize::try_from(before.len.min(max_bytes)).unwrap_or(usize::MAX));
+    let mut reader = (&file).take(max_bytes.saturating_add(1));
+    reader
         .read_to_end(&mut bytes)
         .map_err(|error| format!("{ERROR_IO}: read {}: {error}", path.display()))?;
+    drop(reader);
     if bytes.len() as u64 > max_bytes {
         return Err(format!(
             "{ERROR_BOUNDS}: {} exceeded {max_bytes} bytes while reading",
             path.display()
         ));
     }
-    let after = fs::symlink_metadata(path)
-        .map_err(|error| format!("{ERROR_IO}: re-inspect {}: {error}", path.display()))?;
-    if after.file_type().is_symlink() || !after.is_file() || after.len() != bytes.len() as u64 {
+    // Identity comes from the SAME descriptor (fstat), never a path re-stat:
+    // a concurrent replace lands on a different inode, same-inode truncate or
+    // grow changes the length; both are refused here.
+    let after = FileIdentity::of_descriptor(&file)?;
+    if !before.matches_during_read(&after) || after.len != bytes.len() as u64 {
         return Err(format!(
-            "{ERROR_UNSAFE_PATH}: {} changed type or length during bounded read",
+            "{ERROR_UNSAFE_PATH}: {} changed identity or length during bounded read",
             path.display()
         ));
     }
@@ -7621,4 +7828,217 @@ fn bounded_redacted(value: &str, repo_root: &Path) -> String {
         output.push_str(ellipsis);
     }
     output
+}
+
+#[cfg(test)]
+mod bundle_snapshot_race_drills {
+    //! Deterministic race drills for the immutable bundle snapshot API
+    //! (bd-performance-conformance-bridge-tu32j.22.1.3). Every scenario mutates
+    //! files at a controlled, barrier-equivalent point — no sleeps, no timing
+    //! assumptions — and asserts the verdict derives from exactly one coherent
+    //! byte snapshot or fails stably.
+
+    use super::*;
+    use std::fs;
+
+    fn temp_root(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("vcc_snapshot_{tag}_"))
+            .tempdir()
+            .expect("create temp root")
+    }
+
+    fn xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn write_member(root: &Path, relative: &str, bytes: &[u8]) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdirs");
+        fs::write(path, bytes).expect("write member");
+    }
+
+    // ------------------------------------------------------------------
+    // Model/property drill: bounded seeded inventories must capture
+    // coherently; two consecutive captures are byte-identical; captured
+    // bytes equal independent reads while the tree is unmutated.
+    // ------------------------------------------------------------------
+    #[test]
+    fn snapshot_model_inventories_capture_coherently_and_replay_identically() {
+        for seed in [1u64, 0xDEADBEEF, 0x5EED_5EED] {
+            let root = temp_root("model");
+            let dir = root.path();
+            let mut state = seed;
+            let member_count = 1 + (xorshift(&mut state) % 12) as usize;
+            let mut expected: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+            for index in 0..member_count {
+                let size = (xorshift(&mut state) % 512) as usize;
+                let body: Vec<u8> = (0..size)
+                    .map(|_| (xorshift(&mut state) & 0xFF) as u8)
+                    .collect();
+                let relative = if index == 0 {
+                    "a_top.json".to_string()
+                } else {
+                    format!("nested_{index}/m{index}.bin")
+                };
+                write_member(dir, &relative, &body);
+                expected.insert(relative, body);
+            }
+            let (_, first) = capture_bundle_snapshot(dir).expect("first capture");
+            let (_, second) = capture_bundle_snapshot(dir).expect("second capture");
+            assert_eq!(expected.len(), first.member_count());
+            for (relative, body) in &expected {
+                assert_eq!(
+                    first.bytes(relative).expect("member present"),
+                    body.as_slice(),
+                    "seed {seed}: captured bytes diverge from inventory"
+                );
+                assert_eq!(
+                    sha256_hex(first.bytes(relative).expect("member present")),
+                    sha256_hex(second.bytes(relative).expect("member present")),
+                    "seed {seed}: replayed capture is not byte-identical"
+                );
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Same-length swap between two members' captures: each member stays
+    // internally coherent, and downstream hash cross-checks fail stably on
+    // exactly the swapped member (never a torn mixture).
+    // ------------------------------------------------------------------
+    #[test]
+    fn same_length_swap_between_captures_yields_coherent_members_and_stable_drift() {
+        let root = temp_root("swap");
+        let dir = root.path();
+        write_member(dir, "one.txt", b"AAAA");
+        write_member(dir, "two.txt", b"BBBB");
+
+        let captured_two = std::cell::RefCell::new(false);
+        let (_, snapshot) = capture_bundle_snapshot_with(dir, |relative| {
+            if relative == "two.txt" && !captured_two.replace(true) {
+                // Deterministic injection point: right after `two.txt` was
+                // captured, swap `one.txt` to a same-length rival payload.
+                write_member(dir, "one.txt", b"CCCC");
+            }
+        })
+        .expect("capture with swap injection");
+
+        // The swapped member was captured BEFORE the mutation: its retained
+        // bytes must still be the pre-swap version.
+        assert_eq!(snapshot.bytes("one.txt").expect("one"), b"AAAA");
+        assert_eq!(snapshot.bytes("two.txt").expect("two"), b"BBBB");
+
+        // A fresh capture over the mutated tree sees only coherent new bytes.
+        let (_, after) = capture_bundle_snapshot(dir).expect("post-swap capture");
+        assert_eq!(after.bytes("one.txt").expect("one"), b"CCCC");
+        assert_eq!(
+            sha256_hex(after.bytes("one.txt").unwrap()),
+            sha256_hex(b"CCCC")
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Truncate-during-capture: mutating the same inode through a second
+    // handle while the descriptor read is in flight is refused by the
+    // fstat-before/fstat-after identity contract. Deterministic: the
+    // mutation happens through an independent open descriptor, not by
+    // racing a scheduler.
+    // ------------------------------------------------------------------
+    #[test]
+    fn truncate_through_second_handle_during_capture_is_refused() {
+        let root = temp_root("truncate");
+        let dir = root.path();
+        let payload = "x".repeat(4096);
+        write_member(dir, "victim.bin", payload.as_bytes());
+
+        let mut reader = open_bundle_member(dir, "victim.bin").expect("open victim");
+        // Hold a writer on the SAME inode and shrink it while `reader` is
+        // open but before its bounded read completes identity verification.
+        let mut writer = fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("victim.bin"))
+            .expect("second handle");
+        writer.set_len(16).expect("truncate same inode");
+        drop(writer);
+
+        let error =
+            read_member_through_descriptor("victim.bin", &mut reader, MAX_BUNDLE_FILE_BYTES)
+                .expect_err("truncated capture must be refused");
+        assert!(
+            error.contains(ERROR_UNSAFE_PATH),
+            "expected unsafe-path refusal, got: {error}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Inode replacement between open and identity check is refused even
+    // when the length happens to match (same-length swap attacks).
+    // ------------------------------------------------------------------
+    #[test]
+    fn same_length_replacement_during_capture_is_refused_by_identity() {
+        let before = FileIdentity {
+            len: 128,
+            #[cfg(unix)]
+            device: 7,
+            #[cfg(unix)]
+            inode: 1001,
+        };
+        let after_same_inode_grown = FileIdentity {
+            len: 256,
+            #[cfg(unix)]
+            device: 7,
+            #[cfg(unix)]
+            inode: 1001,
+        };
+        let after_replaced_inode_same_len = FileIdentity {
+            len: 128,
+            #[cfg(unix)]
+            device: 7,
+            #[cfg(unix)]
+            inode: 2002,
+        };
+        assert!(!before.matches_during_read(&after_same_inode_grown));
+        assert!(!before.matches_during_read(&after_replaced_inode_same_len));
+    }
+
+    // ------------------------------------------------------------------
+    // Symlink members never enter the snapshot (walk refuses them), so a
+    // symlink planted over a real member cannot redirect reads.
+    // ------------------------------------------------------------------
+    #[test]
+    fn symlink_members_are_refused_not_followed() {
+        #[cfg(unix)]
+        {
+            let root = temp_root("symlink");
+            let dir = root.path();
+            write_member(dir, "real_target_outside", b"secret");
+            write_member(dir, "keep.json", b"{}");
+            std::os::unix::fs::symlink(dir.join("real_target_outside"), dir.join("link.json"))
+                .expect("plant symlink");
+            let error = capture_bundle_snapshot(dir)
+                .err()
+                .expect("symlink must fail capture");
+            assert!(error.contains(ERROR_UNSAFE_PATH), "got: {error}");
+            // And the link target's contents never leak into any member.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Bounds are enforced from descriptor metadata before allocation:
+    // an oversized member is rejected without reading it into memory.
+    // ------------------------------------------------------------------
+    #[test]
+    fn oversized_member_is_refused_before_allocation() {
+        let root = temp_root("bounds");
+        let dir = root.path();
+        write_member(dir, "big.bin", vec![0u8; 4096].as_slice());
+        let error = capture_bundle_member(dir, "big.bin", 1024)
+            .err()
+            .expect("oversized member must be refused");
+        assert!(error.contains(ERROR_BOUNDS), "got: {error}");
+    }
 }

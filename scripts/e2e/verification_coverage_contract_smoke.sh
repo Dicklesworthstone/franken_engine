@@ -523,6 +523,32 @@ ln -s "../canonical/contract.json" "${symlink_dir}/unsafe-link"
 validate_expected_rejection \
   "mutation.symlink" "$symlink_dir" 'FE-VCC-1007'
 
+# Same-length swap of a manifested artifact: the single-snapshot validator
+# must fail stably on exactly this member (hash drift from captured bytes),
+# never authenticate a mixture of pre- and post-swap versions.
+swap_dir="${smoke_dir}/mutation-same-length-swap"
+clone_bundle_except "$swap_dir"
+swap_target="$(jq -er '.files[0].path' "${canonical_dir}/artifact_manifest.json")"
+python3 - "$swap_dir/$swap_target" <<'PY'
+import sys
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+if not data:
+    data = bytearray(b"A")
+data[0] ^= 0x01 if data[0] != 0x41 else 0x02
+open(path, "wb").write(bytes(data))
+PY
+validate_expected_rejection \
+  "mutation.same_length_swap" "$swap_dir" 'FE-VCC-1008'
+
+# Root replacement: the bundle root itself is a symlink to another tree.
+# The validator must refuse at the root check without reading any member.
+root_swap_dir="${smoke_dir}/mutation-root-replacement"
+mkdir -p "$root_swap_dir"
+ln -s "$canonical_dir" "${root_swap_dir}/bundle"
+validate_expected_rejection \
+  "mutation.root_replacement" "${root_swap_dir}/bundle" 'FE-VCC-1007'
+
 path_dir="${smoke_dir}/mutation-manifest-path"
 clone_bundle_except "$path_dir" "artifact_manifest.json"
 jq '.files[0].path = "../escape"' \

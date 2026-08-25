@@ -1,0 +1,9 @@
+br ready --json
+br list --json --status in_progress
+bv --robot-plan
+curl agent-mail health
+rch status
+git rev-parse HEAD && git status --porcelain
+scan artifacts/shadow_daemon_no_mock_drill for complete prior bundles
+python3 normalize capture -> journal.json
+cargo test -p frankenengine-engine --test shadow_daemon_no_mock_drill_bd_nil04

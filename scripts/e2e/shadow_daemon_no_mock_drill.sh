@@ -251,8 +251,10 @@ PYEOF
 
 # --- 3. Drive the real composer through the harness --------------------------
 record "cargo test -p frankenengine-engine --test shadow_daemon_no_mock_drill_bd_nil04"
-export SHADOW_NO_MOCK_CAPTURE_DIR="$CAPTURE_DIR"
-export SHADOW_NO_MOCK_OUTPUT_ROOT="$OUTPUT_ROOT"
+# cargo test executes with the crate directory as CWD, so relative paths from
+# this script would not resolve inside the harness.
+export SHADOW_NO_MOCK_CAPTURE_DIR="$PROJECT_ROOT/$CAPTURE_DIR"
+export SHADOW_NO_MOCK_OUTPUT_ROOT="$PROJECT_ROOT/$OUTPUT_ROOT"
 if ! cargo test -p frankenengine-engine --test shadow_daemon_no_mock_drill_bd_nil04 -- --nocapture; then
     fail_closed "composer harness assertions failed; see test output"
 fi

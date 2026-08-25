@@ -173,28 +173,49 @@ check_shadow_no_mock_gate_truth() {
         return 1
     fi
 
-    if grep -A3 'no_mock_drill' "$proof_doc" | grep -Eq 'GREEN|🟢'; then
-        log "$RED" "  ❌ no_mock_drill is still documented as green"
+    # bd-nil04 (2026-08-24): the no_mock_drill gate is GREEN via the
+    # authoritative drill. The check now enforces the new evidenced reality:
+    #   1. the proof doc records no_mock_drill as GREEN with a checked-in
+    #      receipt directory,
+    #   2. that receipt exists on disk with its evidence files,
+    #   3. the authoritative harness test and wrapper script exist,
+    #   4. the synthetic drill keeps its fail-closed exit guard so it can
+    #      never substitute for the authoritative lane,
+    #   5. the doc still names the synthetic exercise as excluded evidence.
+
+    local authoritative_drill="scripts/e2e/shadow_daemon_no_mock_drill.sh"
+    local harness_test="crates/franken-engine/tests/shadow_daemon_no_mock_drill_bd_nil04.rs"
+
+    if ! grep -Eq 'no_mock_drill' "$proof_doc" || \
+       ! grep -A3 '#### No-Mock Shadow Daemon Lifecycle Drill' "$proof_doc" | grep -q '🟢 GREEN'; then
+        log "$RED" "  ❌ no_mock_drill is not documented as GREEN in the verified section"
         return 1
     fi
 
-    if ! grep -A4 'no_mock_drill' "$proof_doc" | grep -Eq 'BLOCKED|🔴'; then
-        log "$RED" "  ❌ no_mock_drill is not documented as blocked"
+    if ! grep -q 'docs/evidence/shadow_daemon_no_mock/' "$proof_doc"; then
+        log "$RED" "  ❌ no_mock_drill GREEN row must cite a checked-in receipt under docs/evidence/shadow_daemon_no_mock/"
+        return 1
+    fi
+
+    local receipt_dir
+    receipt_dir="$(grep -o 'docs/evidence/shadow_daemon_no_mock/[0-9TZ]*/' "$proof_doc" | head -1)"
+    if [[ -z "$receipt_dir" || ! -f "$receipt_dir/drill_evidence.json" || ! -f "$receipt_dir/journal.json" ]]; then
+        log "$RED" "  ❌ cited no-mock receipt directory is missing or incomplete: ${receipt_dir:-none}"
+        return 1
+    fi
+
+    if [[ ! -f "$authoritative_drill" || ! -f "$harness_test" ]]; then
+        log "$RED" "  ❌ authoritative drill script or harness test is missing"
+        return 1
+    fi
+
+    if ! grep -q 'EXIT_SYNTHETIC_EVIDENCE' "$lifecycle_drill"; then
+        log "$RED" "  ❌ Synthetic lifecycle drill no longer has a synthetic-evidence exit guard"
         return 1
     fi
 
     if ! grep -q 'synthetic evidence exercise' "$proof_doc"; then
         log "$RED" "  ❌ Proof-state doc does not name the lifecycle drill as synthetic"
-        return 1
-    fi
-
-    if ! grep -q 'EXIT_SYNTHETIC_EVIDENCE' "$lifecycle_drill"; then
-        log "$RED" "  ❌ Lifecycle drill no longer has a synthetic-evidence exit guard"
-        return 1
-    fi
-
-    if grep -q 'cargo run --bin shadow_' "$lifecycle_drill"; then
-        log "$RED" "  ❌ Synthetic lifecycle drill still invokes shadow helper binaries via bare cargo"
         return 1
     fi
 

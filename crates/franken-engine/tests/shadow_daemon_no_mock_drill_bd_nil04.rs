@@ -77,41 +77,25 @@ fn authoritative_no_mock_lifecycle_drill_bd_nil04() {
     let run_id = read_trimmed(&capture.join("shadow_run_id.txt"), "the drill run id");
 
     // --- Compose twice from identical inputs -----------------------------------
-    let out_one = output_root.join("composition_1");
-    let out_two = output_root.join("composition_2");
+    // Both compositions share one output directory so embedded artifact paths
+    // cannot mask genuine nondeterminism: any input-derived difference between
+    // the runs must show up as a full-structure inequality.
+    let out_dir = output_root.join("composition");
     let input_one = ShadowDecisionComposerInput::new(
         run_id.clone(),
         revision.clone(),
         epoch,
         events.clone(),
-        &out_one,
+        &out_dir,
     );
     let input_two =
-        ShadowDecisionComposerInput::new(run_id, revision, epoch, events.clone(), &out_two);
+        ShadowDecisionComposerInput::new(run_id, revision, epoch, events.clone(), &out_dir);
 
     let first =
         compose_shadow_decision(&input_one).expect("composition must succeed on the real capture");
     let second =
         compose_shadow_decision(&input_two).expect("repeat composition must succeed identically");
 
-    // Determinism modulo the output-root path that legitimately differs.
-    let redacted = |value: &serde_json::Value| -> serde_json::Value {
-        fn strip(value: &mut serde_json::Value) {
-            match value {
-                serde_json::Value::Object(map) => {
-                    map.remove("artifact_paths");
-                    for (_, child) in map.iter_mut() {
-                        strip(child);
-                    }
-                }
-                serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
-                _ => {}
-            }
-        }
-        let mut value = value.clone();
-        strip(&mut value);
-        value
-    };
     let first_json = serde_json::json!({
         "status": &first.shadow_status,
         "recommendations": &first.recommendations,
@@ -129,8 +113,7 @@ fn authoritative_no_mock_lifecycle_drill_bd_nil04() {
         "report": &second.report_md,
     });
     assert_eq!(
-        redacted(&first_json),
-        redacted(&second_json),
+        first_json, second_json,
         "composition must be byte-stable across repeated runs on identical inputs"
     );
 

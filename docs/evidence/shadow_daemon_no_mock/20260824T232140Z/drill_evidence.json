@@ -1,0 +1,12 @@
+{
+  "drill": "authoritative_no_mock_lifecycle",
+  "bead": "bd-nil04",
+  "shadow_run_id": "shadow-no-mock-20260824T232140Z",
+  "source_revision": "e8f58696e6af033ec20dcc7ed58ca81c31940159",
+  "generated_epoch_seconds": 1787628103,
+  "truth_state": "degraded",
+  "decision": "degraded",
+  "recommendation_count": 1,
+  "all_recommendations_advisory": true,
+  "determinism": "byte-identical-across-repeat-composition"
+}

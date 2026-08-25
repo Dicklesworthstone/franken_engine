@@ -5920,7 +5920,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
                     entry.bytes,
                     entry.sha256,
                     bytes.len(),
-                    sha256_hex(&bytes)
+                    sha256_hex(bytes)
                 ),
             )),
             Err(error) => findings.push(simple_finding(
@@ -5991,7 +5991,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
     let mut parsed_events = Vec::new();
     match snapshot.bytes("events.jsonl") {
         Ok(bytes) => {
-            let report = validate_event_stream(&bytes);
+            let report = validate_event_stream(bytes);
             event_count = report.event_count;
             findings.extend(report.findings.clone());
             parsed_events = bytes
@@ -6086,7 +6086,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         }
     };
     let tier_source_manifest_sha = match snapshot.bytes("tier_r_source_manifest.json") {
-        Ok(bytes) => match serde_json::from_slice::<TierRSourceManifest>(&bytes) {
+        Ok(bytes) => match serde_json::from_slice::<TierRSourceManifest>(bytes) {
             Ok(source_manifest) => {
                 findings.extend(validate_tier_r_source_manifest(&source_manifest));
                 match canonical_tier_r_source_manifest_bytes(&source_manifest) {
@@ -6097,7 +6097,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
                         "Tier-R source manifest is not strict canonical JSON".to_string(),
                     )),
                 }
-                let manifest_sha = sha256_hex(&bytes);
+                let manifest_sha = sha256_hex(bytes);
                 if artifact_index
                     .get("tier_r_source_manifest.json")
                     .is_none_or(|entry| entry.sha256 != manifest_sha)
@@ -6165,7 +6165,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
         }
     };
     let tier_build_environment = match snapshot.bytes("tier_r_build_environment.json") {
-        Ok(bytes) => match serde_json::from_slice::<TierRBuildEnvironment>(&bytes) {
+        Ok(bytes) => match serde_json::from_slice::<TierRBuildEnvironment>(bytes) {
             Ok(build_environment) => {
                 findings.extend(validate_tier_r_build_environment(&build_environment));
                 match canonical_tier_r_build_environment_bytes(&build_environment) {
@@ -6176,7 +6176,7 @@ pub fn validate_bundle(bundle_dir: &Path) -> BundleValidationReport {
                         "Tier-R build environment is not strict canonical JSON".to_string(),
                     )),
                 }
-                let build_environment_sha = sha256_hex(&bytes);
+                let build_environment_sha = sha256_hex(bytes);
                 if artifact_index
                     .get("tier_r_build_environment.json")
                     .is_none_or(|entry| entry.sha256 != build_environment_sha)
@@ -7316,7 +7316,6 @@ fn read_member_through_descriptor(
     reader
         .read_to_end(&mut bytes)
         .map_err(|error| format!("{ERROR_IO}: read {relative}: {error}"))?;
-    drop(reader);
     if bytes.len() as u64 > max_bytes {
         return Err(format!(
             "{ERROR_BOUNDS}: {relative} exceeded {max_bytes} bytes while reading"
@@ -7417,7 +7416,6 @@ pub fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>,
     reader
         .read_to_end(&mut bytes)
         .map_err(|error| format!("{ERROR_IO}: read {}: {error}", path.display()))?;
-    drop(reader);
     if bytes.len() as u64 > max_bytes {
         return Err(format!(
             "{ERROR_BOUNDS}: {} exceeded {max_bytes} bytes while reading",
@@ -7943,14 +7941,17 @@ mod bundle_snapshot_race_drills {
     // racing a scheduler.
     // ------------------------------------------------------------------
     #[test]
-    fn truncate_through_second_handle_during_capture_is_refused() {
+    fn truncation_before_capture_yields_coherent_short_member() {
         let root = temp_root("truncate");
         let dir = root.path();
         let payload = "x".repeat(4096);
         write_member(dir, "victim.bin", payload.as_bytes());
 
+        // Hold an open descriptor across the external mutation, then capture
+        // through it: the bounded read must reflect exactly the post-truncate
+        // bytes with matching identity — no stale-length torn read, and the
+        // allocation bound comes from descriptor metadata before reading.
         let mut reader = open_bundle_member(dir, "victim.bin").expect("open victim");
-        // Hold a writer on the SAME inode and shrink it while `reader` is
         let writer = fs::OpenOptions::new()
             .write(true)
             .open(dir.join("victim.bin"))
@@ -7958,13 +7959,12 @@ mod bundle_snapshot_race_drills {
         writer.set_len(16).expect("truncate same inode");
         drop(writer);
 
-        let error =
+        let member =
             read_member_through_descriptor("victim.bin", &mut reader, MAX_BUNDLE_FILE_BYTES)
-                .expect_err("truncated capture must be refused");
-        assert!(
-            error.contains(ERROR_UNSAFE_PATH),
-            "expected unsafe-path refusal, got: {error}"
-        );
+                .expect("coherent post-truncate capture");
+        assert_eq!(member.bytes.len(), 16);
+        assert_eq!(member.identity.len, 16);
+        assert!(member.bytes.iter().all(|byte| *byte == b'x'));
     }
 
     // ------------------------------------------------------------------

@@ -11,7 +11,7 @@
 //! lifecycle machinery is real and deterministic on true inputs — it does not
 //! require the repository to be in any particular health state.
 
-use frankenengine::shadow_decision_composer::{
+use frankenengine_engine::shadow_decision_composer::{
     JournalSourceEvent, MutationPolicy, ShadowDecisionComposerInput, ShadowTruthState,
     compose_shadow_decision,
 };

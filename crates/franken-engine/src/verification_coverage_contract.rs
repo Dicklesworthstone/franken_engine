@@ -7148,12 +7148,6 @@ fn walk_bundle_files(bundle_dir: &Path) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
-fn parse_json_file<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Result<T, String> {
-    let bytes = read_bounded_regular_file(path, max_bytes)?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{ERROR_JSON}: parse {}: {error}", path.display()))
-}
-
 /// Identity of one captured bundle member, taken exclusively from the open
 /// descriptor's fstat. Path metadata is never consulted after capture, so a
 /// concurrent rename/replace cannot smuggle different bytes past the identity
@@ -7957,8 +7951,7 @@ mod bundle_snapshot_race_drills {
 
         let mut reader = open_bundle_member(dir, "victim.bin").expect("open victim");
         // Hold a writer on the SAME inode and shrink it while `reader` is
-        // open but before its bounded read completes identity verification.
-        let mut writer = fs::OpenOptions::new()
+        let writer = fs::OpenOptions::new()
             .write(true)
             .open(dir.join("victim.bin"))
             .expect("second handle");

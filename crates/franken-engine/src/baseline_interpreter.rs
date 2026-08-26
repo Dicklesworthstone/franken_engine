@@ -61873,7 +61873,7 @@ impl InterpreterCore {
                         return self.crypto_random_failure(invocation_label, None);
                     };
                     let Ok(signing_key) =
-                        p256::ecdsa::SigningKey::slice_from_bytes(&scalar_bytes)
+                        p256::ecdsa::SigningKey::from_slice(&scalar_bytes)
                     else {
                         continue;
                     };
@@ -61947,7 +61947,7 @@ impl InterpreterCore {
                 Self::ed25519_sign_detached(seed_bytes, &message).to_vec()
             }
             CryptoKeyPairAlgorithm::EcP256 => {
-                Self::require_sha256_p256_algorithm(
+                self.require_sha256_p256_algorithm(
                     algorithm_arg,
                     &invocation_label,
                 )?;
@@ -62037,7 +62037,7 @@ impl InterpreterCore {
                 }
             }
             CryptoKeyPairAlgorithm::EcP256 => {
-                Self::require_sha256_p256_algorithm(
+                self.require_sha256_p256_algorithm(
                     algorithm_arg,
                     &invocation_label,
                 )?;
@@ -62084,7 +62084,7 @@ impl InterpreterCore {
         _invocation_label: &Label,
     ) -> Result<(), InterpreterError> {
         match value {
-            Some(Value::Str(name)) if name.as_str() == "sha256" => Ok(()),
+            Some(Value::Str(name)) if name.as_str() == Some("sha256") => Ok(()),
             other => Err(InterpreterError::TypeError {
                 expected: "the literal \"sha256\" digest for P-256 sign/verify in this engine slice"
                     .to_string(),
@@ -62095,15 +62095,14 @@ impl InterpreterCore {
         }
     }
 
-    /// bd-53l89 slice 3: ECDSA over P-256 pins SHA-256 as the only digest in
-    /// this slice; anything else is a typed argument error.
-    fn require_sha256_p256_algorithm(
-        value: Option<Value>,
-        invocation_label: &Label,
-    ) -> Result<(), InterpreterError> {
-        match value {
-            Some(Value::Str(name)) if name.as_str() == "sha256" => Ok(()),
-            other => Err(Self::crypto_throw_node_error(
+    /// Resolve a live KeyPairActive handle to its signing-private parts
+    /// (contract §1: ObjectId membership is the authority; §3: the private
+    /// clone stays inside Zeroizing).
+    fn crypto_key_pair_private(
+        &self,
+        value: &Value,
+    ) -> Result<
+        (
             CryptoKeyPairAlgorithm,
             Zeroizing<Vec<u8>>,
             Label,
@@ -62347,6 +62346,35 @@ impl InterpreterCore {
             .map_err(|_| "ERR_CRYPTO_INVALID_SIGNATURE_LENGTH")?;
         Ok(verifying_key.verify(message, &signature).is_ok())
     }
+
+    /// bd-53l89 slice 3: pure P-256 ECDSA signing with RFC 6979 deterministic
+    /// nonces (SHA-256), returning the DER encoding Node emits. The scalar is
+    /// validated at generation, so construction cannot fail here.
+    fn p256_sign_detached_der(scalar: [u8; 32], message: &[u8]) -> Vec<u8> {
+        use p256::ecdsa::signature::Signer as _;
+        let signing_key = p256::ecdsa::SigningKey::from_slice(&scalar)
+            .expect("P-256 scalar validated during generation");
+        let signature: p256::ecdsa::Signature = signing_key.sign(message);
+        signature.to_der().as_bytes().to_vec()
+    }
+
+    /// bd-53l89 slice 3: pure P-256 ECDSA verification over an uncompressed
+    /// SEC1 public key and a DER signature. `Err` carries the typed failure
+    /// class for malformed encodings; `Ok(false)` is a legitimate reject.
+    fn p256_verify_detached_der(
+        public_key: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, &'static str> {
+        let encoded_point = p256::EncodedPoint::from_bytes(public_key)
+            .map_err(|_| "stored P-256 public key rejected")?;
+        let verifying_key = p256::ecdsa::VerifyingKey::from_encoded_point(&encoded_point)
+            .map_err(|_| "stored P-256 public key rejected")?;
+        let signature = p256::ecdsa::Signature::from_der(signature)
+            .map_err(|_| "ERR_CRYPTO_INVALID_SIGNATURE")?;
+        Ok(verifying_key.verify(message, &signature).is_ok())
+    }
+
     /// bd-lnqta: NIST SP 800-38D AES-256-GCM for initialization vectors whose
     /// length differs from the audited 96-bit fast path above. J0 is derived
     /// through GHASH per §8.2.1, counters increment only the low 32 bits

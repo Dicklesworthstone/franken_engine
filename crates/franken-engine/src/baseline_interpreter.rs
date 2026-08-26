@@ -57,6 +57,8 @@ use aes::cipher::{
 use aes_gcm::aead::{AeadInPlace, KeyInit as AeadKeyInit};
 use ghash::{GHash, universal_hash};
 use ghash::universal_hash::UniversalHash as _;
+use ed25519_dalek::{Signature as Ed25519Signature, Signer as Ed25519Signer,
+    Verifier as Ed25519Verifier, VerifyingKey};
 use flate2::{Compression, GzBuilder, read::MultiGzDecoder};
 use hmac::{Hmac, Mac};
 use md5::Md5;
@@ -61855,6 +61857,176 @@ impl InterpreterCore {
         }
     }
 
+    /// bd-53l89 slice 2 (contract §5,6). Node `crypto.sign(algorithm, data,
+    /// key)` with Ed25519 semantics: the algorithm must be null/undefined and
+    /// the key must be a live KeyPairActive handle. The signature derives from
+    /// Secret-floor key material and the message, so its label is
+    /// join(lifecycle_label, message_label) — never Public.
+    fn crypto_sign_sync(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        if args.count != 3 {
+            return Err(InterpreterError::TypeError {
+                expected: "sign(algorithm, data, key)".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        Self::require_null_ed25519_algorithm(
+            self.builtin_arg(args, 0)?,
+            "sign",
+            &invocation_label,
+        )?;
+        let data_value = self.crypto_required_arg(args, 1, "message")?;
+        let key_value = self.crypto_required_arg(args, 2, "key handle")?;
+        let (seed, lifecycle_label) = self.crypto_ed25519_seed(&key_value)?;
+        let message = self.crypto_input_bytes(&data_value, None)?;
+        let data_register = RegRange {
+            start: args.start.saturating_add(1),
+            count: 1,
+        };
+        let message_label = self.join_arg_range_label(data_register)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(message.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(128)
+                .saturating_add(Self::estimate_label_bytes(&lifecycle_label)),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(
+            message.len().saturating_add(64),
+        ))?;
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(
+            &<[u8; 32]>::try_from(seed.as_slice()).map_err(|_| InterpreterError::InternalError {
+                details: "ed25519 signing seed must be exactly 32 bytes".to_string(),
+            })?,
+        );
+        let signature = signing_key.sign(&message).to_bytes();
+        let result_label = lifecycle_label.join(&message_label);
+        self.crypto_output_value_with_temporary_budget(
+            &signature,
+            None,
+            &result_label,
+            true,
+            u64::try_from(message.len()).unwrap_or(u64::MAX),
+        )
+    }
+
+    /// bd-53l89 slice 2 (contract §5,6). Node `crypto.verify(algorithm, data,
+    /// key, signature)`. The verdict consumes only public material plus
+    /// caller-supplied message/signature inputs; the JoinInputs epilogue joins
+    /// those operand labels onto the boolean, so a Secret message yields a
+    /// Secret-labeled verdict (sound predicate secrecy).
+    fn crypto_verify_sync(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        if args.count != 4 {
+            return Err(InterpreterError::TypeError {
+                expected: "verify(algorithm, data, key, signature)".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        Self::require_null_ed25519_algorithm(
+            self.builtin_arg(args, 0)?,
+            "verify",
+            &invocation_label,
+        )?;
+        let data_value = self.crypto_required_arg(args, 1, "message")?;
+        let key_value = self.crypto_required_arg(args, 2, "key handle")?;
+        let signature_value = self.crypto_required_arg(args, 3, "signature")?;
+        let public_key = self.crypto_ed25519_public(&key_value)?;
+        let message = self.crypto_input_bytes(&data_value, None)?;
+        let signature = self.crypto_input_bytes(&signature_value, None)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(message.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::try_from(signature.len()).unwrap_or(u64::MAX))
+                .saturating_add(96),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(
+            message.len().saturating_add(signature.len()),
+        ))?;
+        let Ok(signature_array) = <[u8; 64]>::try_from(signature.as_slice()) else {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_CRYPTO_INVALID_SIGNATURE_LENGTH",
+                format!(
+                    "Invalid Ed25519 signature length: expected 64 bytes, got {}",
+                    signature.len()
+                ),
+                &invocation_label,
+            ));
+        };
+        let verifying_key = VerifyingKey::from_bytes(&public_key)
+            .expect("stored Ed25519 public key validated at generation");
+        let signature_value = Ed25519Signature::from_slice(&signature_array)
+            .expect("signature length checked above");
+        let verified = verifying_key.verify(&message, &signature_value).is_ok();
+        Ok(Value::Bool(verified))
+    }
+
+    fn require_null_ed25519_algorithm(
+        value: Option<Value>,
+        operation: &str,
+        _invocation_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        match value {
+            None | Some(Value::Undefined) | Some(Value::Null) => Ok(()),
+            Some(other) => Err(InterpreterError::TypeError {
+                expected: format!("null algorithm for Ed25519 {operation}"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn crypto_ed25519_seed(
+        &self,
+        value: &Value,
+    ) -> Result<(Zeroizing<Vec<u8>>, Label), InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "Ed25519 key pair handle".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        match self.crypto_objects.get(object_id) {
+            Some(CryptoObjectState::KeyPairActive {
+                algorithm: CryptoKeyPairAlgorithm::Ed25519,
+                private_key,
+                lifecycle_label,
+                ..
+            }) => Ok((private_key.clone(), lifecycle_label.clone())),
+            Some(_) => Err(InterpreterError::TypeError {
+                expected: "Ed25519 key pair handle".to_string(),
+                got: "non-Ed25519 crypto object".to_string(),
+            }),
+            None => Err(InterpreterError::TypeError {
+                expected: "Ed25519 key pair handle".to_string(),
+                got: "detached or forged receiver".to_string(),
+            }),
+        }
+    }
+
+    fn crypto_ed25519_public(&self, value: &Value) -> Result<[u8; 32], InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "Ed25519 key pair handle".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        match self.crypto_objects.get(object_id) {
+            Some(CryptoObjectState::KeyPairActive {
+                algorithm: CryptoKeyPairAlgorithm::Ed25519,
+                public_key,
+                ..
+            }) => Ok(public_key.as_slice().try_into().expect("32-byte Ed25519 public key")),
+            Some(_) => Err(InterpreterError::TypeError {
+                expected: "Ed25519 key pair handle".to_string(),
+                got: "non-Ed25519 crypto object".to_string(),
+            }),
+            None => Err(InterpreterError::TypeError {
+                expected: "Ed25519 key pair handle".to_string(),
+                got: "detached or forged receiver".to_string(),
+            }),
+        }
+    }
+
     fn crypto_create_cipher(
         &mut self,
         args: RegRange,
@@ -64384,6 +64556,8 @@ impl InterpreterCore {
             "builtin:CryptoRandomInt" => self.crypto_random_int(args),
             "builtin:CryptoRandomFillSync" => self.crypto_random_fill_sync(args),
             "builtin:CryptoGenerateKeyPairSync" => self.crypto_generate_key_pair_sync(args),
+            "builtin:CryptoSign" => self.crypto_sign_sync(args),
+            "builtin:CryptoVerify" => self.crypto_verify_sync(args),
             "builtin:CryptoObjectUpdate"
             | "builtin:CryptoObjectDigest"
             | "builtin:CryptoObjectCopy"
@@ -114790,6 +114964,247 @@ mod tests {
         ));
         assert_eq!(core.crypto_objects[&refused], before);
         assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn crypto_gcm_variable_nonce_matches_node_bun_goldens_bd_lnqta() {
+        // Differential goldens captured from live Node v24 and Bun 1.4.0
+        // probes on 2026-08-26: both runtimes emit byte-identical
+        // ciphertext/tag pairs, so either serves as the oracle. Key is
+        // 32 x 0x01, each IV is iv_len x 0x07, plaintext is constant.
+        const KEY: [u8; 32] = [1; 32];
+        const PLAINTEXT: &[u8] = b"hello variable nonce";
+        fn unhex(value: &str) -> Vec<u8> {
+            (0..value.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&value[index..index + 2], 16))
+                .collect::<Result<Vec<u8>, _>>()
+                .expect("valid fixture hex")
+        }
+        let goldens: &[(usize, &str, &str)] = &[
+            (
+                1,
+                "4c0971579abef61f10cc92d12e0910ded9cf5ee9",
+                "dba2a7af2ca9109bcd2c01cf2e24a3c9",
+            ),
+            (
+                7,
+                "2e61943f973eb45a49dd677532b9972e782878d3",
+                "8ce2d9fd8ee9ead9369acdfba2e359fa",
+            ),
+            (
+                8,
+                "8eece1cd028b7f79c95007a5a07dba4a03627780",
+                "bc3ad9bdcc7a068df99ae73fff7cba0f",
+            ),
+            (
+                11,
+                "0cb67f3d50dc314b057655f0107c9be3599cb0dc",
+                "7564f70ed6ffff6c9af1b0adf6b86154",
+            ),
+            (
+                12,
+                "e59686c8608ec7c06bf36552caa547a4c8c7e2bc",
+                "3c0da85ba467e4d859c0a9fa33b0b61f",
+            ),
+            (
+                13,
+                "cfce17e9a86f497ac188c39540160a804768f1b2",
+                "fe5b89612475b85d23c4694e55b2c0ac",
+            ),
+            (
+                16,
+                "2dcc57b2b8bb4cef2ef28a9179b19fa7fe0440fe",
+                "42ce77b52c64f83af718ae121251c808",
+            ),
+            (
+                24,
+                "ec10c6d1a4d0807eadc36a80c72c33f049f2394c",
+                "a3c4e68bb7a3dae4c2dd2ba616c866d1",
+            ),
+            (
+                32,
+                "3ef30546c423d39a8d4fcd43e2e092aad9b454cf",
+                "f2cff1f69694932b289cab0110abb325",
+            ),
+            (
+                64,
+                "bf913681c1fe7e8746563e095c344fd869f2bef1",
+                "917b66a4c99340521e8558dc1de6c81f",
+            ),
+            (
+                128,
+                "4b282d62037a896d915921330fcf248ef416a862",
+                "ebcd1d0b04034b10a608c8c8495672d9",
+            ),
+        ];
+        for &(iv_len, ciphertext_hex, tag_hex) in goldens {
+            let iv = vec![7u8; iv_len];
+            let (ciphertext, tag) = InterpreterCore::crypto_transform_cipher_all(
+                CryptoCipherAlgorithm::Aes256Gcm,
+                CryptoCipherDirection::Encrypt,
+                &KEY,
+                &iv,
+                PLAINTEXT,
+                None,
+            )
+            .unwrap_or_else(|_| panic!("encryption must admit IV length {iv_len}"));
+            assert_eq!(
+                ciphertext.as_slice(),
+                unhex(ciphertext_hex),
+                "ciphertext divergence at IV length {iv_len}"
+            );
+            let tag = tag.expect("GCM encryption must produce an auth tag");
+            assert_eq!(
+                tag.as_slice(),
+                unhex(tag_hex),
+                "tag divergence at IV length {iv_len}"
+            );
+            let (plaintext, decrypted_tag) = InterpreterCore::crypto_transform_cipher_all(
+                CryptoCipherAlgorithm::Aes256Gcm,
+                CryptoCipherDirection::Decrypt,
+                &KEY,
+                &iv,
+                &ciphertext,
+                Some(tag.as_slice()),
+            )
+            .unwrap_or_else(|_| panic!("decryption must admit IV length {iv_len}"));
+            assert!(decrypted_tag.is_none(), "decryption emits no tag");
+            assert_eq!(plaintext.as_slice(), PLAINTEXT);
+        }
+        // Empty plaintext tags at representative lengths, including the
+        // zero-length GHASH domain edge.
+        let empty_goldens: &[(usize, &str)] = &[
+            (8, "d3371853a590f6ec7452944bd0b601e2"),
+            (13, "8f5bb7b7cad0eeb73eeafaa02f51ea91"),
+            (128, "a1e7d0ddf4617ca23d98380a6204844a"),
+        ];
+        for &(iv_len, tag_hex) in empty_goldens {
+            let iv = vec![7u8; iv_len];
+            let (ciphertext, tag) = InterpreterCore::crypto_transform_cipher_all(
+                CryptoCipherAlgorithm::Aes256Gcm,
+                CryptoCipherDirection::Encrypt,
+                &KEY,
+                &iv,
+                b"",
+                None,
+            )
+            .expect("empty-payload encryption must succeed");
+            assert!(ciphertext.is_empty());
+            let tag = tag.expect("empty payload still carries an auth tag");
+            assert_eq!(tag.as_slice(), unhex(tag_hex));
+        }
+    }
+
+    #[test]
+    fn crypto_gcm_variable_nonce_refuses_tampered_material_bd_lnqta() {
+        const KEY: [u8; 32] = [1; 32];
+        const PLAINTEXT: &[u8] = b"hello variable nonce";
+        let iv = vec![7u8; 13];
+        let encrypt = |plaintext: &[u8]| {
+            InterpreterCore::crypto_transform_cipher_all(
+                CryptoCipherAlgorithm::Aes256Gcm,
+                CryptoCipherDirection::Encrypt,
+                &KEY,
+                &iv,
+                plaintext,
+                None,
+            )
+            .expect("baseline encryption")
+        };
+        // A flipped auth-tag bit must refuse authentication without
+        // releasing plaintext.
+        let (ciphertext, tag) = encrypt(PLAINTEXT);
+        let mut tag = tag.expect("auth tag present");
+        tag[15] ^= 0x01;
+        assert!(matches!(
+            InterpreterCore::crypto_transform_cipher_all(
+                CryptoCipherAlgorithm::Aes256Gcm,
+                CryptoCipherDirection::Decrypt,
+                &KEY,
+                &iv,
+                &ciphertext,
+                Some(tag.as_slice()),
+            ),
+            Err("unable to authenticate data")
+        ));
+        // So must a flipped final ciphertext bit under the untampered tag.
+        let (ciphertext, tag) = encrypt(PLAINTEXT);
+        let tag = tag.expect("auth tag present");
+        let mut tampered = ciphertext.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x80;
+        assert!(matches!(
+            InterpreterCore::crypto_transform_cipher_all(
+                CryptoCipherAlgorithm::Aes256Gcm,
+                CryptoCipherDirection::Decrypt,
+                &KEY,
+                &iv,
+                &tampered,
+                Some(tag.as_slice()),
+            ),
+            Err("unable to authenticate data")
+        ));
+    }
+
+    #[test]
+    fn crypto_create_cipher_enforces_bounded_gcm_iv_window_bd_lnqta() {
+        let mut core = quickjs_test_core();
+        let key = core
+            .alloc_buffer_from_bytes(&[5; 32])
+            .expect("allocate GCM key");
+        core.write_reg(0, Value::str("aes-256-gcm"))
+            .expect("seed algorithm register");
+        core.write_reg(1, Value::Object(key))
+            .expect("seed key register");
+        // Rejected: empty and over-window IVs fail closed exactly like the
+        // live Node/Bun probes.
+        for rejected_len in [0usize, 129, 200] {
+            let iv = core
+                .alloc_buffer_from_bytes(&vec![6u8; rejected_len])
+                .expect("allocate rejected IV");
+            core.write_reg(2, Value::Object(iv))
+                .expect("seed rejected IV register");
+            assert!(
+                matches!(
+                    core.crypto_create_cipher(
+                        RegRange { start: 0, count: 3 },
+                        CryptoCipherDirection::Encrypt,
+                    ),
+                    Err(InterpreterError::UncaughtException { .. })
+                ),
+                "IV length {rejected_len} must be refused"
+            );
+            let Value::Object(error_id) = core
+                .pending_exception
+                .clone()
+                .expect("Node-style IV error must be pending")
+            else {
+                panic!("pending exception must be an Error object")
+            };
+            assert_eq!(
+                core.heap[error_id.0 as usize].properties.get("code"),
+                Some(&Value::str("ERR_CRYPTO_INVALID_IV"))
+            );
+            core.clear_pending_exception_slot();
+        }
+        // Accepted: both window boundaries and a mid-window odd length admit
+        // live cipher objects.
+        for accepted_len in [1usize, 13, 128] {
+            let iv = core
+                .alloc_buffer_from_bytes(&vec![7u8; accepted_len])
+                .expect("allocate accepted IV");
+            core.write_reg(2, Value::Object(iv))
+                .expect("seed accepted IV register");
+            let created = core
+                .crypto_create_cipher(
+                    RegRange { start: 0, count: 3 },
+                    CryptoCipherDirection::Encrypt,
+                )
+                .unwrap_or_else(|_| panic!("IV length {accepted_len} must be admitted"));
+            assert!(matches!(created, Value::Object(_)));
+            core.clear_pending_hostcall_result_label();
+        }
     }
 
     #[test]

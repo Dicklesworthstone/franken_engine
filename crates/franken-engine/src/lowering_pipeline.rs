@@ -26000,7 +26000,12 @@ fn hostcall_exception_is_operand_derived(
         | "builtin:ZlibInflateSync"
         | "builtin:ZlibDeflateRawSync"
         | "builtin:ZlibInflateRawSync"
-        | "builtin:ZlibUnzipSync" => all_inputs_are_closed(),
+        | "builtin:ZlibUnzipSync"
+        // bd-zlib-residual-l6ev2: brotli sync codecs share the zlib family's
+        // pure-compute contract — engine-owned compression over closed
+        // inputs, exceptional outcomes are engine validation errors only.
+        | "builtin:ZlibBrotliCompressSync"
+        | "builtin:ZlibBrotliDecompressSync" => all_inputs_are_closed(),
         // These exact pure-compute entry points validate only primitive
         // arguments. Object inputs remain fail-high because their coercion or
         // transitive state does not yet have a complete static summary.
@@ -30759,6 +30764,44 @@ mod tests {
             assert_eq!(
                 console.declassification_required, requires_declassification,
                 "{capability}"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_dump_ir2_flows_for_sign_fixture_bd_53l89_temporary() {
+        let ops = lower_script_source_ops(
+            r#"
+            const crypto = require('crypto');
+            const pair = crypto.generateKeyPairSync('ed25519');
+            const message = Buffer.from('franken engine signs');
+            const tamperedMessage = Buffer.from('franken engine signS');
+            const signature = crypto.sign(null, message, pair);
+            crypto.verify(null, message, pair, signature);
+            crypto.verify(null, tamperedMessage, pair, signature);
+            console.log('roundtrip-ok');
+        "#,
+            "probe-sign",
+        );
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"probe-sign"), "probe_sign.js");
+        ir1.ops = ops;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("IR1->IR2 should succeed")
+            .module;
+        for (index, op) in ir2.ops.iter().enumerate() {
+            let Some(flow) = op.flow.as_ref() else {
+                continue;
+            };
+            if flow.data_label == Label::Public && flow.sink_clearance == Label::Public {
+                continue;
+            }
+            println!(
+                "FLOW op={index} cap={:?} data={:?} sink={:?} declass={} inner={:?}",
+                op.required_capability.as_ref().map(|tag| tag.0.clone()),
+                flow.data_label,
+                flow.sink_clearance,
+                flow.declassification_required,
+                op.inner,
             );
         }
     }

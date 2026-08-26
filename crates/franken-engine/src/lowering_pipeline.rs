@@ -27323,7 +27323,13 @@ fn simulate_ir2_flow_labels(
                             | "builtin:ZlibDeflateRawSync"
                             | "builtin:ZlibInflateRawSync"
                             | "builtin:ZlibUnzipSync"
-                    )
+                            // bd-zlib-residual-l6ev2: brotli outputs are
+                            // engine-owned Buffers like their deflate
+                            // siblings and need the same authenticated
+                            // BufferObject shape for finite-method reads.
+                            | "builtin:ZlibBrotliCompressSync"
+                            | "builtin:ZlibBrotliDecompressSync"
+                )
                 {
                     result_shape = FlowValueShape::BufferObject;
                 }
@@ -27725,6 +27731,13 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
             // a boolean oracle on possibly-secret content, so it carries the
             // same TopSecret clearance as the other byte-observing methods.
             | "builtin:bufferobjectequals"
+            // bd-53l89 slice 2: Ed25519 sign/verify read the engine-private
+            // key table and return derived values whose labels already ride
+            // the operands (contract §6) — the call site itself is internal
+            // computation over that private state, not egress. Real sinks
+            // still see the Secret-floor signature label and refuse.
+            | "builtin:cryptosign"
+            | "builtin:cryptoverify"
     ) {
         return Label::TopSecret;
     }

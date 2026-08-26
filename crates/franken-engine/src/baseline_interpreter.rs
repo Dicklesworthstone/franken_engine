@@ -51,10 +51,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes::cipher::{
-    BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher,
+    BlockDecryptMut, BlockEncrypt, BlockEncryptMut, KeyIvInit, StreamCipher,
     block_padding::{NoPadding, Pkcs7},
 };
 use aes_gcm::aead::{AeadInPlace, KeyInit as AeadKeyInit};
+use ghash::{GHash, universal_hash};
+use ghash::universal_hash::UniversalHash as _;
 use flate2::{Compression, GzBuilder, read::MultiGzDecoder};
 use hmac::{Hmac, Mac};
 use md5::Md5;
@@ -61770,6 +61772,23 @@ impl InterpreterCore {
         }
     }
 
+    /// Upper bound of the bounded variable-length AES-256-GCM initialization
+    /// vector window (bd-lnqta). Live Node/Bun probes (2026-08-26; OpenSSL-
+    /// and BoringSSL-backed runtimes) emit byte-for-byte identical tags for
+    /// IV lengths 1..=128 and reject 0 and >=129 with ERR_CRYPTO_INVALID_IV.
+    const CRYPTO_GCM_MAX_IV_LEN: usize = 128;
+
+    /// bd-lnqta: AES-256-GCM admits the bounded variable-length window
+    /// above; every other algorithm keeps its exact-length contract.
+    fn crypto_cipher_iv_length_ok(algorithm: CryptoCipherAlgorithm, iv_len: usize) -> bool {
+        if algorithm == CryptoCipherAlgorithm::Aes256Gcm {
+            (1..=Self::CRYPTO_GCM_MAX_IV_LEN).contains(&iv_len)
+        } else {
+            let (_, expected_iv) = Self::crypto_cipher_key_iv_lengths(algorithm);
+            iv_len == expected_iv
+        }
+    }
+
     /// bd-53l89 slice 1 (contract:
     /// docs/CRYPTO_ASYMMETRIC_KEY_LIFECYCLE_CONTRACT_V1.md §1,2,3,7,9).
     /// Entropy enters exclusively through the audited RandomRead host effect;
@@ -61875,13 +61894,20 @@ impl InterpreterCore {
                 &invocation_label,
             ));
         }
-        if iv.len() != expected_iv {
+        if !Self::crypto_cipher_iv_length_ok(algorithm, iv.len()) {
             drop(key);
             drop(iv);
+            let detail = if algorithm == CryptoCipherAlgorithm::Aes256Gcm {
+                // Node/Bun variable-length GCM rejection carries no expected
+                // count because every length outside the window fails.
+                "Invalid initialization vector".to_string()
+            } else {
+                format!("Invalid initialization vector: expected {expected_iv} bytes")
+            };
             return Err(self.crypto_throw_node_error(
                 "TypeError",
                 "ERR_CRYPTO_INVALID_IV",
-                format!("Invalid initialization vector: expected {expected_iv} bytes"),
+                detail,
                 &invocation_label,
             ));
         }
@@ -61939,24 +61965,125 @@ impl InterpreterCore {
                 Ok((output, None))
             }
             (CryptoCipherAlgorithm::Aes256Gcm, CryptoCipherDirection::Encrypt) => {
-                let cipher = <aes_gcm::Aes256Gcm as AeadKeyInit>::new_from_slice(key)
-                    .map_err(|_| "invalid AES-256-GCM key")?;
-                let nonce = aes_gcm::Nonce::<aes::cipher::consts::U12>::from_slice(iv);
-                let mut output = Zeroizing::new(input.to_vec());
-                let tag = cipher
-                    .encrypt_in_place_detached(nonce, b"", &mut output)
-                    .map_err(|_| "AES-256-GCM encryption failed")?;
-                Ok((output, Some(Zeroizing::new(tag.to_vec()))))
+                if iv.len() == 12 {
+                    let cipher = <aes_gcm::Aes256Gcm as AeadKeyInit>::new_from_slice(key)
+                        .map_err(|_| "invalid AES-256-GCM key")?;
+                    let nonce = aes_gcm::Nonce::<aes::cipher::consts::U12>::from_slice(iv);
+                    let mut output = Zeroizing::new(input.to_vec());
+                    let tag = cipher
+                        .encrypt_in_place_detached(nonce, b"", &mut output)
+                        .map_err(|_| "AES-256-GCM encryption failed")?;
+                    Ok((output, Some(Zeroizing::new(tag.to_vec()))))
+                } else {
+                    Self::crypto_gcm_variable_nonce_transform(key, iv, input, direction, auth_tag)
+                }
             }
             (CryptoCipherAlgorithm::Aes256Gcm, CryptoCipherDirection::Decrypt) => {
-                let cipher = <aes_gcm::Aes256Gcm as AeadKeyInit>::new_from_slice(key)
-                    .map_err(|_| "invalid AES-256-GCM key")?;
-                let nonce = aes_gcm::Nonce::<aes::cipher::consts::U12>::from_slice(iv);
-                let tag = aes_gcm::Tag::from_slice(auth_tag.ok_or("authentication tag not set")?);
-                let mut output = Zeroizing::new(input.to_vec());
-                cipher
-                    .decrypt_in_place_detached(nonce, b"", &mut output, tag)
-                    .map_err(|_| "unable to authenticate data")?;
+                if iv.len() == 12 {
+                    let cipher = <aes_gcm::Aes256Gcm as AeadKeyInit>::new_from_slice(key)
+                        .map_err(|_| "invalid AES-256-GCM key")?;
+                    let nonce = aes_gcm::Nonce::<aes::cipher::consts::U12>::from_slice(iv);
+                    let tag =
+                        aes_gcm::Tag::from_slice(auth_tag.ok_or("authentication tag not set")?);
+                    let mut output = Zeroizing::new(input.to_vec());
+                    cipher
+                        .decrypt_in_place_detached(nonce, b"", &mut output, tag)
+                        .map_err(|_| "unable to authenticate data")?;
+                    Ok((output, None))
+                } else {
+                    Self::crypto_gcm_variable_nonce_transform(key, iv, input, direction, auth_tag)
+                }
+            }
+        }
+    }
+
+    /// bd-lnqta: NIST SP 800-38D AES-256-GCM for initialization vectors whose
+    /// length differs from the audited 96-bit fast path above. J0 is derived
+    /// through GHASH per §8.2.1, counters increment only the low 32 bits
+    /// (§6.5 inc32), and the tag closes over the no-AAD lengths block per
+    /// §7.1. Decryption verifies the caller-supplied tag in constant time
+    /// and releases plaintext only on success.
+    fn crypto_gcm_variable_nonce_transform(
+        key: &[u8],
+        iv: &[u8],
+        input: &[u8],
+        direction: CryptoCipherDirection,
+        auth_tag: Option<&[u8]>,
+    ) -> Result<CryptoCipherOutput, &'static str> {
+        debug_assert!(
+            (1..=Self::CRYPTO_GCM_MAX_IV_LEN).contains(&iv.len()) && iv.len() != 12,
+            "caller must bound-check the GCM IV window before dispatching here"
+        );
+        let cipher = aes::Aes256::new_from_slice(key).map_err(|_| "invalid AES-256-GCM key")?;
+        // H = E(K, 0^128).
+        let mut h_block = aes::Block::clone_from_slice(&[0u8; 16]);
+        cipher.encrypt_block(&mut h_block);
+        let ghash_key = universal_hash::Key::<GHash>::clone_from_slice(h_block.as_slice());
+        // J0 per SP 800-38D §8.2.1: the 96-bit form concatenates a fixed
+        // word; every other length runs GHASH over IV || zero-pad || [bits].
+        let j0 = if iv.len() == 12 {
+            let mut block = [0u8; 16];
+            block[..12].copy_from_slice(iv);
+            block[15] = 1;
+            aes::Block::from(block)
+        } else {
+            let mut ghash_of_iv = GHash::new(&ghash_key);
+            ghash_of_iv.update_padded(iv);
+            let iv_bits = (iv.len() as u64)
+                .checked_mul(8)
+                .ok_or("AES-256-GCM IV bit length overflow")?;
+            let mut length_block = [0u8; 16];
+            length_block[8..].copy_from_slice(&iv_bits.to_be_bytes());
+            ghash_of_iv.update(&[universal_hash::Block::<GHash>::clone_from_slice(&length_block)]);
+            let derived = ghash_of_iv.finalize();
+            aes::Block::clone_from_slice(derived.as_slice())
+        };
+        // T0 = E(K, J0); data counters start at inc32(J0).
+        let mut tag_base = j0;
+        cipher.encrypt_block(&mut tag_base);
+        let mut counter = j0;
+        let mut output = Zeroizing::new(input.to_vec());
+        for chunk in output.chunks_mut(16) {
+            let tail = &mut counter[..];
+            let low =
+                u32::from_be_bytes([tail[12], tail[13], tail[14], tail[15]]).wrapping_add(1);
+            tail[12..16].copy_from_slice(&low.to_be_bytes());
+            let mut keystream = counter;
+            cipher.encrypt_block(&mut keystream);
+            for (byte, key_byte) in chunk.iter_mut().zip(keystream.iter()) {
+                *byte ^= key_byte;
+            }
+        }
+        // GHASH domain is the ciphertext alone (no-AAD policy), closed by
+        // the §7.1 lengths block [0]^64 || [len(C)]_64.
+        let mut ghash_over_ciphertext = GHash::new(&ghash_key);
+        ghash_over_ciphertext.update_padded(&output);
+        let ciphertext_bits = (output.len() as u64)
+            .checked_mul(8)
+            .ok_or("AES-256-GCM ciphertext bit length overflow")?;
+        let mut lengths_block = [0u8; 16];
+        lengths_block[8..].copy_from_slice(&ciphertext_bits.to_be_bytes());
+        ghash_over_ciphertext.update(&[universal_hash::Block::<GHash>::clone_from_slice(
+            &lengths_block,
+        )]);
+        let ghash_value = ghash_over_ciphertext.finalize();
+        let mut expected_tag = [0u8; 16];
+        for ((slot, base), hashed) in expected_tag
+            .iter_mut()
+            .zip(tag_base.iter())
+            .zip(ghash_value.iter())
+        {
+            *slot = base ^ hashed;
+        }
+        match direction {
+            CryptoCipherDirection::Encrypt => {
+                Ok((output, Some(Zeroizing::new(expected_tag.to_vec()))))
+            }
+            CryptoCipherDirection::Decrypt => {
+                let provided = auth_tag.ok_or("authentication tag not set")?;
+                if provided.len() != 16 || !bool::from(provided.ct_eq(expected_tag.as_slice())) {
+                    return Err("unable to authenticate data");
+                }
                 Ok((output, None))
             }
         }

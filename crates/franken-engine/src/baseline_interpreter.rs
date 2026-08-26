@@ -62227,9 +62227,14 @@ impl InterpreterCore {
             }
         }
         // GHASH domain is the ciphertext alone (no-AAD policy), closed by
-        // the §7.1 lengths block [0]^64 || [len(C)]_64.
+        // the §7.1 lengths block [0]^64 || [len(C)]_64. On decryption the
+        // ciphertext is the caller's input, not the produced plaintext.
+        let ciphertext_bytes: &[u8] = match direction {
+            CryptoCipherDirection::Encrypt => &output,
+            CryptoCipherDirection::Decrypt => input,
+        };
         let mut ghash_over_ciphertext = GHash::new(&ghash_key);
-        ghash_over_ciphertext.update_padded(&output);
+        ghash_over_ciphertext.update_padded(ciphertext_bytes);
         let ciphertext_bits = (output.len() as u64)
             .checked_mul(8)
             .ok_or("AES-256-GCM ciphertext bit length overflow")?;

@@ -55,11 +55,13 @@ use aes::cipher::{
     block_padding::{NoPadding, Pkcs7},
 };
 use aes_gcm::aead::{AeadInPlace, KeyInit as AeadKeyInit};
-use ghash::{GHash, universal_hash};
-use ghash::universal_hash::UniversalHash as _;
-use ed25519_dalek::{Signature as Ed25519Signature, Signer as Ed25519Signer,
-    Verifier as Ed25519Verifier, VerifyingKey};
+use ed25519_dalek::{
+    Signature as Ed25519Signature, Signer as Ed25519Signer, Verifier as Ed25519Verifier,
+    VerifyingKey,
+};
 use flate2::{Compression, GzBuilder, read::MultiGzDecoder};
+use ghash::universal_hash::UniversalHash as _;
+use ghash::{GHash, universal_hash};
 use hmac::{Hmac, Mac};
 use md5::Md5;
 use regex::{NoExpand, Regex, RegexBuilder};
@@ -61890,15 +61892,13 @@ impl InterpreterCore {
                 .saturating_add(128)
                 .saturating_add(Self::estimate_label_bytes(&lifecycle_label)),
         )?;
-        self.charge_crypto_work(Self::crypto_byte_work(
-            message.len().saturating_add(64),
-        ))?;
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(
-            &<[u8; 32]>::try_from(seed.as_slice()).map_err(|_| InterpreterError::InternalError {
+        self.charge_crypto_work(Self::crypto_byte_work(message.len().saturating_add(64)))?;
+        let Ok(seed_bytes) = <[u8; 32]>::try_from(seed.as_slice()) else {
+            return Err(InterpreterError::InternalError {
                 details: "ed25519 signing seed must be exactly 32 bytes".to_string(),
-            })?,
-        );
-        let signature = signing_key.sign(&message).to_bytes();
+            });
+        };
+        let signature = Self::ed25519_sign_detached(seed_bytes, &message);
         let result_label = lifecycle_label.join(&message_label);
         self.crypto_output_value_with_temporary_budget(
             &signature,
@@ -61942,22 +61942,25 @@ impl InterpreterCore {
         self.charge_crypto_work(Self::crypto_byte_work(
             message.len().saturating_add(signature.len()),
         ))?;
-        let Ok(signature_array) = <[u8; 64]>::try_from(signature.as_slice()) else {
-            return Err(self.crypto_throw_node_error(
-                "RangeError",
-                "ERR_CRYPTO_INVALID_SIGNATURE_LENGTH",
-                format!(
-                    "Invalid Ed25519 signature length: expected 64 bytes, got {}",
-                    signature.len()
-                ),
-                &invocation_label,
-            ));
+        let verified = match Self::ed25519_verify_detached(public_key, &message, &signature) {
+            Ok(verified) => verified,
+            Err("ERR_CRYPTO_INVALID_SIGNATURE_LENGTH") => {
+                return Err(self.crypto_throw_node_error(
+                    "RangeError",
+                    "ERR_CRYPTO_INVALID_SIGNATURE_LENGTH",
+                    format!(
+                        "Invalid Ed25519 signature length: expected 64 bytes, got {}",
+                        signature.len()
+                    ),
+                    &invocation_label,
+                ));
+            }
+            Err(other) => {
+                return Err(InterpreterError::InternalError {
+                    details: other.to_string(),
+                });
+            }
         };
-        let verifying_key = VerifyingKey::from_bytes(&public_key)
-            .expect("stored Ed25519 public key validated at generation");
-        let signature_value = Ed25519Signature::from_slice(&signature_array)
-            .expect("signature length checked above");
-        let verified = verifying_key.verify(&message, &signature_value).is_ok();
         Ok(Value::Bool(verified))
     }
 
@@ -62015,7 +62018,10 @@ impl InterpreterCore {
                 algorithm: CryptoKeyPairAlgorithm::Ed25519,
                 public_key,
                 ..
-            }) => Ok(public_key.as_slice().try_into().expect("32-byte Ed25519 public key")),
+            }) => Ok(public_key
+                .as_slice()
+                .try_into()
+                .expect("32-byte Ed25519 public key")),
             Some(_) => Err(InterpreterError::TypeError {
                 expected: "Ed25519 key pair handle".to_string(),
                 got: "non-Ed25519 crypto object".to_string(),
@@ -62169,6 +62175,31 @@ impl InterpreterCore {
         }
     }
 
+    /// bd-53l89 slice 2: pure Ed25519 detached signing over the stored seed
+    /// (contract §2/§6 — deterministic Ed25519 nonce, no extra entropy).
+    fn ed25519_sign_detached(seed: [u8; 32], message: &[u8]) -> [u8; 64] {
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+            .sign(message)
+            .to_bytes()
+    }
+
+    /// bd-53l89 slice 2: pure Ed25519 verification. `Err` carries the typed
+    /// failure class for malformed signatures; `Ok(false)` is a legitimate
+    /// reject, not an error.
+    fn ed25519_verify_detached(
+        public_key: [u8; 32],
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, &'static str> {
+        let Ok(signature_array) = <[u8; 64]>::try_from(signature) else {
+            return Err("ERR_CRYPTO_INVALID_SIGNATURE_LENGTH");
+        };
+        let verifying_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|_| "stored Ed25519 public key rejected")?;
+        let signature = Ed25519Signature::from_slice(&signature_array)
+            .map_err(|_| "ERR_CRYPTO_INVALID_SIGNATURE_LENGTH")?;
+        Ok(verifying_key.verify(message, &signature).is_ok())
+    }
     /// bd-lnqta: NIST SP 800-38D AES-256-GCM for initialization vectors whose
     /// length differs from the audited 96-bit fast path above. J0 is derived
     /// through GHASH per §8.2.1, counters increment only the low 32 bits
@@ -62206,7 +62237,9 @@ impl InterpreterCore {
                 .ok_or("AES-256-GCM IV bit length overflow")?;
             let mut length_block = [0u8; 16];
             length_block[8..].copy_from_slice(&iv_bits.to_be_bytes());
-            ghash_of_iv.update(&[universal_hash::Block::<GHash>::clone_from_slice(&length_block)]);
+            ghash_of_iv.update(&[universal_hash::Block::<GHash>::clone_from_slice(
+                &length_block,
+            )]);
             let derived = ghash_of_iv.finalize();
             aes::Block::clone_from_slice(derived.as_slice())
         };
@@ -62217,8 +62250,7 @@ impl InterpreterCore {
         let mut output = Zeroizing::new(input.to_vec());
         for chunk in output.chunks_mut(16) {
             let tail = &mut counter[..];
-            let low =
-                u32::from_be_bytes([tail[12], tail[13], tail[14], tail[15]]).wrapping_add(1);
+            let low = u32::from_be_bytes([tail[12], tail[13], tail[14], tail[15]]).wrapping_add(1);
             tail[12..16].copy_from_slice(&low.to_be_bytes());
             let mut keystream = counter;
             cipher.encrypt_block(&mut keystream);
@@ -115150,6 +115182,42 @@ mod tests {
             ),
             Err("unable to authenticate data")
         ));
+    }
+
+    #[test]
+    fn ed25519_detached_sign_verify_accept_tamper_and_length_bd_53l89() {
+        let seed = [0x42u8; 32];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let public_key = signing_key.verifying_key().to_bytes();
+        let message = b"franken engine signs";
+
+        let signature = InterpreterCore::ed25519_sign_detached(seed, message);
+        assert_eq!(signature.len(), 64);
+        assert!(
+            InterpreterCore::ed25519_verify_detached(public_key, message, &signature)
+                .expect("well-formed signature verifies"),
+            "the true signature must verify"
+        );
+
+        let tampered_message = b"franken engine signS";
+        assert_eq!(
+            InterpreterCore::ed25519_verify_detached(public_key, tampered_message, &signature),
+            Ok(false),
+            "a tampered message must reject without error"
+        );
+
+        assert_eq!(
+            InterpreterCore::ed25519_verify_detached(public_key, message, &signature[..63]),
+            Err("ERR_CRYPTO_INVALID_SIGNATURE_LENGTH"),
+            "short signatures must surface the typed length error"
+        );
+
+        // Determinism under the contract's scripted-entropy regime: same seed,
+        // same message, identical signature bytes.
+        assert_eq!(
+            InterpreterCore::ed25519_sign_detached(seed, message),
+            signature
+        );
     }
 
     #[test]

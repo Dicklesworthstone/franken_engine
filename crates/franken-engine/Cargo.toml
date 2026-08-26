@@ -319,6 +319,11 @@ zstd = "0.13"
 brotli = "8.0"
 subtle = "2.6"
 ed25519-dalek = "2.0"
+p256 = { version = "0.13", default-features = false, features = [
+    "std",
+    "ecdsa",
+    "sha256",
+] }
 rand = "0.8"
 hex = "0.4"
 base64 = "0.22"

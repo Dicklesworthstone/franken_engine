@@ -24959,6 +24959,42 @@ fn invalidate_nonprimitive_binding_flow_shapes(
     }
 }
 
+/// Heap-backed retained proofs (`BufferObject`, `ClosedResult`,
+/// `FreshAggregate`) summarize engine-vouched structure whose backing store
+/// lives on the shared heap (bd-b1etn). Guest call boundaries, property
+/// mutations, and control-flow merges can observe or mutate that store
+/// through aliases, so the soundness-critical sites must clear heap-backed
+/// proofs outright instead of keeping them alive for later finite-method
+/// reads. Unrelated-call sweeps keep using the weaker nonprimitive
+/// invalidation so synthetic-receiver reads survive (bd-zco6t, bd-dign3).
+fn invalidate_heap_backed_flow_shapes(values: &mut [FlowValue]) {
+    for value in values {
+        if matches!(
+            value.shape,
+            FlowValueShape::BufferObject
+                | FlowValueShape::ClosedResult
+                | FlowValueShape::FreshAggregate
+        ) {
+            value.shape = FlowValueShape::Unknown;
+        }
+    }
+}
+
+fn invalidate_heap_backed_binding_flow_shapes(
+    binding_shapes: &mut BTreeMap<BindingId, FlowValueShape>,
+) {
+    for shape in binding_shapes.values_mut() {
+        if matches!(
+            *shape,
+            FlowValueShape::BufferObject
+                | FlowValueShape::ClosedResult
+                | FlowValueShape::FreshAggregate
+        ) {
+            *shape = FlowValueShape::Unknown;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // bd-pafik: stream pipeline callback and Promise rejection provenance
 // ---------------------------------------------------------------------------
@@ -26149,6 +26185,7 @@ fn ir1_exception_flow_label(
     op: &Ir1Op,
     inferred_label: &Label,
     operation_exception_is_operand_derived: bool,
+    is_event_emitter_error_throw: bool,
 ) -> Option<Label> {
     match op {
         // An explicit throw carries precisely the thrown value's provenance.
@@ -26172,6 +26209,14 @@ fn ir1_exception_flow_label(
         // the exception-label override); every other Await stays fail-high
         // below.
         Ir1Op::Await if operation_exception_is_operand_derived => {
+            Some(Label::Internal.join(inferred_label))
+        }
+        // Node EventEmitter error-channel parity (runtime
+        // emit_event_listener_snapshot): with no listener registered,
+        // emit("error", payload) throws the payload value itself carrying
+        // the joined emit-argument labels; a payload-less emit throws an
+        // engine-constructed Error and stays fail-high below.
+        Ir1Op::CallMethod { .. } if is_event_emitter_error_throw => {
             Some(Label::Internal.join(inferred_label))
         }
         // Named builtins are fail-high unless their exception contract is
@@ -26269,6 +26314,7 @@ fn simulate_ir2_flow_labels(
             active_catch_regions.extend(starting.iter().copied());
         }
         let mut operation_exception_is_operand_derived = false;
+        let mut operation_exception_is_event_emitter_error = false;
         let mut operation_exception_label_override = None;
         let inferred = match &op.inner {
             Ir1Op::LoadLiteral { value } => {
@@ -26432,6 +26478,8 @@ fn simulate_ir2_flow_labels(
                 } else {
                     Label::TopSecret
                 };
+                invalidate_heap_backed_flow_shapes(&mut value_stack);
+                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 let result_shape = if callee_shape == FlowValueShape::ArrayIsArrayFunction {
@@ -26456,6 +26504,16 @@ fn simulate_ir2_flow_labels(
                 let receiver = pop_flow_value(&mut value_stack)?;
                 let callee = pop_flow_value(&mut value_stack)?;
                 let callee_shape = callee.shape;
+                // bd-l0d6z Node parity: emit("error", payload) with no
+                // listener throws the payload VALUE itself, labeled with the
+                // joined emit-argument labels (runtime
+                // emit_event_listener_snapshot pairs arguments.first() with
+                // emission_label). With no payload argument the engine
+                // constructs its own Error, which stays fail-high below.
+                if callee_shape == FlowValueShape::EventEmitterEmitMethod && *arg_count >= 2 {
+                    operation_exception_is_event_emitter_error = true;
+                    operation_exception_label_override = Some(join_flow_values(&inputs));
+                }
                 let callee_is_summarized = matches!(
                     callee_shape,
                     FlowValueShape::Callable
@@ -26662,6 +26720,8 @@ fn simulate_ir2_flow_labels(
             Ir1Op::Label { id } => {
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                invalidate_heap_backed_flow_shapes(&mut value_stack);
+                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 if let Some(catch_label) = catch_entry_labels.get(id) {
                     let value = fresh_flow_value(catch_label.clone(), &mut next_identity);
                     catch_entry_identities.insert(value.identity);
@@ -26780,6 +26840,8 @@ fn simulate_ir2_flow_labels(
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                invalidate_heap_backed_flow_shapes(&mut value_stack);
+                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 value_stack.push(value);
                 label
             }
@@ -26821,6 +26883,8 @@ fn simulate_ir2_flow_labels(
                 let label = join_flow_values(&inputs);
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                invalidate_heap_backed_flow_shapes(&mut value_stack);
+                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
                 label
             }
@@ -27540,6 +27604,7 @@ fn simulate_ir2_flow_labels(
             &op.inner,
             exception_input_label,
             operation_exception_is_operand_derived,
+            operation_exception_is_event_emitter_error,
         ) {
             // The runtime routes an exception to the innermost active handler.
             // An enclosing handler is tainted only if the inner handler later

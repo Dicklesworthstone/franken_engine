@@ -209,3 +209,51 @@ fn unsupported_or_unconsumed_module_aliases_remain_fail_closed() {
         );
     }
 }
+
+// bd-znj5l: the three residual product-corpus fixtures
+// (/dp/franken_node compat_corpus/zlib tc::zlib::0004/0009/0016) replayed at
+// the engine boundary with identical sources and expected stdout.
+
+#[test]
+fn brotli_sync_roundtrip_matches_fixture_tc_zlib_0004_bd_znj5l() {
+    let output = eval_console(
+        r#"
+        const zlib = require('zlib');
+        const input = 'brotli roundtrip content';
+        const out = zlib.brotliDecompressSync(zlib.brotliCompressSync(input)).toString('utf8');
+        console.log(out);
+        console.log(out === input);
+        "#,
+    );
+    assert_eq!(output, "brotli roundtrip content\ntrue");
+}
+
+#[test]
+fn brotli_decompress_corrupt_input_throws_error_like_fixture_tc_zlib_0009_bd_znj5l() {
+    let output = eval_console(
+        r#"
+        const zlib = require('zlib');
+        try {
+          zlib.brotliDecompressSync(Buffer.from([1, 2, 3, 4, 5]));
+          console.log('no-throw');
+        } catch (e) {
+          console.log(e instanceof Error);
+        }
+        "#,
+    );
+    assert_eq!(output, "true");
+}
+
+#[ignore = "bd-znj5l residual: static IFC lane downgrades object literals with computed keys (even closed-primitive key exprs like zlib.constants.BROTLI_PARAM_QUALITY) out of FreshAggregate, so the options bag fails hostcall_exception_is_operand_derived and the compress result taints TopSecret. Runtime quality-param support is live (params_plain_key probes pass). Un-ignore when computed-key freshness inference lands."]
+#[test]
+fn brotli_quality_param_roundtrip_matches_fixture_tc_zlib_0016_bd_znj5l() {
+    let output = eval_console(
+        r#"
+        const zlib = require('zlib');
+        const opts = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } };
+        const c = zlib.brotliCompressSync('brotli with quality option', opts);
+        console.log(zlib.brotliDecompressSync(c).toString('utf8'));
+        "#,
+    );
+    assert_eq!(output, "brotli with quality option");
+}

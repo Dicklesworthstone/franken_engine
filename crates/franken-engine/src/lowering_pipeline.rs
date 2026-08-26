@@ -26114,14 +26114,23 @@ fn hostcall_exception_is_operand_derived(
             })
         }
         // Buffer.from and Buffer.alloc/allocUnsafe have a closed exception
-        // contract only for direct primitive arguments. Object arguments can
-        // expose mutable array-like or backing-store state whose provenance is
-        // not summarized by the object register label yet.
+        // contract for direct primitive arguments (bd-znj5l): Buffer.from
+        // also admits a single fresh aggregate — an array literal is
+        // engine-fresh, invalidated by any mutation or opaque escape, and
+        // Buffer.from copies its enumerable elements through engine-owned
+        // byte coercion without invoking guest code, the same trust the
+        // Buffer.concat arm already places in its list argument. Generic
+        // object arguments stay fail-high: array-likes, TypedArrays, and
+        // iterables can carry accessors or unsummarized backing stores.
+        // Buffer.alloc/allocUnsafe keep primitive-only arguments; their
+        // allocation-size coercion is a different contract.
         "builtin:BufferFrom" | "builtin:BufferAlloc" | "builtin:BufferAllocUnsafe" => {
             !inputs.is_empty()
-                && inputs
-                    .iter()
-                    .all(|value| value.shape == FlowValueShape::Primitive)
+                && inputs.iter().all(|value| match value.shape {
+                    FlowValueShape::Primitive => true,
+                    FlowValueShape::FreshAggregate => capability == "builtin:BufferFrom",
+                    _ => false,
+                })
         }
         // Buffer.concat is finite only when its list is a fresh aggregate of
         // closed elements. Passive binding storage may retain that proof, but
@@ -27329,7 +27338,7 @@ fn simulate_ir2_flow_labels(
                             // BufferObject shape for finite-method reads.
                             | "builtin:ZlibBrotliCompressSync"
                             | "builtin:ZlibBrotliDecompressSync"
-                )
+                    )
                 {
                     result_shape = FlowValueShape::BufferObject;
                 }

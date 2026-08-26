@@ -18085,6 +18085,10 @@ fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> 
         // bd-53l89 slice 1: ed25519 generation lowers to the typed
         // RandomRead-authority hostcall; P-256 arrives with the ECDSA slice.
         "generateKeyPairSync" => Some("builtin:CryptoGenerateKeyPairSync"),
+        // bd-53l89 slice 2: module-level sign/verify over KeyPairActive
+        // handles; Ed25519-only in this slice.
+        "sign" => Some("builtin:CryptoSign"),
+        "verify" => Some("builtin:CryptoVerify"),
         _ => None,
     }
 }
@@ -25957,11 +25961,14 @@ fn hostcall_exception_is_operand_derived(
             | "builtin:CryptoConstants"
             | "builtin:CryptoInvalidRandomInt"
             | "builtin:CryptoObjectUpdate"
-            | "builtin:CryptoObjectDigest"
             | "builtin:CryptoObjectCopy"
             | "builtin:CryptoObjectFinal"
             | "builtin:CryptoObjectGetAuthTag"
             | "builtin:CryptoObjectSetAuthTag"
+            // bd-53l89 slice 2: pure-compute Ed25519 sign/verify over
+            // KeyPairActive handles and closed inputs.
+            | "builtin:CryptoSign"
+            | "builtin:CryptoVerify"
     ) {
         return inputs
             .iter()
@@ -27268,6 +27275,15 @@ fn simulate_ir2_flow_labels(
                     result_shape = FlowValueShape::BufferObject;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:BufferIsBuffer" {
+                    result_shape = FlowValueShape::Primitive;
+                }
+                // bd-53l89 slice 2: an Ed25519 signature is an engine-owned
+                // 64-byte Buffer; the verify verdict is a plain boolean. Both
+                // closed shapes keep chained sign->verify calls operand-derived.
+                if hostcall_is_operand_derived && capability == "builtin:CryptoSign" {
+                    result_shape = FlowValueShape::BufferObject;
+                }
+                if hostcall_is_operand_derived && capability == "builtin:CryptoVerify" {
                     result_shape = FlowValueShape::Primitive;
                 }
                 // bd-dign3: hash/cipher catalogs are engine-owned arrays of

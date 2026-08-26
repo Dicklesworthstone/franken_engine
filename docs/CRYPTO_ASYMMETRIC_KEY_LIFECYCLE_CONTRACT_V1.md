@@ -64,6 +64,9 @@ guest-visible values, console output, evidence payloads, or error strings.
 Test: post-drop memory assertions mirroring `crypto_kdf_zeroized` patterns;
 grep-level gate that no `Vec<u8>` private field exists outside `Zeroizing`.
 
+(Revision note: a draft of this section briefly carried a mis-anchored
+verify-label edit; the authoritative verify rule lives in §6.)
+
 ## 4. Export / receipt / replay policy
 
 v1 posture: **private-key export is denied** with a typed error (§5);
@@ -90,9 +93,11 @@ finalized-object error family. Errors carry no secret bytes (§3).
   — v1 pins them at the entropy floor actually applied, i.e. **Secret**.
 - `sign()` result label = join(lifecycle_label, message label) — a signature is
   derivative of both.
-- `verify()` result label = Public (a boolean verdict over Public-labeled
-  public key and caller-supplied signature/message inputs; nothing secret is
-  consumed).
+- `verify()` result label = the JoinInputs epilogue join of its operand
+  labels (message, signature; the public key is Public). Rationale: a boolean
+  verdict over a Secret-labeled message is itself a predicate on secret data,
+  so with an all-Public call the verdict is Public and with any Secret
+  operand it is at least Secret.
 - Lowering summaries mirror these exactly (bd-dign3 pattern); any divergence
   between summary and runtime label is a bug, resolved toward runtime truth.
 

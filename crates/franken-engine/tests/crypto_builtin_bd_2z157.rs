@@ -1232,3 +1232,72 @@ fn eval_crypto_error(source: &str) -> String {
         .expect_err("expected the source to fail");
     format!("{}", error.primary_error())
 }
+
+#[test]
+fn ed25519_sign_verify_roundtrip_tamper_and_public_verdict_bd_53l89() {
+    let source = r#"
+        const crypto = require('crypto');
+        const pair = crypto.generateKeyPairSync('ed25519');
+        const message = Buffer.from('franken engine signs');
+        const signature = crypto.sign(null, message, pair);
+        if (signature.length !== 64) { throw new Error('bad signature length: ' + signature.length); }
+        if (crypto.verify(null, message, pair, signature) !== true) { throw new Error('verify must accept the true signature'); }
+        const tamperedMessage = Buffer.from('franken engine signS');
+        if (crypto.verify(null, tamperedMessage, pair, signature) !== false) { throw new Error('verify must reject the tampered message'); }
+        console.log('roundtrip-ok', crypto.verify(null, message, pair, signature));
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let result = execute_crypto(source, provider.clone(), recorder);
+    assert_eq!(orchestrated_console(&result), "roundtrip-ok true");
+}
+
+#[test]
+fn ed25519_signature_is_never_public_bd_53l89() {
+    // Contract §6: a signature is derivative of Secret-floor key material, so
+    // even over a Public message its label is at least Secret and console
+    // (Internal clearance) must refuse it at lowering time.
+    let source = "const crypto=require('crypto'); \
+        const pair=crypto.generateKeyPairSync('ed25519'); \
+        const signature=crypto.sign(null, Buffer.from('x'), pair); \
+        console.log(signature);";
+    let provider = Arc::new(ScriptedRandomHostIo::never());
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider, Some(recorder));
+    let error = orchestrator
+        .execute(&crypto_package(source, true))
+        .expect_err("a Secret-labeled signature must not reach an Internal sink");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Lowering(lowering_error)
+                if matches!(
+                    lowering_error.as_ref(),
+                    LoweringPipelineError::UnauthorizedFlow {
+                        source_label: Label::Secret,
+                        sink_clearance: Label::Internal,
+                        ..
+                    }
+                )
+        ),
+        "expected UnauthorizedFlow Secret->Internal, got {error:?}"
+    );
+}
+
+#[test]
+fn ed25519_sign_rejects_non_null_algorithm_and_foreign_keys_bd_53l89() {
+    let algorithm_error = eval_crypto_error(
+        "require('crypto').generateKeyPairSync('ed25519'); require('crypto').sign('sha256', Buffer.from('x'), {});",
+    );
+    assert!(
+        algorithm_error.contains("null algorithm for Ed25519 sign"),
+        "non-null Ed25519 algorithm must be refused, got {algorithm_error:?}"
+    );
+
+    let foreign_key = eval_crypto_error("require('crypto').sign(null, Buffer.from('x'), {});");
+    assert!(
+        foreign_key.contains("Ed25519 key pair handle"),
+        "a non-handle key argument must raise the handle type error, got {foreign_key:?}"
+    );
+}

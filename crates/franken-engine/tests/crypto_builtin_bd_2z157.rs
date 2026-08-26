@@ -826,8 +826,11 @@ fn asymmetric_inline_and_escaped_uses_remain_fail_closed() {
         "require('crypto').randomUUID();",
         "require('crypto').randomFillSync(Buffer.alloc(8));",
         "require('crypto').randomInt(10);",
-        "const crypto = require('crypto'); crypto.generateKeyPairSync('ed25519');",
+        // bd-53l89 slice 1 shipped ed25519 generation; the remaining pinned
+        // forms below must still fail closed. createSign lands with the
+        // sign/verify slice and stays denied until then.
         "const crypto = require('crypto'); crypto.createSign('sha256');",
+        "const crypto = require('crypto'); crypto.generateKeyPairSync('p256');",
         "const crypto = require('crypto'); crypto;",
         "const crypto = require('crypto'); crypto['createHash']('sha256');",
     ] {
@@ -1156,4 +1159,76 @@ fn computed_escaped_and_excluded_fluent_crypto_objects_cannot_dynamic_dispatch()
             "rejected crypto-object use unexpectedly escaped the finite dispatch boundary for {source:?}: {error}"
         );
     }
+}
+
+#[test]
+fn generate_key_pair_sync_ed25519_consumes_one_typed_entropy_effect_bd_53l89() {
+    let source = r#"
+        const crypto = require('crypto');
+        const pair = crypto.generateKeyPairSync('ed25519');
+        if (!pair) { throw new Error('generateKeyPairSync returned a falsy handle'); }
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+    let result = execute_crypto(source, provider.clone(), recorder_dyn);
+
+    assert_eq!(orchestrated_console(&result), "");
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert_eq!(
+        result.host_effect_transcript,
+        vec![(
+            HostIoRequest::RandomRead { byte_len: 32 },
+            Ok(HostIoResponse::RandomRead {
+                bytes: vec![0x42; 32]
+            })
+        )]
+    );
+}
+
+#[test]
+fn ed25519_generation_is_deterministic_under_identical_entropy_bd_53l89() {
+    // Contract §2: identical provider captures must drive identical
+    // pipelines. Private key material never egresses (§3), so the observable
+    // identity is the full host-effect transcript plus clean completion.
+    let source = r#"
+        const crypto = require('crypto');
+        crypto.generateKeyPairSync('ed25519');
+    "#;
+    let run = || {
+        let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 32]]));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let result = execute_crypto(source, provider.clone(), recorder);
+        assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+        result.host_effect_transcript
+    };
+    assert_eq!(run(), run());
+}
+
+#[test]
+fn generate_key_pair_sync_rejects_unknown_algorithms_and_options_bd_53l89() {
+    let unknown = eval_crypto_error("require('crypto').generateKeyPairSync('p256');");
+    assert!(
+        unknown.contains("Unknown key pair algorithm"),
+        "unknown curve must raise the typed argument error, got {unknown:?}"
+    );
+
+    let options = eval_crypto_error("require('crypto').generateKeyPairSync('ed25519', {});");
+    assert!(
+        options.contains("options are not supported"),
+        "non-undefined options must be refused in this slice, got {options:?}"
+    );
+}
+
+/// Evaluate one crypto source with a never-serving random provider and return
+/// the primary failure text (typed errors surface before any entropy draw).
+fn eval_crypto_error(source: &str) -> String {
+    let provider = Arc::new(ScriptedRandomHostIo::never());
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider, Some(recorder));
+    let error = orchestrator
+        .execute(&crypto_package(source, true))
+        .expect_err("expected the source to fail");
+    format!("{}", error.primary_error())
 }

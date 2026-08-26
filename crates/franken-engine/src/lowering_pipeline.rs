@@ -7992,11 +7992,12 @@ pub fn lower_ir2_to_ir3(
                         capture_count: free_vars.len() as u32,
                     });
                 } else if *is_async && *is_arrow {
-                    ir3.instructions.push(Ir3Instruction::CreateAsyncArrowClosure {
-                        dst,
-                        function_index,
-                        capture_count: free_vars.len() as u32,
-                    });
+                    ir3.instructions
+                        .push(Ir3Instruction::CreateAsyncArrowClosure {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
                 } else if *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                         dst,
@@ -9439,11 +9440,12 @@ pub fn lower_ir2_to_ir3(
                             capture_count: inner_fv.len() as u32,
                         });
                     } else if *inner_async && *inner_arrow {
-                        ir3.instructions.push(Ir3Instruction::CreateAsyncArrowClosure {
-                            dst,
-                            function_index,
-                            capture_count: inner_fv.len() as u32,
-                        });
+                        ir3.instructions
+                            .push(Ir3Instruction::CreateAsyncArrowClosure {
+                                dst,
+                                function_index,
+                                capture_count: inner_fv.len() as u32,
+                            });
                     } else if *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                             dst,
@@ -11420,8 +11422,7 @@ fn try_lower_arrow_expression_to_ir1(
     let body_scope = ScopeId { depth: 0, index: 0 };
     let mut body_label_counter: u32 = 0;
     let mut param_names: Vec<String> = Vec::with_capacity(params.len());
-    let mut destructure_params: Vec<(String, &BindingPattern)> =
-        Vec::with_capacity(params.len());
+    let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::with_capacity(params.len());
     for (index, param) in params.iter().enumerate() {
         push_param_slot(index, param, &mut param_names, &mut destructure_params);
     }
@@ -13086,8 +13087,7 @@ fn lower_expression_to_ir1_inner(
                     )?;
                     return Ok(());
                 }
-                if let Some(capability) =
-                    process_next_tick_call_capability(callee, binding_lookup)
+                if let Some(capability) = process_next_tick_call_capability(callee, binding_lookup)
                 {
                     // `process.nextTick(cb, ...args)` — dedicated job-queue
                     // hostcall; the raw `process` object is never lowered
@@ -15272,7 +15272,10 @@ fn lower_expression_to_ir1_inner(
                 binding_index,
                 root_scope_id,
             )?;
-            debug_assert!(lowered, "ArrowFunction must use the stack-bounded lowering helper");
+            debug_assert!(
+                lowered,
+                "ArrowFunction must use the stack-bounded lowering helper"
+            );
         }
         Expression::Function {
             name,
@@ -18079,6 +18082,9 @@ fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> 
         "createDecipheriv" => Some("builtin:CryptoCreateDecipheriv"),
         "getHashes" => Some("builtin:CryptoGetHashes"),
         "getCiphers" => Some("builtin:CryptoGetCiphers"),
+        // bd-53l89 slice 1: ed25519 generation lowers to the typed
+        // RandomRead-authority hostcall; P-256 arrives with the ECDSA slice.
+        "generateKeyPairSync" => Some("builtin:CryptoGenerateKeyPairSync"),
         _ => None,
     }
 }
@@ -25155,10 +25161,7 @@ fn summarize_stream_callback_exceptions(
     let capture_ids = free_var_ids.iter().copied().collect::<BTreeSet<_>>();
     // Body binding ids allocate parameters first (0..param_count); a capture
     // cell colliding with a parameter slot would make tagging ambiguous.
-    if capture_ids
-        .iter()
-        .any(|id| (*id as usize) < param_count)
-    {
+    if capture_ids.iter().any(|id| (*id as usize) < param_count) {
         return StreamCallbackSummary::Unsupported;
     }
     // The engine invokes the LAST declared parameter as the continuation. A
@@ -25180,17 +25183,19 @@ fn summarize_stream_callback_exceptions(
         }
     }
 
-    type TagState = (Vec<StreamCallbackTag>, BTreeMap<BindingId, StreamCallbackTag>);
+    type TagState = (
+        Vec<StreamCallbackTag>,
+        BTreeMap<BindingId, StreamCallbackTag>,
+    );
     let merge_states = |a: &TagState, b: &TagState| -> Option<TagState> {
         if a.0.len() != b.0.len() {
             return None;
         }
-        let stack = a
-            .0
-            .iter()
-            .zip(b.0.iter())
-            .map(|(x, y)| x.merge(*y))
-            .collect::<Vec<_>>();
+        let stack =
+            a.0.iter()
+                .zip(b.0.iter())
+                .map(|(x, y)| x.merge(*y))
+                .collect::<Vec<_>>();
         let mut locals = BTreeMap::new();
         for key in a.1.keys().chain(b.1.keys()) {
             let merged = match (a.1.get(key), b.1.get(key)) {
@@ -25272,7 +25277,11 @@ fn summarize_stream_callback_exceptions(
                     stack.push(StreamCallbackTag::Primitive);
                 }
                 Ir1Op::GetProperty { key } => {
-                    let pops = if matches!(key, Ir1PropertyKey::Dynamic) { 2 } else { 1 };
+                    let pops = if matches!(key, Ir1PropertyKey::Dynamic) {
+                        2
+                    } else {
+                        1
+                    };
                     if stack.len() < pops {
                         return StreamCallbackSummary::Unsupported;
                     }
@@ -25758,12 +25767,11 @@ fn summarize_function_body(
         return Label::TopSecret;
     }
 
-    let return_label = Label::join_all(body_ir2_ops.iter().zip(labels).filter_map(
-        |(op, label)| {
+    let return_label =
+        Label::join_all(body_ir2_ops.iter().zip(labels).filter_map(|(op, label)| {
             matches!(op.inner, Ir1Op::Return | Ir1Op::Yield { .. }).then_some(label)
-        },
-    ))
-    .unwrap_or(Label::TopSecret);
+        }))
+        .unwrap_or(Label::TopSecret);
     capture_label.join(&return_label)
 }
 
@@ -26337,8 +26345,10 @@ fn simulate_ir2_flow_labels(
                 // (options objects must flow literally into the stream
                 // constructor to stay authenticated).
                 match &value.stream {
-                    Some(info @ (StreamFlowInfo::Stream { .. }
-                    | StreamFlowInfo::PipelinePromise { .. })) => {
+                    Some(
+                        info @ (StreamFlowInfo::Stream { .. }
+                        | StreamFlowInfo::PipelinePromise { .. }),
+                    ) => {
                         binding_stream_infos.insert(*binding_id, info.clone());
                     }
                     _ => {
@@ -26448,9 +26458,7 @@ fn simulate_ir2_flow_labels(
                 }
                 let result_shape = match callee_shape {
                     FlowValueShape::OwnKeyJoinMethod => FlowValueShape::Primitive,
-                    FlowValueShape::EventEmitterFluentMethod => {
-                        FlowValueShape::EventEmitterObject
-                    }
+                    FlowValueShape::EventEmitterFluentMethod => FlowValueShape::EventEmitterObject,
                     FlowValueShape::EventEmitterEmitMethod => FlowValueShape::Primitive,
                     _ => FlowValueShape::Unknown,
                 };
@@ -26676,16 +26684,16 @@ fn simulate_ir2_flow_labels(
                 let object = pop_flow_value(&mut value_stack)?;
                 let shape = match (&object.shape, key) {
                     (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
-                    (
-                        FlowValueShape::EventEmitterObject,
-                        Ir1PropertyKey::Static(key),
-                    ) if matches!(key.as_str(), Some("on" | "once")) => {
+                    (FlowValueShape::EventEmitterObject, Ir1PropertyKey::Static(key))
+                        if matches!(key.as_str(), Some("on" | "once")) =>
+                    {
                         FlowValueShape::EventEmitterFluentMethod
                     }
-                    (
-                        FlowValueShape::EventEmitterObject,
-                        Ir1PropertyKey::Static(key),
-                    ) if key.as_str() == Some("emit") => FlowValueShape::EventEmitterEmitMethod,
+                    (FlowValueShape::EventEmitterObject, Ir1PropertyKey::Static(key))
+                        if key.as_str() == Some("emit") =>
+                    {
+                        FlowValueShape::EventEmitterEmitMethod
+                    }
                     (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
                         if key.as_str() == Some("join") =>
                     {
@@ -26701,10 +26709,7 @@ fn simulate_ir2_flow_labels(
                     (
                         FlowValueShape::Primitive | FlowValueShape::ClosedResult,
                         Ir1PropertyKey::Static(key),
-                    ) if key.as_str() == Some("includes") =>
-                    {
-                        FlowValueShape::Callable
-                    }
+                    ) if key.as_str() == Some("includes") => FlowValueShape::Callable,
                     (
                         FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
                         Ir1PropertyKey::Static(key),
@@ -26716,10 +26721,7 @@ fn simulate_ir2_flow_labels(
                         FlowValueShape::Callable
                     }
                     (FlowValueShape::BufferObject, Ir1PropertyKey::Static(key))
-                        if matches!(
-                            key.as_str(),
-                            Some("toString" | "readUInt32LE" | "equals")
-                        ) =>
+                        if matches!(key.as_str(), Some("toString" | "readUInt32LE" | "equals")) =>
                     {
                         FlowValueShape::Callable
                     }
@@ -27006,9 +27008,7 @@ fn simulate_ir2_flow_labels(
                     _ => false,
                 };
                 let result_shape = match callee_shape {
-                    FlowValueShape::EventEmitterConstructor => {
-                        FlowValueShape::EventEmitterObject
-                    }
+                    FlowValueShape::EventEmitterConstructor => FlowValueShape::EventEmitterObject,
                     FlowValueShape::FunctionConstructor => FlowValueShape::Callable,
                     _ => FlowValueShape::Unknown,
                 };
@@ -27390,8 +27390,7 @@ fn simulate_ir2_flow_labels(
                 if hostcall_is_operand_derived && capability == "builtin:ArrayIsArrayFunction" {
                     result_shape = FlowValueShape::ArrayIsArrayFunction;
                 }
-                if hostcall_is_operand_derived
-                    && capability == "builtin:EventEmitterConstructorRef"
+                if hostcall_is_operand_derived && capability == "builtin:EventEmitterConstructorRef"
                 {
                     result_shape = FlowValueShape::EventEmitterConstructor;
                 }
@@ -27476,8 +27475,7 @@ fn simulate_ir2_flow_labels(
                         // bounded only when EVERY stage is an authenticated
                         // stream whose callback summary is supported; any
                         // unknown stage keeps the fail-high default.
-                        if let Some(rejection) =
-                            stream_pipeline_rejection(&inputs, &stream_states)
+                        if let Some(rejection) = stream_pipeline_rejection(&inputs, &stream_states)
                         {
                             pipeline_rejections.insert(op_index, rejection.clone());
                             result_stream =
@@ -27577,8 +27575,7 @@ fn infer_ir2_flow_annotations(
         runtime_check_ops: 0,
     };
 
-    for (op_index, (op, inferred_data_label)) in
-        ir2.ops.iter_mut().zip(inferred_labels).enumerate()
+    for (op_index, (op, inferred_data_label)) in ir2.ops.iter_mut().zip(inferred_labels).enumerate()
     {
         let inferred_sink_clearance = infer_sink_clearance(
             &op.effect,
@@ -29014,11 +29011,8 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
             .module;
-            let context = LoweringContext::new(
-                "trace-bd-zco6t",
-                "decision-bd-zco6t",
-                "policy-bd-zco6t",
-            );
+            let context =
+                LoweringContext::new("trace-bd-zco6t", "decision-bd-zco6t", "policy-bd-zco6t");
             if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &context) {
                 panic!("{name} must lower without UnauthorizedFlow: {error}");
             }
@@ -29638,8 +29632,11 @@ mod tests {
         ir1.ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::String("write".into()),
         });
-        ir1.ops
-            .push(pafik_callback_fn(3, pafik_reporting_callback_body(), Vec::new()));
+        ir1.ops.push(pafik_callback_fn(
+            3,
+            pafik_reporting_callback_body(),
+            Vec::new(),
+        ));
         ir1.ops.push(Ir1Op::NewObject { count: 1 });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "builtin:StreamWritable".to_string(),
@@ -32889,9 +32886,11 @@ mod tests {
         let unknown_console_flow = unknown_ir2
             .ops
             .iter()
-            .find(|op| matches!(&op.inner,
-                Ir1Op::HostCall { capability, .. } if capability == "console:log"
-            ))
+            .find(|op| {
+                matches!(&op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
             .and_then(|op| op.flow.as_ref())
             .expect("unknown Object.keys console flow");
         assert_eq!(unknown_console_flow.data_label, Label::TopSecret);
@@ -32933,9 +32932,11 @@ mod tests {
         let console_flow = ir2
             .ops
             .iter()
-            .find(|op| matches!(&op.inner,
-                Ir1Op::HostCall { capability, .. } if capability == "console:log"
-            ))
+            .find(|op| {
+                matches!(&op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
             .and_then(|op| op.flow.as_ref())
             .expect("callable aggregate console flow");
         assert_eq!(console_flow.data_label, Label::Public);
@@ -32972,9 +32973,11 @@ mod tests {
         let stored_console_flow = stored_ir2
             .ops
             .iter()
-            .find(|op| matches!(&op.inner,
-                Ir1Op::HostCall { capability, .. } if capability == "console:log"
-            ))
+            .find(|op| {
+                matches!(&op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
             .and_then(|op| op.flow.as_ref())
             .expect("stored aggregate console flow");
         assert_eq!(stored_console_flow.data_label, Label::TopSecret);

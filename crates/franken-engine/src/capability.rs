@@ -320,7 +320,10 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
         "builtin:CryptoRandomBytes"
         | "builtin:CryptoRandomUUID"
         | "builtin:CryptoRandomInt"
-        | "builtin:CryptoRandomFillSync" => (
+        | "builtin:CryptoRandomFillSync"
+        // bd-53l89 slice 1: generation IS an entropy read (contract §2/§9) —
+        // RandomRead authority, SourceFloor(Secret) result floor per §6.
+        | "builtin:CryptoGenerateKeyPairSync" => (
             Some(RuntimeCapability::RandomRead),
             result_contract_for_authority(RuntimeCapability::RandomRead),
             HostcallDispatchBinding::Builtin,

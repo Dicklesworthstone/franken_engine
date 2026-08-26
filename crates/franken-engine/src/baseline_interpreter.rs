@@ -578,6 +578,19 @@ enum CryptoObjectState {
         auth_tag: Option<Zeroizing<Vec<u8>>>,
         lifecycle_label: Label,
     },
+    KeyPairActive {
+        algorithm: CryptoKeyPairAlgorithm,
+        private_key: Zeroizing<Vec<u8>>,
+        public_key: Vec<u8>,
+        lifecycle_label: Label,
+    },
+}
+
+/// Asymmetric algorithms available to `crypto.generateKeyPairSync` (bd-53l89
+/// slice 1: Ed25519 only; P-256 lands with the ECDSA slice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptoKeyPairAlgorithm {
+    Ed25519,
 }
 
 impl CryptoObjectState {
@@ -595,6 +608,9 @@ impl CryptoObjectState {
                 lifecycle_label, ..
             }
             | Self::CipherFinalized {
+                lifecycle_label, ..
+            }
+            | Self::KeyPairActive {
                 lifecycle_label, ..
             } => lifecycle_label,
         }
@@ -633,6 +649,11 @@ impl CryptoObjectState {
                 }
                 _ => false,
             },
+            // bd-53l89 slice 1: a generated key pair exposes no lifecycle
+            // methods yet; sign/verify dispatch arrives with its own slice and
+            // will extend this arm. Until then every lifecycle capability is
+            // refused, so the handle is inert by construction.
+            Self::KeyPairActive { .. } => false,
         }
     }
 }
@@ -8842,7 +8863,7 @@ struct LoopbackSocketState {
     /// invisible to `listeners("finish")`/`rawListeners("finish")`
     /// (bd-asw4m.5). Consumed once when the finish emission completes.
     end_completion_callback: Option<Value>,
- }
+}
 
 /// TLS session observations that cannot be forged through guest heap writes.
 /// Application bytes still use the loopback socket queues; successful
@@ -12305,8 +12326,7 @@ impl InterpreterCore {
                     let handle_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                         .saturating_add(Self::estimate_string_bytes(&handle));
                     self.apply_memory_component_delta(0, handle_bytes)?;
-                    self.child_process_handles
-                        .insert(child, handle.clone());
+                    self.child_process_handles.insert(child, handle.clone());
                     if let Err(error) =
                         self.replace_child_process_state(child, Self::pending_child_process_state())
                     {
@@ -12680,9 +12700,7 @@ impl InterpreterCore {
             // fd reads are consumed by the ReadFd conversion arm (positional
             // Buffer mutation + count); a stray Bytes result surfaced here
             // still materializes as a real Buffer rather than vanishing.
-            FsMetaResult::Bytes(bytes) => {
-                Ok(Value::Object(self.alloc_buffer_from_bytes(&bytes)?))
-            }
+            FsMetaResult::Bytes(bytes) => Ok(Value::Object(self.alloc_buffer_from_bytes(&bytes)?)),
         }
     }
 
@@ -14361,13 +14379,11 @@ impl InterpreterCore {
             }
         }
         if let Some((server, generation)) = server {
-            if let Err(error) =
-                self.schedule_loopback_task(PendingLoopbackTask::Connect {
-                    client,
-                    server,
-                    generation,
-                })
-            {
+            if let Err(error) = self.schedule_loopback_task(PendingLoopbackTask::Connect {
+                client,
+                server,
+                generation,
+            }) {
                 rollback_connect_registration!(self);
                 return Err(error);
             }
@@ -14789,13 +14805,11 @@ impl InterpreterCore {
             close_wrapper = Some((property_object, previous_heap_len));
         }
         if should_schedule {
-            if let Err(error) =
-                self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
-                    server,
-                    generation,
-                    label: lifecycle_label,
-                })
-            {
+            if let Err(error) = self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
+                server,
+                generation,
+                label: lifecycle_label,
+            }) {
                 if let Some((property_object, previous_heap_len)) = close_wrapper {
                     self.rollback_inserted_event_listener(server, "close", false);
                     self.rollback_event_once_wrapper(property_object, previous_heap_len);
@@ -31648,12 +31662,14 @@ impl InterpreterCore {
         if let Some(record) = self.module_state.modules.get(resolved) {
             let namespace = record.namespace_object;
             let async_promise = match &record.status {
-                ModuleRuntimeStatus::AsyncEvaluating => Some(record.evaluation_promise.ok_or_else(
-                    || InterpreterError::ModuleEvaluationFailed {
-                        specifier: resolved.to_string(),
-                        reason: "async-evaluating module has no evaluation Promise".to_string(),
-                    },
-                )?),
+                ModuleRuntimeStatus::AsyncEvaluating => {
+                    Some(record.evaluation_promise.ok_or_else(|| {
+                        InterpreterError::ModuleEvaluationFailed {
+                            specifier: resolved.to_string(),
+                            reason: "async-evaluating module has no evaluation Promise".to_string(),
+                        }
+                    })?)
+                }
                 ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => None,
                 ModuleRuntimeStatus::Failed(reason) => {
                     return Err(InterpreterError::ModuleEvaluationFailed {
@@ -36478,14 +36494,14 @@ impl InterpreterCore {
         } else {
             None
         };
-        let async_settlement_failure = self
-            .module_state
-            .modules
-            .get(specifier)
-            .and_then(|record| match &record.status {
-                ModuleRuntimeStatus::Failed(reason) => Some(reason.clone()),
-                _ => None,
-            });
+        let async_settlement_failure =
+            self.module_state
+                .modules
+                .get(specifier)
+                .and_then(|record| match &record.status {
+                    ModuleRuntimeStatus::Failed(reason) => Some(reason.clone()),
+                    _ => None,
+                });
         self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;
         result?;
@@ -36496,13 +36512,14 @@ impl InterpreterCore {
             });
         }
         if let Some(execution) = suspended_execution {
-            let record = self.module_state.modules.get_mut(specifier).ok_or_else(|| {
-                InterpreterError::ModuleEvaluationFailed {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(specifier)
+                .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
                     specifier: specifier.to_string(),
-                    reason: "module record disappeared while parking async evaluation"
-                        .to_string(),
-                }
-            })?;
+                    reason: "module record disappeared while parking async evaluation".to_string(),
+                })?;
             record.async_execution = Some(execution);
         }
         Ok(suspended)
@@ -37041,12 +37058,14 @@ impl InterpreterCore {
             return Ok(promise);
         }
         let promise = self.create_promise()?;
-        let record = self.module_state.modules.get_mut(specifier).ok_or_else(|| {
-            InterpreterError::ModuleEvaluationFailed {
+        let record = self
+            .module_state
+            .modules
+            .get_mut(specifier)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
                 specifier: specifier.to_string(),
                 reason: "module record missing while creating evaluation Promise".to_string(),
-            }
-        })?;
+            })?;
         record.evaluation_promise = Some(promise);
         Ok(promise)
     }
@@ -37449,12 +37468,14 @@ impl InterpreterCore {
         }
 
         let (owner_module, suspended_execution) = {
-            let record = self.module_state.modules.get_mut(&specifier).ok_or_else(|| {
-                InterpreterError::ModuleEvaluationFailed {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(&specifier)
+                .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
                     specifier: specifier.clone(),
                     reason: "async continuation owner module is not retained".to_string(),
-                }
-            })?;
+                })?;
             let owner_module = record.compiled_module.as_ref().cloned().ok_or_else(|| {
                 InterpreterError::ModuleEvaluationFailed {
                     specifier: specifier.clone(),
@@ -37491,13 +37512,15 @@ impl InterpreterCore {
         };
         self.restore_module_execution(caller_execution, true);
         if let Some(execution) = parked_execution {
-            let record = self.module_state.modules.get_mut(&specifier).ok_or_else(|| {
-                InterpreterError::ModuleEvaluationFailed {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(&specifier)
+                .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
                     specifier: specifier.clone(),
                     reason: "async module record disappeared while re-parking continuation"
                         .to_string(),
-                }
-            })?;
+                })?;
             record.status = ModuleRuntimeStatus::AsyncEvaluating;
             record.async_execution = Some(execution);
         }
@@ -37512,10 +37535,7 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.push_event("top_level_await_resumed", "ok", None);
         match (resumption_context.continuation, settled) {
-            (
-                ModuleAwaitContinuation::AwaitValue { result_register },
-                Ok(argument),
-            ) => {
+            (ModuleAwaitContinuation::AwaitValue { result_register }, Ok(argument)) => {
                 self.write_reg_with_label(
                     result_register,
                     Self::js_value_to_value(&argument),
@@ -41777,10 +41797,7 @@ impl InterpreterCore {
                     if let Some((dependency, evaluation_promise)) =
                         self.pending_async_module_import.take()
                     {
-                        self.suspend_on_async_module_dependency(
-                            evaluation_promise,
-                            dependency,
-                        )?;
+                        self.suspend_on_async_module_dependency(evaluation_promise, dependency)?;
                         return Ok(LabeledReturn {
                             value: Value::Undefined,
                             label: Label::Public,
@@ -42809,26 +42826,28 @@ impl InterpreterCore {
                         });
                     }
 
-                    if self.foreign_closure_module(&callee_value, module)?.is_some() {
+                    if self
+                        .foreign_closure_module(&callee_value, module)?
+                        .is_some()
+                    {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(Some(callee), args)?;
                         let arguments = self.call_arguments(args)?;
-                        let (result, result_label) =
-                            match self.invoke_inline_construct_with_labels(
-                                Some(module),
-                                callee_value,
-                                arguments,
-                                Some(call_labels),
-                                Some((new_target_value, new_target_label)),
-                            ) {
-                                Ok(value) => value,
-                                Err(error) => {
-                                    match self.route_isolated_explicit_throw(module, error)? {
-                                        None => continue,
-                                        Some(error) => return Err(error),
-                                    }
+                        let (result, result_label) = match self.invoke_inline_construct_with_labels(
+                            Some(module),
+                            callee_value,
+                            arguments,
+                            Some(call_labels),
+                            Some((new_target_value, new_target_label)),
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                match self.route_isolated_explicit_throw(module, error)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
                                 }
-                            };
+                            }
+                        };
                         self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
@@ -42854,11 +42873,7 @@ impl InterpreterCore {
                                 result_label,
                                 &new_target_label,
                             )?;
-                            self.write_reg_with_label(
-                                dst,
-                                Value::Object(object_id),
-                                result_label,
-                            )?;
+                            self.write_reg_with_label(dst, Value::Object(object_id), result_label)?;
                             self.ip += 1;
                             continue;
                         }
@@ -43537,8 +43552,7 @@ impl InterpreterCore {
                     let lexical_this_temporary_bytes =
                         Self::estimate_arrow_lexical_this_entry_bytes(&lexical_this);
                     let captured_env = self.snapshot_scope_chain_with_temporary_budget(
-                        lexical_super_temporary_bytes
-                            .saturating_add(lexical_this_temporary_bytes),
+                        lexical_super_temporary_bytes.saturating_add(lexical_this_temporary_bytes),
                     )?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
@@ -43692,8 +43706,7 @@ impl InterpreterCore {
                     let lexical_this_temporary_bytes =
                         Self::estimate_arrow_lexical_this_entry_bytes(&lexical_this);
                     let captured_env = self.snapshot_scope_chain_with_temporary_budget(
-                        lexical_super_temporary_bytes
-                            .saturating_add(lexical_this_temporary_bytes),
+                        lexical_super_temporary_bytes.saturating_add(lexical_this_temporary_bytes),
                     )?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
@@ -50579,10 +50592,7 @@ impl InterpreterCore {
             let Some(task) = self.next_tick_queue.pop_front() else {
                 break;
             };
-            self.apply_memory_component_delta(
-                previous_bytes,
-                self.next_tick_queue_memory_bytes(),
-            )?;
+            self.apply_memory_component_delta(previous_bytes, self.next_tick_queue_memory_bytes())?;
             *drained += 1;
             let module = module.ok_or_else(|| InterpreterError::TypeError {
                 expected: "module-backed process.nextTick dispatch".to_string(),
@@ -57034,7 +57044,8 @@ impl InterpreterCore {
             })?;
         let argument_start: u32 = if explicit_new_target.is_some() { 2 } else { 1 };
         let required_registers =
-            argument_start.checked_add(arg_count)
+            argument_start
+                .checked_add(arg_count)
                 .ok_or_else(|| InterpreterError::TypeError {
                     expected: "u32-bounded Reflect.construct register budget".to_string(),
                     got: format!("{argument_start} constructor registers + {arg_count} arguments"),
@@ -58266,12 +58277,15 @@ impl InterpreterCore {
                         // aligned with Object.keys: array indices first, then
                         // ordinary strings in creation order, with Symbols
                         // excluded from JSON object members.
-                        for key in object.own_runtime_property_keys().into_iter().filter_map(
-                            |key| match key {
-                                RuntimePropertyKey::String(key) => Some(key),
-                                RuntimePropertyKey::Symbol(_) => None,
-                            },
-                        ) {
+                        for key in
+                            object
+                                .own_runtime_property_keys()
+                                .into_iter()
+                                .filter_map(|key| match key {
+                                    RuntimePropertyKey::String(key) => Some(key),
+                                    RuntimePropertyKey::Symbol(_) => None,
+                                })
+                        {
                             // Engine-internal metadata (e.g. Symbol __type/__key)
                             // is not a real enumerable JS property.
                             if key.as_str().is_some_and(|key| key.starts_with("__"))
@@ -59849,19 +59863,15 @@ impl InterpreterCore {
     /// `options.params`. Unspecified parameters fall back to the Brotli
     /// defaults Node exposes (`BROTLI_DEFAULT_QUALITY` = 11,
     /// `BROTLI_DEFAULT_WINDOW` = 22).
-    fn zlib_brotli_params(
-        &self,
-        options: Option<&Value>,
-    ) -> Result<(u32, u32), InterpreterError> {
+    fn zlib_brotli_params(&self, options: Option<&Value>) -> Result<(u32, u32), InterpreterError> {
         const BROTLI_PARAM_QUALITY: f64 = 4.0;
         const BROTLI_PARAM_LGWIN: f64 = 6.0;
         let mut quality = 11u32;
         let mut lgwin = 22u32;
         if let Some(parsed) = self.zlib_brotli_param(options, BROTLI_PARAM_QUALITY)? {
-            let parsed =
-                u32::try_from(parsed).map_err(|_| InterpreterError::RangeError {
-                    message: format!("zlib brotli quality {parsed} is outside 0..=11"),
-                })?;
+            let parsed = u32::try_from(parsed).map_err(|_| InterpreterError::RangeError {
+                message: format!("zlib brotli quality {parsed} is outside 0..=11"),
+            })?;
             if parsed > 11 {
                 return Err(InterpreterError::RangeError {
                     message: format!("zlib brotli quality {parsed} is outside 0..=11"),
@@ -59870,10 +59880,9 @@ impl InterpreterCore {
             quality = parsed;
         }
         if let Some(parsed) = self.zlib_brotli_param(options, BROTLI_PARAM_LGWIN)? {
-            let parsed =
-                u32::try_from(parsed).map_err(|_| InterpreterError::RangeError {
-                    message: format!("zlib brotli lgwin {parsed} is outside 10..=24"),
-                })?;
+            let parsed = u32::try_from(parsed).map_err(|_| InterpreterError::RangeError {
+                message: format!("zlib brotli lgwin {parsed} is outside 10..=24"),
+            })?;
             if !(10..=24).contains(&parsed) {
                 return Err(InterpreterError::RangeError {
                     message: format!("zlib brotli lgwin {parsed} is outside 10..=24"),
@@ -59890,15 +59899,13 @@ impl InterpreterCore {
         quality: u32,
         lgwin: u32,
     ) -> Result<Vec<u8>, ZlibOperationFailure> {
-        let mut params =
-            brotli::enc::backward_references::BrotliEncoderParams::default();
+        let mut params = brotli::enc::backward_references::BrotliEncoderParams::default();
         // brotli 8.x stores both knobs as i32; the parser above already
         // range-checked quality into 0..=11 and lgwin into 10..=24.
         params.quality = quality as i32;
         params.lgwin = lgwin as i32;
         let mut output = Vec::new();
-        let mut writer =
-            brotli::CompressorWriter::with_params(&mut output, 4096, &params);
+        let mut writer = brotli::CompressorWriter::with_params(&mut output, 4096, &params);
         use std::io::Write as _;
         writer
             .write_all(input)
@@ -59920,9 +59927,7 @@ impl InterpreterCore {
         use std::io::Read as _;
         if input.is_empty() {
             // A valid Brotli stream is never zero bytes; Node rejects this.
-            return Err(ZlibOperationFailure::data(
-                "unexpected end of brotli input",
-            ));
+            return Err(ZlibOperationFailure::data("unexpected end of brotli input"));
         }
         let mut reader = brotli::Decompressor::new(input, 4096);
         let mut output = Vec::new();
@@ -60817,7 +60822,9 @@ impl InterpreterCore {
             CryptoObjectState::HmacFinalized { .. }
             | CryptoObjectState::HashFinalized { .. }
             | CryptoObjectState::CipherActive { .. }
-            | CryptoObjectState::CipherFinalized { .. } => 0,
+            | CryptoObjectState::CipherFinalized { .. }
+            // bd-53l89: key pair handles expose no digest/final lifecycle.
+            | CryptoObjectState::KeyPairActive { .. } => 0,
         };
         let candidate_state_bound = CRYPTO_STATE_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
@@ -60884,6 +60891,14 @@ impl InterpreterCore {
                 return Err(InterpreterError::TypeError {
                     expected: "hash or HMAC receiver".to_string(),
                     got: "cipher receiver".to_string(),
+                });
+            }
+            // bd-53l89: digest/final is not a key pair operation; the
+            // lifecycle gate already refuses these tags for KeyPairActive.
+            CryptoObjectState::KeyPairActive { .. } => {
+                return Err(InterpreterError::TypeError {
+                    expected: "hash or HMAC receiver".to_string(),
+                    got: "key pair receiver".to_string(),
                 });
             }
         };
@@ -60994,13 +61009,7 @@ impl InterpreterCore {
             CryptoHashAlgorithm::Sha512 => crate::crypto_kdf_zeroized::PrfHash::Sha512,
             CryptoHashAlgorithm::Md5 => crate::crypto_kdf_zeroized::PrfHash::Md5,
         };
-        crate::crypto_kdf_zeroized::pbkdf2_zeroized(
-            prf_hash,
-            password,
-            salt,
-            iterations,
-            output,
-        );
+        crate::crypto_kdf_zeroized::pbkdf2_zeroized(prf_hash, password, salt, iterations, output);
         Ok(())
     }
 
@@ -61758,6 +61767,72 @@ impl InterpreterCore {
             CryptoCipherAlgorithm::Aes256Cbc => (32, 16),
             CryptoCipherAlgorithm::Aes128Ctr => (16, 16),
             CryptoCipherAlgorithm::Aes256Gcm => (32, 12),
+        }
+    }
+
+    /// bd-53l89 slice 1 (contract:
+    /// docs/CRYPTO_ASYMMETRIC_KEY_LIFECYCLE_CONTRACT_V1.md §1,2,3,7,9).
+    /// Entropy enters exclusively through the audited RandomRead host effect;
+    /// the private seed lives only in Zeroizing storage inside
+    /// `crypto_objects`; the returned JS value is an inert ObjectId handle.
+    fn crypto_generate_key_pair_sync(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let algorithm_name = self.crypto_required_string_arg(args, 0, "key pair algorithm")?;
+        if args.count > 2 {
+            return Err(InterpreterError::TypeError {
+                expected: "generateKeyPairSync(algorithm[, options])".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        if let Some(options) = self.builtin_arg(args, 1)? {
+            if !matches!(options, Value::Undefined) {
+                return Err(self.crypto_throw_node_error(
+                    "Error",
+                    "ERR_INVALID_ARG_VALUE",
+                    "generateKeyPairSync options are not supported in this engine slice"
+                        .to_string(),
+                    &invocation_label,
+                ));
+            }
+        }
+        let Some(algorithm) = Self::crypto_key_pair_algorithm(&algorithm_name) else {
+            return Err(self.crypto_throw_node_error(
+                "Error",
+                "ERR_INVALID_ARG_VALUE",
+                format!(
+                    "Unknown key pair algorithm: {}",
+                    Self::crypto_diagnostic_fragment(&algorithm_name)
+                ),
+                &invocation_label,
+            ));
+        };
+        self.require_random_read_capability()?;
+        match algorithm {
+            CryptoKeyPairAlgorithm::Ed25519 => {
+                self.charge_crypto_work(Self::crypto_byte_work(32))?;
+                let seed = match self.perform_random_read_effect(32) {
+                    Ok(bytes) => Zeroizing::new(bytes),
+                    Err(()) => return self.crypto_random_failure(invocation_label, None),
+                };
+                let Ok(seed_bytes) = <[u8; 32]>::try_from(seed.as_slice()) else {
+                    return self.crypto_random_failure(invocation_label, None);
+                };
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+                let public_key = signing_key.verifying_key().to_bytes().to_vec();
+                self.crypto_alloc_object(CryptoObjectState::KeyPairActive {
+                    algorithm,
+                    private_key: Zeroizing::new(signing_key.to_bytes().to_vec()),
+                    public_key,
+                    lifecycle_label: invocation_label,
+                })
+            }
+        }
+    }
+
+    fn crypto_key_pair_algorithm(name: &str) -> Option<CryptoKeyPairAlgorithm> {
+        match name {
+            "ed25519" | "ed25519-dalek" => Some(CryptoKeyPairAlgorithm::Ed25519),
+            _ => None,
         }
     }
 
@@ -62660,6 +62735,15 @@ impl InterpreterCore {
                 | CryptoObjectState::CipherFinalized { .. } => {
                     BuiltinFunctionKind::CryptoCipherUpdate
                 }
+                // bd-53l89: a key pair handle has no update lifecycle; the
+                // typed refusal below keeps the match total without granting
+                // any operation.
+                CryptoObjectState::KeyPairActive { .. } => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "hash, HMAC, or cipher receiver".to_string(),
+                        got: "key pair receiver".to_string(),
+                    });
+                }
             },
             "builtin:CryptoObjectDigest" => BuiltinFunctionKind::CryptoDigest,
             "builtin:CryptoObjectCopy" => BuiltinFunctionKind::CryptoCopy,
@@ -62898,8 +62982,7 @@ impl InterpreterCore {
                 // delegated target that fell through to the unknown-member
                 // arm must fail closed instead of surfacing the silent
                 // `undefined` (bd-z1peg.3, acceptance criterion 5).
-                if outcome.is_ok()
-                    && std::mem::take(&mut self.builtin_dispatch_hit_unknown_member)
+                if outcome.is_ok() && std::mem::take(&mut self.builtin_dispatch_hit_unknown_member)
                 {
                     Err(InterpreterError::CapabilityDenied {
                         capability: recordable_capability_tag(cap).into_owned(),
@@ -64173,6 +64256,7 @@ impl InterpreterCore {
             "builtin:CryptoRandomUUID" => self.crypto_random_uuid(args),
             "builtin:CryptoRandomInt" => self.crypto_random_int(args),
             "builtin:CryptoRandomFillSync" => self.crypto_random_fill_sync(args),
+            "builtin:CryptoGenerateKeyPairSync" => self.crypto_generate_key_pair_sync(args),
             "builtin:CryptoObjectUpdate"
             | "builtin:CryptoObjectDigest"
             | "builtin:CryptoObjectCopy"
@@ -67541,12 +67625,13 @@ impl InterpreterCore {
                     });
                 }
                 let explicit_new_target = if args.count >= 3 {
-                    let new_target_register = args.start.checked_add(2).ok_or(
-                        InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        },
-                    )?;
+                    let new_target_register =
+                        args.start
+                            .checked_add(2)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
                     let new_target = self.read_reg(new_target_register)?;
                     if !self.is_constructible_value(&new_target) {
                         return Err(InterpreterError::TypeError {
@@ -74894,10 +74979,8 @@ impl InterpreterCore {
         execution: &GeneratorExecutionSnapshot,
         seen: &mut BTreeSet<usize>,
     ) -> u64 {
-        let mut total = Self::accumulate_scope_frame_cell_payload_bytes(
-            &execution.scope_chain.frames,
-            seen,
-        );
+        let mut total =
+            Self::accumulate_scope_frame_cell_payload_bytes(&execution.scope_chain.frames, seen);
         for frame in &execution.call_stack {
             if let Some(saved) = &frame.saved_scope_chain {
                 total = total
@@ -74916,10 +74999,8 @@ impl InterpreterCore {
     /// both here and there is over-counted, never under-counted.
     fn shared_binding_cell_payloads_memory_bytes(&self) -> u64 {
         let mut seen: BTreeSet<usize> = BTreeSet::new();
-        let mut total = Self::accumulate_scope_frame_cell_payload_bytes(
-            &self.scope_chain.frames,
-            &mut seen,
-        );
+        let mut total =
+            Self::accumulate_scope_frame_cell_payload_bytes(&self.scope_chain.frames, &mut seen);
         for frame in &self.call_stack {
             if let Some(saved) = &frame.saved_scope_chain {
                 total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
@@ -75549,6 +75630,11 @@ impl InterpreterCore {
                 auth_tag.as_ref().map_or(0, |tag| tag.capacity())
             }
             CryptoObjectState::HashFinalized { .. } | CryptoObjectState::HmacFinalized { .. } => 0,
+            CryptoObjectState::KeyPairActive {
+                private_key,
+                public_key,
+                ..
+            } => private_key.capacity().saturating_add(public_key.len()),
         };
         CRYPTO_STATE_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
@@ -78530,7 +78616,10 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
             None,
             &Label::Public,
         );
-        assert!(result.is_ok(), "pure delegated builtin must succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "pure delegated builtin must succeed: {result:?}"
+        );
 
         let (values_after, labels_after) = register_snapshot(&core, 4);
         assert_eq!(
@@ -78584,8 +78673,14 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
             "a near-budget Custom label must refuse: {refusal:?}"
         );
         let (values_after, labels_after) = register_snapshot(&core, 4);
-        assert_eq!(values_after, values_before, "refusal must not move register values");
-        assert_eq!(labels_after, labels_before, "refusal must not move register labels");
+        assert_eq!(
+            values_after, values_before,
+            "refusal must not move register values"
+        );
+        assert_eq!(
+            labels_after, labels_before,
+            "refusal must not move register labels"
+        );
         assert!(
             core.pending_hostcall_result_label.is_none(),
             "refusal must not leave pending result provenance"
@@ -99080,7 +99175,10 @@ mod async_runtime_tests_current {
         assert_eq!(writable.deferred_final_tick_sequence, None);
         assert_eq!(writable.tick_sequence, Some(91));
         assert_eq!(writable.tick_phase, WritableTickPhase::Error);
-        assert_eq!(writable.terminal_error_origin, Some(WritableErrorOrigin::Write));
+        assert_eq!(
+            writable.terminal_error_origin,
+            Some(WritableErrorOrigin::Write)
+        );
         assert_eq!(writable.lifecycle_label, Label::Secret);
         let (Value::Object(error_id), error_label) = writable
             .terminal_error
@@ -105455,10 +105553,7 @@ mod async_runtime_tests_current {
         let Value::Object(compressed) = core
             .dispatch_zlib_hostcall(
                 "builtin:ZlibBrotliCompressSync",
-                RegRange {
-                    start: 0,
-                    count: 1,
-                },
+                RegRange { start: 0, count: 1 },
             )
             .expect("brotli compress must succeed")
         else {
@@ -105470,10 +105565,7 @@ mod async_runtime_tests_current {
         let Value::Object(decompressed) = core
             .dispatch_zlib_hostcall(
                 "builtin:ZlibBrotliDecompressSync",
-                RegRange {
-                    start: 0,
-                    count: 1,
-                },
+                RegRange { start: 0, count: 1 },
             )
             .expect("brotli decompress must succeed")
         else {
@@ -105504,10 +105596,7 @@ mod async_runtime_tests_current {
         let Value::Object(compressed) = core
             .dispatch_zlib_hostcall(
                 "builtin:ZlibBrotliCompressSync",
-                RegRange {
-                    start: 0,
-                    count: 2,
-                },
+                RegRange { start: 0, count: 2 },
             )
             .expect("quality-5 brotli compress must succeed")
         else {
@@ -105519,10 +105608,7 @@ mod async_runtime_tests_current {
         let Value::Object(decompressed) = core
             .dispatch_zlib_hostcall(
                 "builtin:ZlibBrotliDecompressSync",
-                RegRange {
-                    start: 0,
-                    count: 1,
-                },
+                RegRange { start: 0, count: 1 },
             )
             .expect("decompress must succeed")
         else {
@@ -105547,10 +105633,7 @@ mod async_runtime_tests_current {
 
         match core.dispatch_zlib_hostcall(
             "builtin:ZlibBrotliDecompressSync",
-            RegRange {
-                start: 0,
-                count: 1,
-            },
+            RegRange { start: 0, count: 1 },
         ) {
             Err(InterpreterError::UncaughtException { value }) => {
                 assert!(
@@ -105558,9 +105641,7 @@ mod async_runtime_tests_current {
                     "corrupt brotli input must raise the brotli data error, got {value:?}"
                 );
             }
-            other => panic!(
-                "corrupt brotli input must throw a guest Error, got {other:?}"
-            ),
+            other => panic!("corrupt brotli input must throw a guest Error, got {other:?}"),
         }
     }
 
@@ -105581,10 +105662,7 @@ mod async_runtime_tests_current {
         assert!(matches!(
             core.dispatch_zlib_hostcall(
                 "builtin:ZlibBrotliCompressSync",
-                RegRange {
-                    start: 0,
-                    count: 2,
-                },
+                RegRange { start: 0, count: 2 },
             ),
             Err(InterpreterError::RangeError { .. })
         ));
@@ -131618,16 +131696,12 @@ mod memory_accounting_tests {
 
         // Connect site: the callback registers as a stable once wrapper with
         // .listener identity, not a bare one-shot record.
-        core.write_reg(0, Value::Int(41_000)).expect("port register");
-        core.write_reg(1, callback.clone()).expect("connect callback");
+        core.write_reg(0, Value::Int(41_000))
+            .expect("port register");
+        core.write_reg(1, callback.clone())
+            .expect("connect callback");
         let client = core
-            .connect_loopback_socket_with_tls(
-                RegRange {
-                    start: 0,
-                    count: 2,
-                },
-                false,
-            )
+            .connect_loopback_socket_with_tls(RegRange { start: 0, count: 2 }, false)
             .expect("loopback connect");
         let Value::Object(client) = client else {
             panic!("loopback connect must return the socket object");
@@ -131642,24 +131716,16 @@ mod memory_accounting_tests {
 
         // Listen site: same publication shape on the server lifecycle event.
         let server = core
-            .construct_loopback_server(RegRange {
-                start: 0,
-                count: 0,
-            })
+            .construct_loopback_server(RegRange { start: 0, count: 0 })
             .expect("loopback server");
         let Value::Object(server_id) = server else {
             panic!("loopback server must return the server object");
         };
         core.write_reg(0, Value::Int(0)).expect("wildcard port");
-        core.write_reg(1, callback.clone()).expect("listen callback");
-        core.loopback_server_listen(
-            Value::Object(server_id),
-            RegRange {
-                start: 0,
-                count: 2,
-            },
-        )
-        .expect("loopback listen");
+        core.write_reg(1, callback.clone())
+            .expect("listen callback");
+        core.loopback_server_listen(Value::Object(server_id), RegRange { start: 0, count: 2 })
+            .expect("loopback listen");
         let listen_records = core.event_listener_records_for(server_id, "listening");
         assert!(listen_records[0].once);
         let listen_property = core
@@ -131670,14 +131736,8 @@ mod memory_accounting_tests {
         // Close site: same publication shape, and the wrapper is live before
         // the scheduled ServerClose task fires.
         core.write_reg(1, callback.clone()).expect("close callback");
-        core.loopback_server_close(
-            Value::Object(server_id),
-            RegRange {
-                start: 0,
-                count: 2,
-            },
-        )
-        .expect("loopback close");
+        core.loopback_server_close(Value::Object(server_id), RegRange { start: 0, count: 2 })
+            .expect("loopback close");
         let close_records = core.event_listener_records_for(server_id, "close");
         assert_eq!(close_records.len(), 1, "close registers one record");
         assert!(close_records[0].once);
@@ -131694,8 +131754,7 @@ mod memory_accounting_tests {
 
     #[test]
     fn socket_end_completion_carrier_stays_outside_finish_listeners_bd_asw4m5() {
-        let mut core =
-            InterpreterCore::new(test_quickjs_config(), "bd-asw4m5-end-carrier");
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-asw4m5-end-carrier");
         let mut module = Ir3Module::new(
             ContentHash::compute(b"bd-asw4m5-end-carrier"),
             "bd_asw4m5_end_carrier.js",
@@ -131723,10 +131782,7 @@ mod memory_accounting_tests {
         core.loopback_socket_end(
             &module,
             Value::Object(sender),
-            RegRange {
-                start: 0,
-                count: 1,
-            },
+            RegRange { start: 0, count: 1 },
         )
         .expect("socket end with completion callback");
 
@@ -131741,10 +131797,7 @@ mod memory_accounting_tests {
             core.loopback_socket_end(
                 &module,
                 Value::Object(sender),
-                RegRange {
-                    start: 0,
-                    count: 1,
-                },
+                RegRange { start: 0, count: 1 },
             )
             .expect("second end returns the socket"),
             Value::Object(sender),
@@ -131756,7 +131809,6 @@ mod memory_accounting_tests {
             "carrier publication and consumption must stay memory-accounted"
         );
     }
-
 
     fn loopback_write_atomicity_fixture(
         linked_peer: bool,

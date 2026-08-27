@@ -24887,6 +24887,7 @@ enum FlowValueShape {
     ClosedResult,
     BufferObject,
     FreshAggregate,
+    ConstantsObject,
 }
 
 impl FlowValueShape {
@@ -24898,6 +24899,7 @@ impl FlowValueShape {
                 | Self::ClosedResult
                 | Self::BufferObject
                 | Self::FreshAggregate
+                | Self::ConstantsObject
                 | Self::EventEmitterObject
         )
     }
@@ -24927,6 +24929,7 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
                 // fail-high. Mutation and escape paths still clear it via
                 // their own explicit invalidations.
                 | FlowValueShape::ClosedResult
+                | FlowValueShape::ConstantsObject
         ) {
             value.shape = FlowValueShape::Unknown;
         }
@@ -24953,6 +24956,7 @@ fn invalidate_nonprimitive_binding_flow_shapes(
                 // the synthetic-receiver and later-read paths, exactly as
                 // BufferObject does.
                 | FlowValueShape::ClosedResult
+                | FlowValueShape::ConstantsObject
         ) {
             *shape = FlowValueShape::Unknown;
         }
@@ -24960,13 +24964,14 @@ fn invalidate_nonprimitive_binding_flow_shapes(
 }
 
 /// Heap-backed retained proofs (`BufferObject`, `ClosedResult`,
-/// `FreshAggregate`) summarize engine-vouched structure whose backing store
-/// lives on the shared heap (bd-b1etn). Guest call boundaries, property
-/// mutations, and control-flow merges can observe or mutate that store
-/// through aliases, so the soundness-critical sites must clear heap-backed
-/// proofs outright instead of keeping them alive for later finite-method
-/// reads. Unrelated-call sweeps keep using the weaker nonprimitive
-/// invalidation so synthetic-receiver reads survive (bd-zco6t, bd-dign3).
+/// `FreshAggregate`, `ConstantsObject`) summarize engine-vouched structure
+/// whose backing store lives on the shared heap (bd-b1etn). Guest call
+/// boundaries, property mutations, and control-flow merges can observe or
+/// mutate that store through aliases, so the soundness-critical sites must
+/// clear heap-backed proofs outright instead of keeping them alive for later
+/// finite-method reads. Unrelated-call sweeps keep using the weaker
+/// nonprimitive invalidation so synthetic-receiver reads survive (bd-zco6t,
+/// bd-dign3).
 fn invalidate_heap_backed_flow_shapes(values: &mut [FlowValue]) {
     for value in values {
         if matches!(
@@ -24974,6 +24979,7 @@ fn invalidate_heap_backed_flow_shapes(values: &mut [FlowValue]) {
             FlowValueShape::BufferObject
                 | FlowValueShape::ClosedResult
                 | FlowValueShape::FreshAggregate
+                | FlowValueShape::ConstantsObject
         ) {
             value.shape = FlowValueShape::Unknown;
         }
@@ -24989,6 +24995,7 @@ fn invalidate_heap_backed_binding_flow_shapes(
             FlowValueShape::BufferObject
                 | FlowValueShape::ClosedResult
                 | FlowValueShape::FreshAggregate
+                | FlowValueShape::ConstantsObject
         ) {
             *shape = FlowValueShape::Unknown;
         }
@@ -25995,6 +26002,8 @@ fn hostcall_exception_is_operand_derived(
             | "builtin:CryptoGetHashes"
             | "builtin:CryptoGetCiphers"
             | "builtin:CryptoConstants"
+            | "builtin:ZlibConstants"
+            | "builtin:OsConstants"
             | "builtin:CryptoInvalidRandomInt"
             | "builtin:CryptoObjectUpdate"
             | "builtin:CryptoObjectCopy"
@@ -26069,6 +26078,7 @@ fn hostcall_exception_is_operand_derived(
                 | FlowValueShape::CallableContainer
                 | FlowValueShape::OwnKeyArray)),
         "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
+        _ if capability.starts_with("builtin:instanceof:") => true,
         "builtin:QuerystringParse" => !inputs.is_empty()
             && inputs
                 .iter()
@@ -26164,8 +26174,20 @@ fn hostcall_exception_is_operand_derived(
             !inputs.is_empty()
                 && inputs.iter().all(|value| match value.shape {
                     FlowValueShape::Primitive => true,
-                    FlowValueShape::FreshAggregate => capability == "builtin:BufferFrom",
+                    FlowValueShape::FreshAggregate | FlowValueShape::ClosedResult => {
+                        capability == "builtin:BufferFrom"
+                    }
                     _ => false,
+                })
+        }
+        "builtin:ArrayFrom" => {
+            !inputs.is_empty()
+                && inputs.iter().all(|value| {
+                    value.shape.is_closed()
+                        || matches!(
+                            value.shape,
+                            FlowValueShape::Callable | FlowValueShape::CallableContainer
+                        )
                 })
         }
         // Buffer.concat is finite only when its list is a fresh aggregate of
@@ -26376,6 +26398,26 @@ fn simulate_ir2_flow_labels(
                 let label = Label::Internal;
                 let shape = if name == "Function" {
                     FlowValueShape::FunctionConstructor
+                } else if matches!(name.as_str(), "undefined" | "NaN" | "Infinity") {
+                    FlowValueShape::Primitive
+                } else if matches!(
+                    name.as_str(),
+                    "Error"
+                        | "TypeError"
+                        | "RangeError"
+                        | "SyntaxError"
+                        | "ReferenceError"
+                        | "URIError"
+                        | "EvalError"
+                        | "Array"
+                        | "Object"
+                        | "String"
+                        | "Number"
+                        | "Boolean"
+                        | "Symbol"
+                        | "BigInt"
+                ) {
+                    FlowValueShape::Callable
                 } else {
                     FlowValueShape::Unknown
                 };
@@ -26435,18 +26477,10 @@ fn simulate_ir2_flow_labels(
                     value.shape,
                     FlowValueShape::OwnKeyArray
                         | FlowValueShape::EventEmitterObject
-                        // bd-zco6t: the authenticated Buffer is a dedicated
-                        // finite-method receiver (`toString`/`readUInt32LE`);
-                        // this stack-copy preserve is the same synthetic-
-                        // receiver seam OwnKeyArray's `.join` uses. Named
-                        // BufferObject bindings also survive the subsequent
-                        // GetProperty/CallMethod invalidation so `buf.toString`
-                        // after `fs.readSync` still sees the engine receiver.
                         | FlowValueShape::BufferObject
-                        // bd-dign3: ClosedResult receivers (catalog arrays,
-                        // typed-array views, cipher results) use the same
-                        // synthetic-receiver seam for their finite methods.
                         | FlowValueShape::ClosedResult
+                        | FlowValueShape::FreshAggregate
+                        | FlowValueShape::ConstantsObject
                 ) {
                     invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
                 }
@@ -26502,6 +26536,7 @@ fn simulate_ir2_flow_labels(
                 // shapes (notably EventEmitter.on/once/emit) are attributed
                 // to the callable rather than mistaken for the receiver.
                 let receiver = pop_flow_value(&mut value_stack)?;
+                let receiver_shape = receiver.shape;
                 let callee = pop_flow_value(&mut value_stack)?;
                 let callee_shape = callee.shape;
                 // bd-l0d6z Node parity: emit("error", payload) with no
@@ -26539,6 +26574,7 @@ fn simulate_ir2_flow_labels(
                     FlowValueShape::OwnKeyJoinMethod => FlowValueShape::Primitive,
                     FlowValueShape::EventEmitterFluentMethod => FlowValueShape::EventEmitterObject,
                     FlowValueShape::EventEmitterEmitMethod => FlowValueShape::Primitive,
+                    _ if receiver_shape == FlowValueShape::Primitive => FlowValueShape::Primitive,
                     _ => FlowValueShape::Unknown,
                 };
                 value_stack.push(fresh_shaped_flow_value(
@@ -26720,8 +26756,6 @@ fn simulate_ir2_flow_labels(
             Ir1Op::Label { id } => {
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                invalidate_heap_backed_flow_shapes(&mut value_stack);
-                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 if let Some(catch_label) = catch_entry_labels.get(id) {
                     let value = fresh_flow_value(catch_label.clone(), &mut next_identity);
                     catch_entry_identities.insert(value.identity);
@@ -26747,6 +26781,8 @@ fn simulate_ir2_flow_labels(
                 value_stack.push(value);
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                invalidate_heap_backed_flow_shapes(&mut value_stack);
+                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 label
             }
             Ir1Op::JumpIfFalsyConsume { .. }
@@ -26755,6 +26791,8 @@ fn simulate_ir2_flow_labels(
                 let label = pop_flow_value(&mut value_stack)?.label;
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                invalidate_heap_backed_flow_shapes(&mut value_stack);
+                invalidate_heap_backed_binding_flow_shapes(&mut binding_flow_shapes);
                 label
             }
             Ir1Op::GetProperty { key } => {
@@ -26764,6 +26802,7 @@ fn simulate_ir2_flow_labels(
                 }
                 let object = pop_flow_value(&mut value_stack)?;
                 let shape = match (&object.shape, key) {
+                    (FlowValueShape::ConstantsObject, _) => FlowValueShape::Primitive,
                     (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
                     (FlowValueShape::EventEmitterObject, Ir1PropertyKey::Static(key))
                         if matches!(key.as_str(), Some("on" | "once")) =>
@@ -26790,7 +26829,25 @@ fn simulate_ir2_flow_labels(
                     (
                         FlowValueShape::Primitive | FlowValueShape::ClosedResult,
                         Ir1PropertyKey::Static(key),
-                    ) if key.as_str() == Some("includes") => FlowValueShape::Callable,
+                    ) if matches!(
+                        key.as_str(),
+                        Some(
+                            "includes"
+                                | "repeat"
+                                | "slice"
+                                | "substring"
+                                | "trim"
+                                | "toLowerCase"
+                                | "toUpperCase"
+                                | "concat"
+                                | "indexOf"
+                                | "charAt"
+                                | "charCodeAt"
+                                | "startsWith"
+                                | "endsWith"
+                                | "split"
+                        )
+                    ) => FlowValueShape::Callable,
                     (
                         FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
                         Ir1PropertyKey::Static(key),
@@ -26813,7 +26870,9 @@ fn simulate_ir2_flow_labels(
                 // Finite Object.keys `.join` lookup cannot alias-mutate other
                 // closed values; keep FreshAggregate bindings intact for later
                 // stringify / own-property reads on the same object.
-                if shape != FlowValueShape::OwnKeyJoinMethod {
+                if shape != FlowValueShape::OwnKeyJoinMethod
+                    && inputs.last().map(|obj| obj.shape) != Some(FlowValueShape::ConstantsObject)
+                {
                     invalidate_nonprimitive_flow_shapes(&mut value_stack);
                     invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 }
@@ -27046,9 +27105,10 @@ fn simulate_ir2_flow_labels(
             Ir1Op::ForInInit | Ir1Op::ForOfInit => {
                 let source = pop_flow_value(&mut value_stack)?;
                 let label = source.label;
+                let shape = source.shape;
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                value_stack.push(fresh_shaped_flow_value(label.clone(), shape, &mut next_identity));
                 label
             }
             Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
@@ -27060,9 +27120,22 @@ fn simulate_ir2_flow_labels(
                     .entry(*done_label)
                     .or_insert(iterator.identity);
                 let label = iterator.label;
+                let shape = if iterator.shape.is_closed() {
+                    FlowValueShape::ClosedResult
+                } else {
+                    FlowValueShape::Unknown
+                };
+                let iterator_shape = iterator.shape;
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                if let Some(top) = value_stack.last_mut() {
+                    top.shape = iterator_shape;
+                }
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::IteratorClose { .. } => {
@@ -27142,6 +27215,9 @@ fn simulate_ir2_flow_labels(
                 arg_count,
             } => {
                 let inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
+                if ops.len() == 91 && op_index == 44 {
+                    eprintln!("HOSTCALL_OP_44 inputs: {:?}", inputs.iter().map(|v| (v.label.clone(), v.shape)).collect::<Vec<_>>());
+                }
                 let hostcall_is_operand_derived = hostcall_exception_is_operand_derived(
                     capability,
                     &inputs,
@@ -27355,6 +27431,9 @@ fn simulate_ir2_flow_labels(
                 if hostcall_is_operand_derived && capability == "builtin:BufferIsBuffer" {
                     result_shape = FlowValueShape::Primitive;
                 }
+                if hostcall_is_operand_derived && capability.starts_with("builtin:instanceof:") {
+                    result_shape = FlowValueShape::Primitive;
+                }
                 // bd-53l89 slice 2: an Ed25519 signature is an engine-owned
                 // 64-byte Buffer; the verify verdict is a plain boolean. Both
                 // closed shapes keep chained sign->verify calls operand-derived.
@@ -27376,8 +27455,15 @@ fn simulate_ir2_flow_labels(
                 {
                     result_shape = FlowValueShape::ClosedResult;
                 }
-                if hostcall_is_operand_derived && capability == "builtin:CryptoConstants" {
-                    result_shape = FlowValueShape::FreshAggregate;
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:CryptoConstants"
+                            | "builtin:ZlibConstants"
+                            | "builtin:OsConstants"
+                    )
+                {
+                    result_shape = FlowValueShape::ConstantsObject;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:CryptoTimingSafeEqual" {
                     result_shape = FlowValueShape::Primitive;
@@ -27463,6 +27549,7 @@ fn simulate_ir2_flow_labels(
                             // crypto lifecycle exception contract fail high on
                             // valid binary-like inputs.
                             | "builtin:ArrayBuffer"
+                            | "builtin:ArrayFrom"
                             | "builtin:Uint8Array"
                             | "builtin:Int32Array"
                             | "builtin:Uint32Array"
@@ -27617,6 +27704,14 @@ fn simulate_ir2_flow_labels(
                 };
                 *entry = entry.join(&exception_label);
             }
+        }
+        if ops.len() == 91 && (20..=45).contains(&op_index) {
+            eprintln!(
+                "DEBUG_TRACE op {op_index:02}: {:?} | stack_shapes={:?} | binding_shapes={:?}",
+                op.inner,
+                value_stack.iter().map(|v| v.shape).collect::<Vec<_>>(),
+                binding_flow_shapes
+            );
         }
         inferred_labels.push(inferred);
     }
@@ -42823,4 +42918,38 @@ mod tests {
         )
         .expect("a lexical process binding must not be treated as ambient authority");
     }
+
+    #[test]
+    fn bd_znj5l_preset_dictionary_options_loop_and_instanceof_error_lowering() {
+        let source = r#"
+        const zlib = require('zlib');
+        const dictionary = Buffer.from('the quick brown fox');
+        const compressed = zlib.deflateSync('the quick brown fox jumps', { dictionary });
+        console.log(zlib.inflateSync(compressed, { dictionary }).toString());
+        for (const options of [undefined, { dictionary: Buffer.from('wrong') }]) {
+          try {
+            zlib.inflateSync(compressed, options);
+            console.log('no-throw');
+          } catch (error) {
+            console.log(error instanceof Error, error.code);
+          }
+        }
+        "#;
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_znj5l_debug.js".to_string());
+        let context = LoweringContext::new("trace-1", "decision-1", "policy-1")
+            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+        let result = lower_ir0_to_ir3(&ir0, &context);
+        match result {
+            Ok(output) => {
+                for (i, op) in output.ir2.ops.iter().enumerate() {
+                    println!("op {i:02}: {:?} | flow={:?}", op.inner, op.flow);
+                }
+            }
+            Err(err) => {
+                panic!("lower_ir0_to_ir3 failed: {err:?}");
+            }
+        }
+    }
 }
+

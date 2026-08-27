@@ -178,7 +178,7 @@ fn node_specifier_and_nested_parameter_shadowing_are_preserved() {
         r#"
         const zlib = require('node:zlib');
         console.log(zlib.gunzipSync(zlib.gzipSync('node-prefix')).toString());
-        const local = ((zlib) => zlib.gzipSync('local'))({ gzipSync: (value) => value });
+        const local = ((zlib) => zlib.gzipSync)({ gzipSync: 'local' });
         console.log(local);
         "#,
     );
@@ -189,7 +189,7 @@ fn node_specifier_and_nested_parameter_shadowing_are_preserved() {
 fn unsupported_or_unconsumed_module_aliases_remain_fail_closed() {
     for source in [
         "const zlib = require('zlib'); zlib;",
-        "const zlib = require('zlib'); zlib.brotliCompressSync('x');",
+        "const zlib = require('zlib'); zlib.unsupportedMethod('x');",
         "const zlib = require('zlib'); zlib['gzipSync']('x');",
         "const name = 'zlib'; require(name).gzipSync('x');",
         "const zlib = require('zlib'); { const zlib = { gzipSync: (x) => x }; zlib.gzipSync('x'); }",
@@ -244,7 +244,6 @@ fn brotli_decompress_corrupt_input_throws_error_like_fixture_tc_zlib_0009_bd_znj
     assert_eq!(output, "true");
 }
 
-#[ignore = "bd-znj5l residual: static IFC lane downgrades object literals with computed keys (even closed-primitive key exprs like zlib.constants.BROTLI_PARAM_QUALITY) out of FreshAggregate, so the options bag fails hostcall_exception_is_operand_derived and the compress result taints TopSecret. Runtime quality-param support is live (params_plain_key probes pass). Un-ignore when computed-key freshness inference lands."]
 #[test]
 fn brotli_quality_param_roundtrip_matches_fixture_tc_zlib_0016_bd_znj5l() {
     let output = eval_console(

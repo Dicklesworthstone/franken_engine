@@ -48,10 +48,9 @@ fn run_console_messages(test_name: &str, extension_id: &str, source: &str) -> Ve
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let report: serde_json::Value = serde_json::from_slice(
-        &fs::read(&out).expect("run report should be readable"),
-    )
-    .expect("run report should be JSON");
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&out).expect("run report should be readable"))
+            .expect("run report should be JSON");
     report["console_output"]
         .as_array()
         .map(|entries| {
@@ -70,7 +69,11 @@ fn array_to_string_joins_elements_bd_sxh8o_3() {
         "bd-sxh8o3-tostring",
         "console.log([1,2,3].toString());\n",
     );
-    assert_eq!(messages, vec!["1,2,3"], "Array.prototype.toString should join");
+    assert_eq!(
+        messages,
+        vec!["1,2,3"],
+        "Array.prototype.toString should join"
+    );
 }
 
 #[test]

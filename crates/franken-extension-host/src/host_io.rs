@@ -1431,12 +1431,9 @@ impl SandboxedHostIo {
         fd: u64,
         action: impl FnOnce(&mut SandboxFdEntry) -> Result<T, HostIoError>,
     ) -> Result<T, HostIoError> {
-        let mut table = self
-            .fd_table
-            .lock()
-            .map_err(|_| HostIoError::Io {
-                detail: "sandbox fd table lock poisoned".to_string(),
-            })?;
+        let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
+            detail: "sandbox fd table lock poisoned".to_string(),
+        })?;
         let Some(entry) = table.entries.get_mut(&fd) else {
             return Err(HostIoError::Fs {
                 code: "EBADF".to_string(),
@@ -1529,12 +1526,9 @@ impl SandboxedHostIo {
                     detail: format!("not a regular file: {raw}"),
                 });
             }
-            let mut table = self
-                .fd_table
-                .lock()
-                .map_err(|_| HostIoError::Io {
-                    detail: "sandbox fd table lock poisoned".to_string(),
-                })?;
+            let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
+                detail: "sandbox fd table lock poisoned".to_string(),
+            })?;
             let fd = table.next_fd;
             table.next_fd = table.next_fd.saturating_add(1);
             table.entries.insert(
@@ -1665,12 +1659,9 @@ impl SandboxedHostIo {
     /// # Errors
     /// `EBADF` for an unknown or already-closed fd.
     pub fn close_fd(&self, fd: u64) -> Result<(), HostIoError> {
-        let mut table = self
-            .fd_table
-            .lock()
-            .map_err(|_| HostIoError::Io {
-                detail: "sandbox fd table lock poisoned".to_string(),
-            })?;
+        let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
+            detail: "sandbox fd table lock poisoned".to_string(),
+        })?;
         if table.entries.remove(&fd).is_none() {
             return Err(HostIoError::Fs {
                 code: "EBADF".to_string(),

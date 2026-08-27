@@ -3900,7 +3900,8 @@ impl ExecutionOrchestrator {
                 .get(&action.to_string())
                 .copied()
                 .unwrap_or(0);
-            builder = builder.candidate(CandidateAction::new(format!("{action:?}"), candidate_loss));
+            builder =
+                builder.candidate(CandidateAction::new(format!("{action:?}"), candidate_loss));
         }
 
         // Record chosen action.
@@ -4665,9 +4666,7 @@ impl ExecutionOrchestrator {
                 "discard_abrupt_completion"
             }
             crate::ir_contract::Ir3Instruction::CreateClosure { .. } => "create_closure",
-            crate::ir_contract::Ir3Instruction::CreateArrowClosure { .. } => {
-                "create_arrow_closure"
-            }
+            crate::ir_contract::Ir3Instruction::CreateArrowClosure { .. } => "create_arrow_closure",
             crate::ir_contract::Ir3Instruction::PushCapture { .. } => "push_capture",
             crate::ir_contract::Ir3Instruction::PushScope => "push_scope",
             crate::ir_contract::Ir3Instruction::PopScope => "pop_scope",

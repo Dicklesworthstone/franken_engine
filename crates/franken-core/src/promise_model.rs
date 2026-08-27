@@ -880,7 +880,9 @@ impl MicrotaskQueue {
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
         estimate_vector_slot_bytes::<Microtask>(self.tasks.len())
             .saturating_add(saturating_sum(
-                self.tasks.iter().map(estimate_microtask_payload_memory_bytes),
+                self.tasks
+                    .iter()
+                    .map(estimate_microtask_payload_memory_bytes),
             ))
             .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
@@ -909,7 +911,10 @@ impl MicrotaskQueue {
         }
         let task = self.tasks.pop()?;
         self.enqueue_count = self.enqueue_count.saturating_sub(1);
-        if matches!(self.witness.last(), Some(WitnessEvent::MicrotaskEnqueued { .. })) {
+        if matches!(
+            self.witness.last(),
+            Some(WitnessEvent::MicrotaskEnqueued { .. })
+        ) {
             self.witness.pop();
         }
         Some(task)

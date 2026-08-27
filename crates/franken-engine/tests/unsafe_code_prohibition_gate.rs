@@ -198,9 +198,11 @@ fn code_only(line: &str) -> String {
 /// string literals, and comments.
 fn contains_unsafe_construct(text: &str) -> bool {
     let blanked = blank_span_prose(text);
-    blanked
-        .lines()
-        .any(|line| UNSAFE_FORMS.iter().any(|form| code_only(line).contains(form)))
+    blanked.lines().any(|line| {
+        UNSAFE_FORMS
+            .iter()
+            .any(|form| code_only(line).contains(form))
+    })
 }
 
 /// True when `text` re-weakens the prohibition to a cfg-relaxed form. The
@@ -258,11 +260,13 @@ fn no_source_file_contains_unsafe_constructs() {
 
     let mut offenders = Vec::new();
     for path in &sources {
-        let blanked = blank_span_prose(
-            &std::fs::read_to_string(path).expect("read workspace source"),
-        );
+        let blanked =
+            blank_span_prose(&std::fs::read_to_string(path).expect("read workspace source"));
         for (line_no, line) in blanked.lines().enumerate() {
-            if UNSAFE_FORMS.iter().any(|form| code_only(line).contains(form)) {
+            if UNSAFE_FORMS
+                .iter()
+                .any(|form| code_only(line).contains(form))
+            {
                 offenders.push(format!("{}:{}", path.display(), line_no + 1));
             }
         }

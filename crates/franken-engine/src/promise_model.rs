@@ -474,9 +474,13 @@ impl PromiseStore {
     /// reaction, label, settled payload, and replay witness.
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
         estimate_vector_slot_bytes::<PromiseRecord>(
-            self.promises.iter().filter(|record| record.is_some()).count(),
+            self.promises
+                .iter()
+                .filter(|record| record.is_some())
+                .count(),
         )
-            .saturating_add(saturating_sum(self.promises.iter().flatten().map(|record| {
+        .saturating_add(saturating_sum(self.promises.iter().flatten().map(
+            |record| {
                 let state_bytes = match &record.state {
                     PromiseState::Pending => 0,
                     PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
@@ -494,8 +498,9 @@ impl PromiseStore {
                             .iter()
                             .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
                     ))
-            })))
-            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+            },
+        )))
+        .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
     pub(crate) fn projected_create_memory_bytes(&self) -> u64 {
@@ -623,11 +628,15 @@ impl PromiseStore {
     /// Roll back the most recent still-pending creation after an enclosing
     /// interpreter memory preflight refuses its resident charge.
     pub(crate) fn rollback_last_created(&mut self, handle: PromiseHandle) -> bool {
-        let is_last_pending = self.promises.last().and_then(Option::as_ref).is_some_and(|record| {
-            record.handle == handle
-                && matches!(record.state, PromiseState::Pending)
-                && record.reactions.is_empty()
-        });
+        let is_last_pending = self
+            .promises
+            .last()
+            .and_then(Option::as_ref)
+            .is_some_and(|record| {
+                record.handle == handle
+                    && matches!(record.state, PromiseState::Pending)
+                    && record.reactions.is_empty()
+            });
         let has_matching_witness = matches!(
             self.witness.last(),
             Some(WitnessEvent::PromiseCreated {
@@ -1106,7 +1115,10 @@ impl PromiseStore {
 
     /// Number of promises in the store.
     pub fn len(&self) -> usize {
-        self.promises.iter().filter(|record| record.is_some()).count()
+        self.promises
+            .iter()
+            .filter(|record| record.is_some())
+            .count()
     }
 
     /// Whether the store is empty.

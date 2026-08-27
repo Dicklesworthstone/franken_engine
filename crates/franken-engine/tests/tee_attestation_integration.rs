@@ -244,8 +244,7 @@ fn test_live_quote_generation_is_simulated() {
             let valid_from =
                 chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_from).unwrap();
             let valid_until =
-                chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until)
-                    .unwrap();
+                chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until).unwrap();
 
             assert!(valid_from.with_timezone(&chrono::Utc) <= now);
             assert!(valid_until.with_timezone(&chrono::Utc) > now);

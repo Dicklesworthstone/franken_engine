@@ -5468,8 +5468,7 @@ impl InterpreterCore {
                 expected: "valid pending promise for await".to_string(),
                 got: error.to_string(),
             })?;
-        if let Err(error) =
-            self.apply_promise_runtime_memory_delta(previous_promise_runtime_bytes)
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_runtime_bytes)
         {
             self.promise_store = promise_store_snapshot;
             self.event_loop.microtasks = microtask_queue_snapshot;
@@ -12602,8 +12601,8 @@ impl InterpreterCore {
         } else {
             MEMORY_ESTIMATE_MAP_ENTRY_BYTES
         };
-        let retained_bytes = entry_bytes
-            .saturating_add(std::mem::size_of::<PromiseCombinatorWatcher>() as u64);
+        let retained_bytes =
+            entry_bytes.saturating_add(std::mem::size_of::<PromiseCombinatorWatcher>() as u64);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(retained_bytes);
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
@@ -16412,9 +16411,8 @@ impl InterpreterCore {
                 .values
                 .values()
                 .map(|value| {
-                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
-                        crate::promise_model::estimate_js_value_memory_bytes(value),
-                    )
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(value))
                 })
                 .fold(0u64, u64::saturating_add),
             PromiseCombinatorState::AllSettled(tracker) => tracker
@@ -19351,8 +19349,12 @@ mod promise_runtime_accounting_tests_bd_ur3tk_21 {
             .expect("then fits");
         assert_eager_matches_recompute(&core, "after pending .then registration");
 
-        core.fulfill_promise(promise, JsValue::Str("x".repeat(4096).into()), Label::Public)
-            .expect("fulfill fits");
+        core.fulfill_promise(
+            promise,
+            JsValue::Str("x".repeat(4096).into()),
+            Label::Public,
+        )
+        .expect("fulfill fits");
         assert_eager_matches_recompute(&core, "after settlement with a 4KB payload");
         assert!(
             core.promise_store
@@ -19524,11 +19526,8 @@ mod promise_runtime_accounting_tests_bd_ur3tk_21 {
         let mut core = accounting_core();
         // Schedule directly on the queue, then resynchronize — the loop's
         // turn/in-flight bookkeeping is what this test pins.
-        core.event_loop.set_timeout(
-            crate::closure_model::ClosureHandle(0),
-            0,
-            Label::Public,
-        );
+        core.event_loop
+            .set_timeout(crate::closure_model::ClosureHandle(0), 0, Label::Public);
         core.sync_estimated_memory_bytes()
             .expect("resync after direct schedule");
         assert_eager_matches_recompute(&core, "after scheduled macrotask");

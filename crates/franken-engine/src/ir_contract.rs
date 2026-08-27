@@ -2220,10 +2220,7 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("construct_with_new_target")),
                 ("callee", CanonicalValue::U64(u64::from(*callee))),
-                (
-                    "new_target",
-                    CanonicalValue::U64(u64::from(*new_target)),
-                ),
+                ("new_target", CanonicalValue::U64(u64::from(*new_target))),
                 ("args", args.canonical_value()),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
             ]),

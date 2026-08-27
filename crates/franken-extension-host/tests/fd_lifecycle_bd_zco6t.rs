@@ -56,7 +56,9 @@ fn fixture_0022_positional_read_leaves_cursor_bd_zco6t() {
     std::fs::write(root.join("r.txt"), b"abcdefgh").expect("seed file");
     let fd = provider.open_fd("r.txt", "r").expect("openSync('r')");
 
-    let bytes = provider.read_fd(fd, 4, Some(2)).expect("positional readSync");
+    let bytes = provider
+        .read_fd(fd, 4, Some(2))
+        .expect("positional readSync");
     assert_eq!(bytes, b"cdef", "fixture 0022 prints 4 then 'cdef'");
     assert_eq!(bytes.len(), 4, "the fixture's printed count is the length");
 
@@ -114,7 +116,9 @@ fn wrong_mode_fd_access_is_ebadf_bd_zco6t() {
     std::fs::write(root.join("mode.txt"), b"seed").expect("seed file");
 
     let read_only = provider.open_fd("mode.txt", "r").expect("openSync('r')");
-    let err = provider.write_fd(read_only, b"nope").expect_err("write on r");
+    let err = provider
+        .write_fd(read_only, b"nope")
+        .expect_err("write on r");
     assert!(
         matches!(&err, HostIoError::Fs { code, .. } if code == "EBADF"),
         "write on a read-only fd must be EBADF: {err:?}"
@@ -122,7 +126,9 @@ fn wrong_mode_fd_access_is_ebadf_bd_zco6t() {
     provider.close_fd(read_only).expect("close");
 
     let write_only = provider.open_fd("mode.txt", "w").expect("openSync('w')");
-    let err = provider.read_fd(write_only, 1, None).expect_err("read on w");
+    let err = provider
+        .read_fd(write_only, 1, None)
+        .expect_err("read on w");
     assert!(
         matches!(&err, HostIoError::Fs { code, .. } if code == "EBADF"),
         "read on a write-only fd must be EBADF: {err:?}"

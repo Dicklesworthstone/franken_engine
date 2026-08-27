@@ -26847,7 +26847,10 @@ fn simulate_ir2_flow_labels(
                                 | "endsWith"
                                 | "split"
                         )
-                    ) => FlowValueShape::Callable,
+                    ) =>
+                    {
+                        FlowValueShape::Callable
+                    }
                     (
                         FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
                         Ir1PropertyKey::Static(key),
@@ -27112,7 +27115,11 @@ fn simulate_ir2_flow_labels(
                 };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_shaped_flow_value(label.clone(), shape, &mut next_identity));
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    shape,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
@@ -27461,9 +27468,7 @@ fn simulate_ir2_flow_labels(
                 if hostcall_is_operand_derived
                     && matches!(
                         capability.as_str(),
-                        "builtin:CryptoConstants"
-                            | "builtin:ZlibConstants"
-                            | "builtin:OsConstants"
+                        "builtin:CryptoConstants" | "builtin:ZlibConstants" | "builtin:OsConstants"
                     )
                 {
                     result_shape = FlowValueShape::ConstantsObject;
@@ -42947,4 +42952,3 @@ mod tests {
         }
     }
 }
-

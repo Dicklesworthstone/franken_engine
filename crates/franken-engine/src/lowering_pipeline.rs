@@ -27105,7 +27105,11 @@ fn simulate_ir2_flow_labels(
             Ir1Op::ForInInit | Ir1Op::ForOfInit => {
                 let source = pop_flow_value(&mut value_stack)?;
                 let label = source.label;
-                let shape = source.shape;
+                let shape = if source.shape.is_closed() {
+                    FlowValueShape::ClosedResult
+                } else {
+                    FlowValueShape::Unknown
+                };
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
                 invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 value_stack.push(fresh_shaped_flow_value(label.clone(), shape, &mut next_identity));
@@ -27120,7 +27124,9 @@ fn simulate_ir2_flow_labels(
                     .entry(*done_label)
                     .or_insert(iterator.identity);
                 let label = iterator.label;
-                let shape = if iterator.shape.is_closed() {
+                let shape = if matches!(op.inner, Ir1Op::ForInNext { .. }) {
+                    FlowValueShape::Primitive
+                } else if iterator.shape.is_closed() {
                     FlowValueShape::ClosedResult
                 } else {
                     FlowValueShape::Unknown
@@ -27215,9 +27221,6 @@ fn simulate_ir2_flow_labels(
                 arg_count,
             } => {
                 let inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
-                if ops.len() == 91 && op_index == 44 {
-                    eprintln!("HOSTCALL_OP_44 inputs: {:?}", inputs.iter().map(|v| (v.label.clone(), v.shape)).collect::<Vec<_>>());
-                }
                 let hostcall_is_operand_derived = hostcall_exception_is_operand_derived(
                     capability,
                     &inputs,
@@ -27704,14 +27707,6 @@ fn simulate_ir2_flow_labels(
                 };
                 *entry = entry.join(&exception_label);
             }
-        }
-        if ops.len() == 91 && (20..=45).contains(&op_index) {
-            eprintln!(
-                "DEBUG_TRACE op {op_index:02}: {:?} | stack_shapes={:?} | binding_shapes={:?}",
-                op.inner,
-                value_stack.iter().map(|v| v.shape).collect::<Vec<_>>(),
-                binding_flow_shapes
-            );
         }
         inferred_labels.push(inferred);
     }

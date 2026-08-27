@@ -1,0 +1,100 @@
+{
+  "schema_version": "frx.toolchain.lane.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.10.6",
+  "generated_by": "bd-mjh3.10.6",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "lane": {
+    "id": "FRX-10.6",
+    "name": "Toolchain/Ecosystem Ownership Surface"
+  },
+  "ownership": {
+    "build_tool_adapters": {
+      "required": true,
+      "source_map_fidelity_required": true,
+      "diagnostics_fidelity_required": true
+    },
+    "ecosystem_compatibility_matrix": {
+      "required": true,
+      "compatibility_classes_required": true,
+      "confidence_grade_required": true
+    },
+    "incremental_adoption_controls": {
+      "required": true,
+      "supported_rollout_axes": [
+        "file",
+        "component",
+        "route",
+        "policy"
+      ],
+      "safe_defaults_required": true
+    }
+  },
+  "inputs": [
+    "compiler_runtime_artifact_contracts",
+    "fallback_policy_surfaces",
+    "pilot_feedback",
+    "ecosystem_breakage_telemetry"
+  ],
+  "outputs": {
+    "integration_profiles": {
+      "required": true,
+      "confidence_grades": [
+        "green",
+        "yellow",
+        "red"
+      ],
+      "required_fields": [
+        "integration_class",
+        "confidence_grade",
+        "compatibility_class",
+        "remediation_id",
+        "fallback_mode"
+      ]
+    },
+    "migration_diagnostics": {
+      "required": true,
+      "actionable": true,
+      "required_fields": [
+        "diagnostic_code",
+        "compatibility_class",
+        "remediation_id",
+        "trace_id",
+        "error_code"
+      ]
+    },
+    "rollout_controls": {
+      "required": true,
+      "deterministic": true,
+      "required_fields": [
+        "rollout_axis",
+        "current_stage",
+        "next_stage",
+        "fallback_trigger"
+      ]
+    }
+  },
+  "failure_policy": {
+    "mode": "conservative_compatibility",
+    "auto_route_on_instability": true,
+    "block_promotion_on_persistent_instability": true,
+    "require_remediation_bead": true
+  },
+  "release_gate_contract": {
+    "promotion_requires_green_or_explicit_waiver": true,
+    "confidence_grade_transition_logged": true,
+    "rollback_path_required": true
+  },
+  "logging_contract": {
+    "component": "frx_toolchain_lane",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

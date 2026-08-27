@@ -1,0 +1,68 @@
+{
+  "schema_version": "frx.online-regret-change-point-demotion-controller.v1",
+  "generated_by": "bd-mjh3.15.3",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "primary_bead": "bd-mjh3.15.3",
+  "monitor_contract": {
+    "regret": {
+      "requires_exact_regret": true,
+      "comparison": "realized > min(theoretical_bound, policy_bound)",
+      "units": "millionths"
+    },
+    "change_point": {
+      "comparison": "cusum_stat > threshold",
+      "units": "millionths",
+      "mode": "deterministic"
+    },
+    "tail_risk": {
+      "comparison": "cvar_us > max_cvar_us",
+      "units": "microseconds"
+    },
+    "calibration": {
+      "comparison": "empirical_coverage < target_coverage",
+      "units": "millionths"
+    }
+  },
+  "demotion_policy": {
+    "mode": "fail_closed",
+    "regret_requires_consecutive_breaches": true,
+    "change_point_requires_consecutive_breaches": true,
+    "tail_risk_is_immediate": true,
+    "calibration_is_immediate": true,
+    "fallback_target": "conservative_or_safe_mode"
+  },
+  "logging": {
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ],
+    "requires_reason_payload": true
+  },
+  "artifacts": {
+    "required_files": [
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt"
+    ],
+    "suite_script": "scripts/run_frx_online_regret_change_point_demotion_controller_suite.sh",
+    "replay_script": "scripts/e2e/frx_online_regret_change_point_demotion_controller_replay.sh"
+  },
+  "integration": {
+    "runtime_decision_core": {
+      "requires_cvar_gate": true,
+      "requires_calibration_gate": true
+    },
+    "hybrid_lane_router": {
+      "requires_change_point_monitor": true,
+      "requires_demotion_trace": true
+    },
+    "regret_bounded_router": {
+      "requires_regret_certificate": true
+    }
+  }
+}

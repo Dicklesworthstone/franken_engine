@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard-contract.v1",
+  "scoreboard_schema": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+  "required_inputs": [
+    "--retention-ledger-json",
+    "--compaction-plan-json",
+    "--gc-guard-report-json",
+    "--archive-pack-json"
+  ],
+  "optional_inputs": [
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.remote-proof-retention-class-ledger.v1",
+    "franken-engine.remote-proof-compaction-plan.v1",
+    "franken-engine.remote-proof-gc-guard.v1",
+    "franken-engine.remote-proof-archive-pack.v1"
+  ],
+  "required_artifacts": [
+    "remote_proof_archive_pressure_scoreboard.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "advisories": {
+    "retain": [
+      "retain_current_residency"
+    ],
+    "compaction_first": [
+      "compact_before_eviction"
+    ],
+    "cool_archive": [
+      "cool_without_gc"
+    ],
+    "evict_cold_archive": [
+      "evict_archived_bundle"
+    ],
+    "fail_closed": [
+      "preserve_active_evidence",
+      "preserve_pinned_evidence",
+      "manual_review_required"
+    ]
+  },
+  "required_pressure_levels": [
+    "low",
+    "elevated",
+    "critical"
+  ],
+  "hash_requirements": [
+    "remote_proof_archive_pressure_scoreboard.hash_basis.input_hash",
+    "remote_proof_archive_pressure_scoreboard.hash_basis.scoreboard_hash"
+  ],
+  "determinism": {
+    "stable_scoreboard_hash_expectation": "Repeated runs over identical normalized inputs must preserve the same scoreboard hash.",
+    "fail_closed_rule": "Bundle drift, active replay protection under pressure, salvage pinning, or upstream guard failure must preserve evidence instead of inventing an unsafe relief path.",
+    "execution_mode": "Advisory only; the scoreboard never deletes, compacts, or cools evidence directly."
+  }
+}

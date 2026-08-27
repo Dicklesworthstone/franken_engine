@@ -1,0 +1,163 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-resource-lease-allocator-contract.v1",
+  "bead_id": "bd-knanr",
+  "depends_on": [
+    "bd-7dr9z",
+    "bd-g7bk2",
+    "bd-o9pr3"
+  ],
+  "script": "scripts/swarm_autopilot_resource_lease_allocator.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_resource_lease_allocator_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_RESOURCE_LEASE_ALLOCATOR.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_resource_lease_allocator/cases.json",
+  "plan_schema_version": "franken-engine.swarm-autopilot-resource-lease-plan.v1",
+  "receipt_schema_version": "franken-engine.swarm-autopilot-resource-scarcity-receipts.v1",
+  "required_inputs": [
+    {
+      "source_id": "operator_intent_policy_json",
+      "argument": "--operator-intent-policy-json",
+      "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+      "required": true
+    },
+    {
+      "source_id": "brownout_forecaster_json",
+      "argument": "--brownout-forecaster-json",
+      "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+      "required": true
+    },
+    {
+      "source_id": "queue_advisory_bundle_json",
+      "argument": "--queue-advisory-bundle-json",
+      "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+      "required": true
+    },
+    {
+      "source_id": "rch_rehabilitation_ledger_json",
+      "argument": "--rch-rehabilitation-ledger-json",
+      "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+      "required": true
+    }
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--default-lease-duration-seconds",
+    "--output-dir"
+  ],
+  "artifacts": {
+    "plan_json": "swarm_autopilot_resource_lease_plan.json",
+    "receipts_json": "swarm_autopilot_resource_scarcity_receipts.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "resource_classes": [
+    "cpu_memory",
+    "rch_slots",
+    "warm_target",
+    "proof_cache",
+    "fairness_recovery",
+    "all"
+  ],
+  "receipt_decisions": [
+    "admit",
+    "reserve",
+    "defer",
+    "rebalance",
+    "cool",
+    "fail_closed"
+  ],
+  "required_receipt_fields": [
+    "receipt_id",
+    "lane_id",
+    "decision",
+    "resource_class",
+    "lease_duration_seconds",
+    "reason_codes",
+    "evidence_paths",
+    "rollback_command",
+    "remediation_command"
+  ],
+  "required_plan_fields": [
+    "allocation_id",
+    "decision",
+    "truth_state",
+    "summary.overall_state",
+    "summary.admit_count",
+    "summary.reserve_count",
+    "summary.defer_count",
+    "summary.rebalance_count",
+    "summary.cool_count",
+    "lease_allocations",
+    "resolved_inputs",
+    "fail_closed_reasons",
+    "artifact_paths.plan_json",
+    "artifact_paths.receipts_json"
+  ],
+  "fail_closed_rules": [
+    "stale policy, forecast, queue advisory, or rehab evidence fails closed",
+    "local fallback contamination fails closed",
+    "contradictory or blocked queue locality evidence fails closed",
+    "missing worker pressure telemetry fails closed",
+    "fail-closed policy, forecaster, or rehab evidence is not promotable into lease advice"
+  ],
+  "precedence_rules": [
+    "urgent RCH slack protection outranks nonurgent heavy fanout",
+    "fairness recovery outranks warm-cache reuse when fairness pressure is active",
+    "proof-cache cooling outranks warm-target reuse when proof-cache pressure is brownout"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "fixture_cases": [
+    {
+      "case_id": "healthy_balanced_allocation",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "urgent_lane_protection",
+      "expected_decision": "pass",
+      "required_lane_decision": "reserve"
+    },
+    {
+      "case_id": "fairness_recovery",
+      "expected_decision": "pass",
+      "required_lane_decision": "rebalance"
+    },
+    {
+      "case_id": "rch_brownout_deferral",
+      "expected_decision": "pass",
+      "required_lane_decision": "defer"
+    },
+    {
+      "case_id": "proof_cache_cooling",
+      "expected_decision": "pass",
+      "required_lane_decision": "cool"
+    },
+    {
+      "case_id": "contradictory_locality_fail_closed",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-LEASE-CONTRADICTORY-QUEUE"
+    }
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_resource_lease_allocator.sh",
+    "bash -n scripts/e2e/swarm_autopilot_resource_lease_allocator_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_resource_lease_allocator.sh scripts/e2e/swarm_autopilot_resource_lease_allocator_smoke.sh",
+    "jq empty docs/swarm_autopilot_resource_lease_allocator_contract_v1.json scripts/testdata/swarm_autopilot_resource_lease_allocator/cases.json",
+    "bash scripts/e2e/swarm_autopilot_resource_lease_allocator_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_resource_lease_allocator_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_RESOURCE_LEASE_ALLOCATOR.md docs/swarm_autopilot_resource_lease_allocator_contract_v1.json scripts/swarm_autopilot_resource_lease_allocator.sh scripts/e2e/swarm_autopilot_resource_lease_allocator_smoke.sh scripts/testdata/swarm_autopilot_resource_lease_allocator/cases.json"
+  ]
+}

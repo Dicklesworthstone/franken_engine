@@ -1,0 +1,101 @@
+{
+  "schema_version": "franken-engine.swarm-handoff-capsule-generator-contract.v1",
+  "bead_id": "bd-d5kxj",
+  "parent_bead_id": "bd-hx1cw",
+  "surface_id": "swarm_handoff_capsule_generator",
+  "purpose": "Emit deterministic handoff capsules from read-only coordination snapshots for compaction, agent takeover, and noisy dirty-worktree sessions.",
+  "source_inputs": [
+    "git_status_json",
+    "br_state_json",
+    "owned_paths_json",
+    "recent_commits_json",
+    "rch_jobs_json",
+    "validation_receipts_json",
+    "mail_health_json",
+    "operator_notes_json"
+  ],
+  "emitted_artifacts": [
+    "swarm_handoff_capsule.json",
+    "swarm_handoff_capsule.md",
+    "handoff_commands.txt",
+    "events.jsonl"
+  ],
+  "required_capsule_fields": [
+    "schema_version",
+    "capsule_id",
+    "decision",
+    "branch_status",
+    "dirty_worktree",
+    "bead_state",
+    "recent_commits",
+    "rch_jobs",
+    "validation_receipts",
+    "agent_mail",
+    "operator_notes",
+    "mutation_policy"
+  ],
+  "decision_policy": {
+    "ready": "no unrelated dirty paths, no active RCH jobs, no degraded Agent Mail, and no bad validation receipts",
+    "degraded": "handoff is usable but visible coordination risks require review",
+    "blocked": "missing branch snapshot or failed/stale/non-reuse validation receipt"
+  },
+  "privacy_policy": {
+    "reads_file_contents": false,
+    "copies_operator_note_bodies": false,
+    "copies_command_receipts": true,
+    "copies_transcript_digest_only": true
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "rch_policy": {
+    "runs_rch": false,
+    "heavy_cargo_examples_allowed": true,
+    "required_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+    "local_fallback_contaminates_green_proof": true
+  },
+  "degraded_mail_policy": {
+    "agent_mail_required": false,
+    "mail_outage_decision": "degraded",
+    "fallback_lock": "br assignee plus bead status plus dirty-path ownership",
+    "repairs_mail_db": false
+  },
+  "fixture_cases": [
+    "clean_repo_fixture",
+    "dirty_multi_agent_fixture",
+    "active_rch_process_fixture",
+    "corrupted_agent_mail_fixture"
+  ],
+  "duplicate_surface_refs": [
+    {
+      "surface_id": "frx_handoff_packet_schema",
+      "artifact": "docs/frx_handoff_packet_schema_v1.json",
+      "reuse": "handoff packet naming and readiness language"
+    },
+    {
+      "surface_id": "handoff_contracts",
+      "artifact": "docs/handoff_contracts.md",
+      "reuse": "advisory-only handoff semantics"
+    },
+    {
+      "surface_id": "swarm_agent_causal_trace_spine",
+      "artifact": "docs/swarm_agent_causal_trace_spine_contract_v1.json",
+      "reuse": "source evidence chain and anomaly language"
+    }
+  ],
+  "validation": {
+    "check": "./scripts/e2e/swarm_handoff_capsule_generator_smoke.sh check",
+    "selftest": "./scripts/e2e/swarm_handoff_capsule_generator_smoke.sh selftest",
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

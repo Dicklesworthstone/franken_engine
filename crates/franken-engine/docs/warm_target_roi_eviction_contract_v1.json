@@ -1,0 +1,53 @@
+{
+  "schema_version": "franken-engine.warm-target-roi-eviction-contract.v1",
+  "ledger_schema": "franken-engine.warm-target-roi-eviction-ledger.v1",
+  "required_inputs": [
+    "--bundle-report-json",
+    "--sticky-plan-json",
+    "--hotspot-ledger-json",
+    "--pressure-snapshot-json",
+    "--incident-history-json"
+  ],
+  "optional_inputs": [
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.resident-remote-proof-bundle.v1",
+    "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+    "franken-engine.rch-sync-closure-hotspot-ledger.v1"
+  ],
+  "required_artifacts": [
+    "warm_target_roi_ledger.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "decisions": {
+    "retain": {
+      "recommended_action": "retain_warm_target",
+      "exit_code": 0
+    },
+    "cool": {
+      "recommended_action": "cool_warm_target",
+      "exit_code": 75
+    },
+    "evict": {
+      "recommended_action": "evict_warm_target",
+      "exit_code": 42
+    }
+  },
+  "required_pressure_levels": [
+    "low",
+    "medium",
+    "high",
+    "critical"
+  ],
+  "hash_requirements": [
+    "hash_basis.input_hash",
+    "hash_basis.ledger_hash"
+  ],
+  "determinism": {
+    "stable_hash_expectation": "Repeated runs over identical normalized inputs must preserve the same ledger hash.",
+    "execution_mode": "Classifier only; the ROI ledger does not execute cargo or mutate warm target directories."
+  }
+}

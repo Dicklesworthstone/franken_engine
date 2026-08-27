@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.remote-proof-gc-guard-contract.v1",
+  "guard_schema": "franken-engine.remote-proof-gc-guard.v1",
+  "required_inputs": [
+    "--retention-ledger-json",
+    "--warm-target-roi-ledger-json",
+    "--salvage-receipt-json",
+    "--archive-pack-json"
+  ],
+  "optional_inputs": [
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.remote-proof-retention-class-ledger.v1",
+    "franken-engine.warm-target-roi-eviction-ledger.v1",
+    "franken-engine.remote-proof-salvage-receipt.v1",
+    "franken-engine.remote-proof-archive-pack.v1"
+  ],
+  "required_artifacts": [
+    "remote_proof_gc_guard_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "guard_decisions": {
+    "deny_gc": [
+      "keep_hot",
+      "pin_until_salvage_clears"
+    ],
+    "cool_only": [
+      "cool_without_gc"
+    ],
+    "allow_gc": [
+      "delete_cold_archived_bundle"
+    ],
+    "fail_closed": [
+      "manual_review_required"
+    ]
+  },
+  "hash_requirements": [
+    "remote_proof_gc_guard_report.hash_basis.input_hash",
+    "remote_proof_gc_guard_report.hash_basis.guard_hash"
+  ],
+  "determinism": {
+    "stable_guard_hash_expectation": "Repeated runs over identical normalized inputs must preserve the same GC guard hash.",
+    "allow_gc_precondition": "Deletion is allowed only when the retention ledger is cold-only and the archive pack is restore-verified.",
+    "execution_mode": "Classifier only; the GC guard emits recommendations and never deletes or rewrites artifact sets."
+  }
+}

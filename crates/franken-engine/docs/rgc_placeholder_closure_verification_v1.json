@@ -1,0 +1,228 @@
+{
+  "schema_version": "franken-engine.placeholder-closure-verification.v1",
+  "bead_id": "bd-2muur.8",
+  "policy_id": "policy-placeholder-closure-verification-v1",
+  "generated_by": "bd-2muur.8",
+  "generated_at_utc": "2026-04-17T08:45:00Z",
+  "track": {
+    "id": "RGC-920H",
+    "name": "Placeholder Closure Verification"
+  },
+  "source_inputs": [
+    "README.md",
+    "docs/RGC_PLACEHOLDER_CLOSURE_VERIFICATION_V1.md",
+    "crates/franken-engine/src/zero_placeholder_gate.rs",
+    "crates/franken-engine/src/zero_placeholder_scan.rs",
+    "scripts/run_rgc_zero_placeholder_gate.sh",
+    "scripts/run_rgc_zero_placeholder_scan.sh"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "closure_id",
+    "finding_id",
+    "disposition",
+    "evidence_hash",
+    "gate_result",
+    "audit_trail"
+  ],
+  "generated_artifacts": [
+    "artifacts/placeholder_closure_verification/<timestamp>/run_manifest.json",
+    "artifacts/placeholder_closure_verification/<timestamp>/trace_ids.json",
+    "artifacts/placeholder_closure_verification/<timestamp>/events.jsonl",
+    "artifacts/placeholder_closure_verification/<timestamp>/commands.txt",
+    "artifacts/placeholder_closure_verification/<timestamp>/step_logs/step_000.log",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_matrix.json",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_bundle/scan_results/",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_bundle/fix_evidence/",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_bundle/waiver_registry/",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_bundle/gate_results/",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_bundle/audit_trail/",
+    "artifacts/placeholder_closure_verification/<timestamp>/closure_report.json"
+  ],
+  "closure_verification_contract": {
+    "verification_scope": "complete_placeholder_audit_workstream_closure",
+    "implementation_beads": [
+      "bd-2muur.8.1",
+      "bd-2muur.8.2"
+    ],
+    "required_disposition_types": [
+      "fixed",
+      "waived"
+    ],
+    "finding_disposition_matrix": {
+      "fixed_requirements": {
+        "fix_commit_hash": "required",
+        "fix_test_evidence": "required",
+        "rescan_confirmation": "required",
+        "regression_protection": "required"
+      },
+      "waived_requirements": {
+        "waiver_id": "required",
+        "owner_attribution": "required",
+        "expiration_epoch": "required",
+        "justification": "required",
+        "review_cadence": "required"
+      }
+    },
+    "closure_states": [
+      {
+        "state": "complete_closure",
+        "criteria": [
+          "all_findings_resolved_or_waived",
+          "all_waivers_valid_and_justified",
+          "gate_tests_pass",
+          "audit_trail_complete"
+        ]
+      },
+      {
+        "state": "incomplete_closure",
+        "criteria": [
+          "unresolved_findings_without_waivers",
+          "expired_waivers_requiring_renewal",
+          "failed_gate_tests",
+          "missing_audit_evidence"
+        ]
+      },
+      {
+        "state": "closure_violation",
+        "criteria": [
+          "findings_introduced_after_baseline",
+          "invalid_or_unjustified_waivers",
+          "circumvented_gate_requirements",
+          "incomplete_audit_trail"
+        ]
+      }
+    ],
+    "gate_integration_points": [
+      {
+        "component": "zero_placeholder_gate",
+        "integration_type": "enforcement_mechanism",
+        "required_artifacts": [
+          "gate_report.json",
+          "waiver_validation_results.json"
+        ]
+      },
+      {
+        "component": "zero_placeholder_scan",
+        "integration_type": "source_of_findings",
+        "required_artifacts": [
+          "scan_results.json",
+          "finding_inventory.json"
+        ]
+      },
+      {
+        "component": "ci_pipeline",
+        "integration_type": "release_gate",
+        "required_artifacts": [
+          "closure_verification_report.json"
+        ]
+      }
+    ],
+    "audit_trail_requirements": [
+      {
+        "stage": "finding_identification",
+        "required_evidence": [
+          "scan_result_hash",
+          "scan_timestamp",
+          "scan_configuration"
+        ]
+      },
+      {
+        "stage": "disposition_decision",
+        "required_evidence": [
+          "decision_rationale",
+          "decision_owner",
+          "decision_timestamp"
+        ]
+      },
+      {
+        "stage": "fix_implementation",
+        "required_evidence": [
+          "fix_commit_hash",
+          "fix_test_results",
+          "fix_verification_artifacts"
+        ]
+      },
+      {
+        "stage": "waiver_justification",
+        "required_evidence": [
+          "waiver_record",
+          "justification_document",
+          "owner_approval"
+        ]
+      },
+      {
+        "stage": "closure_verification",
+        "required_evidence": [
+          "verification_test_results",
+          "closure_matrix_hash",
+          "audit_completeness_proof"
+        ]
+      }
+    ],
+    "failure_conditions": [
+      {
+        "condition": "orphaned_findings",
+        "description": "scan results with no closure matrix entry",
+        "severity": "blocking",
+        "resolution": "add_missing_closure_matrix_entries"
+      },
+      {
+        "condition": "invalid_waivers",
+        "description": "expired, unjustified, or improperly attributed waivers",
+        "severity": "blocking",
+        "resolution": "renew_or_justify_waivers"
+      },
+      {
+        "condition": "gate_divergence",
+        "description": "scan and gate results disagree on finding status",
+        "severity": "blocking",
+        "resolution": "reconcile_scan_and_gate_results"
+      },
+      {
+        "condition": "missing_evidence",
+        "description": "fix claims without supporting commit/test evidence",
+        "severity": "blocking",
+        "resolution": "provide_missing_fix_evidence"
+      },
+      {
+        "condition": "audit_gaps",
+        "description": "incomplete traceability in resolution chain",
+        "severity": "blocking",
+        "resolution": "complete_audit_trail"
+      }
+    ],
+    "success_metrics": {
+      "zero_gap_threshold_millionths": 0,
+      "waiver_compliance_threshold_millionths": 1000000,
+      "gate_agreement_threshold_millionths": 1000000,
+      "audit_completeness_threshold_millionths": 1000000,
+      "deterministic_reproduction_required": true
+    },
+    "consumer_fail_closed_reasons": [
+      "unresolved findings without valid waivers",
+      "expired waivers past renewal deadline",
+      "gate test failures during closure verification",
+      "incomplete audit trail preventing traceability",
+      "scan/gate result disagreement on finding status",
+      "missing fix evidence for claimed resolutions",
+      "invalid waiver justifications or attributions"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_placeholder_closure_verification_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_placeholder_closure_verification_verify\" cargo test -p frankenengine-engine --test placeholder_closure_verification",
+    "./scripts/run_placeholder_closure_matrix.sh generate",
+    "./scripts/run_placeholder_closure_verification.sh verify",
+    "./scripts/run_placeholder_closure_bundle.sh bundle",
+    "./scripts/run_placeholder_waiver_validation.sh check"
+  ]
+}

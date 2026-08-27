@@ -1,0 +1,40 @@
+{
+  "schema_version": "frx.canonical-react-behavior-corpus.contract.v1",
+  "bead_id": "bd-mjh3.2.1",
+  "generated_by": "bd-mjh3.2.1",
+  "corpus": {
+    "fixtures_dir": "crates/franken-engine/tests/conformance/frx_react_corpus/fixtures",
+    "traces_dir": "crates/franken-engine/tests/conformance/frx_react_corpus/traces",
+    "minimum_fixture_count": 10,
+    "required_focus_tags": [
+      "hooks",
+      "concurrent",
+      "suspense",
+      "hydration",
+      "error_boundary",
+      "portal",
+      "events",
+      "effects",
+      "state"
+    ]
+  },
+  "determinism_contract": {
+    "fixture_schema_version": "frx.react.fixture.v1",
+    "trace_schema_version": "frx.react.observable.trace.v1",
+    "require_stable_fixture_ref_and_scenario_id": true,
+    "require_monotonic_event_sequence": true,
+    "require_monotonic_event_timing_us": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "error_code": "FE-FRX-02-1-CORPUS-GATE-0001",
+    "block_on_missing_fixture": true,
+    "block_on_trace_mismatch": true,
+    "block_on_schema_drift": true
+  },
+  "operator_verification": [
+    "./scripts/run_frx_canonical_react_behavior_corpus_suite.sh ci",
+    "./scripts/e2e/frx_canonical_react_behavior_corpus_replay.sh",
+    "jq empty docs/frx_canonical_react_behavior_corpus_v1.json"
+  ]
+}

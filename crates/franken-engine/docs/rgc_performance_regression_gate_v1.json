@@ -1,0 +1,33 @@
+{
+  "schema_version": "franken-engine.rgc-performance-regression-gate.contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.8.3",
+  "report_schema_version": "franken-engine.rgc-performance-regression-gate.v1",
+  "policy_id": "policy-rgc-performance-regression-gate-v1",
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "regression_report.json"
+  ],
+  "error_codes": [
+    "FE-RGC-703-BASELINE-0001",
+    "FE-RGC-703-INTEGRITY-0002",
+    "FE-RGC-703-SIGNIFICANCE-0003",
+    "FE-RGC-703-REGRESSION-0004",
+    "FE-RGC-703-REGRESSION-0005",
+    "FE-RGC-703-WAIVER-0006",
+    "WARN-RGC-703-REGRESSION-0001"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_performance_regression_gate.sh",
+    "replay_wrapper": "scripts/e2e/rgc_performance_regression_gate_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-performance-regression-gate.run-manifest.v1"
+  },
+  "operator_verification": [
+    "./scripts/run_rgc_performance_regression_gate.sh ci",
+    "./scripts/e2e/rgc_performance_regression_gate_replay.sh ci",
+    "jq empty docs/rgc_performance_regression_gate_v1.json"
+  ]
+}

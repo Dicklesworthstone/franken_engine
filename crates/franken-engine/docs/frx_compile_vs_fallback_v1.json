@@ -1,0 +1,45 @@
+{
+  "schema_version": "frx.compile-fallback-decision.v1",
+  "generated_by": "bd-mjh3.1.1",
+  "rules": [
+    {
+      "rule_id": "CF-001",
+      "condition": "all_required_invariants_proven && no_forbidden_regression_signal",
+      "decision": "compile_legal",
+      "action": "compile_to_frir"
+    },
+    {
+      "rule_id": "CF-002",
+      "condition": "invariant_proof_missing || unsupported_semantic_construct",
+      "decision": "fallback_required",
+      "action": "deterministic_js_lane"
+    },
+    {
+      "rule_id": "CF-003",
+      "condition": "calibration_or_sequential_validity_below_threshold",
+      "decision": "fallback_required",
+      "action": "safe_mode_policy_bundle"
+    },
+    {
+      "rule_id": "CF-004",
+      "condition": "tail_budget_violation || drift_trigger_active",
+      "decision": "fallback_required",
+      "action": "conservative_router_demote"
+    },
+    {
+      "rule_id": "CF-005",
+      "condition": "artifact_integrity_or_provenance_verification_failed",
+      "decision": "fallback_required",
+      "action": "deny_promotion_and_emit_incident"
+    }
+  ],
+  "required_evidence_fields": [
+    "assumptions_hash",
+    "calibration_summary",
+    "claim_id",
+    "decision_id",
+    "evidence_id",
+    "policy_id",
+    "trace_id"
+  ]
+}

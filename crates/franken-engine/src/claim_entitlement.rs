@@ -19,7 +19,7 @@ pub const CLAIM_ENTITLEMENT_IMPOSSIBILITY_SCHEMA_VERSION: &str =
 pub const CLAIM_ENTITLEMENT_COUNTEREXAMPLE_LEDGER_SCHEMA_VERSION: &str =
     "franken-engine.rgc-claim-counterexample-ledger.v1";
 pub const CLAIM_ENTITLEMENT_CONTRACT_JSON: &str =
-    include_str!("../../../docs/rgc_claim_entitlement_algebra_v1.json");
+    include_str!("../docs/rgc_claim_entitlement_algebra_v1.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimEntitlementContract {

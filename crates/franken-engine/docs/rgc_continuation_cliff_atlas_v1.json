@@ -1,0 +1,64 @@
+{
+  "schema_version": "franken-engine.continuation-cliff-atlas.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-1lsy.7.19",
+  "generated_by": "bd-1lsy.7.19",
+  "generated_at_utc": "2026-03-07T00:00:00Z",
+  "track": {
+    "id": "RGC-619",
+    "name": "Continuation Cliff Atlas and Catastrophe-Avoidance Optimizer"
+  },
+  "margin_certificate_contract": {
+    "deterministic": true,
+    "required_fields": [
+      "threat_class_id",
+      "cliff_band",
+      "cvar_margin_millionths",
+      "e_value_margin_millionths",
+      "observation_margin"
+    ],
+    "allowed_bands": [
+      "stable",
+      "near_cliff",
+      "beyond_cliff",
+      "missing_neighborhood"
+    ]
+  },
+  "witness_contract": {
+    "required_fields": [
+      "threat_class_id",
+      "cliff_band",
+      "campaign_id",
+      "max_payoff_millionths",
+      "worst_exploit",
+      "escape_action",
+      "rationale"
+    ],
+    "missing_neighborhood_escape_action": "fallback_safe",
+    "unstable_escape_actions": [
+      "route_to",
+      "fallback_safe"
+    ]
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "block_on_missing_neighborhood": true,
+    "block_on_budget_crossing": true,
+    "require_warning_preservation_for_near_cliff": true
+  },
+  "logging_contract": {
+    "component": "rgc_continuation_cliff_atlas_gate",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  },
+  "operator_verification": [
+    "./scripts/run_rgc_continuation_cliff_atlas_suite.sh ci"
+  ]
+}

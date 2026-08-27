@@ -1,0 +1,141 @@
+{
+  "schema_version": "frx.unit-test-taxonomy.v1",
+  "bead_id": "bd-mjh3.20.1",
+  "generated_by": "bd-mjh3.20.1",
+  "fixture_registry_schema_version": "frx.fixture-registry.v1",
+  "determinism_contract": {
+    "schema_version": "frx.test-determinism-contract.v1",
+    "require_seed": true,
+    "require_seed_transcript_checksum": true,
+    "require_fixed_timezone": true,
+    "timezone": "UTC",
+    "require_fixed_locale": true,
+    "lang": "C.UTF-8",
+    "lc_all": "C.UTF-8",
+    "require_toolchain_fingerprint": true,
+    "require_replay_command": true
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "lane_coverage": [
+    {
+      "lane": "compiler",
+      "owner": "frx-compiler-lane",
+      "required_unit_classes": ["core", "regression", "edge"],
+      "mapped_e2e_families": ["frx_track_b_compiler"],
+      "coverage_rationale": "Compiler lane must preserve deterministic lowering and compatibility parity."
+    },
+    {
+      "lane": "js_runtime",
+      "owner": "frx-js-runtime-lane",
+      "required_unit_classes": ["core", "edge", "adversarial"],
+      "mapped_e2e_families": ["frx_track_c_js_runtime"],
+      "coverage_rationale": "Runtime lane validates hook/effect ordering and failure-mode safety."
+    },
+    {
+      "lane": "wasm_runtime",
+      "owner": "frx-wasm-lane",
+      "required_unit_classes": ["core", "edge", "fault_injection"],
+      "mapped_e2e_families": ["frx_track_d_wasm_lane"],
+      "coverage_rationale": "WASM lane requires deterministic fallback and bounded recovery behavior."
+    },
+    {
+      "lane": "hybrid_router",
+      "owner": "frx-hybrid-router",
+      "required_unit_classes": ["core", "regression"],
+      "mapped_e2e_families": ["frx_track_d_hybrid_router"],
+      "coverage_rationale": "Hybrid routing decisions must replay identically across seeds and environments."
+    },
+    {
+      "lane": "verification",
+      "owner": "frx-verification-lane",
+      "required_unit_classes": ["core", "adversarial", "fault_injection"],
+      "mapped_e2e_families": ["frx_track_e_verification"],
+      "coverage_rationale": "Verification lane requires adversarial and fault-focused evidence closure."
+    },
+    {
+      "lane": "toolchain",
+      "owner": "frx-toolchain-lane",
+      "required_unit_classes": ["core", "regression"],
+      "mapped_e2e_families": ["frx_track_f_toolchain"],
+      "coverage_rationale": "Toolchain lane validates deterministic integration and compatibility bounds."
+    },
+    {
+      "lane": "governance_evidence",
+      "owner": "frx-governance-evidence-lane",
+      "required_unit_classes": ["core", "regression", "fault_injection"],
+      "mapped_e2e_families": ["frx_governance_evidence"],
+      "coverage_rationale": "Governance evidence lane enforces replayable logs and auditability."
+    },
+    {
+      "lane": "adoption_release",
+      "owner": "frx-adoption-release-lane",
+      "required_unit_classes": ["core", "regression", "adversarial"],
+      "mapped_e2e_families": ["frx_adoption_release"],
+      "coverage_rationale": "Release lane requires fail-closed gates backed by deterministic evidence."
+    }
+  ],
+  "fixture_registry": [
+    {
+      "fixture_id": "frx.react.corpus.v1",
+      "fixture_path": "crates/franken-engine/tests/conformance/frx_react_corpus/fixtures",
+      "trace_path": "crates/franken-engine/tests/conformance/frx_react_corpus/traces",
+      "provenance": "docs/frx_canonical_react_behavior_corpus_v1.json",
+      "owner_lane": "js_runtime",
+      "required_classes": ["core", "edge", "regression"],
+      "e2e_family": "frx_react_behavior_replay",
+      "seed_strategy": "fixture_seed_stable_by_scenario",
+      "artifact_retention": "manifest+events+commands"
+    },
+    {
+      "fixture_id": "ifc.corpus.v1",
+      "fixture_path": "crates/franken-engine/tests/conformance/ifc_corpus/fixtures",
+      "trace_path": "crates/franken-engine/tests/conformance/ifc_corpus/expected",
+      "provenance": "crates/franken-engine/tests/conformance/ifc_corpus/ifc_conformance_assets.json",
+      "owner_lane": "verification",
+      "required_classes": ["core", "adversarial", "fault_injection"],
+      "e2e_family": "ifc_conformance_gate",
+      "seed_strategy": "seed_fixed_by_asset_id",
+      "artifact_retention": "manifest+evidence+ifc_summary"
+    },
+    {
+      "fixture_id": "transplanted.conformance.v1",
+      "fixture_path": "crates/franken-engine/tests/conformance/transplanted/fixtures",
+      "trace_path": "crates/franken-engine/tests/conformance/transplanted/expected",
+      "provenance": "crates/franken-engine/tests/conformance/transplanted/conformance_assets.json",
+      "owner_lane": "compiler",
+      "required_classes": ["core", "regression", "edge"],
+      "e2e_family": "parser_conformance_replay",
+      "seed_strategy": "seed_fixed_by_fixture_ref",
+      "artifact_retention": "manifest+evidence+counterexample"
+    },
+    {
+      "fixture_id": "parser.phase0.semantic.fixtures.v1",
+      "fixture_path": "crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json",
+      "trace_path": null,
+      "provenance": "docs/PARSER_GRAMMAR_CLOSURE_BACKLOG.md",
+      "owner_lane": "compiler",
+      "required_classes": ["core", "regression"],
+      "e2e_family": "parser_phase0_gate",
+      "seed_strategy": "seed_derived_from_fixture_hash",
+      "artifact_retention": "manifest+events+commands"
+    }
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_unit_test_taxonomy_fixture_registry_gate.sh ci",
+    "./scripts/e2e/frx_unit_test_taxonomy_fixture_registry_replay.sh test",
+    "jq empty docs/frx_unit_test_taxonomy_fixture_registry_v1.json"
+  ]
+}

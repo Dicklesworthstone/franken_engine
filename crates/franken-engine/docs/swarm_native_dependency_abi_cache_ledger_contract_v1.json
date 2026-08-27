@@ -1,0 +1,82 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-abi-cache-ledger-contract.v1",
+  "bead_id": "bd-sqm14.5",
+  "parent_bead_id": "bd-sqm14",
+  "depends_on": [
+    "bd-sqm14.2",
+    "bd-sqm14.3"
+  ],
+  "script": "scripts/swarm_native_dependency_abi_cache_ledger.sh",
+  "smoke_script": "scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh",
+  "fixture_bundle": "scripts/testdata/swarm_native_dependency_abi_cache_ledger/cases.json",
+  "output_schema_version": "franken-engine.native-dependency-abi-cache-ledger.v1",
+  "source_schema_version": "franken-engine.native-dependency-abi-cache-ledger-sources.v1",
+  "required_inputs": [
+    "abi_cache_input_json"
+  ],
+  "fingerprint_fields": [
+    "rust_toolchain",
+    "rch_worker_id",
+    "target_dir_id",
+    "requirement_bundle_version",
+    "dependency_id",
+    "pkg_config_version",
+    "include_roots",
+    "environment_roots",
+    "header_paths",
+    "abi_fingerprint"
+  ],
+  "decisions": [
+    "reuse_allowed",
+    "reuse_quarantined",
+    "fail_closed"
+  ],
+  "exit_codes": {
+    "reuse_allowed": 0,
+    "reuse_quarantined": 75,
+    "fail_closed": 42
+  },
+  "required_reason_codes": [
+    "abi_fingerprint_match",
+    "missing_native_abi_evidence",
+    "native_dependency_version_changed",
+    "missing_required_header_path",
+    "worker_identity_changed",
+    "target_cache_fingerprint_mismatch"
+  ],
+  "ledger_rules": [
+    "reuse is allowed only when current and cached ABI fingerprints match",
+    "missing required native dependency fingerprints fail closed",
+    "missing required header paths fail closed",
+    "changed native versions quarantine reuse",
+    "changed worker identity quarantines reuse",
+    "the ledger must not delete target directories or mutate remote workers"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "deletes_target_dirs": false,
+    "mutates_remote_workers": false,
+    "installs_remote_packages": false,
+    "changes_live_queue_policy": false
+  },
+  "proof_cases": [
+    "hdf5_1_14_5_reuse_match",
+    "missing_hdf5_quarantine",
+    "changed_hdf5_version_quarantine",
+    "missing_hdf5_header_fail_closed",
+    "changed_worker_identity_quarantine"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_native_dependency_abi_cache_ledger_contract_v1.json",
+    "jq empty scripts/testdata/swarm_native_dependency_abi_cache_ledger/cases.json",
+    "bash -n scripts/swarm_native_dependency_abi_cache_ledger.sh",
+    "bash -n scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh",
+    "bash scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh check",
+    "bash scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_native_dependency_abi_cache_ledger.sh docs/swarm_native_dependency_abi_cache_ledger_contract_v1.json scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh scripts/testdata/swarm_native_dependency_abi_cache_ledger/cases.json"
+  ]
+}

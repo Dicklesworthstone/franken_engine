@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-conformance-gate-contract.v1",
+  "report_schema_version": "franken-engine.swarm-starvation-rescue-conformance-report.v1",
+  "producer_script": "scripts/swarm_starvation_rescue_conformance_gate.sh",
+  "smoke_script": "scripts/e2e/swarm_starvation_rescue_conformance_gate_smoke.sh",
+  "required_inputs": [
+    {
+      "name": "starvation_rescue_plan_json",
+      "schema_version": "franken-engine.swarm-starvation-rescue-plan.v1"
+    },
+    {
+      "name": "resolved starvation_rescue_input_json",
+      "schema_version": "franken-engine.swarm-starvation-rescue-input.v1"
+    },
+    {
+      "name": "resolved scenario_matrix_report_json",
+      "schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix-report.v1"
+    }
+  ],
+  "validated_invariants": [
+    "contradictory_ownership_blocks_rescue",
+    "local_fallback_forces_fail_closed",
+    "contact_first_blocks_advisory",
+    "salvage_pinned_blocks_advisory",
+    "artifact_lineage_is_real",
+    "fresh_rescue_input_evidence"
+  ],
+  "required_report_fields": [
+    "decision",
+    "summary.plan_decision",
+    "summary.scenario_class",
+    "summary.checked_command_file_count",
+    "verified_invariants",
+    "gate_failures",
+    "resolved_sources.starvation_rescue_plan_json.path",
+    "resolved_sources.starvation_rescue_input_json.path",
+    "resolved_sources.scenario_matrix_report_json.path",
+    "artifact_paths.swarm_starvation_rescue_conformance_report_json"
+  ],
+  "failure_modes": [
+    "contradictory ownership left advisory or uncited",
+    "stale-lock contact-first uncertainty left advisory or omitted contact action",
+    "salvage/manual-review pressure left advisory or omitted preserve_pinned_evidence",
+    "degraded-rch local fallback left non-fail-closed or uncited",
+    "planner artifact paths or matched case ids do not resolve to real evidence",
+    "drill transcripts contain bare cargo examples",
+    "normalized rescue input is stale"
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_starvation_rescue_conformance_gate.sh",
+    "bash -n scripts/e2e/swarm_starvation_rescue_conformance_gate_smoke.sh",
+    "shellcheck -x scripts/swarm_starvation_rescue_conformance_gate.sh scripts/e2e/swarm_starvation_rescue_conformance_gate_smoke.sh",
+    "jq empty docs/swarm_starvation_rescue_conformance_gate_contract_v1.json",
+    "bash scripts/e2e/swarm_starvation_rescue_conformance_gate_smoke.sh check",
+    "bash scripts/e2e/swarm_starvation_rescue_conformance_gate_smoke.sh selftest"
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-shadow-source-watchers-contract.v1",
+  "bead_id": "bd-djejh.3",
+  "parent_bead_id": "bd-djejh",
+  "depends_on": [
+    "bd-djejh.1"
+  ],
+  "upstream_contract": "docs/swarm_autopilot_shadow_daemon_contract_v1.json",
+  "script": "scripts/swarm_autopilot_shadow_source_watchers.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_shadow_source_watchers_smoke.sh",
+  "operator_docs": "docs/SWARM_AUTOPILOT_SHADOW_SOURCE_WATCHERS.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_shadow_source_watchers/cases.json",
+  "source_snapshot_schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+  "summary_schema_version": "franken-engine.swarm-autopilot-shadow-source-summary.v1",
+  "event_schema_version": "franken-engine.swarm-autopilot-shadow-source-watchers.event.v1",
+  "required_sources": [
+    "br_queue_snapshot_json",
+    "bv_robot_plan_json",
+    "agent_mail_snapshot_json",
+    "rch_status_snapshot_json",
+    "git_state_snapshot_json",
+    "artifact_bundle_snapshot_json"
+  ],
+  "source_keys": [
+    "br_queue",
+    "bv_robot_plan",
+    "agent_mail",
+    "rch_status",
+    "git_state",
+    "artifact_bundles"
+  ],
+  "output_artifacts": [
+    "source_snapshots.jsonl",
+    "source_snapshot_summary.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_snapshot_fields": [
+    "source_key",
+    "source_id",
+    "source_kind",
+    "schema_version",
+    "content_hash",
+    "collected_epoch_seconds",
+    "freshness_window_seconds",
+    "fresh",
+    "degraded",
+    "raw_payload_ref",
+    "local_fallback_contamination",
+    "error_codes"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "fail_closed"
+  ],
+  "fail_closed_error_codes": [
+    "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-MALFORMED-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP",
+    "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"
+  ],
+  "degraded_error_codes": [
+    "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "fixture_cases": [
+    {
+      "case_id": "healthy_sources",
+      "expected_truth_state": "confirmed",
+      "expected_decision": "pass",
+      "expected_exit_code": 0
+    },
+    {
+      "case_id": "stale_br_queue",
+      "expected_truth_state": "blocked",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE"
+    },
+    {
+      "case_id": "degraded_agent_mail_rch",
+      "expected_truth_state": "degraded",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0,
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+    },
+    {
+      "case_id": "rch_local_fallback_contamination",
+      "expected_truth_state": "contaminated",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"
+    },
+    {
+      "case_id": "missing_artifact_bundle",
+      "expected_truth_state": "blocked",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE"
+    },
+    {
+      "case_id": "contradictory_bead_ownership",
+      "expected_truth_state": "blocked",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP"
+    }
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_autopilot_shadow_source_watchers_contract_v1.json scripts/testdata/swarm_autopilot_shadow_source_watchers/cases.json",
+    "bash -n scripts/swarm_autopilot_shadow_source_watchers.sh scripts/e2e/swarm_autopilot_shadow_source_watchers_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_shadow_source_watchers.sh scripts/e2e/swarm_autopilot_shadow_source_watchers_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_shadow_source_watchers_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_shadow_source_watchers_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_SHADOW_SOURCE_WATCHERS.md docs/swarm_autopilot_shadow_source_watchers_contract_v1.json scripts/swarm_autopilot_shadow_source_watchers.sh scripts/e2e/swarm_autopilot_shadow_source_watchers_smoke.sh scripts/testdata/swarm_autopilot_shadow_source_watchers/cases.json"
+  ]
+}

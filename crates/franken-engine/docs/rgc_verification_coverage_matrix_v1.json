@@ -1,0 +1,324 @@
+{
+  "schema_version": "rgc.verification-coverage-matrix.v1",
+  "bead_id": "bd-1lsy.11.1",
+  "generated_by": "bd-1lsy.11.1",
+  "generated_at_utc": "2026-03-02T18:27:13Z",
+  "track": {
+    "id": "RGC-051",
+    "name": "Verification Coverage Matrix"
+  },
+  "scope": {
+    "project_epic": "bd-1lsy",
+    "snapshot_source": "br list --json --limit 0 filtered to non-closed bd-1lsy*",
+    "snapshot_generated_at_utc": "2026-05-02T02:39:51Z",
+    "open_bead_ids": [
+      "bd-1lsy.11.1",
+      "bd-1lsy.5.7.2",
+      "bd-1lsy.7.10.2",
+      "bd-1lsy.7.10.4",
+      "bd-1lsy.7.11",
+      "bd-1lsy.7.11.2",
+      "bd-1lsy.7.11.3",
+      "bd-1lsy.7.12",
+      "bd-1lsy.7.12.1",
+      "bd-1lsy.7.12.2",
+      "bd-1lsy.7.12.3",
+      "bd-1lsy.7.13.1",
+      "bd-1lsy.7.13.2",
+      "bd-1lsy.7.13.3",
+      "bd-1lsy.7.14",
+      "bd-1lsy.7.14.3",
+      "bd-1lsy.7.15",
+      "bd-1lsy.7.15.1",
+      "bd-1lsy.7.15.2",
+      "bd-1lsy.7.15.3",
+      "bd-1lsy.7.16",
+      "bd-1lsy.7.16.1",
+      "bd-1lsy.7.16.2",
+      "bd-1lsy.7.16.3",
+      "bd-1lsy.7.17",
+      "bd-1lsy.7.17.3",
+      "bd-1lsy.7.18",
+      "bd-1lsy.7.18.1",
+      "bd-1lsy.7.18.2",
+      "bd-1lsy.7.18.3",
+      "bd-1lsy.7.19.1",
+      "bd-1lsy.7.19.2",
+      "bd-1lsy.7.19.3",
+      "bd-1lsy.7.20.3",
+      "bd-1lsy.7.7.2",
+      "bd-1lsy.7.8.1",
+      "bd-1lsy.7.9",
+      "bd-1lsy.7.9.1",
+      "bd-1lsy.8.5",
+      "bd-1lsy.8.5.4",
+      "bd-1lsy.8.6",
+      "bd-1lsy.8.6.1",
+      "bd-1lsy.8.6.2",
+      "bd-1lsy.8.6.3",
+      "bd-1lsy.8.7",
+      "bd-1lsy.8.7.1",
+      "bd-1lsy.8.7.2",
+      "bd-1lsy.8.7.3",
+      "bd-1lsy.9.10.2",
+      "bd-1lsy.9.10.3",
+      "bd-1lsy.9.11.3",
+      "bd-1lsy.9.3.2",
+      "bd-1lsy.9.7",
+      "bd-1lsy.9.7.1",
+      "bd-1lsy.9.7.2",
+      "bd-1lsy.9.8",
+      "bd-1lsy.9.8.1",
+      "bd-1lsy.9.8.2",
+      "bd-1lsy.9.8.3",
+      "bd-1lsy.9.9",
+      "bd-1lsy.9.9.1",
+      "bd-1lsy.9.9.2",
+      "bd-1lsy.9.9.3"
+    ]
+  },
+  "required_structured_log_fields": [
+    "trace_id",
+    "decision_id",
+    "runtime_lane",
+    "seed",
+    "result",
+    "error_code"
+  ],
+  "required_artifact_triad": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "critical_behavior_bead_ids": [
+    "bd-1lsy.11.1",
+    "bd-1lsy.5.7.2",
+    "bd-1lsy.7.10.2",
+    "bd-1lsy.7.10.4",
+    "bd-1lsy.7.11",
+    "bd-1lsy.7.11.2",
+    "bd-1lsy.7.11.3",
+    "bd-1lsy.7.12",
+    "bd-1lsy.7.12.1",
+    "bd-1lsy.7.12.2",
+    "bd-1lsy.7.12.3",
+    "bd-1lsy.7.13.1",
+    "bd-1lsy.7.13.2",
+    "bd-1lsy.7.13.3",
+    "bd-1lsy.7.14",
+    "bd-1lsy.7.14.3",
+    "bd-1lsy.7.15",
+    "bd-1lsy.7.15.1",
+    "bd-1lsy.7.15.2",
+    "bd-1lsy.7.15.3",
+    "bd-1lsy.7.16",
+    "bd-1lsy.7.16.1",
+    "bd-1lsy.7.16.2",
+    "bd-1lsy.7.16.3",
+    "bd-1lsy.7.17",
+    "bd-1lsy.7.17.3",
+    "bd-1lsy.7.18",
+    "bd-1lsy.7.18.1",
+    "bd-1lsy.7.18.2",
+    "bd-1lsy.7.18.3",
+    "bd-1lsy.7.19.1",
+    "bd-1lsy.7.19.2",
+    "bd-1lsy.7.19.3",
+    "bd-1lsy.7.20.3",
+    "bd-1lsy.7.7.2",
+    "bd-1lsy.7.8.1",
+    "bd-1lsy.7.9",
+    "bd-1lsy.7.9.1",
+    "bd-1lsy.8.5",
+    "bd-1lsy.8.5.4",
+    "bd-1lsy.8.6",
+    "bd-1lsy.8.6.1",
+    "bd-1lsy.8.6.2",
+    "bd-1lsy.8.6.3",
+    "bd-1lsy.8.7",
+    "bd-1lsy.8.7.1",
+    "bd-1lsy.8.7.2",
+    "bd-1lsy.8.7.3",
+    "bd-1lsy.9.10.2",
+    "bd-1lsy.9.10.3",
+    "bd-1lsy.9.11.3",
+    "bd-1lsy.9.3.2",
+    "bd-1lsy.9.7",
+    "bd-1lsy.9.7.1",
+    "bd-1lsy.9.7.2",
+    "bd-1lsy.9.8",
+    "bd-1lsy.9.8.1",
+    "bd-1lsy.9.8.2",
+    "bd-1lsy.9.8.3",
+    "bd-1lsy.9.9",
+    "bd-1lsy.9.9.1",
+    "bd-1lsy.9.9.2",
+    "bd-1lsy.9.9.3"
+  ],
+  "milestone_targets": [
+    {
+      "milestone": "M1",
+      "description": "Real parse->lower->execute baseline path",
+      "required_beads": [
+        "bd-1lsy.7.7.2",
+        "bd-1lsy.7.8.1",
+        "bd-1lsy.7.9"
+      ],
+      "stop_go_rule": "Fail closed unless required beads map to unit+integration+e2e rows with reproducible artifacts."
+    },
+    {
+      "milestone": "M2",
+      "description": "Core runtime semantics and module interop readiness",
+      "required_beads": [
+        "bd-1lsy.7.10.2",
+        "bd-1lsy.7.10.4",
+        "bd-1lsy.7.11",
+        "bd-1lsy.7.11.2"
+      ],
+      "stop_go_rule": "No promotion when deterministic fallback/error-code contracts are unmapped."
+    },
+    {
+      "milestone": "M3",
+      "description": "In-band security enforcement for capability, IFC, and containment flows",
+      "required_beads": [
+        "bd-1lsy.8.5",
+        "bd-1lsy.8.5.4",
+        "bd-1lsy.8.6",
+        "bd-1lsy.8.6.1"
+      ],
+      "stop_go_rule": "Block on missing replay linkage and structured logs for security decisions."
+    },
+    {
+      "milestone": "M4",
+      "description": "Tiered performance plus benchmark-governance evidence",
+      "required_beads": [
+        "bd-1lsy.9.3.2",
+        "bd-1lsy.9.7",
+        "bd-1lsy.9.8",
+        "bd-1lsy.9.9"
+      ],
+      "stop_go_rule": "No speed claim without deterministic artifact linkage and statistical verification rows."
+    },
+    {
+      "milestone": "M5",
+      "description": "Conformance/differential closure and GA handoff evidence",
+      "required_beads": [
+        "bd-1lsy.11.1",
+        "bd-1lsy.5.7.2",
+        "bd-1lsy.9.7",
+        "bd-1lsy.9.8"
+      ],
+      "stop_go_rule": "Release blocked unless artifact triad + replay commands are present in mapped rows."
+    }
+  ],
+  "coverage_rows": [
+    {
+      "row_id": "rgc-coverage-unit",
+      "bead_selectors": [
+        "bd-1lsy",
+        "bd-1lsy.*"
+      ],
+      "requirement_id": "RGC-REQ-051-UNIT-001",
+      "test_kind": "unit",
+      "harness_entrypoint": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_verification_matrix_unit cargo test -p frankenengine-engine --lib",
+      "deterministic_seed_policy": "fixed-seed-unit-v1",
+      "required_log_fields": [
+        "trace_id",
+        "decision_id",
+        "runtime_lane",
+        "seed",
+        "result",
+        "error_code",
+        "component",
+        "event",
+        "outcome"
+      ],
+      "artifact_paths": [
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/run_manifest.json",
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/events.jsonl",
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/commands.txt"
+      ],
+      "gate_owner": "RGC-051",
+      "pass_fail_interpretation": "Pass when deterministic unit-lane command is mapped and validator contract remains green."
+    },
+    {
+      "row_id": "rgc-coverage-integration",
+      "bead_selectors": [
+        "bd-1lsy",
+        "bd-1lsy.*"
+      ],
+      "requirement_id": "RGC-REQ-051-INTEG-001",
+      "test_kind": "integration",
+      "harness_entrypoint": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_verification_matrix_integration cargo test -p frankenengine-engine --tests",
+      "deterministic_seed_policy": "fixed-seed-integration-v1",
+      "required_log_fields": [
+        "trace_id",
+        "decision_id",
+        "runtime_lane",
+        "seed",
+        "result",
+        "error_code",
+        "component",
+        "event",
+        "outcome"
+      ],
+      "artifact_paths": [
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/run_manifest.json",
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/events.jsonl",
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/commands.txt"
+      ],
+      "gate_owner": "RGC-051",
+      "pass_fail_interpretation": "Pass when integration-lane command mappings and artifact contract remain deterministic."
+    },
+    {
+      "row_id": "rgc-coverage-e2e",
+      "bead_selectors": [
+        "bd-1lsy",
+        "bd-1lsy.*"
+      ],
+      "requirement_id": "RGC-REQ-051-E2E-001",
+      "test_kind": "e2e",
+      "harness_entrypoint": "./scripts/e2e/rgc_verification_coverage_matrix_replay.sh ci",
+      "deterministic_seed_policy": "fixed-seed-e2e-v1",
+      "required_log_fields": [
+        "trace_id",
+        "decision_id",
+        "runtime_lane",
+        "seed",
+        "result",
+        "error_code",
+        "component",
+        "event",
+        "outcome"
+      ],
+      "artifact_paths": [
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/run_manifest.json",
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/events.jsonl",
+        "artifacts/rgc_verification_coverage_matrix/<timestamp>/commands.txt"
+      ],
+      "gate_owner": "RGC-051",
+      "pass_fail_interpretation": "Pass when replay wrapper executes validator gate and emits deterministic triad artifacts."
+    }
+  ],
+  "waiver_governance": {
+    "waiver_required_fields": [
+      "waiver_id",
+      "bead_id",
+      "requirement_id",
+      "owner",
+      "expiry_utc",
+      "rationale",
+      "mitigation_plan",
+      "approval_signature_ref"
+    ],
+    "max_waiver_age_hours": 168,
+    "fail_closed_on_expired_waiver": true,
+    "fail_closed_on_missing_signature": true
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_verification_coverage_matrix_v1.json",
+    "./scripts/run_rgc_verification_coverage_matrix.sh check",
+    "./scripts/run_rgc_verification_coverage_matrix.sh ci",
+    "./scripts/e2e/rgc_verification_coverage_matrix_replay.sh ci"
+  ]
+}

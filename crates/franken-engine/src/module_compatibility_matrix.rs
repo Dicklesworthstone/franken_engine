@@ -16,7 +16,7 @@ use crate::hash_tiers::ContentHash;
 
 const COMPONENT_NAME: &str = "module_compatibility_matrix";
 pub const DEFAULT_MATRIX_JSON: &str =
-    include_str!("../../../docs/module_compatibility_matrix_v1.json");
+    include_str!("../docs/module_compatibility_matrix_v1.json");
 
 pub type CompatibilityResult<T> = Result<T, Box<CompatibilityMatrixError>>;
 

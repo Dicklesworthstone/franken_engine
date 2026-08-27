@@ -1,0 +1,85 @@
+{
+  "schema_version": "franken-engine.proof-queue-tail-latency-rescue-gate-contract.v1",
+  "bead_id": "bd-ciutb",
+  "component": "proof_queue_tail_latency_rescue_gate",
+  "purpose": "Convert preserved proof queue replay and brownout evidence into advisory-only bounded tail-latency rescue receipts.",
+  "implementation_script": "scripts/proof_queue_tail_latency_rescue_gate.sh",
+  "smoke_script": "scripts/e2e/proof_queue_tail_latency_rescue_gate_smoke.sh",
+  "fixtures": "scripts/testdata/proof_queue_tail_latency_rescue_gate/cases.json",
+  "reused_surfaces": [
+    "scripts/proof_queue_brownout_starvation_detector.sh",
+    "scripts/swarm_starvation_rescue_conformance_gate.sh",
+    "crates/franken-engine/src/tail_latency_control_plane.rs"
+  ],
+  "required_inputs": [
+    {
+      "argument": "--replay-trace-json",
+      "schema_version": "franken-engine.proof-economy-replay-trace.v1"
+    }
+  ],
+  "optional_inputs": [
+    {
+      "argument": "--counterfactual-report-json",
+      "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1"
+    },
+    {
+      "argument": "--tail-latency-report-json",
+      "schema_version": "franken-engine.tail-latency-control-plane.v1"
+    },
+    {
+      "argument": "--max-agent-share-millionths",
+      "schema_version": "integer threshold"
+    }
+  ],
+  "output_schema": "franken-engine.proof-queue-tail-latency-rescue-receipt.v1",
+  "run_manifest_schema": "franken-engine.proof-queue-tail-latency-rescue-gate.run-manifest.v1",
+  "event_schema": "franken-engine.proof-queue-tail-latency-rescue-gate.event.v1",
+  "required_artifacts": [
+    "run_manifest.json",
+    "tail_latency_rescue_receipt.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md",
+    "brownout_detector/brownout_report.json"
+  ],
+  "required_detection_codes": [
+    "queue_brownout_all_workers_busy",
+    "unfair_agent_slot_share",
+    "low_priority_starvation",
+    "counterfactual_all_policies_brownout"
+  ],
+  "required_fixture_cases": [
+    "healthy",
+    "all_workers_busy",
+    "unfair_agent_slot_share",
+    "low_priority_starvation",
+    "counterfactual_all_policies_brownout"
+  ],
+  "receipt_required_fields": [
+    "cause",
+    "affected_agents",
+    "affected_beads",
+    "fairness_evidence",
+    "proposed_bounded_action"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "mutates_live_workers": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  },
+  "validation_commands": [
+    "jq empty docs/proof_queue_tail_latency_rescue_gate_contract_v1.json scripts/testdata/proof_queue_tail_latency_rescue_gate/cases.json",
+    "bash -n scripts/proof_queue_tail_latency_rescue_gate.sh scripts/e2e/proof_queue_tail_latency_rescue_gate_smoke.sh",
+    "shellcheck -x scripts/proof_queue_tail_latency_rescue_gate.sh scripts/e2e/proof_queue_tail_latency_rescue_gate_smoke.sh",
+    "bash scripts/e2e/proof_queue_brownout_starvation_detector_smoke.sh check",
+    "bash scripts/e2e/proof_queue_brownout_starvation_detector_smoke.sh selftest",
+    "bash scripts/e2e/proof_queue_tail_latency_rescue_gate_smoke.sh check",
+    "bash scripts/e2e/proof_queue_tail_latency_rescue_gate_smoke.sh selftest",
+    "git diff --check -- scripts/proof_queue_tail_latency_rescue_gate.sh scripts/e2e/proof_queue_tail_latency_rescue_gate_smoke.sh scripts/testdata/proof_queue_tail_latency_rescue_gate/cases.json docs/proof_queue_tail_latency_rescue_gate_contract_v1.json docs/PROOF_QUEUE_TAIL_LATENCY_RESCUE_GATE.md"
+  ]
+}

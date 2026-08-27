@@ -1,0 +1,88 @@
+{
+  "schema_version": "franken-engine.swarm-ctrl-xvii-runbook-truth-contract.v1",
+  "purpose": "Keep the SWARM-CTRL-XVII no-mock drill runbook truthful about fixture-fed catalog evidence and advisory-only operator handoff.",
+  "runbook_doc": "docs/SWARM_CTRL_XVII_OPERATOR_RUNBOOK.md",
+  "implementation_script": "scripts/e2e/swarm_control_surface_catalog_runbook_truth_gate.sh",
+  "drill_script": "scripts/e2e/swarm_control_surface_catalog_no_mock_drill.sh",
+  "required_denials": [
+    "does not mutate br",
+    "does not query live Agent Mail",
+    "does not send Agent Mail",
+    "does not release reservations",
+    "does not run Cargo",
+    "does not run RCH",
+    "does not change queue policy",
+    "does not replace operator status"
+  ],
+  "required_runbook_lines": [
+    "The drill uses the real catalog normalizer, intent router, drift gate, intake guard, and operator status reporter.",
+    "scripts/swarm_operator_status_report.sh remains the only operator-status producer."
+  ],
+  "forbidden_positive_claims": [
+    "mutates br",
+    "queries live Agent Mail",
+    "sends Agent Mail",
+    "releases reservations",
+    "runs Cargo",
+    "runs RCH",
+    "changes queue policy",
+    "replaces operator status",
+    "automatic remediation",
+    "second dashboard producer"
+  ],
+  "cases": [
+    {
+      "case_id": "rch_stall_routes_to_catalog_surface",
+      "expected_surface_id": "swarm_rch_stall_rehabilitation_ledger",
+      "producer": "scripts/swarm_control_surface_intent_router.sh"
+    },
+    {
+      "case_id": "actionability_divergence_routes_to_truth_surface",
+      "expected_surface_id": "swarm_actionability_truth_gate",
+      "producer": "scripts/swarm_control_surface_intent_router.sh"
+    },
+    {
+      "case_id": "duplicate_feature_rejected",
+      "expected_action": "duplicate_reject",
+      "producer": "scripts/swarm_control_surface_intake_guard.sh"
+    },
+    {
+      "case_id": "uncataloged_script_fails_drift_gate",
+      "expected_reason_code": "FE-SWARM-DRIFT-UNCATALOGED-SCRIPT",
+      "producer": "scripts/swarm_control_surface_drift_gate.sh"
+    },
+    {
+      "case_id": "operator_status_exposes_handoff",
+      "expected_section": "predictive_dashboard.swarm_control_surface_catalog",
+      "producer": "scripts/swarm_operator_status_report.sh"
+    },
+    {
+      "case_id": "shadow_daemon_active_owner_remains_blocked",
+      "expected_reason_code": "FE-SWARM-DRIFT-STALE-OWNER-BEAD",
+      "producer": "scripts/swarm_control_surface_drift_gate.sh"
+    }
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "queries_live_agent_mail": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false,
+    "replaces_operator_status_report": false
+  },
+  "validation_commands": [
+    "jq empty docs/swarm_ctrl_xvii_runbook_truth_contract_v1.json",
+    "bash -n scripts/e2e/swarm_control_surface_catalog_no_mock_drill.sh scripts/e2e/swarm_control_surface_catalog_runbook_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_control_surface_catalog_no_mock_drill.sh scripts/e2e/swarm_control_surface_catalog_runbook_truth_gate.sh",
+    "bash scripts/e2e/swarm_control_surface_catalog_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_control_surface_catalog_no_mock_drill.sh selftest",
+    "bash scripts/e2e/swarm_control_surface_catalog_runbook_truth_gate.sh check",
+    "bash scripts/e2e/swarm_control_surface_catalog_runbook_truth_gate.sh selftest",
+    "git diff --check -- scripts/e2e/swarm_control_surface_catalog_no_mock_drill.sh scripts/e2e/swarm_control_surface_catalog_runbook_truth_gate.sh docs/SWARM_CTRL_XVII_OPERATOR_RUNBOOK.md docs/swarm_ctrl_xvii_runbook_truth_contract_v1.json"
+  ]
+}

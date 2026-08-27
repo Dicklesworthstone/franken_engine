@@ -1,0 +1,75 @@
+{
+  "schema_version": "frx.local-semantic-atlas.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.14.1",
+  "generated_by": "bd-mjh3.14.1",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-14.1",
+    "name": "Local Semantic Atlas for Components, Hooks, and Effects"
+  },
+  "atlas_entry_contract": {
+    "deterministic": true,
+    "required_fields": [
+      "component_id",
+      "module_path",
+      "hook_signature",
+      "effect_signature",
+      "required_contexts",
+      "assumption_keys",
+      "fixture_refs",
+      "trace_refs",
+      "content_hash"
+    ],
+    "canonical_sort_keys": [
+      "component_id",
+      "hook_signature",
+      "effect_signature",
+      "fixture_refs",
+      "trace_refs",
+      "assumption_keys"
+    ]
+  },
+  "quality_debt_contract": {
+    "required_fields": [
+      "component_id",
+      "debt_code",
+      "description",
+      "blocking"
+    ],
+    "blocking_debt_codes": [
+      "FE-FRX-14-1-LOCAL-0001",
+      "FE-FRX-14-1-LOCAL-0002",
+      "FE-FRX-14-1-LOCAL-0003",
+      "FE-FRX-14-1-LOCAL-0004"
+    ]
+  },
+  "activation_gate": {
+    "block_on_missing_fixture_trace_linkage": true,
+    "block_on_missing_local_assumptions": true,
+    "block_on_empty_local_contract_surface": true,
+    "block_on_blocking_quality_debt": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "on_blocking_debt": "reject_promotion",
+    "emit_replay_command": true,
+    "emit_quality_debt_report": true
+  },
+  "logging_contract": {
+    "component": "frx_local_semantic_atlas_gate",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  },
+  "operator_verification": [
+    "./scripts/run_frx_local_semantic_atlas_suite.sh ci",
+    "./scripts/e2e/frx_local_semantic_atlas_replay.sh ci"
+  ]
+}

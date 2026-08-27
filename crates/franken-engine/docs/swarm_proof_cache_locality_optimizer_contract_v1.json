@@ -1,0 +1,85 @@
+{
+  "schema_version": "franken-engine.swarm-proof-cache-locality-optimizer-contract.v1",
+  "bead_id": "bd-wuj5w",
+  "script": "scripts/swarm_proof_cache_locality_optimizer.sh",
+  "smoke_script": "scripts/e2e/swarm_proof_cache_locality_optimizer_smoke.sh",
+  "fixture_bundle": "scripts/testdata/swarm_proof_cache_locality_optimizer/cases.json",
+  "output_schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+  "required_inputs": [
+    "admission_budget_plan_json",
+    "warm_target_prefetch_roi_advisory_json",
+    "proof_cache_plan_json",
+    "archive_pressure_scoreboard_json",
+    "worker_truth_report_json",
+    "swarm_resource_envelope_json",
+    "swarm_topology_placement_plan_json",
+    "swarm_topology_placement_receipt_json",
+    "swarm_topology_placement_evidence_ledger_json"
+  ],
+  "required_outputs": [
+    "locality_plan.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "actions": [
+    "reuse_warm_target",
+    "allocate_fresh_target",
+    "cool_target",
+    "refresh_archive_evidence",
+    "preserve_active_target",
+    "manual_review"
+  ],
+  "fail_closed_rules": [
+    "missing_swarm_scale_ii_evidence",
+    "swarm_scale_ii_fail_closed",
+    "contradictory_topology_evidence",
+    "worker_truth_drift",
+    "worker_not_schedulable",
+    "archive_truth_fail_closed",
+    "cache_hit_artifact_incomplete",
+    "unsafe_mutation_policy"
+  ],
+  "blocked_rules": [
+    "active_target_pinned"
+  ],
+  "degraded_rules": [
+    "target_pressure_requires_cooling",
+    "stale_archive_evidence",
+    "warm_target_cooling_required",
+    "proof_cache_refresh_required"
+  ],
+  "fixture_cases": [
+    "high_roi_reuse",
+    "cold_fresh_target",
+    "disk_pressure_cooling",
+    "active_target_pinned",
+    "stale_archive_evidence",
+    "missing_swarm_scale_ii_evidence"
+  ],
+  "hash_contract": {
+    "plan_id": "sha256 over canonical locality plan excluding artifact_paths",
+    "stable_replay_required": true
+  },
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "verification_commands": [
+    "bash -n scripts/swarm_proof_cache_locality_optimizer.sh scripts/e2e/swarm_proof_cache_locality_optimizer_smoke.sh",
+    "shellcheck -x scripts/swarm_proof_cache_locality_optimizer.sh scripts/e2e/swarm_proof_cache_locality_optimizer_smoke.sh",
+    "jq empty docs/swarm_proof_cache_locality_optimizer_contract_v1.json scripts/testdata/swarm_proof_cache_locality_optimizer/cases.json",
+    "bash scripts/e2e/swarm_proof_cache_locality_optimizer_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_cache_locality_optimizer_smoke.sh selftest"
+  ]
+}

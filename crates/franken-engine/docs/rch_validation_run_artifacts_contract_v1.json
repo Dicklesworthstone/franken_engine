@@ -1,0 +1,115 @@
+{
+  "schema_version": "franken-engine.rch-validation-run-artifacts-contract.v1",
+  "bead_id": "bd-wwfiw",
+  "parent_bead_id": "bd-zk8ji",
+  "contract_name": "RCH validation run artifact generator",
+  "generator": "scripts/rch_validation_run_artifacts.sh",
+  "smoke": "scripts/e2e/rch_validation_run_artifacts_smoke.sh",
+  "input_contracts": [
+    {
+      "path": "docs/rch_validation_preflight_contract_v1.json",
+      "schema_version": "franken-engine.rch-validation-preflight.v1",
+      "bead_id": "bd-xxi8i"
+    },
+    {
+      "path": "docs/rch_validation_remote_proof_classifier_v1.json",
+      "schema_version": "franken-engine.rch-validation-remote-proof-classifier.v1",
+      "bead_id": "bd-bpoi9"
+    }
+  ],
+  "output_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "summary.md"
+  ],
+  "companion_artifacts": [
+    {
+      "artifact": "rch_admission_refusal_receipt.json",
+      "schema_version": "franken-engine.rch-admission-refusal-receipt.v1",
+      "generator": "scripts/rch_admission_refusal_receipt.sh",
+      "bead_id": "bd-sq84c.2",
+      "source_evidence": false,
+      "cargo_executed": false,
+      "closeout_use": "pre-admission blocker evidence only; not source evidence"
+    }
+  ],
+  "required_manifest_fields": [
+    "schema_version",
+    "bead_id",
+    "parent_bead_id",
+    "thread_id",
+    "case_id",
+    "validation_id",
+    "generated_at_utc",
+    "input_contracts",
+    "selected_worker",
+    "command_kind",
+    "remote_command",
+    "safe_validation_command",
+    "cargo_target_dir_policy",
+    "required_components",
+    "remote_proof",
+    "verdict",
+    "reason_code",
+    "source_evidence",
+    "operator_category",
+    "remediation",
+    "suggested_next_command",
+    "trace_ids",
+    "artifact_paths"
+  ],
+  "required_verdict_categories": [
+    "source evidence",
+    "source failure",
+    "remote toolchain failure",
+    "remote timeout",
+    "admission refused before worker start",
+    "local fallback refusal",
+    "missing proof"
+  ],
+  "admission_refusal_policy": {
+    "final_verdict": "admission_refused",
+    "reason_code": "no_admissible_workers",
+    "source_evidence": false,
+    "cargo_executed": false,
+    "retry_command_field": "commands.safe_validation_command",
+    "operator_categories": [
+      "wait_for_active_project",
+      "worker_health_or_capacity",
+      "worker_preflight_or_toolchain",
+      "mixed_no_admissible_workers",
+      "admissible"
+    ],
+    "closeout_rule": "Cite as pre-admission blocker evidence only; rerun rch diagnose before any later rch exec attempt."
+  },
+  "command_policy": {
+    "heavy_cargo_commands_require_rch_exec": true,
+    "commands_txt_all_cargo_lines_must_start_with": "rch exec --",
+    "local_fallback_default": "refuse",
+    "overwrite_existing_artifacts": false
+  },
+  "smoke_modes": [
+    "check",
+    "selftest",
+    "replay"
+  ],
+  "required_event_fields": [
+    "trace_id",
+    "validation_id",
+    "worker_id",
+    "command_kind",
+    "verdict",
+    "reason_code",
+    "remediation"
+  ],
+  "fixture_case_ids": [
+    "remote-cargo-check-pass",
+    "remote-source-diagnostic",
+    "missing-cargo-clippy-before-lint",
+    "ssh-timeout-no-final-verdict",
+    "local-fallback-refused",
+    "missing-worker-or-command-evidence"
+  ]
+}

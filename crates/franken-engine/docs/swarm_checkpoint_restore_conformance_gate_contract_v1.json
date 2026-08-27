@@ -1,0 +1,52 @@
+{
+  "schema_version": "franken-engine.swarm-checkpoint-restore-conformance-gate-contract.v1",
+  "report_schema_version": "franken-engine.swarm-checkpoint-restore-conformance-report.v1",
+  "producer_script": "scripts/swarm_checkpoint_restore_conformance_gate.sh",
+  "smoke_script": "scripts/e2e/swarm_checkpoint_restore_conformance_gate_smoke.sh",
+  "required_inputs": [
+    {
+      "name": "checkpoint_bundle_json",
+      "schema_version": "franken-engine.swarm-checkpoint-bundle.v1"
+    },
+    {
+      "name": "checkpoint_restore_plan_json",
+      "schema_version": "franken-engine.swarm-checkpoint-restore-plan.v1"
+    }
+  ],
+  "validated_invariants": [
+    "checkpoint_id_alignment",
+    "stale_or_incomplete_checkpoint_blocks_restore",
+    "local_fallback_checkpoint_blocks_restore",
+    "contradictory_ownership_blocks_restore",
+    "salvage_manual_review_blocks_resume",
+    "resume_requires_clean_comparison_set",
+    "artifact_lineage_is_real"
+  ],
+  "required_report_fields": [
+    "decision",
+    "summary.restore_decision",
+    "summary.gate_failure_count",
+    "summary.checked_artifact_path_count",
+    "verified_invariants",
+    "gate_failures",
+    "resolved_sources.checkpoint_bundle_json.path",
+    "resolved_sources.checkpoint_restore_plan_json.path",
+    "artifact_paths.swarm_checkpoint_restore_conformance_report_json"
+  ],
+  "failure_modes": [
+    "resume or advisory success from stale or blocked checkpoint truth",
+    "local-fallback checkpoint evidence promoted into a restorable plan",
+    "ownership contradiction or contact-first drift downgraded below fail_closed",
+    "salvage manual-review blockers ignored by a resume plan",
+    "resume plan emitted with missing current comparisons or unresolved drift",
+    "bundle or plan artifact paths do not resolve to real evidence"
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_checkpoint_restore_conformance_gate.sh",
+    "bash -n scripts/e2e/swarm_checkpoint_restore_conformance_gate_smoke.sh",
+    "shellcheck -x scripts/swarm_checkpoint_restore_conformance_gate.sh scripts/e2e/swarm_checkpoint_restore_conformance_gate_smoke.sh",
+    "jq empty docs/swarm_checkpoint_restore_conformance_gate_contract_v1.json",
+    "bash scripts/e2e/swarm_checkpoint_restore_conformance_gate_smoke.sh check",
+    "bash scripts/e2e/swarm_checkpoint_restore_conformance_gate_smoke.sh selftest"
+  ]
+}

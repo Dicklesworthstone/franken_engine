@@ -1,0 +1,137 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-conformance-contract.v1",
+  "bead_id": "bd-zllzm",
+  "parent_bead_id": "bd-g347f",
+  "depends_on": [
+    "bd-pthn9"
+  ],
+  "docs": "docs/SWARM_EXECUTION_QUEUE_CONFORMANCE.md",
+  "gate_script": "scripts/e2e/swarm_execution_queue_conformance_gate.sh",
+  "input_contract": "docs/swarm_execution_queue_input_contract_v1.json",
+  "runner_contract": "docs/swarm_execution_queue_runner_contract_v1.json",
+  "golden_schema_version": "franken-engine.swarm-execution-queue-conformance-golden.v1",
+  "fixture_goldens": [
+    {
+      "fixture_id": "healthy",
+      "normalized_input_path": "scripts/testdata/swarm_execution_queue/healthy_input.json",
+      "golden_path": "scripts/testdata/swarm_execution_queue/goldens/healthy_runner_golden.json",
+      "expected_decision": "pass",
+      "expected_exit_code": 0
+    },
+    {
+      "fixture_id": "stale_owner",
+      "normalized_input_path": "scripts/testdata/swarm_execution_queue/stale_owner_input.json",
+      "golden_path": "scripts/testdata/swarm_execution_queue/goldens/stale_owner_runner_golden.json",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0
+    },
+    {
+      "fixture_id": "proof_brownout",
+      "normalized_input_path": "scripts/testdata/swarm_execution_queue/proof_brownout_input.json",
+      "golden_path": "scripts/testdata/swarm_execution_queue/goldens/proof_brownout_runner_golden.json",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0
+    },
+    {
+      "fixture_id": "blocked_parent",
+      "normalized_input_path": "scripts/testdata/swarm_execution_queue/blocked_parent_input.json",
+      "golden_path": "scripts/testdata/swarm_execution_queue/goldens/blocked_parent_runner_golden.json",
+      "expected_decision": "pass",
+      "expected_exit_code": 0
+    },
+    {
+      "fixture_id": "cyclic_input",
+      "normalized_input_path": "scripts/testdata/swarm_execution_queue/cyclic_input.json",
+      "golden_path": "scripts/testdata/swarm_execution_queue/goldens/cyclic_input_runner_golden.json",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42
+    }
+  ],
+  "requirements_matrix": [
+    {
+      "requirement_id": "REQ-QUEUE-ORDER",
+      "level": "MUST",
+      "description": "queue order is deterministic and rank values are contiguous",
+      "covered_by": [
+        "healthy",
+        "blocked_parent"
+      ],
+      "status": "covered"
+    },
+    {
+      "requirement_id": "REQ-FIRST-ACTION",
+      "level": "MUST",
+      "description": "every queued task carries a non-empty first_action",
+      "covered_by": [
+        "healthy",
+        "stale_owner",
+        "proof_brownout",
+        "blocked_parent"
+      ],
+      "status": "covered"
+    },
+    {
+      "requirement_id": "REQ-RISK-BUDGET",
+      "level": "MUST",
+      "description": "risk-budget conservative mode and bounded queue depth match runner output",
+      "covered_by": [
+        "healthy",
+        "proof_brownout",
+        "blocked_parent"
+      ],
+      "status": "covered"
+    },
+    {
+      "requirement_id": "REQ-BOTTLENECKS",
+      "level": "MUST",
+      "description": "bottleneck IDs and critical-bottleneck counts are frozen in runner goldens",
+      "covered_by": [
+        "healthy",
+        "stale_owner",
+        "blocked_parent"
+      ],
+      "status": "covered"
+    },
+    {
+      "requirement_id": "REQ-ARTIFACT-HASH",
+      "level": "MUST",
+      "description": "runner artifact hashes are exact 64-character lowercase hexadecimal values",
+      "covered_by": [
+        "healthy",
+        "stale_owner",
+        "proof_brownout",
+        "blocked_parent"
+      ],
+      "status": "covered"
+    },
+    {
+      "requirement_id": "REQ-FAIL-CLOSED-CYCLE",
+      "level": "MUST",
+      "description": "cyclic input exits 42 and quotes the cycle-detected failure reason",
+      "covered_by": [
+        "cyclic_input"
+      ],
+      "status": "covered"
+    }
+  ],
+  "live_runner_replay": {
+    "optional": true,
+    "env_var": "FRANKEN_SWARM_EXECUTION_QUEUE_BIN",
+    "reason": "the checked-in goldens are validated without building; setting the env var replays the real runner against the same fixtures"
+  },
+  "mutation_policy": {
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_execution_queue_conformance_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_execution_queue_conformance_gate.sh",
+    "jq empty docs/swarm_execution_queue_conformance_contract_v1.json scripts/testdata/swarm_execution_queue/*.json scripts/testdata/swarm_execution_queue/goldens/*.json",
+    "bash scripts/e2e/swarm_execution_queue_conformance_gate.sh check",
+    "bash scripts/e2e/swarm_execution_queue_conformance_gate.sh selftest"
+  ]
+}

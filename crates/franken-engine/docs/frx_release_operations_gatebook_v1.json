@@ -1,0 +1,260 @@
+{
+  "schema_version": "frx.release-operations-gatebook.v1",
+  "bead_id": "bd-mjh3.9.2",
+  "generated_by": "bd-mjh3.9.2",
+  "generated_at_utc": "2026-02-27T00:00:00Z",
+  "track": {
+    "id": "FRX-09.2",
+    "name": "Release Operations Gatebook and Publication Workflow"
+  },
+  "consumes_cut_line_artifacts": {
+    "source_contract": "frx.cut-line-automation.contract.v1",
+    "required_cut_lines": ["C0", "C1", "C2", "C3", "C4", "C5"],
+    "require_signed_decisions": true,
+    "require_monotonic_stage_progression": true,
+    "fail_closed_on_missing_stage_decision": true
+  },
+  "release_packet_channels": [
+    {
+      "channel_id": "cut_line_decision_bundle",
+      "source_bead": "bd-mjh3.12.7",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "ga_readiness_claim_bundle",
+      "source_bead": "bd-mjh3.12.5",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "proof_carrying_artifact_gate",
+      "source_bead": "bd-mjh3.5.4",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "pilot_rollout_harness",
+      "source_bead": "bd-mjh3.9.1",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "tail_latency_memory_hardening",
+      "source_bead": "bd-mjh3.6.4",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "observability_demotion",
+      "source_bead": "bd-mjh3.17.4",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "catastrophic_tail_tournament",
+      "source_bead": "bd-mjh3.18.4",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "twin_rollback_synthesizer",
+      "source_bead": "bd-mjh3.19.4",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    },
+    {
+      "channel_id": "test_evidence_integrator",
+      "source_bead": "bd-mjh3.20.6",
+      "required": true,
+      "signed_required": true,
+      "max_age_ns": 7200000000000,
+      "failure_code": "FE-FRX-09-2-RELEASE-OPS-0001"
+    }
+  ],
+  "stage_checklists": [
+    {
+      "stage": "alpha",
+      "min_cut_line": "C2",
+      "required_channels": [
+        "cut_line_decision_bundle",
+        "pilot_rollout_harness",
+        "proof_carrying_artifact_gate",
+        "test_evidence_integrator"
+      ],
+      "required_checklist_items": [
+        "canary_scope_defined",
+        "halt_conditions_declared",
+        "incident_escalation_contacts_present"
+      ],
+      "publication_mode": "internal_preview"
+    },
+    {
+      "stage": "beta",
+      "min_cut_line": "C3",
+      "required_channels": [
+        "cut_line_decision_bundle",
+        "pilot_rollout_harness",
+        "proof_carrying_artifact_gate",
+        "tail_latency_memory_hardening",
+        "observability_demotion",
+        "catastrophic_tail_tournament",
+        "twin_rollback_synthesizer",
+        "test_evidence_integrator"
+      ],
+      "required_checklist_items": [
+        "rollback_drill_passed",
+        "oncall_readiness_attested",
+        "risk_qualifier_statement_signed"
+      ],
+      "publication_mode": "limited_external"
+    },
+    {
+      "stage": "ga",
+      "min_cut_line": "C4",
+      "required_channels": [
+        "cut_line_decision_bundle",
+        "ga_readiness_claim_bundle",
+        "proof_carrying_artifact_gate",
+        "pilot_rollout_harness",
+        "tail_latency_memory_hardening",
+        "observability_demotion",
+        "catastrophic_tail_tournament",
+        "twin_rollback_synthesizer",
+        "test_evidence_integrator"
+      ],
+      "required_checklist_items": [
+        "rollback_drill_passed",
+        "oncall_readiness_attested",
+        "claim_registry_linkage_complete",
+        "release_packet_digest_verified"
+      ],
+      "publication_mode": "public_claim_registry"
+    }
+  ],
+  "communication_discipline": {
+    "incident_response": {
+      "required_fields": [
+        "incident_id",
+        "severity",
+        "decision_id",
+        "owner",
+        "escalation_path",
+        "first_response_deadline_s"
+      ],
+      "require_escalation_acknowledgement": true
+    },
+    "rollback_communications": {
+      "required_fields": [
+        "rollback_id",
+        "trigger_signal",
+        "rollback_command",
+        "safe_mode_target",
+        "eta_recovery_s"
+      ],
+      "require_operator_acknowledgement": true
+    },
+    "publication_communications": {
+      "required_fields": [
+        "claim_id",
+        "release_stage",
+        "bundle_digest",
+        "public_statement_ref"
+      ],
+      "require_signed_statement": true
+    }
+  },
+  "claim_publication_record": {
+    "required_fields": [
+      "claim_id",
+      "stage_gate_decision_id",
+      "reproducibility_bundle_id",
+      "evidence_bundle_ids",
+      "release_packet_digest",
+      "replay_command",
+      "publication_timestamp_utc",
+      "signer",
+      "signature_ref"
+    ],
+    "require_reproducibility_bundle_links": true,
+    "require_release_packet_digest": true,
+    "block_on_incomplete_record": true
+  },
+  "fail_closed_rules": [
+    "missing_required_channel",
+    "stale_channel_artifact",
+    "missing_or_invalid_signature",
+    "stage_checklist_failure",
+    "missing_publication_record_field",
+    "release_packet_digest_mismatch"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "release_stage",
+    "publication_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "prerequisites": [
+    {
+      "bead_id": "bd-mjh3.20.6",
+      "reason": "milestone/release test-evidence integrator output is required release packet input",
+      "status": "closed"
+    },
+    {
+      "bead_id": "bd-mjh3.12.7",
+      "reason": "cut-line automation decisions are authoritative promotion inputs",
+      "status": "closed"
+    },
+    {
+      "bead_id": "bd-mjh3.12.5",
+      "reason": "GA readiness claim bundle is required for public release publication",
+      "status": "open"
+    },
+    {
+      "bead_id": "bd-mjh3.5.4",
+      "reason": "proof-carrying artifact gate enforces claim authenticity prerequisites",
+      "status": "in_progress"
+    },
+    {
+      "bead_id": "bd-mjh3.9.1",
+      "reason": "pilot rollout evidence channel is required for staged release decisions",
+      "status": "in_progress"
+    },
+    {
+      "bead_id": "bd-mjh3.6.4",
+      "reason": "tail-latency and memory hardening evidence must be attached to release packets",
+      "status": "closed"
+    }
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_release_operations_gatebook_suite.sh ci",
+    "./scripts/e2e/frx_release_operations_gatebook_replay.sh ci",
+    "jq empty docs/frx_release_operations_gatebook_v1.json",
+    "cat artifacts/frx_release_operations_gatebook/<timestamp>/run_manifest.json",
+    "cat artifacts/frx_release_operations_gatebook/<timestamp>/events.jsonl",
+    "cat artifacts/frx_release_operations_gatebook/<timestamp>/commands.txt"
+  ]
+}

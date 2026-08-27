@@ -1,0 +1,52 @@
+{
+  "schema_version": "franken-engine.swarm-ctrl-viii-runbook-truth-contract.v1",
+  "runbook_schema": "franken-engine.swarm-ctrl-viii-operator-runbook.v1",
+  "required_repo_paths": [
+    "scripts/e2e/swarm_admission_drill.sh",
+    "scripts/e2e/swarm_predictive_orchestration_e2e.sh",
+    "scripts/e2e/remote_proof_archive_lifecycle_no_mock_drill.sh",
+    "scripts/e2e/swarm_predictive_admission_no_mock_drill.sh",
+    "scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "docs/SWARM_ADMISSION_DRILL.md",
+    "docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md",
+    "docs/SWARM_CTRL_VIII_OPERATOR_RUNBOOK.md",
+    "docs/swarm_ctrl_viii_runbook_truth_contract_v1.json"
+  ],
+  "required_artifact_references": [
+    "swarm_predictive_admission_no_mock_drill_report.json",
+    "swarm_admission_drill_report.json",
+    "predictive/wrapper/report.json",
+    "predictive/operator-status/status.json",
+    "predictive/operator-status/report.md",
+    "swarm_capacity_forecast.json",
+    "swarm_admission_budget_plan.json",
+    "lease_exchange_salvage_simulation.json",
+    "warm_target_prefetch_roi_advisory.json",
+    "remote_proof_archive_lifecycle_no_mock_drill_report.json"
+  ],
+  "required_commands": [
+    "./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh check",
+    "./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh selftest",
+    "./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh selftest"
+  ],
+  "required_workflow_claims": [
+    "Low-confidence or stale forecast evidence must keep the composed predictive admission drill fail-closed instead of upgrading to admit.",
+    "Lease exchange or salvage remains manual-confirmation only when stale locks, degraded rch, or archive pressure remain unresolved.",
+    "Archive pressure must keep warm-target prefetch advisory-only and negative until compaction or preserve-pinned evidence clears.",
+    "The drill does not mutate live worker state, leases, queue entries, or archive bundles."
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh",
+    "./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh selftest"
+  ],
+  "rejections": [
+    "bare heavy cargo examples not wrapped in rch exec -- env CARGO_TARGET_DIR=",
+    "missing predictive admission artifact references",
+    "stale workflow claims about fail-closed forecast, manual-confirmation salvage, or archive-pressure prefetch limits",
+    "duplicate predictive dashboard producer claims",
+    "claims of live worker mutation"
+  ]
+}

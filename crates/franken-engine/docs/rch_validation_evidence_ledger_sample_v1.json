@@ -1,0 +1,117 @@
+{
+  "schema_version": "franken-engine.rch-validation-evidence-ledger.v1",
+  "component": "rch_validation_evidence_ledger",
+  "ledger_id": "rch-validation-ledger-sample-2026-05-10",
+  "entries": [
+    {
+      "entry_id": "source-bd-7r53m-2-93edf812",
+      "bead_id": "bd-7r53m.2",
+      "commit": "93edf812",
+      "evidence_kind": "source_check",
+      "command_class": "source_only",
+      "command": "git diff --check -- scripts/swarm_proof_command_preflight.sh docs/SWARM_PROOF_COMMAND_PREFLIGHT.md docs/swarm_proof_command_preflight_contract_v1.json scripts/testdata/swarm_proof_command_preflight/cases.json scripts/e2e/swarm_proof_command_preflight_smoke.sh",
+      "result": {
+        "status": "success",
+        "exit_code": 0,
+        "compile_stage_reached": "not_started",
+        "compiler_diagnostic_surfaced": false,
+        "rch_error_code": null,
+        "reason_code": null,
+        "recommended_next_action": "no_action"
+      }
+    },
+    {
+      "entry_id": "focused-timeout-bd-7eefz-7e957797",
+      "bead_id": "bd-7eefz",
+      "commit": "7e957797",
+      "evidence_kind": "focused_rch_proof",
+      "command_class": "focused_lib_test",
+      "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_7eefz_async_gen CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib async_generator_next_fails_closed_for_suspended_body -- --nocapture",
+      "result": {
+        "status": "infrastructure_timeout",
+        "exit_code": null,
+        "compile_stage_reached": "compiling_target_crate",
+        "compiler_diagnostic_surfaced": false,
+        "rch_error_code": "RCH-E104",
+        "reason_code": "ssh_command_timed_out_no_diagnostic",
+        "recommended_next_action": "retry_focused_with_warm_target"
+      }
+    },
+    {
+      "entry_id": "broad-wait-bd-zy517-pending",
+      "bead_id": "bd-zy517",
+      "commit": "pending",
+      "evidence_kind": "broad_gate_attempt",
+      "command_class": "package_all_targets",
+      "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_zy517_all_targets CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo check --all-targets",
+      "result": {
+        "status": "infrastructure_timeout",
+        "exit_code": null,
+        "compile_stage_reached": "test_harness",
+        "compiler_diagnostic_surfaced": false,
+        "rch_error_code": "RCH-E104",
+        "reason_code": "active_all_targets_timeout_no_diagnostic",
+        "recommended_next_action": "wait_existing_all_targets"
+      }
+    },
+    {
+      "entry_id": "blocked-bd-7r53m-3-96e6c064",
+      "bead_id": "bd-7r53m.3",
+      "commit": "96e6c064",
+      "evidence_kind": "blocked_reason",
+      "command_class": "source_only",
+      "command": "./scripts/swarm_validation_admission_recommender.sh --bead-id bd-missing --command-class focused_lib_test --ps-snapshot /tmp/missing --br-snapshot-json /tmp/br.json --dirty-files-json /tmp/dirty.json",
+      "result": {
+        "status": "blocked",
+        "exit_code": 42,
+        "compile_stage_reached": "not_started",
+        "compiler_diagnostic_surfaced": false,
+        "rch_error_code": null,
+        "reason_code": "process_inspection_unavailable",
+        "recommended_next_action": "run_source_only_now"
+      }
+    }
+  ],
+  "aggregates": {
+    "by_bead": [
+      {
+        "bead_id": "bd-7r53m.2",
+        "entry_count": 1,
+        "latest_status": "success"
+      },
+      {
+        "bead_id": "bd-7eefz",
+        "entry_count": 1,
+        "latest_status": "infrastructure_timeout"
+      },
+      {
+        "bead_id": "bd-zy517",
+        "entry_count": 1,
+        "latest_status": "infrastructure_timeout"
+      },
+      {
+        "bead_id": "bd-7r53m.3",
+        "entry_count": 1,
+        "latest_status": "blocked"
+      }
+    ],
+    "by_commit": [
+      {
+        "commit": "93edf812",
+        "entry_count": 1
+      },
+      {
+        "commit": "7e957797",
+        "entry_count": 1
+      },
+      {
+        "commit": "pending",
+        "entry_count": 1
+      },
+      {
+        "commit": "96e6c064",
+        "entry_count": 1
+      }
+    ]
+  }
+}

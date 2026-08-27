@@ -1,0 +1,260 @@
+{
+  "schema_version": "frx.ecosystem-compatibility-matrix.v1",
+  "bead_id": "bd-mjh3.7.3",
+  "generated_by": "bd-mjh3.7.3",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-07.3",
+    "name": "Ecosystem Compatibility Matrix"
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "entries": [
+    {
+      "stack_id": "redux-toolkit",
+      "category": "state_lib",
+      "surface": "store subscription ordering and selector memoization under concurrent updates",
+      "compatibility_status": "native",
+      "integration_test_id": "state_redux_toolkit_subscription",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "No semantic drift observed across deterministic replay seeds.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-state-redux-toolkit",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "state_libs",
+        "outcome": "pass"
+      }
+    },
+    {
+      "stack_id": "zustand",
+      "category": "state_lib",
+      "surface": "selector stability with batched updates and external store subscriptions",
+      "compatibility_status": "native",
+      "integration_test_id": "state_zustand_selector_stability",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "Bounded re-render behavior aligns with compatibility contract.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-state-zustand",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "state_libs",
+        "outcome": "pass"
+      }
+    },
+    {
+      "stack_id": "recoil",
+      "category": "state_lib",
+      "surface": "atom effects with async selectors and error-boundary interactions",
+      "compatibility_status": "compatibility_fallback",
+      "integration_test_id": "state_recoil_atom_effects_async",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "compatibility_fallback",
+      "roadmap_status": "targeted_patch",
+      "notes": "Async selector invalidation can drift under nested suspense boundaries.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-state-recoil",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "state_libs",
+        "outcome": "fallback"
+      }
+    },
+    {
+      "stack_id": "react-router",
+      "category": "routing",
+      "surface": "data-router lazy route prefetch with SSR hydration handoff",
+      "compatibility_status": "compatibility_fallback",
+      "integration_test_id": "routing_react_router_lazy_prefetch",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "deterministic_safe_mode",
+      "roadmap_status": "investigating",
+      "notes": "Hydration race under lazy prefetch remains guarded behind deterministic fallback.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-routing-react-router",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "routing",
+        "outcome": "fallback"
+      }
+    },
+    {
+      "stack_id": "react-hook-form",
+      "category": "forms",
+      "surface": "field-array updates and resolver timing under concurrent mode",
+      "compatibility_status": "native",
+      "integration_test_id": "forms_react_hook_form_field_array",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "Resolver timing and dirtiness tracking remain deterministic.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-forms-react-hook-form",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "forms",
+        "outcome": "pass"
+      }
+    },
+    {
+      "stack_id": "formik",
+      "category": "forms",
+      "surface": "submit lifecycle and async validation cancellation",
+      "compatibility_status": "compatibility_fallback",
+      "integration_test_id": "forms_formik_async_validation",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "compatibility_fallback",
+      "roadmap_status": "planned",
+      "notes": "Async cancellation under rapid submit/retry currently guarded.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-forms-formik",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "forms",
+        "outcome": "fallback"
+      }
+    },
+    {
+      "stack_id": "tanstack-query",
+      "category": "data_lib",
+      "surface": "query cache invalidation and suspense boundary replay",
+      "compatibility_status": "native",
+      "integration_test_id": "data_tanstack_query_invalidation",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "Query invalidation flow remains replay-stable across seeds.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-data-tanstack-query",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "data_libs",
+        "outcome": "pass"
+      }
+    },
+    {
+      "stack_id": "apollo-client",
+      "category": "data_lib",
+      "surface": "optimistic updates and cache eviction ordering during network retries",
+      "compatibility_status": "compatibility_fallback",
+      "integration_test_id": "data_apollo_optimistic_cache",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "compatibility_fallback",
+      "roadmap_status": "targeted_patch",
+      "notes": "Retry loops can reorder optimistic eviction in edge concurrency paths.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-data-apollo-client",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "data_libs",
+        "outcome": "fallback"
+      }
+    },
+    {
+      "stack_id": "legacy-class-components",
+      "category": "legacy_api",
+      "surface": "class lifecycle ordering across mount/update/unmount paths",
+      "compatibility_status": "native",
+      "integration_test_id": "legacy_class_lifecycle_ordering",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "Lifecycle ordering remains parity-locked with deterministic replay.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-legacy-class-components",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "legacy_apis",
+        "outcome": "pass"
+      }
+    },
+    {
+      "stack_id": "portals-refs",
+      "category": "legacy_api",
+      "surface": "portal event retargeting and forwarded ref timing",
+      "compatibility_status": "native",
+      "integration_test_id": "legacy_portal_ref_timing",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "Portal mount order and forwarded ref targets remain stable.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-legacy-portals-refs",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "legacy_apis",
+        "outcome": "pass"
+      }
+    },
+    {
+      "stack_id": "context-error-boundaries",
+      "category": "legacy_api",
+      "surface": "context propagation through nested error boundary recoveries",
+      "compatibility_status": "native",
+      "integration_test_id": "legacy_context_error_boundary_recovery",
+      "evidence_bundle_ref": "artifacts/frx_ecosystem_compatibility_matrix/latest",
+      "fallback_route": "none",
+      "roadmap_status": "released",
+      "notes": "Boundary reset + provider propagation parity maintained.",
+      "structured_log_template": {
+        "scenario_id": "frx-07.3-legacy-context-error-boundaries",
+        "component": "frx_ecosystem_compatibility_matrix",
+        "decision_path": "legacy_apis",
+        "outcome": "pass"
+      }
+    }
+  ],
+  "known_gaps": [
+    {
+      "stack_id": "recoil",
+      "surface": "atom effects with async selectors and error-boundary interactions",
+      "fallback_route": "compatibility_fallback",
+      "roadmap_status": "targeted_patch",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.4",
+      "blocking_issue": "bd-mjh3.7.4",
+      "error_code": "FE-FRX-07-3-GAP-0001"
+    },
+    {
+      "stack_id": "react-router",
+      "surface": "data-router lazy route prefetch with SSR hydration handoff",
+      "fallback_route": "deterministic_safe_mode",
+      "roadmap_status": "investigating",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.4",
+      "blocking_issue": "bd-mjh3.7.4",
+      "error_code": "FE-FRX-07-3-GAP-0002"
+    },
+    {
+      "stack_id": "apollo-client",
+      "surface": "optimistic updates and cache eviction ordering during network retries",
+      "fallback_route": "compatibility_fallback",
+      "roadmap_status": "targeted_patch",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.4",
+      "blocking_issue": "bd-mjh3.7.4",
+      "error_code": "FE-FRX-07-3-GAP-0003"
+    },
+    {
+      "stack_id": "formik",
+      "surface": "submit lifecycle and async validation cancellation",
+      "fallback_route": "compatibility_fallback",
+      "roadmap_status": "planned",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.4",
+      "blocking_issue": "bd-mjh3.7.4",
+      "error_code": "FE-FRX-07-3-GAP-0004"
+    }
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_ecosystem_compatibility_matrix_suite.sh ci",
+    "./scripts/e2e/frx_ecosystem_compatibility_matrix_replay.sh ci",
+    "jq empty docs/frx_ecosystem_compatibility_matrix_v1.json"
+  ]
+}

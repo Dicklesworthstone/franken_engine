@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "franken-engine.rch-validation-evidence-ledger-schema.v1",
+  "title": "FrankenEngine RCH Validation Evidence Ledger",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "component",
+    "ledger_id",
+    "entries",
+    "aggregates"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "franken-engine.rch-validation-evidence-ledger.v1"
+    },
+    "component": {
+      "const": "rch_validation_evidence_ledger"
+    },
+    "ledger_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "entry_id",
+          "bead_id",
+          "commit",
+          "evidence_kind",
+          "command_class",
+          "command",
+          "result"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bead_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commit": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence_kind": {
+            "enum": [
+              "source_check",
+              "focused_rch_proof",
+              "broad_gate_attempt",
+              "blocked_reason"
+            ]
+          },
+          "command_class": {
+            "enum": [
+              "source_only",
+              "focused_lib_test",
+              "focused_integration_test",
+              "package_all_targets",
+              "clippy_all_targets",
+              "release_gate"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result": {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "success",
+                  "compiler_diagnostic",
+                  "infrastructure_timeout",
+                  "worker_disk_full",
+                  "blocked"
+                ]
+              },
+              "exit_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "rch_error_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "compile_stage_reached": {
+                "enum": [
+                  "not_started",
+                  "syncing_project",
+                  "resolving_dependencies",
+                  "compiling_dependencies",
+                  "compiling_target_crate",
+                  "test_harness",
+                  "completed",
+                  "unknown"
+                ]
+              },
+              "compiler_diagnostic_surfaced": {
+                "type": "boolean"
+              },
+              "reason_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recommended_next_action": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "aggregates": {
+      "type": "object",
+      "required": [
+        "by_bead",
+        "by_commit"
+      ],
+      "properties": {
+        "by_bead": {
+          "type": "array"
+        },
+        "by_commit": {
+          "type": "array"
+        }
+      }
+    }
+  }
+}

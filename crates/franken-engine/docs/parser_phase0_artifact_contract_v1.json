@@ -1,0 +1,183 @@
+{
+  "schema_version": "franken-engine.parser-phase0-artifact-contract.v1",
+  "bead_id": "bd-2muur.6.1",
+  "policy_id": "policy-parser-phase0-artifact-contract-v1",
+  "generated_by": "bd-2muur.6.1",
+  "generated_at_utc": "2026-04-03T16:34:00Z",
+  "track": {
+    "id": "RGC-920F.1",
+    "name": "Parser Phase0 Artifact Contract"
+  },
+  "source_inputs": [
+    "docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md",
+    "README.md",
+    "scripts/generate_parser_phase0_artifacts.sh",
+    "scripts/run_parser_phase0_artifact_contract.sh",
+    "scripts/e2e/parser_phase0_artifact_contract_replay.sh"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "artifact_mode",
+    "receipt_reason_code"
+  ],
+  "generated_artifacts": [
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/run_manifest.json",
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/trace_ids.json",
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/events.jsonl",
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/commands.txt",
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/step_logs/step_000.log",
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/parser_phase0_artifact_contract.json",
+    "artifacts/parser_phase0_artifact_contract/<timestamp>/parser_phase0_artifact_contract_validation_report.json"
+  ],
+  "artifact_contract": {
+    "baseline_artifacts": [
+      "baseline.json",
+      "proof_note.md",
+      "env.json",
+      "manifest.json",
+      "repro.lock",
+      "provenance.json"
+    ],
+    "performance_artifact_receipt_path": "parser_phase0_performance_artifact_receipt.json",
+    "accepted_real_artifact_shapes": [
+      {
+        "shape_id": "real_flamegraph_svg",
+        "artifact_path": "flamegraph.svg",
+        "mode": "real_capture",
+        "required_receipt_fields": [
+          "schema_version",
+          "trace_id",
+          "decision_id",
+          "policy_id",
+          "component",
+          "mode",
+          "artifact_path",
+          "artifact_sha256",
+          "capture_source",
+          "collection_scope",
+          "placeholder_rejected",
+          "sample_count",
+          "outcome",
+          "error_code"
+        ],
+        "allowed_capture_sources": [
+          "perf_samples",
+          "cargo_flamegraph",
+          "sampled_stack_aggregator",
+          "collapsed_stack_profile"
+        ]
+      },
+      {
+        "shape_id": "profile_summary_only",
+        "artifact_path": "profile_summary.json",
+        "mode": "real_capture",
+        "required_receipt_fields": [
+          "schema_version",
+          "trace_id",
+          "decision_id",
+          "policy_id",
+          "component",
+          "mode",
+          "artifact_path",
+          "artifact_sha256",
+          "capture_source",
+          "placeholder_rejected",
+          "profile_frame_count",
+          "outcome",
+          "error_code"
+        ],
+        "allowed_capture_sources": [
+          "perf_summary",
+          "cargo_bench_profile",
+          "sampled_stack_aggregator"
+        ]
+      }
+    ],
+    "accepted_degraded_receipt_shape": {
+      "shape_id": "degraded_receipt_only",
+      "artifact_path": "parser_phase0_performance_artifact_receipt.json",
+      "mode": "degraded_receipt",
+      "required_receipt_fields": [
+        "schema_version",
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "component",
+        "mode",
+        "artifact_path",
+        "reason_code",
+        "reason_id",
+        "stage",
+        "consumer_action",
+        "placeholder_rejected",
+        "outcome",
+        "error_code"
+      ],
+      "allowed_reason_codes": [
+        {
+          "code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0001",
+          "reason_id": "profiler_unavailable",
+          "stage": "capture_preflight",
+          "consumer_action": "treat_as_unsupported_environment"
+        },
+        {
+          "code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0002",
+          "reason_id": "capture_disabled_by_policy",
+          "stage": "policy_block",
+          "consumer_action": "treat_as_intentional_no_capture"
+        },
+        {
+          "code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0003",
+          "reason_id": "platform_unsupported",
+          "stage": "capture_preflight",
+          "consumer_action": "treat_as_unsupported_environment"
+        },
+        {
+          "code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0004",
+          "reason_id": "permission_denied",
+          "stage": "capture_execution",
+          "consumer_action": "treat_as_non_evidence_and_surface_permissions_error"
+        },
+        {
+          "code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0005",
+          "reason_id": "preflight_failed",
+          "stage": "capture_preflight",
+          "consumer_action": "treat_as_failed_capture_preflight"
+        },
+        {
+          "code": "FE-PARSER-PHASE0-ARTIFACT-RECEIPT-0006",
+          "reason_id": "upstream_command_failed",
+          "stage": "artifact_materialization",
+          "consumer_action": "treat_as_failed_capture_execution"
+        }
+      ]
+    },
+    "rejected_placeholder_signatures": [
+      "parser phase0 flamegraph placeholder",
+      "parser_phase0 scalar_reference baseline lane (placeholder flamegraph artifact)",
+      "<rect x=\"40\" y=\"72\" width=\"1200\" height=\"24\" fill=\"#22c55e\" />"
+    ],
+    "consumer_fail_closed_reasons": [
+      "missing performance artifact receipt",
+      "unknown degraded reason code",
+      "placeholder signature match",
+      "real_capture receipt with empty artifact_sha256",
+      "artifact path mismatch between receipt and emitted files"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/parser_phase0_artifact_contract_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_parser_phase0_artifact_contract_verify cargo test -p frankenengine-engine --test parser_phase0_artifact_contract",
+    "./scripts/run_parser_phase0_artifact_contract.sh ci",
+    "./scripts/e2e/parser_phase0_artifact_contract_replay.sh ci",
+    "PARSER_PHASE0_ARTIFACT_CONTRACT_REPLAY_RUN_DIR=artifacts/parser_phase0_artifact_contract/<timestamp> ./scripts/e2e/parser_phase0_artifact_contract_replay.sh ci"
+  ]
+}

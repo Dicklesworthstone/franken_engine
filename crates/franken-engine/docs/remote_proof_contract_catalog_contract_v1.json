@@ -1,0 +1,56 @@
+{
+  "schema_version": "franken-engine.remote-proof-contract-catalog-contract.v1",
+  "manifest_schema": "franken-engine.remote-proof-contract-catalog-manifest.v1",
+  "report_schema": "franken-engine.remote-proof-contract-catalog-report.v1",
+  "required_inputs": [
+    "--surface-manifest-json"
+  ],
+  "optional_inputs": [
+    "--repo-root",
+    "--output-dir"
+  ],
+  "required_manifest_fields": [
+    "surfaces[].surface_id",
+    "surfaces[].contract_json",
+    "surfaces[].implementation_script",
+    "surfaces[].smoke_script",
+    "surfaces[].doc_path",
+    "surfaces[].emitted_schema",
+    "surfaces[].upstream_schemas"
+  ],
+  "required_artifacts": [
+    "contract_catalog_report.json",
+    "surface_manifest.normalized.json",
+    "catalog_entries.jsonl",
+    "commands.txt",
+    "events.jsonl",
+    "report.md"
+  ],
+  "decisions": {
+    "pass": {
+      "exit_code": 0,
+      "meaning": "Every listed surface has coherent contract, script, smoke, doc, and upstream schema declarations."
+    },
+    "fail_closed": {
+      "exit_code": 42,
+      "meaning": "The catalog is unsafe because at least one contract, path, doc, script, schema, or upstream reference drifted."
+    }
+  },
+  "fail_closed_reasons": [
+    "surface manifest is empty",
+    "surface_id is missing or duplicated",
+    "contract path, script path, smoke path, or doc path is not relative to the selected repo root",
+    "contract JSON is missing, invalid, or lacks schema_version",
+    "contract JSON lacks required_inputs, required_artifacts, or determinism metadata",
+    "contract schema_version or emitted_schema is duplicated",
+    "implementation script does not mention a required input",
+    "smoke script does not expose check and selftest modes",
+    "operator doc does not mention the implementation script, emitted schema, or required artifacts",
+    "upstream schema is neither emitted by another surface nor declared external"
+  ],
+  "determinism": {
+    "catalog_id": "Derived from normalized manifest rows, normalized catalog entries, and sorted findings.",
+    "sorting": "Surfaces, schemas, findings, and manifest arrays are normalized before hashing.",
+    "execution_mode": "Metadata verifier only; the catalog gate does not execute Cargo, query rch, fetch worker artifacts, or mutate remote state."
+  }
+}

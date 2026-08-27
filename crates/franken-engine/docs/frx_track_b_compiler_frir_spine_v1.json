@@ -1,0 +1,99 @@
+{
+  "schema_version": "frx.track-b.compiler-frir-spine.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.11.2",
+  "generated_by": "bd-mjh3.11.2",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "track": {
+    "id": "FRX-11.2",
+    "name": "Parallel Track B: Compiler/FRIR Spine Sprint"
+  },
+  "ownership": {
+    "canonical_binder_representation": {
+      "deterministic": true,
+      "stable_ids_required": true,
+      "effect_metadata_required": true
+    },
+    "frir_lowering": {
+      "schema_version_stability_required": true,
+      "compatibility_mode_required": true,
+      "host_reproducible": true
+    },
+    "witness_bundle_pipeline": {
+      "pass_hash_linkage_required": true,
+      "replay_metadata_required": true,
+      "producer_track_required": true
+    }
+  },
+  "inputs": [
+    "track_a_semantic_contracts",
+    "compiler_lane_ownership_contract",
+    "parser_normalization_outputs",
+    "optimization_budget_policy"
+  ],
+  "outputs": {
+    "frir_artifact_contract": {
+      "required_fields": [
+        "frir_schema_version",
+        "compatibility_mode",
+        "artifact_hash",
+        "producer_track",
+        "trace_id"
+      ],
+      "deterministic": true
+    },
+    "witness_bundle_contract": {
+      "required_fields": [
+        "pass_id",
+        "input_hash",
+        "output_hash",
+        "invariant_results",
+        "budget_summary",
+        "replay_linkage",
+        "producer_track"
+      ],
+      "deterministic": true
+    },
+    "diagnostics_contract": {
+      "required_fields": [
+        "diagnostic_code",
+        "severity",
+        "component",
+        "event",
+        "outcome",
+        "error_code"
+      ],
+      "deterministic": true
+    }
+  },
+  "activation_gate": {
+    "block_on_missing_witness_linkage": true,
+    "block_on_schema_incompatibility": true,
+    "block_on_failed_isomorphism_check": true,
+    "block_on_missing_replay_metadata": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "deterministic_fallback_lowering": {
+      "enabled": true,
+      "required_on_isomorphism_failure": true
+    },
+    "rollback_policy": {
+      "emit_replay_command": true,
+      "emit_rationale_event": true
+    },
+    "on_fallback_unavailable": "reject_promotion"
+  },
+  "logging_contract": {
+    "component": "frx_track_b_compiler_frir_spine",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

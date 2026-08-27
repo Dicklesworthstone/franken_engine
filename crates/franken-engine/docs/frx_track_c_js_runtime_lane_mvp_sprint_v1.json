@@ -1,0 +1,95 @@
+{
+  "schema_version": "frx.track-c.js-runtime-lane-mvp-sprint.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.11.3",
+  "generated_by": "bd-mjh3.11.3",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-11.3",
+    "name": "Parallel Track C: JS Runtime Lane MVP Sprint"
+  },
+  "ownership": {
+    "deterministic_scheduler": {
+      "required": true,
+      "bounded_flush_required": true,
+      "stable_ordering_required": true
+    },
+    "dom_mutation_executor": {
+      "required": true,
+      "direct_patch_batches_required": true
+    },
+    "trace_emission": {
+      "required": true,
+      "artifact_linkage_required": true,
+      "replay_pointer_required": true
+    },
+    "failover_hooks": {
+      "required": true,
+      "deterministic_trigger_contract_required": true,
+      "fallback_mode_reporting_required": true
+    }
+  },
+  "inputs": [
+    "track_b_frir_contract",
+    "track_a_semantic_contracts",
+    "runtime_kernel_charter_constraints",
+    "track_e_verification_ingestion_contract"
+  ],
+  "outputs": {
+    "lane_trace_bundle": {
+      "required": true,
+      "required_fields": [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "flush_summary_id",
+        "scheduled_updates",
+        "patch_batches",
+        "lane_state",
+        "replay_linkage"
+      ]
+    },
+    "failover_hook_contract": {
+      "required": true,
+      "required_fields": [
+        "hook_id",
+        "trigger_condition",
+        "fallback_mode",
+        "deterministic_guard",
+        "escalation_channel",
+        "owner_track"
+      ]
+    },
+    "promotion_evidence_pointer": {
+      "required": true,
+      "required_fields": [
+        "bead_id",
+        "artifact_root",
+        "manifest_path",
+        "replay_command"
+      ]
+    }
+  },
+  "activation_gate": {
+    "block_on_missing_trace_linkage": true,
+    "block_on_missing_failover_hooks": true,
+    "block_on_nondeterministic_scheduler_observation": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "fallback_activation_required": true,
+    "escalation_on_hook_gap_required": true
+  },
+  "logging_contract": {
+    "component": "frx_track_c_js_runtime_lane_mvp_sprint",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

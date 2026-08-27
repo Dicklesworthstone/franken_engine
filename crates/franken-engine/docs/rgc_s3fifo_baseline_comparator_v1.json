@@ -1,0 +1,47 @@
+{
+  "schema_version": "franken-engine.rgc-s3fifo-baseline-comparator-contract.v1",
+  "bead_id": "bd-1lsy.7.20.1",
+  "required_artifacts": [
+    "cache_trace_corpus_manifest.json",
+    "cache_policy_baseline_report.json",
+    "s3fifo_adoption_wedge_contract.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "env.json",
+    "manifest.json",
+    "repro.lock"
+  ],
+  "baseline_policy_name": "single_queue_fifo",
+  "candidate_policy_name": "s3_fifo",
+  "workload_classes": [
+    "cold_compile",
+    "warm_run",
+    "package_graph",
+    "react_app",
+    "scan_heavy"
+  ],
+  "trace_ids": [
+    "trace.cache.cold_compile",
+    "trace.cache.warm_run",
+    "trace.cache.package_graph",
+    "trace.cache.react_app",
+    "trace.cache.scan_heavy"
+  ],
+  "win_metrics": [
+    "hit_rate_millionths",
+    "hot_retention_millionths",
+    "scan_pollution_millionths"
+  ],
+  "replaced_surfaces": [
+    "bounded cache residency comparator",
+    "future persistent cache admission policy",
+    "future AOT artifact cache admission policy"
+  ],
+  "untouched_surfaces": [
+    "module invalidation semantics",
+    "trust revocation semantics",
+    "snapshot fastpath readers"
+  ]
+}

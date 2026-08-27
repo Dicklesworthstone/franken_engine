@@ -1,0 +1,80 @@
+{
+  "schema_version": "franken-engine.remote-proof-contract-catalog-manifest.v1",
+  "external_schemas": [
+    "franken-engine.rch-incident-packet.v1",
+    "franken-engine.rch-sync-closure-hotspot-ledger.v1",
+    "franken-engine.sticky-worker-warm-target-lease-plan.v1"
+  ],
+  "surfaces": [
+    {
+      "surface_id": "resident-remote-proof-bundle",
+      "contract_json": "docs/resident_remote_proof_bundle_contract_v1.json",
+      "implementation_script": "scripts/resident_remote_proof_bundle_executor.sh",
+      "smoke_script": "scripts/e2e/resident_remote_proof_bundle_executor_smoke.sh",
+      "doc_path": "docs/RESIDENT_REMOTE_PROOF_BUNDLE_EXECUTOR.md",
+      "emitted_schema": "franken-engine.resident-remote-proof-bundle.v1",
+      "upstream_schemas": []
+    },
+    {
+      "surface_id": "rch-worker-truth-parity-ledger",
+      "contract_json": "docs/rch_worker_truth_parity_contract_v1.json",
+      "implementation_script": "scripts/rch_worker_truth_parity_ledger.sh",
+      "smoke_script": "scripts/e2e/rch_worker_truth_parity_ledger_smoke.sh",
+      "doc_path": "docs/RCH_WORKER_TRUTH_PARITY_LEDGER.md",
+      "emitted_schema": "franken-engine.rch-worker-truth-parity-report.v1",
+      "upstream_schemas": [
+        "franken-engine.rch-incident-packet.v1"
+      ]
+    },
+    {
+      "surface_id": "remote-proof-artifact-mirror",
+      "contract_json": "docs/remote_proof_artifact_mirror_contract_v1.json",
+      "implementation_script": "scripts/remote_proof_artifact_mirror_packer.sh",
+      "smoke_script": "scripts/e2e/remote_proof_artifact_mirror_packer_smoke.sh",
+      "doc_path": "docs/REMOTE_PROOF_ARTIFACT_MIRROR_PACKER.md",
+      "emitted_schema": "franken-engine.remote-proof-artifact-mirror-verification.v1",
+      "upstream_schemas": [
+        "franken-engine.resident-remote-proof-bundle.v1"
+      ]
+    },
+    {
+      "surface_id": "locality-aware-remote-proof-batch-packer",
+      "contract_json": "docs/locality_aware_remote_proof_batch_contract_v1.json",
+      "implementation_script": "scripts/locality_aware_remote_proof_batch_packer.sh",
+      "smoke_script": "scripts/e2e/locality_aware_remote_proof_batch_packer_smoke.sh",
+      "doc_path": "docs/LOCALITY_AWARE_REMOTE_PROOF_BATCH_PACKER.md",
+      "emitted_schema": "franken-engine.locality-aware-remote-proof-batch-plan.v1",
+      "upstream_schemas": [
+        "franken-engine.resident-remote-proof-bundle.v1",
+        "franken-engine.remote-proof-artifact-mirror-verification.v1",
+        "franken-engine.warm-target-roi-eviction-ledger.v1"
+      ]
+    },
+    {
+      "surface_id": "remote-proof-salvage-receipt",
+      "contract_json": "docs/remote_proof_salvage_receipt_contract_v1.json",
+      "implementation_script": "scripts/remote_proof_salvage_receipt.sh",
+      "smoke_script": "scripts/e2e/remote_proof_salvage_receipt_smoke.sh",
+      "doc_path": "docs/REMOTE_PROOF_SALVAGE_RECEIPT.md",
+      "emitted_schema": "franken-engine.remote-proof-salvage-receipt.v1",
+      "upstream_schemas": [
+        "franken-engine.resident-remote-proof-bundle.v1",
+        "franken-engine.rch-incident-packet.v1",
+        "franken-engine.rch-worker-truth-parity-report.v1"
+      ]
+    },
+    {
+      "surface_id": "warm-target-roi-eviction-ledger",
+      "contract_json": "docs/warm_target_roi_eviction_contract_v1.json",
+      "implementation_script": "scripts/warm_target_roi_eviction_ledger.sh",
+      "smoke_script": "scripts/e2e/warm_target_roi_eviction_ledger_smoke.sh",
+      "doc_path": "docs/WARM_TARGET_ROI_EVICTION_LEDGER.md",
+      "emitted_schema": "franken-engine.warm-target-roi-eviction-ledger.v1",
+      "upstream_schemas": [
+        "franken-engine.resident-remote-proof-bundle.v1",
+        "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+        "franken-engine.rch-sync-closure-hotspot-ledger.v1"
+      ]
+    }
+  ]
+}

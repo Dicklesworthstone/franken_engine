@@ -1,0 +1,61 @@
+{
+  "schema_version": "frx.flake-quarantine-workflow.contract.v1",
+  "bead_id": "bd-mjh3.20.5",
+  "generated_by": "bd-mjh3.20.5",
+  "flake_detection": {
+    "warning_flake_threshold_millionths": 50000,
+    "high_flake_threshold_millionths": 300000,
+    "required_run_fields": [
+      "run_id",
+      "epoch",
+      "suite_kind",
+      "scenario_id",
+      "outcome",
+      "error_signature",
+      "replay_command_ci",
+      "replay_command_local",
+      "artifact_bundle_id",
+      "related_unit_suites",
+      "root_cause_hypothesis_artifacts",
+      "seed"
+    ]
+  },
+  "reproducer_contract": {
+    "require_ci_and_local_replay_commands": true,
+    "required_bundle_fields": [
+      "bundle_id",
+      "suite_kind",
+      "scenario_id",
+      "seed",
+      "replay_command_ci",
+      "replay_command_local",
+      "artifact_bundle_ids",
+      "run_ids"
+    ]
+  },
+  "quarantine_policy": {
+    "ttl_epochs": 3,
+    "require_owner_binding": true,
+    "require_expiry": true
+  },
+  "gate_confidence": {
+    "require_flake_burden_metrics": true,
+    "require_trendlines": true,
+    "max_flake_burden_millionths": 250000
+  },
+  "linkage_contract": {
+    "require_impacted_unit_suite_links": true,
+    "require_root_cause_hypothesis_artifacts": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "error_code": "FE-FRX-20-5-FLAKE-QUARANTINE-0001",
+    "block_on_missing_owner": true,
+    "block_on_non_expiring_quarantine": true
+  },
+  "operator_verification": [
+    "./scripts/run_frx_flake_quarantine_workflow_suite.sh ci",
+    "./scripts/e2e/frx_flake_quarantine_workflow_replay.sh ci",
+    "jq empty docs/frx_flake_quarantine_workflow_v1.json"
+  ]
+}

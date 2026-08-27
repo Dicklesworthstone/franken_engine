@@ -1,0 +1,161 @@
+{
+  "schema_version": "franken-engine.rgc-react-repro-triage.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.5.7.3",
+  "generated_by": "bd-1lsy.5.7.3",
+  "generated_at_utc": "2026-04-21T00:00:00Z",
+  "policy_id": "policy-rgc-react-repro-triage-v1",
+  "track": {
+    "id": "RGC-405C",
+    "name": "React Repro Triage"
+  },
+  "library_surfaces": [
+    {
+      "schema_version": "franken-engine.minimized-repro-extraction.v1",
+      "bead_id": "bd-1lsy.5.7.3",
+      "policy_id": "RGC-405C",
+      "component": "minimized_repro_extraction"
+    },
+    {
+      "schema_version": "franken-engine.react-repro-triage.v1",
+      "bead_id": "bd-1lsy.5.7.3",
+      "policy_id": "RGC-405C",
+      "component": "react_repro_triage"
+    }
+  ],
+  "failure_class_routes": [
+    {
+      "failure_class": "transform_bug",
+      "owner_bead_id": "bd-1lsy.3.6.1",
+      "owner_team": "jsx-transform",
+      "rationale": "JSX/TSX transform produces incorrect output"
+    },
+    {
+      "failure_class": "resolver_bug",
+      "owner_bead_id": "bd-1lsy.5.8.2",
+      "owner_team": "module-resolution",
+      "rationale": "Module resolver fails to locate React dependency"
+    },
+    {
+      "failure_class": "runtime_semantic_gap",
+      "owner_bead_id": "bd-1lsy.4.9.1",
+      "owner_team": "runtime-semantics",
+      "rationale": "Engine missing required runtime semantics"
+    },
+    {
+      "failure_class": "unsupported_environment",
+      "owner_bead_id": "bd-1lsy.5.9.2",
+      "owner_team": "environment-compat",
+      "rationale": "Platform API not available in engine environment"
+    },
+    {
+      "failure_class": "package_misuse",
+      "owner_bead_id": "bd-1lsy.5.7.3",
+      "owner_team": "docs-triage",
+      "rationale": "User version/config issue — needs advisory update"
+    },
+    {
+      "failure_class": "hook_invariant_violation",
+      "owner_bead_id": "bd-1lsy.3.6.2",
+      "owner_team": "react-lowering",
+      "rationale": "React hook ordering or lifecycle invariant broken"
+    },
+    {
+      "failure_class": "hydration_mismatch",
+      "owner_bead_id": "bd-1lsy.5.7.2",
+      "owner_team": "ssr-hydration",
+      "rationale": "SSR/client hydration output diverges"
+    },
+    {
+      "failure_class": "suspense_divergence",
+      "owner_bead_id": "bd-1lsy.3.6.2",
+      "owner_team": "react-lowering",
+      "rationale": "Suspense boundary behavior differs from React"
+    },
+    {
+      "failure_class": "error_boundary_failure",
+      "owner_bead_id": "bd-1lsy.3.6.2",
+      "owner_team": "react-lowering",
+      "rationale": "Error boundary propagation diverges from React"
+    },
+    {
+      "failure_class": "unclassified",
+      "owner_bead_id": "bd-1lsy.5.7.3",
+      "owner_team": "triage",
+      "rationale": "Failure not yet classified — needs manual investigation"
+    }
+  ],
+  "severity_taxonomy": [
+    {
+      "severity": "critical",
+      "weight": 5,
+      "meaning": "Blocks a core React workflow entirely"
+    },
+    {
+      "severity": "high",
+      "weight": 4,
+      "meaning": "Breaks a common workflow without a clean workaround"
+    },
+    {
+      "severity": "medium",
+      "weight": 3,
+      "meaning": "Engine bug with a known workaround"
+    },
+    {
+      "severity": "low",
+      "weight": 2,
+      "meaning": "Package or environment issue that does not require engine work"
+    },
+    {
+      "severity": "info",
+      "weight": 1,
+      "meaning": "Informational edge-case difference"
+    }
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "seed",
+    "scenario_id",
+    "failure_class",
+    "severity",
+    "owner_bead"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "trace_ids.json",
+    "events.jsonl",
+    "commands.txt",
+    "react_repro_catalog.json",
+    "rgc_react_repro_triage_v1.json",
+    "step_logs/step_000.log"
+  ],
+  "required_test_targets": [
+    "rgc_react_repro_triage",
+    "minimized_repro_extraction_integration",
+    "minimized_repro_extraction_enrichment_integration",
+    "react_repro_triage_integration",
+    "react_repro_triage_enrichment_integration"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_react_repro_triage.sh",
+    "replay_wrapper": "scripts/e2e/rgc_react_repro_triage_replay.sh",
+    "strict_mode": "rch_only_no_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-react-repro-triage.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_react_repro_triage_v1.json",
+    "bash -n scripts/run_rgc_react_repro_triage.sh",
+    "bash -n scripts/e2e/rgc_react_repro_triage_replay.sh",
+    "./scripts/run_rgc_react_repro_triage.sh ci",
+    "env CARGO_TARGET_DIR=$PWD/target_rch_rgc_react_repro_triage_verify rch exec -- cargo test -p frankenengine-engine --test rgc_react_repro_triage",
+    "./scripts/e2e/rgc_react_repro_triage_replay.sh ci",
+    "RGC_REACT_REPRO_TRIAGE_REPLAY_RUN_DIR=artifacts/rgc_react_repro_triage/<timestamp> ./scripts/e2e/rgc_react_repro_triage_replay.sh ci"
+  ]
+}

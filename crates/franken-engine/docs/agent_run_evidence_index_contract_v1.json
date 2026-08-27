@@ -1,0 +1,82 @@
+{
+  "schema_version": "franken-engine.agent-run-evidence-index-contract.v1",
+  "bead_id": "bd-es4nn",
+  "component": "agent_run_evidence_index",
+  "purpose": "Build a deterministic agent-run evidence index linking bead, Agent Mail, commit, validation command, RCH manifest, artifact bundle, and causal trace graph evidence.",
+  "implementation_script": "scripts/agent_run_evidence_index.sh",
+  "smoke_script": "scripts/e2e/agent_run_evidence_index_smoke.sh",
+  "fixtures": "scripts/testdata/agent_run_evidence_index/cases.json",
+  "reused_surfaces": [
+    "scripts/swarm_agent_causal_trace_normalizer.sh",
+    "scripts/swarm_agent_causal_trace_graph.sh",
+    "scripts/run_rgc_evidence_ledger_stitching.sh"
+  ],
+  "input_schema": "franken-engine.agent-run-evidence-index.snapshot.v1",
+  "output_schema": "franken-engine.agent-run-evidence-index.v1",
+  "required_artifacts": [
+    "agent_run_evidence_index.json",
+    "index_edges.jsonl",
+    "causal_trace_normalizer/swarm_agent_causal_trace_events.json",
+    "causal_trace_graph/swarm_agent_causal_trace_graph.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "edge_status_values": [
+    "observed",
+    "missing",
+    "degraded",
+    "fail_closed"
+  ],
+  "required_edge_types": [
+    "bead",
+    "agent_mail_thread",
+    "closeout_commit",
+    "validation_command_transcript",
+    "rch_artifact_manifest",
+    "causal_trace_graph"
+  ],
+  "required_fixture_cases": [
+    "complete_run",
+    "mail_outage",
+    "missing_rch_manifest",
+    "missing_bead",
+    "missing_commit",
+    "missing_command_transcript"
+  ],
+  "required_failure_codes": [
+    "agent_mail_snapshot_missing",
+    "complete_run_missing_artifact_manifest",
+    "complete_run_missing_bead",
+    "complete_run_missing_commit",
+    "complete_run_missing_command_transcript"
+  ],
+  "complete_run_required_evidence": [
+    "matching bead state",
+    "closeout commit",
+    "validation command transcript",
+    "RCH run manifest or artifact bundle hash"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "queries_live_agent_mail": false,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "validation_commands": [
+    "jq empty docs/agent_run_evidence_index_contract_v1.json scripts/testdata/agent_run_evidence_index/cases.json",
+    "bash -n scripts/agent_run_evidence_index.sh scripts/e2e/agent_run_evidence_index_smoke.sh",
+    "shellcheck -x scripts/agent_run_evidence_index.sh scripts/e2e/agent_run_evidence_index_smoke.sh",
+    "bash scripts/e2e/agent_run_evidence_index_smoke.sh check",
+    "bash scripts/e2e/agent_run_evidence_index_smoke.sh selftest",
+    "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check",
+    "git diff --check -- scripts/agent_run_evidence_index.sh scripts/e2e/agent_run_evidence_index_smoke.sh scripts/testdata/agent_run_evidence_index/cases.json docs/agent_run_evidence_index_contract_v1.json docs/AGENT_RUN_EVIDENCE_INDEX.md"
+  ]
+}

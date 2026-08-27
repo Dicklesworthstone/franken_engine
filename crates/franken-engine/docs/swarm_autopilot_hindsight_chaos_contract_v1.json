@@ -1,0 +1,137 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-contract.v1",
+  "bead_id": "bd-09g6k",
+  "depends_on": [
+    "bd-g7bk2",
+    "bd-knanr"
+  ],
+  "script": "scripts/swarm_autopilot_hindsight_chaos.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_hindsight_chaos_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_HINDSIGHT_CHAOS.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_hindsight_chaos/cases.json",
+  "source_bundle_schema_version": "franken-engine.swarm-autopilot-hindsight-source-bundle.v1",
+  "scenarios_schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1",
+  "replay_index_schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-replay-index.v1",
+  "event_schema_version": "franken-engine.swarm-autopilot-hindsight-chaos.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "source_bundle_json",
+      "argument": "--source-bundle-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "scenarios_json": "swarm_autopilot_hindsight_chaos_scenarios.json",
+    "replay_index_json": "swarm_autopilot_hindsight_chaos_replay_index.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "required_source_artifacts": [
+    "brownout_forecast_json",
+    "resource_lease_plan_json",
+    "resource_scarcity_receipts_json",
+    "operator_intent_policy_json",
+    "queue_advisory_bundle_json"
+  ],
+  "scenario_types": [
+    "minimal_perturbation",
+    "brownout_chaos",
+    "stale_ownership_chaos",
+    "local_fallback_contamination"
+  ],
+  "stress_targets": [
+    "forecast",
+    "policy_compiler",
+    "lease_allocator",
+    "recommendation_bundle"
+  ],
+  "required_scenario_fields": [
+    "scenario_id",
+    "scenario_hash",
+    "source_bundle_id",
+    "perturbation_type",
+    "stress_targets",
+    "source_artifacts",
+    "base_state",
+    "delta",
+    "expected_invariant",
+    "replay_command",
+    "replay_ready",
+    "reason_codes"
+  ],
+  "decision_policy": {
+    "pass": "all generated scenarios include replay commands and expected invariants and source material is not stale or contaminated",
+    "fail_closed": "source material is stale or contaminated, required artifact paths are missing, or a generated scenario lacks replay instructions or an expected invariant"
+  },
+  "fail_closed_rules": [
+    "under-specified replay commands or expected invariants fail closed",
+    "local fallback contamination fails closed",
+    "stale source bundles fail closed",
+    "missing source artifact paths fail closed",
+    "schema drift in the source bundle fails closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-LOCAL-FALLBACK",
+    "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-UNDER-SPECIFIED",
+    "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-STALE-SOURCE"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "approves_replay_automatically": false,
+    "promotes_recommendations_automatically": false
+  },
+  "required_doc_text": [
+    "The hindsight chaos generator is advisory only and proof only.",
+    "Minimal perturbations must preserve the original evidence link and record only the delta.",
+    "Brownout chaos must stress RCH slot availability, target-dir pressure, and proof-cache pressure without changing live workers.",
+    "Local fallback chaos is quarantine-only and cannot produce replayable remote-only scenarios.",
+    "Under-specified replay commands or expected invariants fail closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "minimal_perturbation_generation",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_perturbation_type": "minimal_perturbation",
+      "required_stress_target": "forecast"
+    },
+    {
+      "case_id": "brownout_chaos",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_perturbation_type": "brownout_chaos",
+      "required_stress_target": "lease_allocator"
+    },
+    {
+      "case_id": "stale_ownership_chaos",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_perturbation_type": "stale_ownership_chaos",
+      "required_stress_target": "recommendation_bundle"
+    },
+    {
+      "case_id": "local_fallback_chaos",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-LOCAL-FALLBACK"
+    },
+    {
+      "case_id": "under_specified_replay_rejection",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-UNDER-SPECIFIED"
+    }
+  ]
+}

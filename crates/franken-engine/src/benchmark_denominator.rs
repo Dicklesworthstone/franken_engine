@@ -31,7 +31,7 @@ const ERROR_WORKLOAD_NOT_IN_CONTRACT: &str = "FE-BENCH-1010";
 /// (repo root). Embedding it via `include_str!` keeps scoring deterministic and
 /// replay-friendly: the gate never reads the filesystem at runtime.
 pub const WEIGHT_CONTRACT_V1_JSON: &str =
-    include_str!("../../../docs/benchmark_denominator_weights_v1.json");
+    include_str!("../docs/benchmark_denominator_weights_v1.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

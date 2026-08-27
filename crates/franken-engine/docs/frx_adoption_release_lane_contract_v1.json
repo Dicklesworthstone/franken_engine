@@ -1,0 +1,98 @@
+{
+  "schema_version": "frx.adoption-release.lane.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.10.8",
+  "generated_by": "bd-mjh3.10.8",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "lane": {
+    "id": "FRX-10.8",
+    "name": "Adoption/Release Ownership Surface"
+  },
+  "ownership": {
+    "pilot_rollout_governance": {
+      "required": true,
+      "pilot_portfolio_required": true,
+      "ab_rollout_policy_required": true,
+      "cohort_progression_rules_required": true
+    },
+    "stage_gate_authority": {
+      "required": true,
+      "stages": [
+        "alpha",
+        "beta",
+        "ga"
+      ],
+      "artifact_prerequisites_required": true,
+      "halt_conditions_required": true
+    },
+    "claim_publication_integrity": {
+      "required": true,
+      "claim_to_artifact_linkage_required": true,
+      "reproducibility_bundle_required": true,
+      "block_on_incomplete_bundle": true
+    }
+  },
+  "inputs": [
+    "milestone_cutline_outputs",
+    "lane_risk_advisories",
+    "production_telemetry",
+    "pilot_incident_reports"
+  ],
+  "outputs": {
+    "release_decision_bundle": {
+      "required": true,
+      "required_fields": [
+        "stage_gate_id",
+        "decision",
+        "supporting_evidence_ids",
+        "rollback_plan_id",
+        "oncall_readiness_id"
+      ]
+    },
+    "rollout_plan": {
+      "required": true,
+      "required_fields": [
+        "rollout_id",
+        "canary_scope",
+        "cohort_strategy",
+        "halt_condition"
+      ]
+    },
+    "claim_registry_entry": {
+      "required": true,
+      "required_fields": [
+        "claim_id",
+        "artifact_bundle_id",
+        "reproducibility_pack_id",
+        "publication_decision"
+      ]
+    }
+  },
+  "failure_policy": {
+    "mode": "promotion_halt",
+    "halt_promotion_on_stage_gate_failure": true,
+    "halt_promotion_on_rollback_readiness_failure": true,
+    "block_claim_publication_on_incomplete_repro_bundle": true,
+    "require_remediation_before_retry": true
+  },
+  "release_gate_contract": {
+    "stage_gate_requires_artifact_prerequisites": true,
+    "rollback_and_oncall_readiness_required": true,
+    "claim_publication_requires_complete_repro_bundle": true
+  },
+  "logging_contract": {
+    "component": "frx_adoption_release_lane",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "stage_gate_id",
+      "claim_id",
+      "evidence_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

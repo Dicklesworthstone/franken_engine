@@ -1,0 +1,150 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-warehouse-retention-planner-contract.v1",
+  "bead_id": "bd-gra1z.2",
+  "parent_bead_id": "bd-gra1z",
+  "depends_on": [
+    "bd-gra1z.1",
+    "bd-4t4oi"
+  ],
+  "script": "scripts/swarm_autopilot_warehouse_retention_planner.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_warehouse_retention_planner_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_WAREHOUSE_RETENTION_PLANNER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_warehouse_retention_planner/cases.json",
+  "retention_plan_schema_version": "franken-engine.swarm-autopilot-warehouse-retention-plan.v1",
+  "storage_budget_ledger_schema_version": "franken-engine.swarm-autopilot-storage-budget-ledger.v1",
+  "event_schema_version": "franken-engine.swarm-autopilot-warehouse-retention.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "evidence_warehouse_json",
+      "argument": "--evidence-warehouse-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "retention_plan_json": "swarm_autopilot_warehouse_retention_plan.json",
+    "storage_budget_ledger_json": "swarm_autopilot_storage_budget_ledger.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "recognized_retention_classes": [
+    "short_lived_raw_capture",
+    "long_lived_replay_evidence",
+    "audit_log",
+    "policy_snapshot"
+  ],
+  "class_default_estimated_bytes": {
+    "short_lived_raw_capture": 16000,
+    "long_lived_replay_evidence": 32000,
+    "audit_log": 8000,
+    "policy_snapshot": 6000
+  },
+  "storage_pressure_threshold_bytes": {
+    "normal_max": 150000,
+    "elevated_max": 250000,
+    "critical_min": 250001
+  },
+  "required_plan_fields": [
+    "plan_id",
+    "warehouse_hash",
+    "decision",
+    "storage_pressure_state",
+    "retention_window_policy.short_lived_raw_capture_days",
+    "retention_window_policy.long_lived_replay_evidence_days",
+    "retention_window_policy.audit_log_days",
+    "retention_window_policy.policy_snapshot_days",
+    "replay_preserve_sources",
+    "compaction_candidates",
+    "fail_closed_reasons",
+    "remediation_commands",
+    "artifact_paths.retention_plan_json",
+    "artifact_paths.storage_budget_ledger_json",
+    "artifact_paths.evidence_warehouse_json"
+  ],
+  "required_ledger_fields": [
+    "warehouse_hash",
+    "decision",
+    "storage_pressure_state",
+    "summary.artifact_row_count",
+    "summary.total_estimated_bytes",
+    "summary.replay_preserve_count",
+    "summary.compaction_candidate_count",
+    "class_totals",
+    "action_totals",
+    "artifact_paths.storage_budget_ledger_json",
+    "artifact_paths.retention_plan_json"
+  ],
+  "compaction_actions": [
+    "compact_to_summary",
+    "archive_log_excerpt",
+    "archive_snapshot",
+    "retain_replay_only"
+  ],
+  "decision_policy": {
+    "pass": "warehouse evidence is trusted and total estimated bytes stay within the normal threshold",
+    "degraded": "warehouse evidence is trusted but storage pressure is elevated or critical, so compaction advice is required",
+    "fail_closed": "warehouse evidence is stale, contaminated, malformed, or uses unsupported retention classes"
+  },
+  "fail_closed_rules": [
+    "required warehouse input must be valid JSON with required fields",
+    "warehouse decision fail_closed with stale evidence must fail closed",
+    "warehouse decision fail_closed with local fallback contamination must fail closed",
+    "unknown retention classes must fail closed",
+    "missing required artifact rows must fail closed",
+    "replay-preserve sources must not be compacted"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-MISSING-INPUT",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-STALE",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-CONTAMINATED",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-UNKNOWN-RETENTION-CLASS",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-MISSING-ARTIFACT-ROW"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "required_doc_text": [
+    "The planner is advisory only and proof only.",
+    "Storage pressure may degrade the plan without upgrading it to fail_closed.",
+    "Replay-preserve exemptions must not be compacted.",
+    "Stale warehouse evidence must fail closed.",
+    "Local fallback contamination must fail closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "healthy_bounded_retention",
+      "expected_decision": "pass",
+      "expected_storage_pressure_state": "normal"
+    },
+    {
+      "case_id": "storage_pressure_degradation",
+      "expected_decision": "degraded",
+      "expected_storage_pressure_state": "critical"
+    },
+    {
+      "case_id": "replay_preserve_exemption",
+      "expected_decision": "pass",
+      "expected_storage_pressure_state": "normal",
+      "required_replay_preserve_source": "state_snapshot_json"
+    },
+    {
+      "case_id": "stale_warehouse_fail_closed",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-STALE"
+    },
+    {
+      "case_id": "contaminated_evidence_refusal",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-CONTAMINATED"
+    }
+  ]
+}

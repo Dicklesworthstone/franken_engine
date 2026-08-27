@@ -1,0 +1,99 @@
+{
+  "schema_version": "franken-engine.swarm-slo-gate-contract.v1",
+  "bead_id": "bd-u0mau",
+  "track": "SWARM-OPS-P0",
+  "script": "scripts/swarm_slo_gate.sh",
+  "smoke_script": "scripts/e2e/swarm_slo_gate_smoke.sh",
+  "operator_docs": "docs/SWARM_SLO_GATE.md",
+  "fixture_bundle": "scripts/testdata/swarm_slo_gate/cases.json",
+  "input_schema_version": "franken-engine.swarm-slo-gate-input.v1",
+  "report_schema_version": "franken-engine.swarm-slo-gate-report.v1",
+  "run_manifest_schema_version": "franken-engine.swarm-slo-gate-run-manifest.v1",
+  "required_inputs": [
+    "slo_input_json",
+    "admission_budget_plan_json",
+    "rch_rehabilitation_ledger_json",
+    "proof_cache_locality_plan_json",
+    "saturation_replay_report_json"
+  ],
+  "required_outputs": [
+    "slo_gate_report.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "slo_ids": [
+    "max_admitted_heavy_lanes",
+    "minimum_free_rch_slots",
+    "maximum_stale_progress_seconds",
+    "maximum_stale_tracker_age_seconds",
+    "maximum_unknown_dirty_files",
+    "maximum_proof_cache_pressure"
+  ],
+  "fail_closed_sources": [
+    "missing_or_bad_upstream_bundle",
+    "incomplete_worker_pressure_telemetry",
+    "local_fallback_contamination",
+    "upstream_fail_closed"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "green",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "warning",
+      "expected_decision": "warn",
+      "required_error_code": "FE-SWARM-SLO-HEAVY-FANOUT-WARN"
+    },
+    {
+      "case_id": "brownout_fail",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-SLO-HEAVY-FANOUT"
+    },
+    {
+      "case_id": "stale_tracker_fail",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-SLO-STALE-TRACKER"
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected_decision": "fail_closed",
+      "required_error_code": "local_fallback_contamination"
+    }
+  ],
+  "required_report_fields": [
+    "schema_version",
+    "bead_id",
+    "decision",
+    "overall_verdict",
+    "thresholds",
+    "observed",
+    "slo_verdicts",
+    "fail_closed_reasons",
+    "summary.every_fail_has_error_code_and_remediation",
+    "hash_basis.report_hash"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "gate_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false
+  },
+  "verification_commands": [
+    "bash -n scripts/swarm_slo_gate.sh scripts/e2e/swarm_slo_gate_smoke.sh",
+    "shellcheck -x scripts/swarm_slo_gate.sh scripts/e2e/swarm_slo_gate_smoke.sh",
+    "jq empty docs/swarm_slo_gate_contract_v1.json scripts/testdata/swarm_slo_gate/cases.json",
+    "bash scripts/e2e/swarm_slo_gate_smoke.sh check",
+    "bash scripts/e2e/swarm_slo_gate_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_SLO_GATE.md docs/swarm_slo_gate_contract_v1.json scripts/swarm_slo_gate.sh scripts/e2e/swarm_slo_gate_smoke.sh scripts/testdata/swarm_slo_gate/cases.json"
+  ]
+}

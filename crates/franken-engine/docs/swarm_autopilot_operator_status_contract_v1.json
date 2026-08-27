@@ -1,0 +1,332 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-operator-status-contract.v1",
+  "bead_id": "bd-bhddc",
+  "extension_beads": [
+    "bd-gra1z.5",
+    "bd-00ofm.5"
+  ],
+  "depends_on": [
+    "bd-8e5cw",
+    "bd-09g6k",
+    "bd-gra1z.2",
+    "bd-gra1z.3",
+    "bd-gra1z.4",
+    "bd-00ofm.2",
+    "bd-00ofm.3",
+    "bd-00ofm.4"
+  ],
+  "script": "scripts/swarm_autopilot_operator_status_bundle.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_OPERATOR_STATUS.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_operator_status/cases.json",
+  "operator_status_schema_version": "franken-engine.swarm-autopilot-operator-status.v1",
+  "panel_bundle_schema_version": "franken-engine.swarm-autopilot-frankentui-panels.v1",
+  "required_inputs": [
+    {
+      "source_id": "operator_intent_policy_json",
+      "argument": "--operator-intent-policy-json",
+      "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+      "required": true
+    },
+    {
+      "source_id": "brownout_forecaster_json",
+      "argument": "--brownout-forecaster-json",
+      "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+      "required": true
+    },
+    {
+      "source_id": "resource_lease_plan_json",
+      "argument": "--resource-lease-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-resource-lease-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "resource_scarcity_receipts_json",
+      "argument": "--resource-scarcity-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-resource-scarcity-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "recommendation_bundle_json",
+      "argument": "--recommendation-bundle-json",
+      "schema_version": "franken-engine.swarm-autopilot-recommendation-bundle.v1",
+      "required": true
+    },
+    {
+      "source_id": "dashboard_projection_json",
+      "argument": "--dashboard-projection-json",
+      "schema_version": "franken-engine.swarm-autopilot-dashboard-projection.v1",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_chaos_scenarios_json",
+      "argument": "--hindsight-chaos-scenarios-json",
+      "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_chaos_replay_index_json",
+      "argument": "--hindsight-chaos-replay-index-json",
+      "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-replay-index.v1",
+      "required": true
+    },
+    {
+      "source_id": "warehouse_retention_plan_json",
+      "argument": "--warehouse-retention-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-warehouse-retention-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "storage_budget_ledger_json",
+      "argument": "--storage-budget-ledger-json",
+      "schema_version": "franken-engine.swarm-autopilot-storage-budget-ledger.v1",
+      "required": true
+    },
+    {
+      "source_id": "promotion_candidates_json",
+      "argument": "--promotion-candidates-json",
+      "schema_version": "franken-engine.swarm-autopilot-promotion-candidates.v1",
+      "required": true
+    },
+    {
+      "source_id": "promotion_candidate_receipts_json",
+      "argument": "--promotion-candidate-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "anomaly_cohorts_json",
+      "argument": "--anomaly-cohorts-json",
+      "schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
+      "required": true
+    },
+    {
+      "source_id": "cohort_diff_receipts_json",
+      "argument": "--cohort-diff-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "fingerprint_delta_plan_json",
+      "argument": "--fingerprint-delta-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-fingerprint-delta-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "replay_recipe_bundle_json",
+      "argument": "--replay-recipe-bundle-json",
+      "schema_version": "franken-engine.swarm-autopilot-replay-recipe-bundle.v1",
+      "required": true
+    },
+    {
+      "source_id": "replay_recipe_index_json",
+      "argument": "--replay-recipe-index-json",
+      "schema_version": "franken-engine.swarm-autopilot-replay-recipe-index.v1",
+      "required": true
+    },
+    {
+      "source_id": "forensic_hypothesis_summary_json",
+      "argument": "--forensic-hypothesis-summary-json",
+      "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1",
+      "required": true
+    },
+    {
+      "source_id": "forensic_hypothesis_evidence_json",
+      "argument": "--forensic-hypothesis-evidence-json",
+      "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-evidence.v1",
+      "required": true
+    }
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "artifacts": {
+    "operator_status_json": "swarm_autopilot_operator_status.json",
+    "panel_bundle_json": "swarm_autopilot_frankentui_panels.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "required_sections": [
+    "forecast_state",
+    "policy_state",
+    "lease_scarcity",
+    "recommendation_rank",
+    "safe_mode_state",
+    "required_operator_action",
+    "chaos_replay_readiness",
+    "warehouse_lifecycle",
+    "forensic_replay"
+  ],
+  "required_panels": [
+    "forecast_state",
+    "policy_state",
+    "lease_scarcity",
+    "recommendation_rank",
+    "safe_mode_state",
+    "required_operator_action",
+    "chaos_replay_readiness",
+    "warehouse_lifecycle",
+    "forensic_replay"
+  ],
+  "display_states": [
+    "healthy",
+    "degraded",
+    "missing",
+    "stale",
+    "blocked",
+    "fail_closed"
+  ],
+  "renderer_contract": {
+    "provider": "/dp/frankentui",
+    "shipped_in_franken_engine": false,
+    "local_renderer": false,
+    "no_local_tui_runtime": true
+  },
+  "required_status_fields": [
+    "operator_status_id",
+    "decision",
+    "truth_state",
+    "summary.overall_state",
+    "summary.top_action",
+    "summary.safe_mode_active",
+    "summary.warehouse_lifecycle_state",
+    "summary.storage_pressure_state",
+    "summary.top_promotion_candidate_type",
+    "summary.anomaly_cohort_availability",
+    "summary.forensic_replay_state",
+    "summary.forensic_top_hypothesis_pivot",
+    "summary.replay_ready_count",
+    "summary.degraded_panel_count",
+    "summary.fail_closed_panel_count",
+    "sections",
+    "artifact_paths.operator_status_json",
+    "artifact_paths.panel_bundle_json"
+  ],
+  "required_panel_bundle_fields": [
+    "panel_bundle_id",
+    "decision",
+    "renderer_contract.provider",
+    "renderer_contract.no_local_tui_runtime",
+    "status_bar.summary.panel_count",
+    "panels[].panel_id",
+    "panels[].display_state",
+    "panels[].semantic_theme_token",
+    "panels[].focus_order",
+    "panels[].aria_label",
+    "panels[].supports_tiny_layout",
+    "panels[].visible_reasons",
+    "mutation_policy.local_renderer"
+  ],
+  "fail_closed_rules": [
+    "hidden panel state fails closed",
+    "missing evidence links fail closed",
+    "fail-closed upstream policy, forecast, lease plan, recommendation bundle, or chaos replay inputs fail closed",
+    "fail-closed warehouse retention, promotion, or anomaly cohort inputs fail closed",
+    "warehouse lifecycle artifact paths for retention plan, storage ledger, promotion receipts, and anomaly cohorts remain visible",
+    "fail-closed cohort diff, replay recipe, or forensic hypothesis inputs fail closed",
+    "forensic replay artifact paths for cohort diffs, replay recipes, and hypotheses remain visible",
+    "unsafe mutation-policy claims fail closed"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "healthy_autopilot",
+      "expected_decision": "pass",
+      "required_panel_id": "forecast_state",
+      "required_panel_state": "healthy"
+    },
+    {
+      "case_id": "degraded_forecast",
+      "expected_decision": "degraded",
+      "required_panel_id": "forecast_state",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "fail_closed_policy_conflict",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "safe_mode_recommendation",
+      "expected_decision": "safe_mode",
+      "required_panel_id": "safe_mode_state",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "frankentui_panel_projection",
+      "expected_decision": "pass",
+      "required_panel_id": "required_operator_action",
+      "required_top_action": "preserve_urgent_rch_slack"
+    },
+    {
+      "case_id": "healthy_warehouse_lifecycle_handoff",
+      "expected_decision": "pass",
+      "required_panel_id": "warehouse_lifecycle",
+      "required_panel_state": "healthy"
+    },
+    {
+      "case_id": "degraded_storage_pressure",
+      "expected_decision": "degraded",
+      "required_panel_id": "warehouse_lifecycle",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "blocked_contradictory_hindsight",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "contaminated_local_fallback_propagation",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "healthy_reference_comparison",
+      "expected_decision": "pass",
+      "required_panel_id": "forensic_replay",
+      "required_panel_state": "healthy"
+    },
+    {
+      "case_id": "blocked_locality_contradiction_forensics",
+      "expected_decision": "degraded",
+      "required_panel_id": "forensic_replay",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "contaminated_replay_refusal",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "stale_forensic_evidence_propagation",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    }
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "local_renderer": false
+  },
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_operator_status_bundle.sh",
+    "bash -n scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_operator_status_bundle.sh scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
+    "jq empty docs/swarm_autopilot_operator_status_contract_v1.json scripts/testdata/swarm_autopilot_operator_status/cases.json",
+    "bash scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_OPERATOR_STATUS.md docs/swarm_autopilot_operator_status_contract_v1.json scripts/swarm_autopilot_operator_status_bundle.sh scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh scripts/testdata/swarm_autopilot_operator_status/cases.json"
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "schema_version": "frx.governance-evidence.lane.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.10.7",
+  "generated_by": "bd-mjh3.10.7",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "lane": {
+    "id": "FRX-10.7",
+    "name": "Governance/Evidence Ownership Surface"
+  },
+  "ownership": {
+    "schema_governance": {
+      "required": true,
+      "decision_schema_versioning_required": true,
+      "evidence_schema_versioning_required": true,
+      "migration_safety_attestation_required": true
+    },
+    "policy_signing_and_verification": {
+      "required": true,
+      "signing_required": true,
+      "verification_required": true,
+      "fail_closed_on_signature_or_digest_error": true,
+      "key_rotation_overlap_required": true
+    },
+    "explainability_surfaces": {
+      "required": true,
+      "must_link_machine_readable_evidence_ids": true,
+      "free_form_logs_alone_disallowed": true
+    }
+  },
+  "inputs": [
+    "runtime_lane_event_stream",
+    "compiler_lane_event_stream",
+    "verification_lane_event_stream",
+    "security_adversarial_findings",
+    "incident_artifacts"
+  ],
+  "outputs": {
+    "evidence_ledger": {
+      "required": true,
+      "append_only": true,
+      "required_query_fields": [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "evidence_id"
+      ]
+    },
+    "policy_conformance_report": {
+      "required": true,
+      "required_fields": [
+        "policy_id",
+        "schema_version",
+        "signature_status",
+        "digest_status",
+        "outcome"
+      ]
+    },
+    "operator_guidance_artifacts": {
+      "required": true,
+      "must_include_replay_command": true,
+      "must_include_stable_evidence_ids": true
+    }
+  },
+  "failure_policy": {
+    "mode": "conservative_deterministic",
+    "disable_adaptive_behavior_on_integrity_failure": true,
+    "incident_artifact_required": true,
+    "block_promotion_until_revalidated": true
+  },
+  "release_gate_contract": {
+    "schema_migration_must_be_attested": true,
+    "policy_verification_must_be_pass": true,
+    "evidence_linkage_must_be_complete": true
+  },
+  "logging_contract": {
+    "component": "frx_governance_evidence_lane",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "evidence_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

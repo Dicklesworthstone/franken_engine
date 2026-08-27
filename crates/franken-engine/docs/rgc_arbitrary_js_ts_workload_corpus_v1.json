@@ -1,0 +1,396 @@
+{
+  "schema_version": "franken-engine.rgc-arbitrary-js-ts-workload-corpus.v1",
+  "bead_id": "bd-1lsy.8.4.1",
+  "generated_at_utc": "2026-03-10T00:00:00Z",
+  "normative_doc": "docs/RGC_ARBITRARY_JS_TS_WORKLOAD_CORPUS_V1.md",
+  "runtime_targets": [
+    "franken_engine_main",
+    "node_lts",
+    "bun_stable"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "env.json",
+    "repro.lock",
+    "benchmark_env_manifest.json",
+    "behavior_equivalence_summary.json"
+  ],
+  "selection_contract": {
+    "provenance_required": true,
+    "user_value_justification_required": true,
+    "report_only_before_gate": true,
+    "fail_closed_on_missing_sources": true
+  },
+  "required_observability_variants": [
+    "exact_capture",
+    "budgeted_telemetry",
+    "incident_mode"
+  ],
+  "variant_matrix": {
+    "must_cover_families": [
+      "parse-heavy-pipelines",
+      "async-orchestration",
+      "module-graph-transitions",
+      "ts-normalization-heavy"
+    ]
+  },
+  "coverage_axes": [
+    "cold_start",
+    "warm_image",
+    "unicode_text",
+    "module_resolution",
+    "native_addon",
+    "policy_pressure",
+    "telemetry_mode",
+    "async_ordering",
+    "ts_normalization"
+  ],
+  "bootstrap_sources": [
+    {
+      "source_id": "extension_heavy_matrix",
+      "source_kind": "repo_doc",
+      "source_locator": "docs/extension_heavy_workload_matrix_v1.json",
+      "selection_rationale": "Existing deterministic scale-profile matrix for startup, churn, and resource-pressure workload families."
+    },
+    {
+      "source_id": "extension_heavy_golden_outputs",
+      "source_kind": "repo_doc",
+      "source_locator": "docs/extension_heavy_golden_outputs_v1.json",
+      "selection_rationale": "Existing behavior-equivalence digests and publication contract for benchmark cases."
+    },
+    {
+      "source_id": "benchmark_harness_method",
+      "source_kind": "repo_doc",
+      "source_locator": "docs/RGC_701_BENCHMARK_HARNESS_METHOD_V1.md",
+      "selection_rationale": "Current replay, artifact, runtime-pin, and fairness requirements for the benchmark harness."
+    },
+    {
+      "source_id": "react_behavior_corpus",
+      "source_kind": "conformance_corpus",
+      "source_locator": "docs/frx_canonical_react_behavior_corpus_v1.json",
+      "selection_rationale": "Checked-in React behavior corpus covering async, SSR, hydration, and event-order cases."
+    },
+    {
+      "source_id": "security_conformance_manifest",
+      "source_kind": "conformance_corpus",
+      "source_locator": "crates/franken-engine/tests/security_conformance/corpus_manifest.toml",
+      "selection_rationale": "Existing hostcall- and attack-sensitive workloads anchor resource-spiky and policy-heavy scenarios."
+    },
+    {
+      "source_id": "lockstep_runtime_pins",
+      "source_kind": "test_fixture",
+      "source_locator": "crates/franken-engine/tests/fixtures/lockstep_runtimes.toml",
+      "selection_rationale": "Pinned Node and Bun references for parity-facing workload selection."
+    },
+    {
+      "source_id": "native_addon_membrane_suite",
+      "source_kind": "integration_test",
+      "source_locator": "crates/franken-engine/tests/native_addon_membrane_integration.rs",
+      "selection_rationale": "Current native-addon safety and membrane behavior surface for addon-backed workloads."
+    },
+    {
+      "source_id": "parser_benchmark_protocol",
+      "source_kind": "test_fixture",
+      "source_locator": "crates/franken-engine/tests/fixtures/parser_benchmark_protocol_v1.json",
+      "selection_rationale": "Existing parser benchmark protocol contract anchors parse-heavy and TS-adjacent workload selection."
+    },
+    {
+      "source_id": "benchmark_e2e_harness",
+      "source_kind": "source_module",
+      "source_locator": "crates/franken-engine/src/benchmark_e2e.rs",
+      "selection_rationale": "Current benchmark family and fairness implementation surface for executable workload families."
+    }
+  ],
+  "family_definitions": [
+    {
+      "family_id": "regex-unicode-text",
+      "selection_rationale": "Represent unicode-heavy regex and normalization pipelines that dominate text workloads.",
+      "user_value_justification": "Users care about text correctness and latency under realistic unicode-heavy traffic, not ASCII-only microbenches.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "parser_benchmark_protocol",
+        "lockstep_runtime_pins"
+      ]
+    },
+    {
+      "family_id": "string-transform-pipelines",
+      "selection_rationale": "Represent chained string transforms, splitting, joining, and template-heavy build-style flows.",
+      "user_value_justification": "Build tooling and ETL-like application code spend disproportionate time in string-heavy transforms.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "parser_benchmark_protocol",
+        "benchmark_e2e_harness"
+      ]
+    },
+    {
+      "family_id": "npm-resolution-graphs",
+      "selection_rationale": "Represent startup and reload paths dominated by package graph traversal and resolution churn.",
+      "user_value_justification": "Real package startup is graph-shaped and cache-sensitive rather than a flat import toy case.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "extension_heavy_matrix",
+        "lockstep_runtime_pins"
+      ]
+    },
+    {
+      "family_id": "allocation-churn-iterators",
+      "selection_rationale": "Represent iterator pipelines, object churn, and allocation-heavy data walks.",
+      "user_value_justification": "Allocation behavior and iterator pressure show up directly in server and CLI throughput variance.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "benchmark_e2e_harness",
+        "extension_heavy_matrix"
+      ]
+    },
+    {
+      "family_id": "megamorphic-branch-dispatch",
+      "selection_rationale": "Represent branch-heavy dispatch over unstable shapes and mixed code paths.",
+      "user_value_justification": "Web and tooling workloads often degrade on polymorphic dispatch long before they hit arithmetic ceilings.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "benchmark_e2e_harness",
+        "extension_heavy_golden_outputs"
+      ]
+    },
+    {
+      "family_id": "vectorizable-builtin-kernels",
+      "selection_rationale": "Represent builtin-heavy kernels where vectorization or specialization could produce real wins.",
+      "user_value_justification": "Supremacy claims need at least one honest kernel family where builtin acceleration matters.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "parser_benchmark_protocol",
+        "benchmark_harness_method"
+      ]
+    },
+    {
+      "family_id": "effect-hostcall-spikes",
+      "selection_rationale": "Represent effect-heavy and hostcall-heavy bursts under policy pressure.",
+      "user_value_justification": "Extension-heavy users see hostcall bursts, budget churn, and policy transitions in production.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "security_conformance_manifest",
+        "extension_heavy_matrix"
+      ]
+    },
+    {
+      "family_id": "required-native-addon-packages",
+      "selection_rationale": "Represent packages that rely on native addons or membrane-covered native bridges.",
+      "user_value_justification": "Ecosystem credibility drops immediately if native-addon packages are excluded by convenience.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "native_addon_membrane_suite",
+        "benchmark_harness_method"
+      ]
+    },
+    {
+      "family_id": "startup-storm-cold-image",
+      "selection_rationale": "Represent cold-process startup and initial graph materialization under bursty load.",
+      "user_value_justification": "Cold-start wall clock is a first-order product metric for CLIs, lambdas, and worker fleets.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "extension_heavy_matrix",
+        "benchmark_e2e_harness"
+      ]
+    },
+    {
+      "family_id": "startup-storm-warm-image",
+      "selection_rationale": "Represent warm-image, primed-cache, or already-materialized startup scenarios distinctly from cold-start.",
+      "user_value_justification": "Warm-start wins should not be silently conflated with cold-start improvements.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "extension_heavy_matrix",
+        "benchmark_harness_method"
+      ]
+    },
+    {
+      "family_id": "cache-miss-metadata-stressors",
+      "selection_rationale": "Represent metadata, symbol, and cache-miss-heavy execution where little compute hides real latency.",
+      "user_value_justification": "Metadata misses often dominate real latency despite weak synthetic CPU signatures.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "extension_heavy_matrix",
+        "benchmark_e2e_harness"
+      ]
+    },
+    {
+      "family_id": "observability-sensitive-variants",
+      "selection_rationale": "Represent workload cases whose score and parity claims are sensitive to capture mode.",
+      "user_value_justification": "Performance claims that disappear under exact capture or incident mode are not operationally trustworthy.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "benchmark_harness_method",
+        "extension_heavy_golden_outputs"
+      ]
+    },
+    {
+      "family_id": "parse-heavy-pipelines",
+      "selection_rationale": "Represent bundler-, loader-, and transpiler-like paths where parse dominates.",
+      "user_value_justification": "Parser cost remains visible in toolchain startup and repeated file processing.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "parser_benchmark_protocol",
+        "benchmark_harness_method"
+      ]
+    },
+    {
+      "family_id": "async-orchestration",
+      "selection_rationale": "Represent promise-heavy, stream-heavy, and transition-heavy async coordination.",
+      "user_value_justification": "User-visible latency is often dominated by async ordering and queue behavior rather than raw instruction throughput.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "react_behavior_corpus",
+        "lockstep_runtime_pins"
+      ]
+    },
+    {
+      "family_id": "module-graph-transitions",
+      "selection_rationale": "Represent import graph transitions, hydration-like entry changes, and mixed module surfaces.",
+      "user_value_justification": "Graph shape and module transitions decide real startup and reload behavior.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "react_behavior_corpus",
+        "lockstep_runtime_pins"
+      ]
+    },
+    {
+      "family_id": "ts-normalization-heavy",
+      "selection_rationale": "Represent TypeScript-heavy inputs that exercise normalization and pre-execution transforms.",
+      "user_value_justification": "Real users hand FrankenEngine TS-rich codebases and expect honest ingestion costs.",
+      "baseline_targets": [
+        "node_lts",
+        "bun_stable"
+      ],
+      "observability_variants": [
+        "exact_capture",
+        "budgeted_telemetry",
+        "incident_mode"
+      ],
+      "bootstrap_source_ids": [
+        "react_behavior_corpus",
+        "parser_benchmark_protocol"
+      ]
+    }
+  ]
+}

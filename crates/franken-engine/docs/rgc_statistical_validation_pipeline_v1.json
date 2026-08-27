@@ -1,0 +1,75 @@
+{
+  "schema_version": "franken-engine.rgc-statistical-validation-pipeline.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.8.2",
+  "policy_id": "policy-rgc-statistical-validation-pipeline-v1",
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "scenario_id",
+    "workload_id",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "summary.md",
+    "env.json",
+    "repro.lock",
+    "step_logs/",
+    "support_bundle/stats_verdict_report.json"
+  ],
+  "required_test_targets": [
+    "rgc_statistical_validation_pipeline",
+    "performance_statistical_validation_integration"
+  ],
+  "thresholds": {
+    "max_cv_millionths": 120000,
+    "warning_regression_millionths": 10000,
+    "fail_regression_millionths": 25000,
+    "max_p_value_millionths": 50000,
+    "min_effect_size_millionths": 5000,
+    "confidence_level_millionths": 950000
+  },
+  "failure_scenarios": [
+    {
+      "scenario_id": "missing_benchmark_metadata",
+      "path_type": "failure",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-702-INTEGRITY-0001",
+      "expected_message_fragment": "missing benchmark metadata hash"
+    },
+    {
+      "scenario_id": "high_variance_quarantine",
+      "path_type": "failure",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-702-VARIANCE-0003",
+      "expected_message_fragment": "coefficient of variation exceeds policy"
+    },
+    {
+      "scenario_id": "regression_threshold_breach",
+      "path_type": "failure",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-702-REGRESSION-0004",
+      "expected_message_fragment": "regression exceeds fail threshold"
+    }
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_statistical_validation_pipeline.sh",
+    "replay_wrapper": "scripts/e2e/rgc_statistical_validation_pipeline_replay.sh",
+    "strict_mode": "rch_only_no_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-statistical-validation-pipeline.run-manifest.v1"
+  },
+  "operator_verification": [
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_statistical_validation_pipeline_verify cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration",
+    "./scripts/run_rgc_statistical_validation_pipeline.sh ci",
+    "./scripts/e2e/rgc_statistical_validation_pipeline_replay.sh ci",
+    "jq empty docs/rgc_statistical_validation_pipeline_v1.json"
+  ]
+}

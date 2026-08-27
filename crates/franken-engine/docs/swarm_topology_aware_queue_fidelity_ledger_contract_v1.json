@@ -1,0 +1,130 @@
+{
+  "schema_version": "franken-engine.swarm-topology-aware-queue-fidelity-ledger-contract.v1",
+  "bead_id": "bd-q1zfn",
+  "parent_bead_id": "bd-2pn2x",
+  "depends_on": [
+    "bd-utk1x",
+    "bd-cocup"
+  ],
+  "script": "scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
+  "smoke_script": "scripts/e2e/swarm_topology_aware_queue_fidelity_ledger_smoke.sh",
+  "docs": "docs/SWARM_TOPOLOGY_AWARE_QUEUE_FIDELITY_LEDGER.md",
+  "fixture_bundle": "scripts/testdata/swarm_topology_aware_queue_fidelity_ledger/fixtures.json",
+  "upstream_queue_advisory_contract": "docs/swarm_topology_aware_queue_scorer_contract_v1.json",
+  "receipt_schema_version": "franken-engine.swarm-topology-aware-queue-fidelity-receipt.v1",
+  "drift_ledger_schema_version": "franken-engine.swarm-topology-aware-queue-drift-ledger.v1",
+  "source_schema_version": "franken-engine.swarm-topology-aware-queue-fidelity-sources.v1",
+  "required_inputs": [
+    {
+      "source_id": "queue_advisory_bundle_json",
+      "argument": "--queue-advisory-bundle-json",
+      "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+      "required": true
+    },
+    {
+      "source_id": "placement_evidence_ledger_json",
+      "argument": "--placement-evidence-ledger-json",
+      "schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+      "required": true
+    },
+    {
+      "source_id": "queue_artifact_json",
+      "argument": "--queue-artifact-json",
+      "schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+      "required": true
+    },
+    {
+      "source_id": "bottleneck_report_json",
+      "argument": "--bottleneck-report-json",
+      "schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+      "required": true
+    },
+    {
+      "source_id": "locality_outcome_samples_json",
+      "argument": "--locality-outcome-samples-json",
+      "schema_version": "franken-engine.swarm-topology-aware-queue-outcomes.v1",
+      "required": true
+    }
+  ],
+  "artifact_paths": {
+    "fidelity_receipt_json": "swarm_topology_aware_queue_fidelity_receipt.json",
+    "drift_ledger_json": "swarm_topology_aware_queue_drift_ledger.json",
+    "sources_json": "swarm_topology_aware_queue_fidelity_sources.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "summary_md": "summary.md"
+  },
+  "aggregate_metrics": [
+    "locality_match_rate_millionths",
+    "cache_reuse_confirmation_rate_millionths",
+    "drained_worker_avoidance_rate_millionths",
+    "contradiction_rate_millionths",
+    "evidence_completeness_rate_millionths",
+    "confidence_band"
+  ],
+  "reason_codes": [
+    "matched_locality_advisory",
+    "cache_cold_no_reuse_credit",
+    "cache_reuse_outcome_confirmed",
+    "cache_reuse_outcome_missed",
+    "locality_drift_observed",
+    "drained_worker_avoidance_confirmed",
+    "probe_required_worker_avoidance_confirmed",
+    "observed_excluded_worker_used",
+    "missing_outcome_evidence",
+    "partial_upstream_evidence",
+    "partial_receipt_evidence",
+    "contradictory_receipt",
+    "local_fallback_contaminated"
+  ],
+  "fail_closed_rules": [
+    "Missing required advisory, placement, queue, bottleneck, or outcome artifacts fail closed.",
+    "Malformed advisory, placement, queue, bottleneck, or outcome artifacts fail closed.",
+    "Duplicate or unknown outcome task ids fail closed.",
+    "Local fallback contamination fails closed and invalidates remote-only locality truth.",
+    "The ledger must not claim it changed the live queue or repaired placement automatically."
+  ],
+  "blocked_rules": [
+    "Contradictory locality drift blocks the ledger.",
+    "Observed use of an excluded worker blocks the ledger.",
+    "Contradictory placement receipt evidence blocks the ledger.",
+    "Blocked upstream queue advice remains blocked in the fidelity ledger."
+  ],
+  "degraded_rules": [
+    "Missing task-level outcome evidence degrades confidence.",
+    "Cache reuse misses degrade the ledger when hot-cache reuse was expected.",
+    "Conservative drained-worker avoidance success remains degraded instead of being silently upgraded to healthy.",
+    "Degraded upstream advisory or degraded placement evidence stays degraded."
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false
+  },
+  "selftest_scenarios": [
+    "healthy_locality_match",
+    "cache_cold_fallback_no_false_reuse_credit",
+    "blocked_locality_drift",
+    "degraded_drained_worker_avoidance_success",
+    "blocked_drained_worker_avoidance_failure",
+    "contaminated_local_fallback"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
+    "bash -n scripts/e2e/swarm_topology_aware_queue_fidelity_ledger_smoke.sh",
+    "shellcheck -x scripts/swarm_topology_aware_queue_fidelity_ledger.sh scripts/e2e/swarm_topology_aware_queue_fidelity_ledger_smoke.sh",
+    "jq empty docs/swarm_topology_aware_queue_fidelity_ledger_contract_v1.json scripts/testdata/swarm_topology_aware_queue_fidelity_ledger/fixtures.json",
+    "bash scripts/e2e/swarm_topology_aware_queue_fidelity_ledger_smoke.sh check",
+    "bash scripts/e2e/swarm_topology_aware_queue_fidelity_ledger_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_TOPOLOGY_AWARE_QUEUE_FIDELITY_LEDGER.md docs/swarm_topology_aware_queue_fidelity_ledger_contract_v1.json scripts/swarm_topology_aware_queue_fidelity_ledger.sh scripts/e2e/swarm_topology_aware_queue_fidelity_ledger_smoke.sh scripts/testdata/swarm_topology_aware_queue_fidelity_ledger/fixtures.json"
+  ]
+}

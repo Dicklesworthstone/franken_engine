@@ -1,0 +1,256 @@
+{
+  "schema_version": "franken-engine.rgc-docs-help-surface-audit.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.10.11.1",
+  "policy_id": "policy-rgc-docs-help-surface-audit-v1",
+  "audited_inputs": [
+    "README.md",
+    "crates/franken-engine/src/bin/frankenctl.rs",
+    "crates/franken-engine/tests/frankenctl_cli.rs"
+  ],
+  "supported_top_level_commands": [
+    "version",
+    "compile",
+    "run",
+    "doctor",
+    "verify",
+    "benchmark",
+    "replay",
+    "react",
+    "gates",
+    "reports",
+    "test",
+    "synth",
+    "orchestrate",
+    "runtime"
+  ],
+  "required_help_fragments": [
+    "frankenctl usage:",
+    "PRODUCTION-READY SURFACES:",
+    "frankenctl version",
+    "frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
+    "frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+    "frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir <path>]",
+    "frankenctl verify compile-artifact --input <artifact.json> [--output <report.json>]",
+    "frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary] [--output <report.json>]",
+    "frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
+    "frankenctl benchmark score --input <publication_gate_input.json>",
+    "frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
+    "frankenctl replay run --trace <trace.json>",
+    "frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
+    "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
+    "frankenctl gates <gate-type> [options]  # validation gates - use for dev/CI only",
+    "frankenctl reports <report-type> [options]  # analysis reports - use for dev/CI only",
+    "frankenctl test <test-type> [options]  # testing tools - use for dev/CI only",
+    "frankenctl synth <synth-type> [options]  # synthesis tools - experimental",
+    "frankenctl orchestrate <orchestrate-type> [options]  # orchestration tools - experimental",
+    "frankenctl runtime <runtime-type> [options]  # runtime diagnostics - experimental"
+  ],
+  "banned_help_fragments": [
+    "frankenctl init",
+    "frankenctl ext compile",
+    "frankenctl shadow-run",
+    "frankenctl promote",
+    "frankenctl decision show",
+    "frankenctl receipt verify",
+    "frankenctl quarantine",
+    "frankenctl revocation",
+    "frankenctl lockstep",
+    "frankenctl tui",
+    "frankenctl api serve"
+  ],
+  "required_readme_fragments": [
+    "The shipped `frankenctl` CLI provides core execution surfaces and selective ",
+    "operator tooling. **Shipped surfaces**: `version`, `compile`, `run`, `doctor`, ",
+    "`verify`, `benchmark`, `replay`, `react`, `gates`, `reports`, `test`, `synth`, ",
+    "`orchestrate`, and `runtime`. See [Unsupported Surfaces](#unsupported-surfaces) ",
+    "frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script",
+    "frankenctl verify compile-artifact --input ./artifacts/demo.compile.json",
+    "frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json",
+    "frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor",
+    "frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J... --summary",
+    "frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks",
+    "frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json",
+    "frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json",
+    "frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace ./artifacts/replay/live-trace.json --mode validate --out ./artifacts/replay_report.json",
+    "## RGC Docs and Help Surface Audit",
+    "The replay wrapper resolves the latest complete audit bundle, warns on",
+    "Each run also emits `readme_claim_sensitivity_checks.jsonl`, which logs every claim-sensitive README section, matched terms, required proof-state qualifiers, and pass/fail verdict.",
+    "./scripts/run_rgc_docs_help_surface_audit.sh ci",
+    "./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci",
+    "explicit proof-state tracking for cryptographic decision receipts and fleet-scale containment.",
+    "| Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim |",
+    "| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. **Note**: De-escalation unimplemented - containment operates as permanent ratchet |",
+    "For integration builds with the complete asupersync ecosystem:",
+    "Governance and policy enforcement integration surfaces compile and run behind their current proof gates",
+    "Cross-repository coordination surfaces are enabled where sibling repositories are present",
+    "TEE attestation bindings and bounded fleet quarantine remain HYPOTHESIS/TARGETED security claims until promoted by live proof artifacts",
+    "Cryptographic decision receipts compile their integration seams and validation gates, but transparency-log and TEE-backed production guarantees remain governed by the claim-to-proof matrix"
+  ],
+  "banned_readme_fragments": [
+    "frankenctl init",
+    "frankenctl keys generate",
+    "frankenctl control-plane bind",
+    "frankenctl ext compile",
+    "frankenctl ext verify",
+    "frankenctl shadow-run",
+    "frankenctl promote",
+    "frankenctl drill run",
+    "frankenctl decision show",
+    "frankenctl decision tail",
+    "frankenctl evidence export",
+    "frankenctl receipt verify",
+    "frankenctl replay verify",
+    "frankenctl replay run --trace latest",
+    "frankenctl quarantine",
+    "frankenctl revocation",
+    "frankenctl lockstep",
+    "frankenctl tui",
+    "frankenctl api serve",
+    "frankenctl run --config",
+    "frankenctl benchmark run --suite",
+    "frankenctl doctor cx",
+    "Native Rust runtime for adversarial extension workloads, with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
+    "| Cryptographic decision receipts | First-class runtime artifact |",
+    "| Fleet quarantine convergence model | Explicit SLO + fault-injection gates |",
+    "For production deployments with the complete asupersync ecosystem:",
+    "Complete governance and policy enforcement",
+    "Cross-repository coordination enabled",
+    "TEE attestation and fleet quarantine available",
+    "Cryptographic decision receipts with audit trails"
+  ],
+  "audited_claims": [
+    {
+      "claim_id": "readme-quick-example",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Removed unshipped workspace-init, promotion, and incident-drill commands from the top example."
+    },
+    {
+      "claim_id": "readme-quick-start",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Replaced unshipped setup/control-plane commands with current compile/run/doctor/verify/benchmark/replay workflows."
+    },
+    {
+      "claim_id": "readme-command-reference",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Reduced the command table to the exact production contract while the quick example and help surface still enumerate the broader top-level CLI groups with explicit unsupported-in-production labeling."
+    },
+    {
+      "claim_id": "readme-troubleshooting",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Removed remediation advice that depended on non-existent subcommands and replaced it with shipped verify/doctor/replay guidance."
+    },
+    {
+      "claim_id": "readme-claim-sensitive-build-mode",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Qualified cryptographic decision receipt, TEE attestation, and fleet quarantine language so all-features describes integration seams and proof gates rather than unobserved production guarantees."
+    },
+    {
+      "claim_id": "frankenctl-top-level-help",
+      "surface": "crates/franken-engine/src/bin/frankenctl.rs",
+      "status": "accurate",
+      "rationale": "The help renderer already matches the implemented parser and remains the source of truth for the shipped CLI."
+    },
+    {
+      "claim_id": "frankenctl-cli-help-test",
+      "surface": "crates/franken-engine/tests/frankenctl_cli.rs",
+      "status": "accurate",
+      "rationale": "Existing integration coverage already asserts the supported help surface and remains part of the gate."
+    }
+  ],
+  "readme_claim_sensitivity_checks": [
+    {
+      "check_id": "readme-tagline-security-posture",
+      "section_start": "Native Rust runtime for adversarial extension workloads",
+      "section_end": "## TL;DR",
+      "proof_state": "HYPOTHESIS/TARGETED",
+      "claim_terms": [
+        "cryptographic decision receipts",
+        "fleet-scale containment"
+      ],
+      "required_qualifiers": [
+        "proof-state tracking"
+      ],
+      "banned_fragments": [
+        "Native Rust runtime for adversarial extension workloads, with deterministic replay, cryptographic decision receipts, and fleet-scale containment."
+      ]
+    },
+    {
+      "check_id": "readme-comparison-crypto-fleet-rows",
+      "section_start": "## Comparison",
+      "section_end": "## Build Modes",
+      "proof_state": "HYPOTHESIS/TARGETED",
+      "claim_terms": [
+        "Cryptographic decision receipts",
+        "Fleet quarantine convergence model"
+      ],
+      "required_qualifiers": [
+        "HYPOTHESIS",
+        "TARGETED"
+      ],
+      "banned_fragments": [
+        "| Cryptographic decision receipts | First-class runtime artifact |",
+        "| Fleet quarantine convergence model | Explicit SLO + fault-injection gates |"
+      ]
+    },
+    {
+      "check_id": "readme-full-integration-mode",
+      "section_start": "### Full Integration Mode",
+      "section_end": "### Verifying Build Modes",
+      "proof_state": "HYPOTHESIS/TARGETED",
+      "claim_terms": [
+        "TEE attestation",
+        "fleet quarantine",
+        "Cryptographic decision receipts"
+      ],
+      "required_qualifiers": [
+        "HYPOTHESIS",
+        "TARGETED",
+        "live proof artifacts",
+        "integration seams",
+        "claim-to-proof matrix"
+      ],
+      "banned_fragments": [
+        "TEE attestation and fleet quarantine available",
+        "Cryptographic decision receipts with audit trails"
+      ]
+    }
+  ],
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "scenario_id",
+    "path_type",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "docs_help_surface_report.json",
+    "frankenctl_help.txt",
+    "readme_claim_sensitivity_checks.jsonl",
+    "step_logs/step_*.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_docs_help_surface_audit.sh",
+    "replay_wrapper": "scripts/e2e/rgc_docs_help_surface_audit_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-docs-help-surface-audit.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_docs_help_surface_audit_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_docs_help_surface_audit_verify cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit",
+    "./scripts/run_rgc_docs_help_surface_audit.sh ci",
+    "./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-planner-contract.v1",
+  "report_schema_version": "franken-engine.swarm-starvation-rescue-plan.v1",
+  "producer_script": "scripts/swarm_starvation_rescue_planner.sh",
+  "required_inputs": [
+    {
+      "flag": "--starvation-rescue-input-json",
+      "schema_version": "franken-engine.swarm-starvation-rescue-input.v1"
+    },
+    {
+      "flag": "--scenario-matrix-report-json",
+      "schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix-report.v1"
+    }
+  ],
+  "decision_modes": [
+    "advisory",
+    "manual_review_required",
+    "fail_closed"
+  ],
+  "required_top_level_fields": [
+    "scenario_class",
+    "summary.top_recommendation_action",
+    "recommendations",
+    "policy_basis.matched_case_ids",
+    "artifact_paths.swarm_starvation_rescue_plan_json"
+  ],
+  "fail_closed_rules": [
+    "blocked starvation-rescue input truth must stay fail closed",
+    "scenario matrix coverage must include the computed scenario class",
+    "scenario matrix report itself must be green before planning"
+  ],
+  "non_goals": [
+    "no live worker mutation",
+    "no reservation release",
+    "no br update"
+  ]
+}

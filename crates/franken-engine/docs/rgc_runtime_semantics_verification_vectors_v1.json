@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.rgc-runtime-semantics-verification-vectors.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.11.7",
+  "generated_by": "bd-1lsy.11.7",
+  "generated_at_utc": "2026-03-03T07:57:00Z",
+  "vectors": [
+    {
+      "scenario_id": "rgc-053-runtime-baseline-01",
+      "semantics_class": "arithmetic_control_flow",
+      "severity": "high",
+      "path_type": "golden",
+      "deterministic_seed": 401,
+      "expected_outcome": "expect_pass",
+      "expected_policy_action": "execute",
+      "command_template": "./scripts/run_rgc_runtime_semantics_verification_pack.sh test",
+      "minimal_repro_pointer": "crates/franken-engine/tests/fixtures/rgc_runtime_semantics_baseline_repro.json",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "rgc-053-runtime-cross-arch-01",
+      "semantics_class": "object_closure_semantics",
+      "severity": "high",
+      "path_type": "golden",
+      "deterministic_seed": 433,
+      "expected_outcome": "expect_pass",
+      "expected_policy_action": "execute_with_closure_environment",
+      "command_template": "./scripts/run_rgc_runtime_semantics_verification_pack.sh test",
+      "minimal_repro_pointer": "crates/franken-engine/tests/fixtures/rgc_runtime_semantics_closure_repro.json",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "rgc-053-runtime-stress-01",
+      "semantics_class": "async_error_path",
+      "severity": "critical",
+      "path_type": "golden",
+      "deterministic_seed": 431,
+      "expected_outcome": "expect_pass",
+      "expected_policy_action": "execute_with_async_replay",
+      "command_template": "./scripts/run_rgc_runtime_semantics_verification_pack.sh test",
+      "minimal_repro_pointer": "crates/franken-engine/tests/fixtures/rgc_runtime_semantics_async_repro.json",
+      "requires_replay": true
+    }
+  ]
+}

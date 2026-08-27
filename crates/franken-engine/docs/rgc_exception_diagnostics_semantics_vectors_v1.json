@@ -1,0 +1,54 @@
+{
+  "schema_version": "franken-engine.rgc-exception-diagnostics-semantics-vectors.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.4.5",
+  "generated_by": "bd-1lsy.4.5",
+  "generated_at_utc": "2026-03-05T04:45:00Z",
+  "vectors": [
+    {
+      "scenario_id": "rgc-305-sync-empty-source",
+      "semantics_class": "sync_exception_propagation",
+      "severity": "high",
+      "deterministic_seed": 4501,
+      "input_source": "",
+      "boundaries": ["sync_callframe"],
+      "expected_error_class": "parse",
+      "expected_error_code": "eval.parse.empty_source",
+      "expected_divergence_class": "intentional_divergence",
+      "command_template": "./scripts/run_rgc_exception_diagnostics_semantics.sh test",
+      "minimal_repro_pointer": "crates/franken-engine/tests/eval_pipeline_integration.rs::quickjs_rejects_empty_source",
+      "remediation_guidance": "Normalize lane-specific correlation IDs before cross-lane comparison; compare stable class/code/location/stack fields.",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "rgc-305-async-boundary-chain",
+      "semantics_class": "async_exception_propagation",
+      "severity": "critical",
+      "deterministic_seed": 4502,
+      "input_source": "let",
+      "boundaries": ["sync_callframe", "async_job", "hostcall"],
+      "expected_error_class": "parse",
+      "expected_error_code": "eval.parse.failure",
+      "expected_divergence_class": "intentional_divergence",
+      "command_template": "./scripts/run_rgc_exception_diagnostics_semantics.sh test",
+      "minimal_repro_pointer": "crates/franken-engine/tests/eval_pipeline_integration.rs::boundary_propagation_copies_location_into_boundary_stack_frame",
+      "remediation_guidance": "Normalize lane-specific correlation IDs before cross-lane comparison; compare stable class/code/location/stack fields.",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "rgc-305-runtime-non-callable-callee",
+      "semantics_class": "diagnostic_metadata_stability",
+      "severity": "high",
+      "deterministic_seed": 4503,
+      "input_source": "1()",
+      "boundaries": ["hostcall"],
+      "expected_error_class": "runtime",
+      "expected_error_code": "eval.runtime.fault",
+      "expected_divergence_class": "intentional_divergence",
+      "command_template": "./scripts/run_rgc_exception_diagnostics_semantics.sh test",
+      "minimal_repro_pointer": "crates/franken-engine/src/lib.rs::map_interpreter_error",
+      "remediation_guidance": "Normalize lane-specific correlation IDs before cross-lane comparison; compare stable class/code/location/stack fields.",
+      "requires_replay": true
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": "franken-engine.proof-economy-replay-trace-contract.v1",
+  "output_schema": "franken-engine.proof-economy-replay-trace.v1",
+  "required_inputs": [
+    "--br-ready-json",
+    "--br-in-progress-json"
+  ],
+  "optional_inputs": [
+    "--agent-mail-reservations-json",
+    "--resource-lease-plans-json",
+    "--proof-cache-plan-json",
+    "--resident-bundle-report-json",
+    "--no-mock-drill-report-json",
+    "--source-revision",
+    "--output-dir"
+  ],
+  "required_artifacts": [
+    "replay_trace.normalized.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.resource-lease-plan.v1",
+    "franken-engine.proof-cache-plan.v1",
+    "franken-engine.resident-remote-proof-bundle.v1",
+    "franken-engine.resident-remote-proof-no-mock-drill.v1"
+  ],
+  "determinism": {
+    "execution_mode": "fixture-only",
+    "sorting": "beads, reservations, commands, and proof rows are sorted before hashing",
+    "hash": "trace_id is sha256 over canonical trace core JSON"
+  },
+  "degraded_mode": {
+    "missing_agent_mail_reservations": "allowed with degraded_mode=true and warning finding"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.rgc-seqlock-reader-writer-bundle.v1",
+  "bead_id": "bd-1lsy.7.21.2",
+  "required_artifacts": [
+    "commands.txt",
+    "env.json",
+    "events.jsonl",
+    "incumbent_fallback_matrix.json",
+    "manifest.json",
+    "repro.lock",
+    "retry_budget_policy.json",
+    "retry_safety_matrix.json",
+    "run_manifest.json",
+    "seqlock_candidate_inventory.json",
+    "seqlock_reader_writer_contract.json",
+    "snapshot_baseline_comparator.json",
+    "summary.md",
+    "trace_ids.json"
+  ],
+  "candidate_expectations": [
+    {
+      "candidate_id": "bulkhead-registry-snapshot",
+      "disposition": "reject"
+    },
+    {
+      "candidate_id": "governance-ledger-head-view",
+      "disposition": "accept"
+    },
+    {
+      "candidate_id": "guardplane-calibration-snapshot",
+      "disposition": "accept"
+    },
+    {
+      "candidate_id": "hostcall-telemetry-snapshot",
+      "disposition": "reject"
+    },
+    {
+      "candidate_id": "module-cache-snapshot",
+      "disposition": "accept"
+    },
+    {
+      "candidate_id": "policy-checkpoint-value",
+      "disposition": "reject"
+    },
+    {
+      "candidate_id": "privacy-randomness-snapshot-chain",
+      "disposition": "conditional"
+    },
+    {
+      "candidate_id": "slot-registry-replacement-progress",
+      "disposition": "conditional"
+    },
+    {
+      "candidate_id": "static-analysis-summary",
+      "disposition": "reject"
+    }
+  ]
+}

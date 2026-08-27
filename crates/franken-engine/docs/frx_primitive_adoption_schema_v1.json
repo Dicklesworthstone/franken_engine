@@ -1,0 +1,79 @@
+{
+  "schema_version": "frx.primitive.adoption.schema.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.16.1",
+  "lane": {
+    "id": "FRX-16.1",
+    "name": "Primitive Adoption Schema + Verification Checklist + Reuse Scan Gate"
+  },
+  "required_record_fields": [
+    "primitive_id",
+    "tier",
+    "verification",
+    "score",
+    "fallback",
+    "reuse_scan",
+    "adopt_vs_build_rationale"
+  ],
+  "activation_gate": {
+    "mode": "fail_closed",
+    "block_on_missing_verification_metadata": true,
+    "block_on_missing_fallback_metadata": true,
+    "block_on_missing_reuse_scan_outcome": true,
+    "block_on_invalid_score_range": true
+  },
+  "tier_rules": {
+    "reuse_scan_required_tiers": [
+      "s",
+      "a"
+    ],
+    "reuse_scan_optional_tiers": [
+      "b",
+      "c"
+    ]
+  },
+  "verification_checklist_fields": [
+    "checklist_version",
+    "primary_paper_verified",
+    "independent_replication_completed",
+    "verification_notes"
+  ],
+  "fallback_budget_fields": [
+    "trigger",
+    "deterministic_mode",
+    "max_retry_count",
+    "time_budget_ms",
+    "memory_budget_mb"
+  ],
+  "reuse_scan_fields": [
+    "catalog_version",
+    "decision",
+    "candidate_crates",
+    "rationale"
+  ],
+  "error_codes": {
+    "missing_verification_metadata": "FE-FRX-16-VERIFY-0001",
+    "missing_fallback_metadata": "FE-FRX-16-FALLBACK-0001",
+    "missing_reuse_scan_outcome": "FE-FRX-16-REUSE-0001",
+    "invalid_score_range": "FE-FRX-16-SCORE-0001",
+    "invalid_metadata_field": "FE-FRX-16-METADATA-0001"
+  },
+  "logging_contract": {
+    "component": "frx_primitive_adoption_schema_gate",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ],
+    "recommended_fields": [
+      "scenario_id",
+      "primitive_id",
+      "tier",
+      "replay_command"
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "schema_version": "franken-engine.proof-queue-brownout-detector-contract.v1",
+  "output_schema": "franken-engine.proof-queue-brownout-report.v1",
+  "required_inputs": [
+    "--replay-trace-json"
+  ],
+  "optional_inputs": [
+    "--counterfactual-report-json",
+    "--max-agent-share-millionths",
+    "--output-dir"
+  ],
+  "required_artifacts": [
+    "brownout_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.proof-economy-replay-trace.v1",
+    "franken-engine.proof-economy-counterfactual-replay-report.v1"
+  ],
+  "finding_codes": [
+    "queue_brownout_all_workers_busy",
+    "unfair_agent_slot_share",
+    "low_priority_starvation",
+    "counterfactual_all_policies_brownout"
+  ],
+  "determinism": {
+    "execution_mode": "fixture-only",
+    "sorting": "findings are sorted by severity, code, and stable finding id",
+    "hash": "brownout_id is sha256 over canonical brownout report core JSON"
+  },
+  "failure_policy": {
+    "queue_brownout_all_workers_busy": "fail_closed with exit code 42",
+    "counterfactual_all_policies_brownout": "fail_closed with exit code 42",
+    "unfair_agent_slot_share": "warning with bounded remediation",
+    "low_priority_starvation": "warning with bounded remediation"
+  }
+}

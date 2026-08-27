@@ -10,7 +10,7 @@ pub const CLAIM_ENVELOPE_CONTRACT_COMPONENT: &str = "rgc_claim_envelope_contract
 pub const CLAIM_ENVELOPE_CONTRACT_POLICY_ID: &str = "policy-rgc-claim-envelope-contract-v1";
 pub const REACT_CAPABILITY_CONTRACT_POLICY_ID: &str = "policy-rgc-react-capability-contract-v1";
 pub const CLAIM_ENVELOPE_CONTRACT_JSON: &str =
-    include_str!("../../../docs/rgc_claim_envelope_contract_v1.json");
+    include_str!("../docs/rgc_claim_envelope_contract_v1.json");
 pub const MAX_PUBLISHABLE_STALENESS_HOURS: u64 = 168;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

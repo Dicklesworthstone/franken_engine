@@ -1,0 +1,141 @@
+{
+  "schema_version": "franken-engine.swarm-actionability-truth-gate-no-mock-drill-contract.v1",
+  "bead_id": "bd-fi6kq",
+  "parent_bead_id": "bd-l09xv",
+  "depends_on": [
+    "bd-l4mya"
+  ],
+  "track_contract_path": "docs/swarm_actionability_truth_gate_contract_v1.json",
+  "drill_script": "scripts/e2e/swarm_actionability_truth_gate_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh",
+  "fixture_bundle": "scripts/testdata/swarm_actionability_truth_gate/cases.json",
+  "modes": [
+    "live",
+    "fixture",
+    "replay"
+  ],
+  "composed_scripts": [
+    "scripts/swarm_actionability_truth_gate.sh"
+  ],
+  "required_repo_paths": [
+    "docs/swarm_actionability_truth_gate_contract_v1.json",
+    "docs/swarm_actionability_truth_gate_no_mock_drill_contract_v1.json",
+    "docs/SWARM_ACTIONABILITY_TRUTH_GATE_CONTRACT.md",
+    "docs/SWARM_ACTIONABILITY_TRUTH_GATE.md",
+    "scripts/swarm_actionability_truth_gate.sh",
+    "scripts/e2e/swarm_actionability_truth_gate_no_mock_drill.sh",
+    "scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh",
+    "scripts/testdata/swarm_actionability_truth_gate/cases.json"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "source_snapshots.json",
+    "actionability_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "truth_gate_report.json",
+    "case_results.jsonl",
+    "trace_ids.json",
+    "report.md"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_ready_safe_to_claim",
+      "expected": {
+        "decision": "safe_to_claim",
+        "candidate_id": "bd-ready1"
+      }
+    },
+    {
+      "scenario_id": "bv_blocked_track_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "candidate_id": "bd-5oef0",
+        "required_reason_code": "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"
+      }
+    },
+    {
+      "scenario_id": "in_progress_owned_defer",
+      "expected": {
+        "decision": "defer",
+        "candidate_id": "bd-djejh.2",
+        "required_reason_code": "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE"
+      }
+    },
+    {
+      "scenario_id": "stale_export_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "candidate_id": "bd-parent",
+        "required_reason_code": "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE"
+      }
+    },
+    {
+      "scenario_id": "dirty_overlap_defer",
+      "expected": {
+        "decision": "defer",
+        "candidate_id": "bd-ready-dirty",
+        "required_reason_code": "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP"
+      }
+    },
+    {
+      "scenario_id": "missing_optional_mail_observe_only",
+      "expected": {
+        "decision": "observe_only",
+        "candidate_id": null,
+        "required_reason_code": "FE-SWARM-ACTIONABILITY-MISSING-SOURCE"
+      }
+    },
+    {
+      "scenario_id": "replay_verification",
+      "expected": {
+        "decision": "pass",
+        "replay_verified": true
+      }
+    }
+  ],
+  "operator_truth_claims": [
+    "The drill supports live, fixture, and replay modes.",
+    "Live mode captures real local br, bv, and git state without mutating claim ownership.",
+    "Fixture mode verifies deterministic preserved snapshots from the checked-in actionability cases bundle.",
+    "Replay mode verifies a pinned emitted bundle without rerunning live capture.",
+    "The drill is advisory only and proof only.",
+    "The drill does not run Cargo or RCH heavy commands.",
+    "Blocked bv actionability, stale exported state, dirty overlap ambiguity, and missing optional ownership evidence stay fail-closed or deferred instead of being upgraded to safe claim guidance."
+  ],
+  "required_truth_gate_rejections": [
+    "heavy_cargo_or_rch_claim",
+    "tracker_or_git_mutation_claim",
+    "reservation_release_or_agent_mail_claim",
+    "replay_reruns_live_capture_claim",
+    "blocked_or_stale_healthy_claim"
+  ],
+  "mutation_policy": {
+    "live_capture_allowed": true,
+    "fixture_mode_deterministic": true,
+    "replay_verification_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reopens_beads": false,
+    "closes_beads": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_git": false,
+    "runs_cargo": false,
+    "runs_rch_heavy_commands": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "reruns_live_capture_during_replay": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_actionability_truth_gate_no_mock_drill.sh scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_actionability_truth_gate_no_mock_drill.sh scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh",
+    "jq empty docs/swarm_actionability_truth_gate_no_mock_drill_contract_v1.json scripts/testdata/swarm_actionability_truth_gate/cases.json",
+    "bash scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh check",
+    "bash scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh selftest",
+    "git diff --check -- docs/swarm_actionability_truth_gate_no_mock_drill_contract_v1.json scripts/e2e/swarm_actionability_truth_gate_no_mock_drill.sh scripts/e2e/swarm_actionability_truth_gate_truth_gate.sh"
+  ]
+}

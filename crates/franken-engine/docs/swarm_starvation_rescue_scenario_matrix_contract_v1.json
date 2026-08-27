@@ -1,0 +1,34 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix-contract.v1",
+  "report_schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix-report.v1",
+  "matrix_schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix.v1",
+  "producer_script": "scripts/swarm_starvation_rescue_scenario_matrix.sh",
+  "required_scenario_classes": [
+    "healthy",
+    "brownout",
+    "ownership_contradiction",
+    "salvage_pinned",
+    "stale_telemetry",
+    "local_fallback"
+  ],
+  "required_top_level_fields": [
+    "summary.pass_case_count",
+    "summary.fail_closed_case_count",
+    "summary.mismatch_case_ids",
+    "cases"
+  ],
+  "golden_expectations": [
+    "source revision is scrubbed",
+    "report ids and hash basis are scrubbed",
+    "artifact paths are scrubbed from embedded starvation rescue reports",
+    "resolved input paths are rewritten to stable placeholders"
+  ],
+  "case_expectations": [
+    "healthy scenario must stay pass/ready",
+    "brownout scenario must stay pass/degraded",
+    "ownership contradiction must fail closed",
+    "salvage-pinned manual review must stay pass/degraded",
+    "stale telemetry must fail closed",
+    "local fallback must fail closed and preserve the local fallback detection signal"
+  ]
+}

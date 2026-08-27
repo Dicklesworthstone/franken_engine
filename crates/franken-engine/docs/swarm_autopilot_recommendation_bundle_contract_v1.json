@@ -1,0 +1,163 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-recommendation-bundle-contract.v1",
+  "bead_id": "bd-8e5cw",
+  "depends_on": [
+    "bd-knanr"
+  ],
+  "script": "scripts/swarm_autopilot_recommendation_bundle.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_recommendation_bundle_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_RECOMMENDATION_BUNDLE.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_recommendation_bundle/cases.json",
+  "bundle_schema_version": "franken-engine.swarm-autopilot-recommendation-bundle.v1",
+  "dashboard_projection_schema_version": "franken-engine.swarm-autopilot-dashboard-projection.v1",
+  "required_inputs": [
+    {
+      "source_id": "operator_intent_policy_json",
+      "argument": "--operator-intent-policy-json",
+      "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+      "required": true
+    },
+    {
+      "source_id": "brownout_forecaster_json",
+      "argument": "--brownout-forecaster-json",
+      "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+      "required": true
+    },
+    {
+      "source_id": "resource_lease_plan_json",
+      "argument": "--resource-lease-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-resource-lease-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "resource_scarcity_receipts_json",
+      "argument": "--resource-scarcity-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-resource-scarcity-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "control_plane_context_json",
+      "argument": "--control-plane-context-json",
+      "schema_version": "franken-engine.swarm-autopilot-control-plane-context.v1",
+      "required": true
+    }
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "artifacts": {
+    "bundle_json": "swarm_autopilot_recommendation_bundle.json",
+    "dashboard_projection_json": "swarm_autopilot_dashboard_projection.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "recommendation_actions": [
+    "admit_lane",
+    "defer_lane",
+    "preserve_urgent_rch_slack",
+    "cool_proof_cache",
+    "rebalance_fair_share",
+    "refresh_evidence",
+    "require_human_review"
+  ],
+  "required_recommendation_fields": [
+    "recommendation_id",
+    "priority",
+    "action",
+    "lane_id",
+    "summary",
+    "deterministic_decision_id",
+    "reason_codes",
+    "evidence_paths",
+    "rollback_command",
+    "remediation_command"
+  ],
+  "required_bundle_fields": [
+    "recommendation_bundle_id",
+    "decision",
+    "truth_state",
+    "summary.overall_state",
+    "summary.top_action",
+    "summary.recommendation_count",
+    "summary.safe_mode_active",
+    "summary.human_review_required",
+    "recommendations",
+    "resolved_inputs",
+    "fail_closed_reasons",
+    "artifact_paths.bundle_json",
+    "artifact_paths.dashboard_projection_json"
+  ],
+  "required_dashboard_projection_fields": [
+    "dashboard_projection_id",
+    "decision",
+    "overall_state",
+    "top_action",
+    "summary_cards",
+    "top_recommendations"
+  ],
+  "safe_mode_fallbacks": [
+    "stale telemetry triggers refresh_evidence and conservative deferrals",
+    "missing Agent Mail triggers require_human_review and conservative deferrals",
+    "unknown dirty files trigger require_human_review",
+    "active reservations trigger require_human_review"
+  ],
+  "fail_closed_rules": [
+    "stale policy, forecast, lease, receipts, or control-plane evidence fails closed",
+    "local fallback contamination fails closed",
+    "fail-closed upstream policy, forecaster, or resource lease plan must not be promoted into recommendations",
+    "receipt and lease allocation mismatches fail closed"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "fixture_cases": [
+    {
+      "case_id": "normal_admit_defer_mix",
+      "expected_decision": "pass",
+      "required_action": "preserve_urgent_rch_slack"
+    },
+    {
+      "case_id": "degraded_safe_mode",
+      "expected_decision": "safe_mode",
+      "required_action": "refresh_evidence"
+    },
+    {
+      "case_id": "fail_closed_contaminated_evidence",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-RECOMMEND-LOCAL-FALLBACK"
+    },
+    {
+      "case_id": "human_review_conflict",
+      "expected_decision": "pass",
+      "required_action": "require_human_review"
+    },
+    {
+      "case_id": "operator_dashboard_projection",
+      "expected_decision": "pass",
+      "required_dashboard_card_id": "brownout_state"
+    }
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_recommendation_bundle.sh",
+    "bash -n scripts/e2e/swarm_autopilot_recommendation_bundle_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_recommendation_bundle.sh scripts/e2e/swarm_autopilot_recommendation_bundle_smoke.sh",
+    "jq empty docs/swarm_autopilot_recommendation_bundle_contract_v1.json scripts/testdata/swarm_autopilot_recommendation_bundle/cases.json",
+    "bash scripts/e2e/swarm_autopilot_recommendation_bundle_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_recommendation_bundle_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_RECOMMENDATION_BUNDLE.md docs/swarm_autopilot_recommendation_bundle_contract_v1.json scripts/swarm_autopilot_recommendation_bundle.sh scripts/e2e/swarm_autopilot_recommendation_bundle_smoke.sh scripts/testdata/swarm_autopilot_recommendation_bundle/cases.json"
+  ]
+}

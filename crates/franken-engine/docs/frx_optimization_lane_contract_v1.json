@@ -1,0 +1,114 @@
+{
+  "schema_version": "frx.optimization.lane.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.10.5",
+  "generated_by": "bd-mjh3.10.5",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "lane": {
+    "id": "FRX-10.5",
+    "name": "Optimization/Performance Ownership Surface"
+  },
+  "ownership": {
+    "profile_first_discipline": {
+      "required": true,
+      "required_inputs": [
+        "baseline_profile",
+        "candidate_profile",
+        "opportunity_matrix_row",
+        "bottleneck_attribution"
+      ]
+    },
+    "one_lever_rule": {
+      "required": true,
+      "max_changes_per_candidate": 1
+    },
+    "isomorphism_guarantee": {
+      "required": true,
+      "verification_contract_required": true
+    }
+  },
+  "inputs": [
+    "hotspot_evidence_top5",
+    "verification_lane_golden_outputs",
+    "tail_latency_budget",
+    "memory_budget",
+    "responsiveness_budget"
+  ],
+  "outputs": {
+    "optimization_campaign_ranking": {
+      "required_fields": [
+        "campaign_id",
+        "expected_value",
+        "relevance_score",
+        "risk_score",
+        "confidence"
+      ]
+    },
+    "isomorphism_proof_notes": {
+      "required_fields": [
+        "candidate_id",
+        "proof_method",
+        "verification_contract_ref",
+        "drift_status"
+      ]
+    },
+    "before_after_artifacts": {
+      "required_fields": [
+        "baseline_artifact",
+        "candidate_artifact",
+        "delta_summary",
+        "replay_command"
+      ]
+    },
+    "performance_risk_advisory": {
+      "required_fields": [
+        "tail_latency_delta",
+        "memory_delta",
+        "responsiveness_delta",
+        "promotion_recommendation",
+        "rollback_plan_ref"
+      ]
+    }
+  },
+  "activation_gate": {
+    "require_profile_evidence": true,
+    "require_isomorphism_proof_notes": true,
+    "require_rollback_plan": true,
+    "block_on_tail_latency_regression": true,
+    "block_on_memory_regression": true,
+    "block_on_responsiveness_regression": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "on_unproven_optimization": "block_merge_and_promotion",
+    "on_gate_regression": "route_to_fallback_baseline",
+    "on_missing_rollback_plan": "reject_candidate"
+  },
+  "consumer_interfaces": {
+    "release_lane": [
+      "performance_risk_advisory",
+      "rollback_plan_ref",
+      "gate_outcome"
+    ],
+    "verification_lane": [
+      "isomorphism_proof_notes",
+      "before_after_artifacts"
+    ],
+    "runtime_lane": [
+      "optimization_campaign_ranking",
+      "profile_evidence_digest"
+    ]
+  },
+  "logging_contract": {
+    "component": "frx_optimization_lane",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

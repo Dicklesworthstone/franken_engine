@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.rgc-performance-regression-verification-pack.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.11.10",
+  "policy_id": "policy-rgc-performance-regression-verification-pack-v1",
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "scenario_id",
+    "path_type",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "support_bundle/benchmark_report.json",
+    "support_bundle/regression_findings.json"
+  ],
+  "integrity_requirements": [
+    "benchmark_metadata_complete",
+    "profiler_receipts_required",
+    "baseline_pins_required",
+    "environment_manifest_required"
+  ],
+  "regression_thresholds": {
+    "warning_millionths": 25000,
+    "fail_millionths": 50000,
+    "max_p_value_millionths": 50000
+  },
+  "failure_scenarios": [
+    {
+      "scenario_id": "missing_baseline",
+      "path_type": "failure",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-060-BASELINE-0001",
+      "expected_message_fragment": "missing or zero baseline"
+    },
+    {
+      "scenario_id": "missing_profiler_receipt",
+      "path_type": "failure",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-060-PROFILER-0002",
+      "expected_message_fragment": "missing profiler receipt"
+    },
+    {
+      "scenario_id": "regression_threshold_breach",
+      "path_type": "failure",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-060-REGRESSION-0003",
+      "expected_message_fragment": "regression exceeds fail threshold"
+    }
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_performance_regression_verification_pack.sh",
+    "replay_wrapper": "scripts/e2e/rgc_performance_regression_verification_pack_replay.sh",
+    "strict_mode": "rch_only_no_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-performance-regression-verification-pack.run-manifest.v1"
+  },
+  "operator_verification": [
+    "./scripts/run_rgc_performance_regression_verification_pack.sh ci",
+    "./scripts/e2e/rgc_performance_regression_verification_pack_replay.sh ci",
+    "jq empty docs/rgc_performance_regression_verification_pack_v1.json"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.contract.v1",
+  "bead_id": "bd-ly6hp.4",
+  "claim_id": "FE-CLAIM-006",
+  "promotion_subset": "covered_capability_typed_input_subset_only",
+  "covered_input_subset": "capability_typed_manifest_ir_hostcall_v1",
+  "source_surfaces": [
+    "crates/franken-engine/tests/capability_typed_ambient_authority_proof.rs",
+    "crates/franken-engine/src/capability.rs",
+    "crates/franken-engine/src/baseline_interpreter.rs",
+    "crates/franken-engine/src/ambient_authority.rs",
+    "crates/franken-engine/src/ir_contract.rs"
+  ],
+  "runtime_policy": {
+    "live_command": "./scripts/idea_wizard_xiii_capability_typed_ambient_authority_proof.sh",
+    "heavy_cargo_policy": "rch_wrapped_only",
+    "requires_no_local_heavy_cargo_transcript": true,
+    "runs_rch_for_live_validation": true
+  },
+  "required_artifacts": [
+    "capability_typed_onboarding_report_json",
+    "typed_input_or_manifest_fixture",
+    "runtime_enforcement_result_json",
+    "ambient_filesystem_rejection_fixture",
+    "ambient_network_rejection_fixture",
+    "ambient_hostcall_rejection_fixture",
+    "unsupported_syntax_fail_closed_fixture",
+    "stale_evidence_fail_closed_fixture",
+    "synthetic_evidence_fail_closed_fixture",
+    "missing_evidence_fail_closed_fixture",
+    "tampered_evidence_fail_closed_fixture",
+    "replay_verifier_report_json",
+    "events_jsonl",
+    "commands_txt",
+    "run_manifest_json",
+    "human_report"
+  ],
+  "required_report_fields": [
+    "covered_input_subset",
+    "requested_capabilities",
+    "granted_capabilities",
+    "denied_ambient_authority",
+    "runtime_enforcement_verdict",
+    "unsupported_contract"
+  ],
+  "negative_fixture_policy": {
+    "ambient_filesystem_rejection_fixture": "must reject implicit filesystem authority",
+    "ambient_network_rejection_fixture": "must reject implicit network authority",
+    "ambient_hostcall_rejection_fixture": "must reject implicit or unknown hostcall authority",
+    "unsupported_syntax_fail_closed_fixture": "must keep unsupported typed TypeScript-to-IR onboarding fail-closed",
+    "stale_synthetic_missing_tampered_evidence": "must remain non-promoting and fail closed"
+  },
+  "downgrade_boundary": {
+    "typed_ts_to_ir_onboarding_shipped": false,
+    "downgrade_text_required": true,
+    "unsupported_contract_diagnostic_code": "capability_typed.unsupported_syntax",
+    "note": "The proof covers only a manifest-to-IR hostcall subset. It does not promote full typed TypeScript-to-IR onboarding."
+  }
+}

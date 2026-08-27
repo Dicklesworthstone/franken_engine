@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.remote-proof-retention-class-contract.v1",
+  "ledger_schema": "franken-engine.remote-proof-retention-class-ledger.v1",
+  "residency_manifest_schema": "franken-engine.remote-proof-evidence-residency-manifest.v1",
+  "required_inputs": [
+    "--bundle-report-json",
+    "--mirror-manifest-json",
+    "--batch-manifest-json",
+    "--salvage-receipt-json"
+  ],
+  "optional_inputs": [
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.resident-remote-proof-bundle.v1",
+    "franken-engine.remote-proof-artifact-mirror-manifest.v1",
+    "franken-engine.locality-aware-remote-proof-batch-plan.v1",
+    "franken-engine.remote-proof-salvage-receipt.v1"
+  ],
+  "required_artifacts": [
+    "retention_class_ledger.json",
+    "evidence_residency_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "retention_classes": {
+    "hot_replay_critical": {
+      "precedence": 2,
+      "meaning": "Replay-critical artifact that must remain hot for near-term rerun or replay."
+    },
+    "warm_operator_inspectable": {
+      "precedence": 3,
+      "meaning": "Bounded warm retention for operator inspection or immediate control-plane reuse."
+    },
+    "salvage_pinned": {
+      "precedence": 1,
+      "meaning": "Artifact pinned by active salvage or orphan-reconciliation workflow."
+    },
+    "cold_archival": {
+      "precedence": 4,
+      "meaning": "Inspect-only artifact that can demote to cold archive storage."
+    }
+  },
+  "hash_requirements": [
+    "retention_class_ledger.hash_basis.input_hash",
+    "retention_class_ledger.hash_basis.manifest_hash",
+    "retention_class_ledger.hash_basis.ledger_hash",
+    "evidence_residency_manifest.hash_basis.input_hash",
+    "evidence_residency_manifest.hash_basis.manifest_hash"
+  ],
+  "determinism": {
+    "stable_manifest_hash_expectation": "Repeated runs over identical normalized inputs must preserve the same evidence residency manifest hash.",
+    "classification_precedence": "salvage_pinned overrides replay-critical hot retention, which overrides warm operator inspection, which overrides cold archival.",
+    "execution_mode": "Classifier only; the retention ledger does not execute cargo, contact workers, or mutate archive state."
+  }
+}

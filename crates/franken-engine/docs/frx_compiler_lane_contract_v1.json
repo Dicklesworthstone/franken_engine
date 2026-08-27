@@ -1,0 +1,123 @@
+{
+  "schema_version": "frx.compiler.lane.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.10.2",
+  "generated_by": "bd-mjh3.10.2",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "lane": {
+    "id": "FRX-10.2",
+    "name": "Compiler/FRIR Ownership Surface"
+  },
+  "ownership": {
+    "source_to_frir_semantics_preservation": true,
+    "parser_normalization_boundaries": {
+      "backend_parity_required": [
+        "swc",
+        "oxc"
+      ],
+      "deterministic_diagnostics_envelope": true
+    },
+    "analysis_graph_correctness": {
+      "required_invariants": [
+        "graph-build-deterministic",
+        "effect-edge-soundness",
+        "capability-flow-consistency"
+      ],
+      "schema_evolution_policy": "versioned-and-fail-closed-on-incompatible-change"
+    },
+    "transformation_witness_generation": {
+      "hash_linkage_required": true,
+      "invariant_outcomes_required": true,
+      "budget_compliance_required": true
+    }
+  },
+  "inputs": [
+    "semantics_lane_contracts",
+    "capability_boundaries",
+    "optimization_policy_budgets",
+    "rewrite_safety_gates"
+  ],
+  "outputs": {
+    "frir_artifacts": {
+      "deterministic": true,
+      "targets": [
+        "js_runtime_lane",
+        "wasm_runtime_lane"
+      ],
+      "required_fields": [
+        "frir_schema_version",
+        "artifact_hash",
+        "producer_lane",
+        "trace_id"
+      ]
+    },
+    "pass_witness_bundle": {
+      "replay_compatible": true,
+      "required_fields": [
+        "pass_id",
+        "input_hash",
+        "output_hash",
+        "invariant_results",
+        "budget_summary",
+        "replay_linkage"
+      ]
+    },
+    "compiler_diagnostics_contract": {
+      "deterministic": true,
+      "required_fields": [
+        "diagnostic_code",
+        "severity",
+        "source_span",
+        "component",
+        "error_code"
+      ]
+    }
+  },
+  "activation_gate": {
+    "require_witness_metadata": true,
+    "require_schema_compatibility": true,
+    "block_on_missing_verification_or_fallback_metadata": true,
+    "block_on_missing_reuse_scan_outcome": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "deterministic_fallback_lowering": {
+      "enabled": true,
+      "required_on_fail_closed": false
+    },
+    "fallback_blockers": [
+      "missing_witness",
+      "schema_incompatibility",
+      "constitutional_invariant_violation"
+    ],
+    "on_fallback_unavailable": "reject_compile_promotion"
+  },
+  "consumer_interfaces": {
+    "runtime_lane": [
+      "frir_schema_version",
+      "pass_witness_bundle",
+      "compile_vs_fallback_decision"
+    ],
+    "toolchain_lane": [
+      "compiler_diagnostics_contract",
+      "pass_witness_bundle"
+    ],
+    "verification_lane": [
+      "witness_hash_linkage",
+      "replay_linkage",
+      "invariant_outcomes"
+    ]
+  },
+  "logging_contract": {
+    "component": "frx_compiler_lane",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

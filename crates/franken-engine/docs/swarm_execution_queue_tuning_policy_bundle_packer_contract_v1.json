@@ -1,0 +1,107 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle-packer-contract.v1",
+  "bead_id": "bd-j2rny.2",
+  "parent_bead_id": "bd-j2rny",
+  "depends_on": [
+    "bd-j2rny.1"
+  ],
+  "script": "scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_TUNING_POLICY_BUNDLE_PACKER.md",
+  "bundle_contract": "docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json",
+  "bundle_schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1",
+  "frontier_export_schema_version": "franken-engine.swarm-execution-queue-policy-frontier-export.v1",
+  "evidence_hashes_schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle-evidence-hashes.v1",
+  "required_inputs": [
+    {
+      "field": "fidelity_score_receipt_json",
+      "argument": "--fidelity-score-receipt-json",
+      "schema_version": "franken-engine.swarm-execution-queue-fidelity-score-receipt.v1",
+      "hash_required": true
+    },
+    {
+      "field": "drift_ledger_json",
+      "argument": "--drift-ledger-json",
+      "schema_version": "franken-engine.swarm-execution-queue-drift-ledger.v1",
+      "hash_required": true
+    },
+    {
+      "field": "counterfactual_backtest_report_json",
+      "argument": "--counterfactual-backtest-report-json",
+      "schema_version": "franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1",
+      "hash_required": true
+    },
+    {
+      "field": "tuning_plan_json",
+      "argument": "--tuning-plan-json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-plan.v1",
+      "hash_required": true
+    },
+    {
+      "field": "frontier_json",
+      "argument": "--frontier-json",
+      "schema_version": "franken-engine.swarm-execution-queue-counterfactual-frontier.v1",
+      "hash_required": true
+    },
+    {
+      "field": "operator_status_json",
+      "argument": "--operator-status-json",
+      "schema_version_required": true,
+      "hash_required": true
+    }
+  ],
+  "required_rollback_references": [
+    "--prior-policy-bundle-id",
+    "--prior-frontier-json",
+    "--rollback-comparator-report-json",
+    "--canary-verdict-ledger-json"
+  ],
+  "artifact_paths": {
+    "tuning_policy_bundle_json": "tuning_policy_bundle.json",
+    "policy_frontier_export_json": "policy_frontier_export.json",
+    "evidence_hashes_json": "evidence_hashes.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "plan_classes": [
+    "no_improvement",
+    "one_clear_improvement",
+    "conflicting_improvements",
+    "insufficient_evidence",
+    "fail_closed"
+  ],
+  "mutation_policy": {
+    "planning_artifact_only": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false,
+    "operator_wording_required": "advisory-only planning artifact"
+  },
+  "fail_closed_rules": [
+    "upstream fail-closed evidence fails closed",
+    "missing candidate rankings fail closed",
+    "promoted candidate absent from ranking fails closed",
+    "frontier candidates absent from ranking fail closed",
+    "automatic live-retuning claims fail closed",
+    "rollback references missing fail closed",
+    "reject local fallback proof evidence"
+  ],
+  "selftest_scenarios": [
+    "no_improvement",
+    "one_clear_improvement",
+    "conflicting_frontiers",
+    "incomplete_evidence_fail_closed"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh",
+    "jq empty docs/swarm_execution_queue_tuning_policy_bundle_packer_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh selftest"
+  ]
+}

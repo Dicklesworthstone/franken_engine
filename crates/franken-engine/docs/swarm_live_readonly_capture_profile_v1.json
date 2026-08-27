@@ -1,0 +1,374 @@
+{
+  "schema_version": "franken-engine.swarm-live-readonly-capture-profile.v1",
+  "bead_id": "bd-ep8y0.1",
+  "parent_bead_id": "bd-ep8y0",
+  "track": "SWARM-LIVE-SNAPSHOT",
+  "profile_schema_version": "franken-engine.swarm-live-readonly-capture-profile-input.v1",
+  "output_bundle_schema_version": "franken-engine.swarm-live-readonly-capture-bundle.v1",
+  "event_schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+  "redaction_report_schema_version": "franken-engine.swarm-live-readonly-redaction-report.v1",
+  "extends": {
+    "canonical_live_state_bead_id": "bd-eozx0",
+    "canonical_live_state_contract": "docs/swarm_ops_state_contract_v1.json",
+    "canonical_live_state_runbook": "docs/SWARM_OPS_STATE_CONTRACT.md",
+    "canonical_resource_lease_bead_id": "bd-x82vp",
+    "canonical_resource_lease_runbook": "docs/SWARM_RESOURCE_LEASE_PLANNER.md"
+  },
+  "docs": {
+    "runbook": "docs/SWARM_LIVE_READONLY_CAPTURE_PROFILE.md",
+    "profile_contract": "docs/swarm_live_readonly_capture_profile_v1.json"
+  },
+  "required_artifacts": [
+    "capture_profile.json",
+    "swarm_ops_state_bundle.json",
+    "events.jsonl",
+    "commands.txt",
+    "redaction_report.json",
+    "report.md"
+  ],
+  "required_event_keys": [
+    "trace_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "evidence_path",
+    "capture_source",
+    "source_command_hash",
+    "payload_hash"
+  ],
+  "capture_sources": [
+    {
+      "component": "br_ready",
+      "maps_to_swarm_ops_component": "br_ready",
+      "commands": [
+        "br ready --json"
+      ],
+      "required": true,
+      "freshness_window_seconds": 300,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "id",
+        "title",
+        "status",
+        "priority"
+      ],
+      "stale_decision": "fail_closed"
+    },
+    {
+      "component": "br_in_progress",
+      "maps_to_swarm_ops_component": "br_ready",
+      "commands": [
+        "br list --status=in_progress --json"
+      ],
+      "required": true,
+      "freshness_window_seconds": 300,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "id",
+        "assignee",
+        "status",
+        "updated_at"
+      ],
+      "stale_decision": "blocked"
+    },
+    {
+      "component": "br_sync_status",
+      "maps_to_swarm_ops_component": "br_ready",
+      "commands": [
+        "br sync --status --json"
+      ],
+      "required": true,
+      "freshness_window_seconds": 300,
+      "mutation_class": "read_only_status",
+      "required_fields": [
+        "dirty_count",
+        "db_newer",
+        "jsonl_newer"
+      ],
+      "stale_decision": "fail_closed"
+    },
+    {
+      "component": "bv_plan",
+      "maps_to_swarm_ops_component": "bv_plan",
+      "commands": [
+        "bv --recipe actionable --robot-plan"
+      ],
+      "required": true,
+      "freshness_window_seconds": 300,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "track_id",
+        "bead_id",
+        "priority",
+        "blocked_state"
+      ],
+      "stale_decision": "blocked"
+    },
+    {
+      "component": "agent_mail_snapshot",
+      "maps_to_swarm_ops_component": "agent_mail",
+      "commands": [
+        "operator-supplied Agent Mail snapshot JSON file"
+      ],
+      "required": false,
+      "freshness_window_seconds": 300,
+      "mutation_class": "input_file_only",
+      "input_file_only": true,
+      "queries_live_agent_mail": false,
+      "required_fields": [
+        "agent_name",
+        "last_active_ts",
+        "reservation_path",
+        "expires_ts"
+      ],
+      "missing_decision": "degraded",
+      "stale_decision": "degraded"
+    },
+    {
+      "component": "rch_status",
+      "maps_to_swarm_ops_component": "rch",
+      "commands": [
+        "rch status --workers --jobs --json"
+      ],
+      "required": true,
+      "freshness_window_seconds": 120,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "worker_id",
+        "worker_state",
+        "job_state",
+        "local_fallback_observed"
+      ],
+      "stale_decision": "degraded"
+    },
+    {
+      "component": "rch_queue",
+      "maps_to_swarm_ops_component": "rch",
+      "commands": [
+        "rch queue --json"
+      ],
+      "required": false,
+      "freshness_window_seconds": 120,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "job_id",
+        "job_state",
+        "worker_id"
+      ],
+      "missing_decision": "degraded",
+      "stale_decision": "degraded"
+    },
+    {
+      "component": "git_status",
+      "maps_to_swarm_ops_component": "git",
+      "commands": [
+        "git status --short"
+      ],
+      "required": true,
+      "freshness_window_seconds": 300,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "dirty_paths",
+        "unowned_dirty_paths"
+      ],
+      "stale_decision": "blocked"
+    },
+    {
+      "component": "git_diff_check",
+      "maps_to_swarm_ops_component": "git",
+      "commands": [
+        "git diff --check -- <paths>"
+      ],
+      "required": true,
+      "freshness_window_seconds": 300,
+      "mutation_class": "read_only",
+      "required_fields": [
+        "diff_check_status",
+        "checked_paths"
+      ],
+      "stale_decision": "blocked"
+    },
+    {
+      "component": "resource_pressure",
+      "maps_to_swarm_ops_component": "rch",
+      "commands": [
+        "operator-supplied resource pressure JSON file"
+      ],
+      "required": false,
+      "freshness_window_seconds": 120,
+      "mutation_class": "input_file_only",
+      "input_file_only": true,
+      "required_fields": [
+        "cpu_slots_available",
+        "memory_pressure",
+        "disk_pressure",
+        "capture_ts"
+      ],
+      "missing_decision": "degraded",
+      "stale_decision": "degraded"
+    },
+    {
+      "component": "proof_transcript",
+      "maps_to_swarm_ops_component": "proof_cache_locality",
+      "commands": [
+        "operator-supplied prior proof transcript file"
+      ],
+      "required": false,
+      "freshness_window_seconds": 86400,
+      "mutation_class": "input_file_only",
+      "input_file_only": true,
+      "required_fields": [
+        "command",
+        "exit_code",
+        "started_at",
+        "completed_at",
+        "output_hash"
+      ],
+      "missing_decision": "degraded",
+      "stale_decision": "degraded"
+    }
+  ],
+  "source_hash_requirements": {
+    "algorithm": "sha256",
+    "hashes_required": [
+      "normalized_command_text",
+      "raw_capture_payload",
+      "redacted_capture_payload",
+      "artifact_file"
+    ],
+    "commands_txt_fields": [
+      "component",
+      "command",
+      "mutation_class",
+      "captured_at",
+      "source_command_hash",
+      "payload_hash",
+      "redacted_payload_hash"
+    ],
+    "hash_mismatch_decision": "fail_closed"
+  },
+  "redaction_rules": [
+    {
+      "rule_id": "agent_mail_tokens",
+      "description": "Redact sender tokens, registration tokens, auth headers, and contact secret material.",
+      "action": "replace_with_redacted_marker",
+      "decision_if_unredacted": "fail_closed"
+    },
+    {
+      "rule_id": "absolute_home_paths",
+      "description": "Normalize home-directory prefixes to project-relative paths or <HOME> when a project-relative path is unavailable.",
+      "action": "normalize",
+      "decision_if_unredacted": "blocked"
+    },
+    {
+      "rule_id": "environment_secrets",
+      "description": "Redact environment variables whose names contain TOKEN, SECRET, KEY, PASSWORD, COOKIE, or AUTH.",
+      "action": "replace_with_redacted_marker",
+      "decision_if_unredacted": "fail_closed"
+    },
+    {
+      "rule_id": "large_stdout",
+      "description": "Replace large stdout or stderr payloads with bounded excerpts plus sha256 hashes.",
+      "action": "truncate_with_hash",
+      "max_bytes": 65536,
+      "decision_if_unredacted": "blocked"
+    }
+  ],
+  "freshness_windows": {
+    "br_ready_seconds": 300,
+    "br_in_progress_seconds": 300,
+    "br_sync_status_seconds": 300,
+    "bv_plan_seconds": 300,
+    "agent_mail_snapshot_seconds": 300,
+    "rch_status_seconds": 120,
+    "rch_queue_seconds": 120,
+    "git_status_seconds": 300,
+    "git_diff_check_seconds": 300,
+    "resource_pressure_seconds": 120,
+    "proof_transcript_seconds": 86400
+  },
+  "trust_states": [
+    "trusted",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "freshness_states": [
+    "fresh",
+    "stale",
+    "missing"
+  ],
+  "fail_closed_classes": [
+    "mutating_command_observed",
+    "missing_required_source",
+    "stale_required_source",
+    "br_jsonl_db_conflict",
+    "local_rch_fallback_marker",
+    "command_hash_mismatch",
+    "unredacted_secret_material",
+    "unsafe_live_mutation_claim"
+  ],
+  "degraded_classes": [
+    "missing_agent_mail_snapshot",
+    "stale_optional_source",
+    "missing_optional_rch_queue",
+    "missing_resource_pressure",
+    "missing_optional_proof_transcript"
+  ],
+  "blocked_classes": [
+    "dirty_unowned_paths",
+    "stale_bv_plan",
+    "diff_check_failure",
+    "large_unredacted_payload",
+    "absolute_home_path_leak"
+  ],
+  "forbidden_command_patterns": [
+    "br update",
+    "br close",
+    "br reopen",
+    "br assign",
+    "br sync --flush-only",
+    "git add",
+    "git commit",
+    "git reset",
+    "git checkout",
+    "cargo build",
+    "cargo check",
+    "cargo test",
+    "cargo clippy",
+    "cargo bench",
+    "cargo run",
+    "rch exec",
+    "rch worker disable",
+    "rch workers disable",
+    "rm -rf"
+  ],
+  "non_mutation_attestation": {
+    "extends_existing_contract_only": true,
+    "canonical_live_state_remains_bd_eozx0": true,
+    "canonical_resource_lease_planning_remains_bd_x82vp": true,
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "closes_beads": false,
+    "reopens_beads": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch_exec": false,
+    "runs_rch_builds": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "repairs_target_dirs": false,
+    "writes_outside_output_dir": false,
+    "creates_scheduler": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_live_readonly_capture_profile_v1.json",
+    "git diff --check -- docs/SWARM_LIVE_READONLY_CAPTURE_PROFILE.md docs/swarm_live_readonly_capture_profile_v1.json .beads/issues.jsonl"
+  ]
+}

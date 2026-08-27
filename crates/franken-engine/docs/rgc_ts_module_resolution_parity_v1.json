@@ -1,0 +1,134 @@
+{
+  "schema_version": "rgc.ts-module-resolution.parity.v1",
+  "bead_id": "bd-1lsy.3.2",
+  "generated_by": "bd-1lsy.3.2",
+  "generated_at_utc": "2026-02-28T06:00:00Z",
+  "track": {
+    "id": "RGC-202",
+    "name": "TypeScript Module Resolution Parity"
+  },
+  "resolution_policy": {
+    "deterministic": true,
+    "paths_alias_support": true,
+    "base_url_fallback": true,
+    "package_conditions": {
+      "import_order": [
+        "import",
+        "types",
+        "default"
+      ],
+      "require_order": [
+        "require",
+        "default"
+      ]
+    },
+    "extension_probing": {
+      "import_order": [
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".js",
+        ".mjs",
+        "/index.ts",
+        "/index.tsx",
+        "/index.js",
+        "/index.mjs"
+      ],
+      "require_order": [
+        ".cts",
+        ".cjs",
+        ".ts",
+        ".js",
+        "/index.cts",
+        "/index.cjs",
+        "/index.ts",
+        "/index.js"
+      ]
+    },
+    "stable_trace_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  },
+  "drift_classification": [
+    {
+      "class": "no_drift",
+      "severity": "none",
+      "remediation": "No action required; parity maintained."
+    },
+    {
+      "class": "candidate_order_mismatch",
+      "severity": "medium",
+      "remediation": "Align alias and extension probe precedence with the reference resolver order."
+    },
+    {
+      "class": "missing_target",
+      "severity": "high",
+      "remediation": "Add missing alias/package targets or missing extension probes."
+    },
+    {
+      "class": "extra_target",
+      "severity": "medium",
+      "remediation": "Remove permissive fallback probes that are not present in the reference toolchain."
+    },
+    {
+      "class": "full_mismatch",
+      "severity": "critical",
+      "remediation": "Reconcile paths/baseUrl/conditions configuration and rerun parity traces before promotion."
+    }
+  ],
+  "parity_scenarios": [
+    {
+      "scenario_id": "paths-alias-and-extension-probing",
+      "required": true,
+      "coverage": [
+        "paths",
+        "baseUrl",
+        "extension_order"
+      ]
+    },
+    {
+      "scenario_id": "package-conditions-import-vs-require",
+      "required": true,
+      "coverage": [
+        "package_exports",
+        "condition_selection"
+      ]
+    },
+    {
+      "scenario_id": "monorepo-fallback-and-trace-determinism",
+      "required": true,
+      "coverage": [
+        "monorepo_layout",
+        "trace_determinism"
+      ]
+    }
+  ],
+  "artifact_contract": {
+    "required_paths": [
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt",
+      "ts_resolution_trace.jsonl"
+    ],
+    "manifest_fields": [
+      "schema_version",
+      "scenario_id",
+      "generated_at_utc",
+      "trace_count",
+      "drift_class",
+      "artifact_paths"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_ts_module_resolution_parity_v1.json",
+    "./scripts/run_rgc_ts_module_resolution_parity_suite.sh ci",
+    "./scripts/e2e/rgc_ts_module_resolution_parity_replay.sh ci",
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/tmp/rch_target_ts_module_resolution_parity cargo test -p frankenengine-engine --test ts_module_resolution_parity"
+  ]
+}

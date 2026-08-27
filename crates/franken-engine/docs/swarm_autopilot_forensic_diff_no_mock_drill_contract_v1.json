@@ -1,0 +1,90 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-forensic-diff-no-mock-drill-contract.v1",
+  "bead_id": "bd-00ofm.6",
+  "parent_bead_id": "bd-00ofm",
+  "drill_script": "scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_autopilot_forensic_diff_truth_gate.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill_smoke.sh",
+  "fixtures": "scripts/testdata/swarm_autopilot_forensic_diff_no_mock_drill/cases.json",
+  "modes": [
+    "fixture",
+    "live",
+    "replay"
+  ],
+  "producer_scripts": [
+    "scripts/swarm_autopilot_cohort_diff_comparator.sh",
+    "scripts/swarm_autopilot_replay_recipe_composer.sh",
+    "scripts/swarm_autopilot_forensic_hypothesis_scorer.sh",
+    "scripts/swarm_autopilot_operator_status_bundle.sh"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "warehouse.json",
+    "reference_anomaly_cohorts.json",
+    "comparison_anomaly_cohorts.json",
+    "reference_replay_index.json",
+    "comparison_replay_index.json",
+    "cohort_diff_receipts.json",
+    "fingerprint_delta_plan.json",
+    "replay_recipe_bundle.json",
+    "replay_recipe_index.json",
+    "forensic_hypothesis_summary.json",
+    "forensic_hypothesis_evidence.json",
+    "operator_status_bundle.json",
+    "truth_gate_report.json"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_forensic_comparison",
+      "required_decision": "pass"
+    },
+    {
+      "scenario_id": "blocked_locality_contradiction_replay",
+      "required_decision": "degraded"
+    },
+    {
+      "scenario_id": "contaminated_replay_refusal",
+      "required_decision": "fail_closed"
+    },
+    {
+      "scenario_id": "low_evidence_degraded_hypothesis",
+      "required_decision": "degraded"
+    },
+    {
+      "scenario_id": "stale_reference_fail_closed",
+      "required_decision": "fail_closed"
+    }
+  ],
+  "required_truth_gate_rejections": [
+    "stale_reference_non_fail_closed_claim",
+    "contradictory_cohort_identity_non_fail_closed_claim",
+    "missing_replay_paths_non_fail_closed_claim",
+    "local_fallback_contamination_non_fail_closed_claim",
+    "unsupported_mutation_claim",
+    "heavy_cargo_or_rch_claim"
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_autopilot_forensic_diff_no_mock_drill_contract_v1.json scripts/testdata/swarm_autopilot_forensic_diff_no_mock_drill/cases.json",
+    "bash -n scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill.sh scripts/e2e/swarm_autopilot_forensic_diff_truth_gate.sh scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill.sh scripts/e2e/swarm_autopilot_forensic_diff_truth_gate.sh scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_FORENSIC_DIFF_NO_MOCK_DRILL.md docs/swarm_autopilot_forensic_diff_no_mock_drill_contract_v1.json scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill.sh scripts/e2e/swarm_autopilot_forensic_diff_truth_gate.sh scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill_smoke.sh scripts/testdata/swarm_autopilot_forensic_diff_no_mock_drill/cases.json"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch_heavy_commands": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "approves_replay_automatically": false,
+    "promotes_evidence_automatically": false
+  }
+}

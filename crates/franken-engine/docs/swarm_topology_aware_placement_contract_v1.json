@@ -1,0 +1,151 @@
+{
+  "schema_version": "franken-engine.swarm-topology-aware-placement-contract.v1",
+  "bead_id": "bd-5p9ln",
+  "parent_bead_id": "bd-6arnx",
+  "track": "SWARM-SCALE-II",
+  "placement_input_schema_version": "franken-engine.swarm-topology-placement-input.v1",
+  "placement_plan_schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+  "placement_evidence_ledger_schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+  "placement_receipt_schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+  "placement_handoff_schema_version": "franken-engine.swarm-topology-placement-handoff.v1",
+  "placement_drill_report_schema_version": "franken-engine.swarm-topology-placement-no-mock-drill-report.v1",
+  "operator_status_section": "swarm_topology_placement",
+  "docs": {
+    "runbook": "docs/SWARM_TOPOLOGY_AWARE_PLACEMENT_CONTRACT.md",
+    "contract": "docs/swarm_topology_aware_placement_contract_v1.json"
+  },
+  "source_surfaces": [
+    {
+      "source_id": "execution_queue_input",
+      "paths": [
+        "scripts/swarm_execution_queue_input_normalizer.sh",
+        "docs/swarm_execution_queue_input_contract_v1.json"
+      ],
+      "role": "queue readiness, owner, reservation, and remote-proof context",
+      "required_for_track": true
+    },
+    {
+      "source_id": "resource_envelope",
+      "paths": [
+        "scripts/swarm_resource_envelope_normalizer.sh",
+        "docs/swarm_resource_envelope_contract_v1.json"
+      ],
+      "role": "host identity, CPU, NUMA, disk, target-dir, and capacity evidence",
+      "required_for_track": true
+    },
+    {
+      "source_id": "operator_status",
+      "paths": [
+        "scripts/swarm_operator_status_report.sh",
+        "scripts/e2e/swarm_operator_status_report_smoke.sh",
+        "docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md",
+        "docs/swarm_predictive_dashboard_contract_v1.json"
+      ],
+      "role": "final advisory handoff and dashboard truth boundary",
+      "required_for_track": true
+    },
+    {
+      "source_id": "metadata_locality_governance",
+      "paths": [
+        "crates/franken-engine/src/metadata_locality_governance_gate.rs"
+      ],
+      "role": "existing locality-governance terminology and fail-closed reasoning",
+      "required_for_track": true
+    },
+    {
+      "source_id": "tail_latency_control_plane",
+      "paths": [
+        "crates/franken-engine/src/tail_latency_control_plane.rs",
+        "scripts/run_rgc_tail_latency_control_plane.sh"
+      ],
+      "role": "existing locality-sensitive replay and high-core scheduling evidence",
+      "required_for_track": false
+    }
+  ],
+  "planned_surfaces": [
+    "scripts/swarm_topology_placement_normalizer.sh",
+    "scripts/e2e/swarm_topology_placement_normalizer_smoke.sh",
+    "scripts/swarm_topology_placement_planner.sh",
+    "scripts/e2e/swarm_topology_placement_planner_smoke.sh",
+    "scripts/swarm_topology_placement_receipt_ledger.sh",
+    "scripts/e2e/swarm_topology_placement_receipt_ledger_smoke.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_operator_status_report_smoke.sh",
+    "scripts/e2e/swarm_topology_placement_no_mock_drill.sh",
+    "scripts/e2e/swarm_topology_placement_truth_gate.sh"
+  ],
+  "required_artifacts": [
+    "swarm_topology_placement_input.json",
+    "swarm_topology_placement_plan.json",
+    "swarm_topology_placement_evidence_ledger.json",
+    "swarm_topology_placement_receipt.json",
+    "swarm_topology_placement_handoff.json",
+    "swarm_topology_placement_no_mock_drill_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_plan_fields": [
+    "decision",
+    "placement_readiness",
+    "recommended_topology_class",
+    "recommended_worker_targets",
+    "warm_cache_residency_state",
+    "warm_cache_opportunities",
+    "degraded_reasons",
+    "blocked_reasons",
+    "fail_closed_reasons",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "proof_categories": [
+    {
+      "category_id": "healthy_topology_aware_planning",
+      "expected_decision": "pass",
+      "description": "coherent topology and warm-cache evidence produce confident advisory placement"
+    },
+    {
+      "category_id": "degraded_partial_topology",
+      "expected_decision": "degraded",
+      "description": "missing optional topology or cache evidence remains visible degraded state"
+    },
+    {
+      "category_id": "blocked_contradictory_locality",
+      "expected_decision": "blocked",
+      "description": "contradictory NUMA, host, or locality evidence blocks placement advice"
+    },
+    {
+      "category_id": "contaminated_local_fallback",
+      "expected_decision": "fail_closed",
+      "description": "local fallback contamination invalidates claimed remote-only locality proof"
+    }
+  ],
+  "fail_closed_classes": [
+    "missing_required_host_identity",
+    "missing_required_topology_snapshot",
+    "stale_required_topology_snapshot",
+    "malformed_topology_snapshot",
+    "contradictory_locality_evidence",
+    "warm_cache_claim_without_residency_evidence",
+    "rch_local_fallback_contaminates_locality",
+    "unsafe_live_mutation_claim"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "repairs_target_dirs_automatically": false
+  },
+  "operator_status_handoff_note": "The operator status report remains the only predictive dashboard producer in franken_engine. It may surface topology-aware placement and warm-cache residency as advisory-only evidence, never as live queue mutation, automatic worker pinning, automatic host rebinding, reservation release, or proof that placement already executed."
+}

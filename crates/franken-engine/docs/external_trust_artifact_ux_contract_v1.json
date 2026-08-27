@@ -1,0 +1,545 @@
+{
+  "schema_version": "franken-engine.external-trust-artifact-ux-contract.v1",
+  "receipt_schema_version": "franken-engine.external-trust-artifact-explanation.v1",
+  "bundle_doctor_schema_version": "franken-engine.external-trust-artifact-bundle-doctor.v1",
+  "claim_explainer_schema_version": "franken-engine.external-trust-claim-explainer.v1",
+  "e8_scenario_report_schema_version": "franken-engine.external-trust-e8-scenario-report.v1",
+  "owning_bead": "bd-grwh9.1",
+  "execution_mode": "offline_first_advisory_proof_reader",
+  "authority_policy": {
+    "composes_existing_authorities": true,
+    "creates_new_claim_authority": false,
+    "proves_certificate_soundness": false,
+    "promotes_claim_wording": false,
+    "runs_replay_commands": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_runtime_policy": false
+  },
+  "mutation_policy": {
+    "mutates_br": false,
+    "mutates_agent_mail": false,
+    "mutates_file_reservations": false,
+    "mutates_remote_workers": false,
+    "mutates_evidence_bundles": false,
+    "mutates_claim_matrix": false,
+    "mutates_git": false,
+    "mutates_cargo_targets": false,
+    "mutates_runtime_policy": false
+  },
+  "renderer_boundary": {
+    "future_rich_renderer_provider": "/dp/frankentui",
+    "local_rich_renderer_shipped": false,
+    "franken_engine_outputs": [
+      "deterministic_json_receipts",
+      "concise_human_text",
+      "fixture_golden_artifacts"
+    ],
+    "handoff_note": "FrankenEngine owns proof-reader JSON/text semantics only; any rich interactive renderer belongs in /dp/frankentui."
+  },
+  "authority_sources": [
+    {
+      "source_class": "claim_matrix_json",
+      "canonical_path": "docs/claim_to_proof_matrix_v1.json",
+      "authority_role": "authoritative claim rows, allowed wording state, owning bead, artifact path, verification command, source span, downgrade text"
+    },
+    {
+      "source_class": "claim_matrix_report",
+      "canonical_path": "docs/CLAIM_TO_PROOF_MATRIX_V1.md",
+      "authority_role": "human companion only; not stronger than matrix JSON"
+    },
+    {
+      "source_class": "claim_gate_report",
+      "canonical_path": "artifacts/claim_to_proof_matrix_gate/<timestamp>/",
+      "authority_role": "gate verdicts, reason strings, failure taxonomy, downgrade text"
+    },
+    {
+      "source_class": "proof_artifact_bundle",
+      "canonical_path": "artifacts/<gate>/<timestamp>/",
+      "authority_role": "bundle completeness, manifest, event log, commands transcript, replay pointers"
+    },
+    {
+      "source_class": "rgc_benchmark_supremacy_bundle",
+      "canonical_path": "artifacts/<rgc-or-benchmark-gate>/<timestamp>/",
+      "authority_role": "release, performance, conformance, and claim-support payloads"
+    },
+    {
+      "source_class": "e2_differential_bundle",
+      "canonical_path": "artifacts/<e2-differential-gate>/<timestamp>/",
+      "authority_role": "Node/Bun/Franken divergence and denominator context"
+    },
+    {
+      "source_class": "e3_flight_recorder_output",
+      "canonical_path": "artifacts/<e3-recorder-gate>/<timestamp>/",
+      "authority_role": "runtime trace explanation and decision/event context when present"
+    },
+    {
+      "source_class": "e8_certificate_bundle",
+      "canonical_path": "artifacts/<e8-certificate-gate>/<timestamp>/",
+      "authority_role": "data ingress, purpose binding, declassification routes, non-use certificate context"
+    },
+    {
+      "source_class": "e8_refusal_ledger",
+      "canonical_path": "docs/e8_refusal_ledger_schema_v1.json",
+      "authority_role": "explicit uncertified, degraded, fail-closed, or out-of-scope E8 refusal evidence"
+    },
+    {
+      "source_class": "beads_tracker",
+      "canonical_path": ".beads/issues.jsonl",
+      "authority_role": "read-only owning bead status and dependency context"
+    }
+  ],
+  "input_kinds": [
+    {
+      "kind": "claim_matrix_row",
+      "required_fields": [
+        "claim_id",
+        "matrix_path",
+        "matrix_schema_version"
+      ]
+    },
+    {
+      "kind": "proof_artifact_bundle",
+      "required_fields": [
+        "bundle_path",
+        "declared_schema_version",
+        "bundle_family"
+      ]
+    },
+    {
+      "kind": "gate_report",
+      "required_fields": [
+        "gate_id",
+        "report_path",
+        "decision"
+      ]
+    },
+    {
+      "kind": "bead_status_snapshot",
+      "required_fields": [
+        "bead_id",
+        "status",
+        "source"
+      ]
+    },
+    {
+      "kind": "e2_differential_bundle",
+      "required_fields": [
+        "bundle_path",
+        "case_ids",
+        "runtime_arms"
+      ]
+    },
+    {
+      "kind": "e3_flight_recorder_output",
+      "required_fields": [
+        "trace_path",
+        "decision_ids",
+        "event_count"
+      ]
+    },
+    {
+      "kind": "e8_certificate_bundle",
+      "required_fields": [
+        "contract_path",
+        "certificate_path",
+        "purpose_id"
+      ]
+    },
+    {
+      "kind": "e8_refusal_ledger",
+      "required_fields": [
+        "ledger_path",
+        "ledger_id",
+        "schema_version",
+        "result_class"
+      ]
+    }
+  ],
+  "decision_vocabulary": [
+    "supported",
+    "degraded",
+    "not_promotable",
+    "fail_closed",
+    "unsupported"
+  ],
+  "decision_precedence_most_conservative_first": [
+    "fail_closed",
+    "unsupported",
+    "not_promotable",
+    "degraded",
+    "supported"
+  ],
+  "cli_exit_policy": {
+    "zero_exit_decisions": [
+      "supported",
+      "degraded"
+    ],
+    "nonzero_exit_decisions": [
+      "unsupported",
+      "not_promotable",
+      "fail_closed"
+    ],
+    "rationale": "unsupported and not_promotable receipts are readable explanations, not successful validation outcomes"
+  },
+  "receipt_required_fields": [
+    "schema_version",
+    "receipt_id",
+    "generated_at_utc",
+    "decision",
+    "reason_codes",
+    "source_inputs",
+    "artifact_refs",
+    "claim_refs",
+    "bead_refs",
+    "evidence_freshness",
+    "mock_status",
+    "local_fallback_status",
+    "replay_commands",
+    "remediation",
+    "source_line_refs",
+    "mutation_policy",
+    "renderer_boundary"
+  ],
+  "source_input_required_fields": [
+    "input_kind",
+    "source_path",
+    "schema_version",
+    "content_hash",
+    "freshness",
+    "availability"
+  ],
+  "artifact_ref_required_fields": [
+    "artifact_id",
+    "path",
+    "content_hash",
+    "required",
+    "present",
+    "schema_version",
+    "replay_command"
+  ],
+  "claim_ref_required_fields": [
+    "claim_id",
+    "allowed_state",
+    "actual_wording_state",
+    "source_path",
+    "source_span",
+    "owning_bead",
+    "downgrade_text"
+  ],
+  "bead_ref_required_fields": [
+    "bead_id",
+    "status",
+    "assignee",
+    "blockers",
+    "tracker_source",
+    "freshness_status"
+  ],
+  "mock_status_values": [
+    "absent",
+    "present_fail_closed",
+    "unknown_fail_closed"
+  ],
+  "local_fallback_status_values": [
+    "absent",
+    "present_fail_closed",
+    "unknown_fail_closed"
+  ],
+  "fail_closed_reason_codes": [
+    {
+      "code": "missing_claim_row",
+      "trigger": "Claim id absent from claim_to_proof_matrix_v1.json",
+      "remediation": "Add or correct the matrix row before explaining the claim"
+    },
+    {
+      "code": "invalid_matrix_schema",
+      "trigger": "Claim matrix schema missing or unsupported",
+      "remediation": "Regenerate or fix the matrix and rerun the claim gate"
+    },
+    {
+      "code": "unreadable_matrix",
+      "trigger": "Claim matrix path is missing, unreadable, or invalid JSON",
+      "remediation": "Read or regenerate the claim-to-proof matrix, then rerun the claim gate"
+    },
+    {
+      "code": "missing_required_field",
+      "trigger": "A claim matrix row omits a field required for its wording state",
+      "remediation": "Fill the required matrix fields before explaining the claim"
+    },
+    {
+      "code": "duplicate_claim_row",
+      "trigger": "More than one claim matrix row has the requested claim id",
+      "remediation": "Deduplicate the matrix row before explaining the claim"
+    },
+    {
+      "code": "invalid_wording_state",
+      "trigger": "allowed_state or actual_wording_state is outside hypothesis, target, or observed",
+      "remediation": "Use the supported wording states before explaining the claim"
+    },
+    {
+      "code": "wording_stronger_than_allowed",
+      "trigger": "Actual wording is stronger than the matrix allows",
+      "remediation": "Downgrade the wording or promote it only after upstream proof gates pass"
+    },
+    {
+      "code": "claim_not_observed",
+      "trigger": "The matrix row is target or hypothesis, not observed proof",
+      "remediation": "Keep the explanation degraded or not_promotable until observed proof artifacts are linked"
+    },
+    {
+      "code": "stale_tracker_state",
+      "trigger": ".beads/issues.jsonl and derived DB disagree, or tracker freshness cannot be established",
+      "remediation": "Run the documented Beads sync/import/export path and re-read state"
+    },
+    {
+      "code": "absent_artifact",
+      "trigger": "Required artifact path is missing",
+      "remediation": "Produce or attach the upstream gate bundle"
+    },
+    {
+      "code": "missing_reproducibility_bundle",
+      "trigger": "Observed proof artifact is present but lacks a nearby repro.lock",
+      "remediation": "Add a reproducibility bundle before treating the claim as supported"
+    },
+    {
+      "code": "invalid_expected_hash",
+      "trigger": "Matrix expected hash is not sha256:<64-hex> or bare 64-hex",
+      "remediation": "Replace the expected artifact hash or omit it until an authority source exists"
+    },
+    {
+      "code": "artifact_hash_mismatch",
+      "trigger": "Matrix expected hash does not match the artifact bytes",
+      "remediation": "Regenerate the artifact from the recorded replay command or correct the matrix hash authority"
+    },
+    {
+      "code": "stale_artifact",
+      "trigger": "Claim-level freshness budget or observed artifact freshness is stale or unknown",
+      "remediation": "Refresh the observed proof artifact or downgrade the claim before treating it as supported"
+    },
+    {
+      "code": "incomplete_artifact_bundle",
+      "trigger": "Required bundle member such as run_manifest.json, events.jsonl, or commands.txt is absent",
+      "remediation": "Re-run the upstream gate or point at a complete preserved bundle"
+    },
+    {
+      "code": "malformed_manifest",
+      "trigger": "Bundle manifest JSON/TOML cannot be parsed as an object",
+      "remediation": "Fix the manifest syntax/schema before using the bundle as evidence"
+    },
+    {
+      "code": "invalid_required_member",
+      "trigger": "Bundle manifest required_members is empty, contains entries without non-empty string paths, declares malformed or conflicting member hashes, or uses non-boolean required flags",
+      "remediation": "Fix the manifest so required members are explicit root-relative paths or path objects with boolean required flags and valid, non-conflicting SHA-256 hex hash fields"
+    },
+    {
+      "code": "path_escape",
+      "trigger": "A bundle manifest member path resolves outside the declared bundle root",
+      "remediation": "Reject the bundle and regenerate it with root-relative member paths only"
+    },
+    {
+      "code": "unsupported_schema",
+      "trigger": "Bundle schema or version outside the V1 allowlist",
+      "remediation": "Add schema support in a future bead or use a supported bundle"
+    },
+    {
+      "code": "hash_mismatch",
+      "trigger": "Declared hash does not match available bytes",
+      "remediation": "Treat artifact as untrusted and regenerate from source"
+    },
+    {
+      "code": "mock_contaminated",
+      "trigger": "MockCertificate, hot_paths_simulation, placeholder, or fixture-only evidence backs an observed proof claim",
+      "remediation": "Replace with a live or preserved non-mock proof artifact"
+    },
+    {
+      "code": "local_fallback_contaminated",
+      "trigger": "Heavy proof command used local Cargo or non-remote fallback where the contract requires rch",
+      "remediation": "Re-run through rch and attach the remote proof bundle"
+    },
+    {
+      "code": "contradictory_bead_status",
+      "trigger": "Matrix or receipt says observed/done while owning bead is blocked/open without an explicit exception",
+      "remediation": "Resolve tracker status or downgrade the claim"
+    },
+    {
+      "code": "missing_replay_command",
+      "trigger": "Upstream artifact claims replayability but has no exact replay command",
+      "remediation": "Regenerate bundle with command transcript and replay metadata"
+    },
+    {
+      "code": "invalid_replay_command",
+      "trigger": "Bundle manifest declares replay command fields with non-string or empty string values",
+      "remediation": "Fix the manifest so every declared replay command is an exact non-empty command string"
+    },
+    {
+      "code": "stale_or_unfresh",
+      "trigger": "Freshness exceeds upstream maximum, cannot be computed, or any declared freshness alias is stale or malformed",
+      "remediation": "Regenerate evidence or emit degraded state"
+    },
+    {
+      "code": "unavailable_e8_certifier",
+      "trigger": "E8 certificate or capstone artifact is not yet available",
+      "remediation": "Emit degraded or non-promotable E8 report until certifier surfaces land"
+    },
+    {
+      "code": "explicit_e8_uncertified_refusal",
+      "trigger": "E8 refusal ledger has refusal codes or a non-certifiable result class",
+      "remediation": "Preserve ledger_id, refusal code, class, source reference, and remediation while blocking positive non-use wording"
+    },
+    {
+      "code": "malformed_e8_refusal_ledger",
+      "trigger": "Refusal ledger has invalid schema, unknown refusal code or class, or an unresolved refusal source reference",
+      "remediation": "Treat the ledger as untrusted and rerun the E8 preflight or capstone producer"
+    },
+    {
+      "code": "duplicate_e8_identifier",
+      "trigger": "E8 route, binding, claim, purpose, or data-source id repeats where uniqueness is required",
+      "remediation": "Fix the data contract or certifier input and rerun upstream validation"
+    },
+    {
+      "code": "unknown_e8_claim_reference",
+      "trigger": "E8 certificate references a claim id absent from the matrix",
+      "remediation": "Add or correct matrix linkage or reject the certificate report"
+    },
+    {
+      "code": "invalid_source_span",
+      "trigger": "Matrix source span has invalid one-based line numbers",
+      "remediation": "Use one-based source span line numbers with start_line <= end_line"
+    },
+    {
+      "code": "source_path_missing",
+      "trigger": "Matrix source path cannot be located",
+      "remediation": "Restore the source path or update the matrix before treating the claim as supported"
+    },
+    {
+      "code": "source_path_unreadable",
+      "trigger": "Matrix source path exists but cannot be read",
+      "remediation": "Make the source readable or update the matrix before explaining the claim"
+    },
+    {
+      "code": "source_span_mismatch",
+      "trigger": "Matrix must_contain text is absent from the declared source span",
+      "remediation": "Update the source span or downgrade the claim until source text matches"
+    },
+    {
+      "code": "source_span_unavailable",
+      "trigger": "Source line references cannot be located",
+      "remediation": "Preserve path-only source ref and mark line span unavailable"
+    },
+    {
+      "code": "unsupported_input_kind",
+      "trigger": "Input family is outside the V1 contract",
+      "remediation": "Add an explicit future contract extension before trusting it"
+    }
+  ],
+  "overlap_map": [
+    {
+      "existing_lane": "SWARM-OPS-P0",
+      "owned_scope": "operational status, dashboards, swarm runbooks",
+      "this_contract_scope": "external artifact explanation receipts only; no queue or dashboard ownership"
+    },
+    {
+      "existing_lane": "SWARM-CTRL",
+      "owned_scope": "control-plane advisory and validation workflow",
+      "this_contract_scope": "trust-artifact reader boundary; no control-plane mutation or scheduling"
+    },
+    {
+      "existing_lane": "SWARM-AUTOPILOT",
+      "owned_scope": "autopilot hindsight, warehouse, panels, policy bundles",
+      "this_contract_scope": "reads supplied artifacts only; does not tune queues"
+    },
+    {
+      "existing_lane": "actionability_truth_gates",
+      "owned_scope": "safe-to-claim or defer classification",
+      "this_contract_scope": "explains owning bead status as evidence context, not as a claimability oracle"
+    },
+    {
+      "existing_lane": "agent_mail_identity_repair",
+      "owned_scope": "Agent Mail identity reconciliation and SLA panels",
+      "this_contract_scope": "no Agent Mail mutation; may cite archived messages only if supplied as artifacts"
+    },
+    {
+      "existing_lane": "proof_cache_locality",
+      "owned_scope": "cache freshness, reuse admission, remote proof economics",
+      "this_contract_scope": "reports freshness and local-fallback status; does not warm or evict caches"
+    },
+    {
+      "existing_lane": "rch_stall_ledgers",
+      "owned_scope": "remote worker stall and no-verdict diagnostics",
+      "this_contract_scope": "flags local fallback or missing remote proof; does not run or cancel rch"
+    },
+    {
+      "existing_lane": "claim_to_proof_matrix_gate",
+      "owned_scope": "claim wording source of truth and allowed state",
+      "this_contract_scope": "human/auditor explanation over matrix rows; cannot override the gate"
+    },
+    {
+      "existing_lane": "e2_e3_e8_tracks",
+      "owned_scope": "differential, recorder, and certificate evidence production",
+      "this_contract_scope": "reads artifacts and explains missing/degraded states; cannot prove them"
+    },
+    {
+      "existing_lane": "e8_refusal_ledger_track",
+      "owned_scope": "analyzed-subset refusal vocabulary, deterministic fixtures, and preflight receipts",
+      "this_contract_scope": "preserves explicit refusal state for auditors; cannot upgrade refusal into a certificate"
+    }
+  ],
+  "required_test_obligations_for_child_beads": [
+    "observed_claim_explanation_with_stable_hashes_and_owning_bead_refs",
+    "target_or_hypothesis_claim_explained_as_degraded_or_not_promotable",
+    "missing_claim_row",
+    "stale_or_contradictory_tracker_state",
+    "complete_proof_artifact_bundle",
+    "missing_bundle_member",
+    "malformed_bundle_manifest",
+    "malformed_or_non_string_bundle_freshness",
+    "bundle_member_path_escape",
+    "unsupported_schema",
+    "hash_mismatch",
+    "mock_contaminated_certificate_or_simulated_hot_path_artifact",
+    "local_fallback_heavy_proof_contamination",
+    "missing_replay_command",
+    "e8_duplicate_id",
+    "e8_missing_certifier_or_capstone_evidence",
+    "e8_explicit_uncertified_refusal_ledger",
+    "e8_malformed_refusal_ledger_or_missing_source_ref",
+    "e8_positive_non_use_wording_blocked_by_refusal_evidence",
+    "e8_unknown_claim_reference"
+  ],
+  "golden_scrub_policy": {
+    "scrub": [
+      "generated_at_utc",
+      "absolute_temp_paths",
+      "hostnames",
+      "process_ids",
+      "worker_ids"
+    ],
+    "preserve": [
+      "semantic_ids",
+      "reason_codes",
+      "content_hashes",
+      "source_paths",
+      "claim_ids",
+      "bead_ids"
+    ]
+  },
+  "supported_consumers": [
+    "shell_scripts",
+    "frankenctl_report_doctor_explain_commands",
+    "/dp/frankentui_renderers",
+    "/dp/franken_node_staging_workflows"
+  ],
+  "truth_constraints": [
+    "Explainers are advisory proof readers, not proof authorities.",
+    "Supported decisions must not promote target or hypothesis claims.",
+    "CLI and smoke/gate wrappers may exit zero only for supported or explicitly degraded receipts.",
+    "Missing, stale, contradictory, mock-contaminated, local-fallback, or unsupported evidence must fail closed or degrade explicitly.",
+    "Replay commands may be reported but must not be auto-executed by the explainer.",
+    "E8 certificate reports remain degraded or not_promotable until certifier and capstone artifacts exist.",
+    "Explicit E8 refusal ledgers must be reported as refusal evidence, not as missing certifier evidence.",
+    "External explainers must preserve E8 refusal ledger_id as the content-addressed refusal identity.",
+    "No positive E8 non-use wording may be emitted when a refusal ledger has refusal codes or a non-certifiable result class.",
+    "Future rich interactive UI must reuse /dp/frankentui.",
+    "Any Cargo validation added by child beads must run through rch and reject local fallback."
+  ]
+}

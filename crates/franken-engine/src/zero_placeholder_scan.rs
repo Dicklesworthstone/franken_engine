@@ -38,7 +38,7 @@ pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placehold
 pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 20;
 
 const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
-    include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
+    include_str!("../docs/rgc_docs_help_surface_audit_v1.json");
 const CLI_DOCS_HELP_POLICY_ID: &str = "policy-rgc-docs-help-surface-audit-v1";
 const CLI_DOCS_HELP_BEAD_ID: &str = "bd-1lsy.10.11.1";
 const SCRIPT_MEASUREMENT_TRUTH_BEAD_ID: &str = "bd-gxsdx";

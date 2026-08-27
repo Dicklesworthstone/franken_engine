@@ -1,0 +1,59 @@
+{
+  "schema_version": "rgc.structured-logging.contract.v1",
+  "bead_id": "bd-1lsy.11.16",
+  "generated_by": "bd-1lsy.11.16",
+  "logging_schema": {
+    "event_schema_version": "rgc.structured-log-event.v1",
+    "required_fields": [
+      "scenario_id",
+      "fixture_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "lane",
+      "component",
+      "event",
+      "outcome",
+      "error_code",
+      "seed",
+      "timing_us",
+      "timestamp_unix_ms"
+    ],
+    "required_correlation_ids": [
+      "scenario_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "seed"
+    ]
+  },
+  "correlation_policy": {
+    "correlation_key_fields": [
+      "scenario_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "seed"
+    ]
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "error_code": "FE-RGC-054A-LOG-SCHEMA-0001"
+  },
+  "redaction_audit_contract": {
+    "bead_id": "bd-1lsy.11.18",
+    "schema_version": "rgc.redaction-audit-report.v1",
+    "component": "rgc_redaction_audit",
+    "event": "apply_redaction_with_audit",
+    "deterministic_serialization": {
+      "serialize_fn": "serialize_redaction_audit_report",
+      "deserialize_fn": "deserialize_redaction_audit_report",
+      "hash_field": "report_hash"
+    }
+  },
+  "operator_verification": [
+    "./scripts/run_rgc_structured_logging_contract_gate.sh ci",
+    "./scripts/e2e/rgc_structured_logging_contract_replay.sh",
+    "jq empty docs/rgc_structured_logging_contract_v1.json"
+  ]
+}

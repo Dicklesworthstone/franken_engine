@@ -1,0 +1,127 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-policy-sustained-gain-scorer-contract.v1",
+  "bead_id": "bd-mj81s",
+  "parent_bead_id": "bd-6qnx9",
+  "depends_on": [
+    "bd-my39p",
+    "bd-adgrb",
+    "bd-j2rny"
+  ],
+  "script": "scripts/swarm_execution_queue_policy_sustained_gain_scorer.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_policy_sustained_gain_scorer_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_POLICY_SUSTAINED_GAIN_SCORER.md",
+  "sustained_gain_receipt_schema_version": "franken-engine.swarm-execution-queue-policy-sustained-gain-receipt.v1",
+  "post_adoption_drift_ledger_schema_version": "franken-engine.swarm-execution-queue-post-adoption-drift-ledger.v1",
+  "evidence_hashes_schema_version": "franken-engine.swarm-execution-queue-policy-sustained-gain-evidence-hashes.v1",
+  "required_inputs": [
+    {
+      "field": "adoption_receipt_json",
+      "argument": "--adoption-receipt-json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-adoption-receipt.v1",
+      "hash_required": true
+    },
+    {
+      "field": "adoption_snapshot_bundle_json",
+      "argument": "--adoption-snapshot-bundle-json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-adoption-snapshot-bundle.v1",
+      "hash_required": true
+    },
+    {
+      "field": "post_adoption_fidelity_score_receipt_json",
+      "argument": "--post-adoption-fidelity-score-receipt-json",
+      "schema_version": "franken-engine.swarm-execution-queue-fidelity-score-receipt.v1",
+      "hash_required": true
+    },
+    {
+      "field": "post_adoption_drift_ledger_json",
+      "argument": "--post-adoption-drift-ledger-json",
+      "schema_version": "franken-engine.swarm-execution-queue-drift-ledger.v1",
+      "hash_required": true
+    },
+    {
+      "field": "evidence_ownership_json",
+      "argument": "--evidence-ownership-json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-evidence-ownership.v1",
+      "hash_required": true
+    }
+  ],
+  "artifact_paths": {
+    "sustained_gain_receipt_json": "sustained_gain_receipt.json",
+    "post_adoption_drift_ledger_json": "post_adoption_drift_ledger.json",
+    "evidence_hashes_json": "evidence_hashes.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "scoring_policy": {
+    "minimum_observation_duration_seconds": 1800,
+    "minimum_sample_count": 3,
+    "sustained_gain_floor_fraction_of_promised_delta": "1/2",
+    "regression_below_baseline_is_failure": true,
+    "rollback_drift_classes": [
+      "proof_drift",
+      "ownership_drift",
+      "restore_drift"
+    ],
+    "required_monitored_metrics": [
+      "queue_fidelity_millionths",
+      "proof_drift_count",
+      "rollback_trigger_count"
+    ]
+  },
+  "ownership_policy": {
+    "evidence_ownership_required": true,
+    "ambiguous_owner_fails_closed": true,
+    "stale_or_rejected_evidence_fails_closed": true,
+    "required_artifact_kinds": [
+      "adoption_receipt_json",
+      "adoption_snapshot_bundle_json",
+      "post_adoption_fidelity_score_receipt_json",
+      "post_adoption_drift_ledger_json"
+    ]
+  },
+  "mutation_policy": {
+    "scoring_artifact_only": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false
+  },
+  "verdicts": [
+    "sustained_gain",
+    "regression_detected",
+    "inconclusive_drift",
+    "fail_closed"
+  ],
+  "fail_closed_rules": [
+    "missing input artifacts fail closed",
+    "bad input schemas fail closed",
+    "adoption receipt not admitted fails closed",
+    "incomplete observation window fails closed",
+    "insufficient sample count fails closed",
+    "missing monitored metrics fail closed",
+    "ambiguous evidence ownership fails closed",
+    "stale or rejected evidence ownership fails closed",
+    "automatic retuning claims fail closed",
+    "unsupported sustained-gain claims in inputs fail closed",
+    "reject local fallback proof evidence"
+  ],
+  "selftest_scenarios": [
+    "sustained_gain_passes",
+    "regression_detected",
+    "inconclusive_drift",
+    "incomplete_window_fails_closed",
+    "ambiguous_ownership_fails_closed",
+    "missing_metric_fails_closed"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_policy_sustained_gain_scorer.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_policy_sustained_gain_scorer_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_policy_sustained_gain_scorer.sh scripts/e2e/swarm_execution_queue_policy_sustained_gain_scorer_smoke.sh",
+    "jq empty docs/swarm_execution_queue_policy_sustained_gain_scorer_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_policy_sustained_gain_scorer_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_policy_sustained_gain_scorer_smoke.sh selftest"
+  ]
+}

@@ -64,9 +64,9 @@ const DEPENDENCY_ORDER_ERROR_CODE: &str = "FE-RGC-010-ORDER-0001";
 const WAVE_VALIDATION_ERROR_CODE: &str = "FE-RGC-010-WAVE-0001";
 
 const SCOPE_SOURCE_JSON: &str =
-    include_str!("../../../docs/rgc_executable_compatibility_target_matrix_v1.json");
-const MILESTONE_SOURCE_JSON: &str = include_str!("../../../docs/rgc_milestone_gatebook_v1.json");
-const RISK_SOURCE_JSON: &str = include_str!("../../../docs/rgc_risk_register_v1.json");
+    include_str!("../docs/rgc_executable_compatibility_target_matrix_v1.json");
+const MILESTONE_SOURCE_JSON: &str = include_str!("../docs/rgc_milestone_gatebook_v1.json");
+const RISK_SOURCE_JSON: &str = include_str!("../docs/rgc_risk_register_v1.json");
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(1);
 

@@ -1,0 +1,264 @@
+{
+  "schema_version": "frx.frankenbrowser-integration-blueprint.v1",
+  "bead_id": "bd-mjh3.9.3",
+  "generated_by": "bd-mjh3.9.3",
+  "generated_at_utc": "2026-02-27T00:00:00Z",
+  "track": {
+    "id": "FRX-09.3",
+    "name": "FrankenBrowser Integration Blueprint"
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "architecture": {
+    "embedding_boundaries": [
+      {
+        "boundary_id": "browser_host_boundary",
+        "host_surface": "frankenbrowser.dom_scheduler",
+        "sidecar_surface": "frankenreact.sidecar_runtime",
+        "isolation_mode": "capability_channel",
+        "allowed_capabilities": [
+          "dom.read",
+          "dom.patch",
+          "scheduler.enqueue"
+        ],
+        "denied_capabilities": [
+          "net.raw_socket",
+          "fs.host_write",
+          "process.spawn"
+        ],
+        "fallback_route": "sidecar_isolation_safe_mode",
+        "deterministic_contract": "serialized_command_stream"
+      },
+      {
+        "boundary_id": "scheduler_bridge_boundary",
+        "host_surface": "frankenbrowser.cooperative_scheduler",
+        "sidecar_surface": "frankenreact.sidecar_scheduler",
+        "isolation_mode": "turn_based_arbitration",
+        "allowed_capabilities": [
+          "scheduler.dequeue",
+          "scheduler.prioritize",
+          "scheduler.yield"
+        ],
+        "denied_capabilities": [
+          "scheduler.random_preempt",
+          "scheduler.priority_override_unbounded"
+        ],
+        "fallback_route": "scheduler_safe_mode",
+        "deterministic_contract": "queue_order_witness_v1"
+      },
+      {
+        "boundary_id": "policy_enforcement_boundary",
+        "host_surface": "frankenbrowser.policy_gate",
+        "sidecar_surface": "frankenreact.capability_router",
+        "isolation_mode": "deny_by_default",
+        "allowed_capabilities": [
+          "policy.attest",
+          "policy.audit_emit",
+          "policy.route_fallback"
+        ],
+        "denied_capabilities": [
+          "policy.bypass",
+          "policy.mutation_without_receipt"
+        ],
+        "fallback_route": "policy_boundary_safe_mode",
+        "deterministic_contract": "decision_receipt_linkage_v1"
+      }
+    ],
+    "scheduler_contract": {
+      "host_scheduler": "frankenbrowser.cooperative_scheduler",
+      "sidecar_scheduler": "frankenreact.sidecar_scheduler",
+      "arbitration_mode": "deterministic_turn_based",
+      "preemption_budget_us": 5000,
+      "require_replay_stable_queue_order": true,
+      "require_explicit_handoff_receipts": true,
+      "fallback_route": "scheduler_safe_mode"
+    },
+    "security_policy_boundaries": [
+      {
+        "policy_surface": "capability_router",
+        "enforcement_mode": "deny_by_default",
+        "requires_signed_receipt": true,
+        "fallback_route": "policy_boundary_safe_mode"
+      },
+      {
+        "policy_surface": "dom_mutation_bridge",
+        "enforcement_mode": "allowlist_with_budget",
+        "requires_signed_receipt": true,
+        "fallback_route": "sidecar_isolation_safe_mode"
+      }
+    ]
+  },
+  "migration_phases": [
+    {
+      "phase_id": "P0_optional_sidecar",
+      "position": 0,
+      "entry_criteria": [
+        "embedding boundaries declared",
+        "host-side capability mapping published"
+      ],
+      "exit_criteria": [
+        "operator-visible decision traces emitted",
+        "shadow mode readiness checklist complete"
+      ],
+      "promotion_blockers": [
+        "missing boundary receipts"
+      ],
+      "rollback_action": "disable_sidecar_router"
+    },
+    {
+      "phase_id": "P1_shadow_mode",
+      "position": 1,
+      "entry_criteria": [
+        "P0 optional sidecar criteria complete",
+        "shadow differential telemetry enabled"
+      ],
+      "exit_criteria": [
+        "deterministic mismatch taxonomy established",
+        "replay manifests generated for divergence scenarios"
+      ],
+      "promotion_blockers": [
+        "unclassified divergence classes",
+        "missing replay artifacts"
+      ],
+      "rollback_action": "force_shadow_observe_only"
+    },
+    {
+      "phase_id": "P2_guarded_active",
+      "position": 2,
+      "entry_criteria": [
+        "shadow mismatch budget under threshold",
+        "policy-boundary deny routes verified"
+      ],
+      "exit_criteria": [
+        "guarded-active cutover drills pass",
+        "scheduler handoff receipts are deterministic"
+      ],
+      "promotion_blockers": [
+        "policy confidence below threshold",
+        "scheduler handoff replay drift"
+      ],
+      "rollback_action": "route_to_shadow_mode"
+    },
+    {
+      "phase_id": "P3_first_class_subsystem",
+      "position": 3,
+      "entry_criteria": [
+        "P2 guarded-active criteria complete",
+        "gatebook evidence package attached"
+      ],
+      "exit_criteria": [
+        "first-class subsystem launch checklist complete",
+        "incident rollback drill passes in deterministic mode"
+      ],
+      "promotion_blockers": [
+        "missing FRX-09.2 publication linkage",
+        "incomplete FRX-07.2 compatibility evidence",
+        "missing FRX-20.6 integrated C5 evidence bundle"
+      ],
+      "rollback_action": "revert_to_guarded_active"
+    }
+  ],
+  "prerequisites": [
+    {
+      "bead_id": "bd-mjh3.7.2",
+      "reason": "SSR/hydration/RSC compatibility strategy baseline required for browser integration safety.",
+      "status": "required"
+    },
+    {
+      "bead_id": "bd-mjh3.9.2",
+      "reason": "Release gatebook and publication workflow required before first-class subsystem promotion.",
+      "status": "required"
+    },
+    {
+      "bead_id": "bd-mjh3.20.6",
+      "reason": "C5 readiness requires integrated milestone/release test-evidence signals before subsystem promotion.",
+      "status": "required"
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "frx-09.3-embed-boundary-handshake",
+      "category": "embedding_boundary",
+      "required_phase": "P1_shadow_mode",
+      "expected_decision_path": "boundary_handshake",
+      "expected_outcome": "pass",
+      "log_template": {
+        "scenario_id": "frx-09.3-embed-boundary-handshake",
+        "component": "frx_frankenbrowser_integration_blueprint",
+        "decision_path": "boundary_handshake",
+        "outcome": "pass"
+      }
+    },
+    {
+      "scenario_id": "frx-09.3-policy-denial-fallback",
+      "category": "security_policy",
+      "required_phase": "P2_guarded_active",
+      "expected_decision_path": "policy_boundary_deny_fallback",
+      "expected_outcome": "fallback",
+      "log_template": {
+        "scenario_id": "frx-09.3-policy-denial-fallback",
+        "component": "frx_frankenbrowser_integration_blueprint",
+        "decision_path": "policy_boundary_deny_fallback",
+        "outcome": "fallback"
+      }
+    },
+    {
+      "scenario_id": "frx-09.3-scheduler-handoff",
+      "category": "scheduler_runtime",
+      "required_phase": "P2_guarded_active",
+      "expected_decision_path": "scheduler_handoff",
+      "expected_outcome": "pass",
+      "log_template": {
+        "scenario_id": "frx-09.3-scheduler-handoff",
+        "component": "frx_frankenbrowser_integration_blueprint",
+        "decision_path": "scheduler_handoff",
+        "outcome": "pass"
+      }
+    },
+    {
+      "scenario_id": "frx-09.3-first-class-cutover",
+      "category": "migration_cutover",
+      "required_phase": "P3_first_class_subsystem",
+      "expected_decision_path": "first_class_cutover",
+      "expected_outcome": "pass",
+      "log_template": {
+        "scenario_id": "frx-09.3-first-class-cutover",
+        "component": "frx_frankenbrowser_integration_blueprint",
+        "decision_path": "first_class_cutover",
+        "outcome": "pass"
+      }
+    },
+    {
+      "scenario_id": "frx-12.6-c5-evidence-integration",
+      "category": "release_evidence",
+      "required_phase": "P3_first_class_subsystem",
+      "expected_decision_path": "c5_integrated_evidence_gate",
+      "expected_outcome": "pass",
+      "log_template": {
+        "scenario_id": "frx-12.6-c5-evidence-integration",
+        "component": "frx_frankenbrowser_integration_blueprint",
+        "decision_path": "c5_integrated_evidence_gate",
+        "outcome": "pass"
+      }
+    }
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_frankenbrowser_integration_blueprint_suite.sh ci",
+    "./scripts/e2e/frx_frankenbrowser_integration_blueprint_replay.sh ci",
+    "./scripts/run_frx_milestone_release_test_evidence_integrator_suite.sh ci",
+    "./scripts/e2e/frx_milestone_release_test_evidence_integrator_replay.sh ci",
+    "jq empty docs/frx_frankenbrowser_integration_blueprint_v1.json"
+  ]
+}

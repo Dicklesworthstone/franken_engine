@@ -1,0 +1,279 @@
+{
+  "schema_version": "frx.end-to-end-scenario-matrix.v1",
+  "bead_id": "bd-mjh3.20.3",
+  "generated_by": "bd-mjh3.20.3",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-20.3",
+    "name": "End-to-End Scenario Matrix with Differential and Chaos Lanes"
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "matrix_policy": {
+    "failure_mode": "fail_closed",
+    "require_unit_anchor_ids": true,
+    "require_invariant_refs": true,
+    "differential_requires_baseline": true,
+    "chaos_requires_profile": true,
+    "deterministic_seed_required": true,
+    "correlation_id_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id"
+    ],
+    "promotion_gate_consumers": [
+      "frx_cut_line_c1",
+      "frx_cut_line_c2",
+      "frx_release_evidence_integrator"
+    ]
+  },
+  "scenario_catalog": [
+    {
+      "scenario_id": "frx-20.3-baseline-render-hydration",
+      "class": "baseline",
+      "fixture_ref": "compat.hydration.server_client_mismatch",
+      "coverage_tags": [
+        "render",
+        "update",
+        "hydration"
+      ],
+      "baseline_scenario_id": null,
+      "chaos_profile": null,
+      "unit_anchor_ids": [
+        "unit.e2e_harness.baseline_render_hydration",
+        "unit.frx_ssr_hydration_rsc_compatibility_strategy.required_scenarios"
+      ],
+      "invariant_refs": [
+        "inv.render.hydration_boundary_equivalence",
+        "inv.replay.seed_transcript_stability"
+      ],
+      "decision_path": "baseline_render_hydration",
+      "expected_outcome": "pass",
+      "replay_seed": 1201,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-baseline-navigation-recovery",
+      "class": "baseline",
+      "fixture_ref": "compat.rsc.server_component_hook_violation",
+      "coverage_tags": [
+        "navigation",
+        "error_recovery"
+      ],
+      "baseline_scenario_id": null,
+      "chaos_profile": null,
+      "unit_anchor_ids": [
+        "unit.e2e_harness.baseline_navigation_recovery",
+        "unit.frx_ssr_hydration_rsc_compatibility_strategy.fallback_policy"
+      ],
+      "invariant_refs": [
+        "inv.router.safe_mode_failover",
+        "inv.replay.trace_decision_correlation"
+      ],
+      "decision_path": "baseline_navigation_recovery",
+      "expected_outcome": "pass",
+      "replay_seed": 1202,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-diff-render-hydration",
+      "class": "differential",
+      "fixture_ref": "compat.ssr.streaming.suspense_handoff",
+      "coverage_tags": [
+        "render",
+        "hydration"
+      ],
+      "baseline_scenario_id": "frx-20.3-baseline-render-hydration",
+      "chaos_profile": null,
+      "unit_anchor_ids": [
+        "unit.e2e_harness.differential_render_hydration"
+      ],
+      "invariant_refs": [
+        "inv.differential.baseline_parity",
+        "inv.replay.seed_transcript_stability"
+      ],
+      "decision_path": "differential_render_hydration",
+      "expected_outcome": "pass",
+      "replay_seed": 1301,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-diff-navigation-recovery",
+      "class": "differential",
+      "fixture_ref": "compat.hydration.server_client_mismatch",
+      "coverage_tags": [
+        "navigation",
+        "error_recovery"
+      ],
+      "baseline_scenario_id": "frx-20.3-baseline-navigation-recovery",
+      "chaos_profile": null,
+      "unit_anchor_ids": [
+        "unit.e2e_harness.differential_navigation_recovery"
+      ],
+      "invariant_refs": [
+        "inv.differential.contract_drift_budget",
+        "inv.replay.trace_decision_correlation"
+      ],
+      "decision_path": "differential_navigation_recovery",
+      "expected_outcome": "pass",
+      "replay_seed": 1302,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-chaos-latency-spike",
+      "class": "chaos",
+      "fixture_ref": "compat.ssr.streaming.suspense_handoff",
+      "coverage_tags": [
+        "render",
+        "degraded_mode",
+        "latency_spike",
+        "failover"
+      ],
+      "baseline_scenario_id": null,
+      "chaos_profile": "chaos.latency_spike_partial_failure",
+      "unit_anchor_ids": [
+        "unit.e2e_harness.chaos_latency_spike",
+        "unit.hybrid_lane_router.safe_mode_fallback_trigger"
+      ],
+      "invariant_refs": [
+        "inv.chaos.policy_demotion_precedence",
+        "inv.failover.replay_pointer_integrity"
+      ],
+      "decision_path": "chaos_latency_spike_failover",
+      "expected_outcome": "fallback",
+      "replay_seed": 1401,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-chaos-policy-demotion",
+      "class": "chaos",
+      "fixture_ref": "compat.rsc.server_component_hook_violation",
+      "coverage_tags": [
+        "navigation",
+        "degraded_mode",
+        "policy_demotion",
+        "failover"
+      ],
+      "baseline_scenario_id": null,
+      "chaos_profile": "chaos.policy_demotion_failover",
+      "unit_anchor_ids": [
+        "unit.e2e_harness.chaos_policy_demotion",
+        "unit.runtime_decision_theory.expected_loss_actioning"
+      ],
+      "invariant_refs": [
+        "inv.chaos.safe_mode_fallback",
+        "inv.replay.trace_decision_correlation"
+      ],
+      "decision_path": "chaos_policy_demotion_failover",
+      "expected_outcome": "fallback",
+      "replay_seed": 1402,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-fault-recovery-adversarial",
+      "class": "fault_injection",
+      "fixture_ref": "compat.hydration.server_client_mismatch",
+      "coverage_tags": [
+        "error_recovery",
+        "adversarial",
+        "partial_failure"
+      ],
+      "baseline_scenario_id": null,
+      "chaos_profile": null,
+      "unit_anchor_ids": [
+        "unit.e2e_harness.fault_recovery_adversarial"
+      ],
+      "invariant_refs": [
+        "inv.fault.recovery_route_stability"
+      ],
+      "decision_path": "fault_recovery_adversarial",
+      "expected_outcome": "fail",
+      "replay_seed": 1501,
+      "target_arch": null
+    },
+    {
+      "scenario_id": "frx-20.3-cross-arch-replay",
+      "class": "cross_arch",
+      "fixture_ref": "compat.ssr.streaming.suspense_handoff",
+      "coverage_tags": [
+        "render",
+        "cross_arch",
+        "deterministic_replay"
+      ],
+      "baseline_scenario_id": null,
+      "chaos_profile": null,
+      "unit_anchor_ids": [
+        "unit.e2e_harness.cross_arch_replay_contract"
+      ],
+      "invariant_refs": [
+        "inv.cross_arch.digest_stability"
+      ],
+      "decision_path": "cross_arch_replay",
+      "expected_outcome": "pass",
+      "replay_seed": 1601,
+      "target_arch": "aarch64-unknown-linux-gnu"
+    }
+  ],
+  "chaos_profiles": [
+    {
+      "profile_id": "chaos.latency_spike_partial_failure",
+      "seed_offset": 101,
+      "fault_injectors": [
+        "latency_spike",
+        "partial_response_drop"
+      ],
+      "expected_policy_actions": [
+        "challenge",
+        "sandbox",
+        "fallback"
+      ]
+    },
+    {
+      "profile_id": "chaos.policy_demotion_failover",
+      "seed_offset": 202,
+      "fault_injectors": [
+        "policy_demotion",
+        "worker_pool_degrade"
+      ],
+      "expected_policy_actions": [
+        "demote",
+        "fallback"
+      ]
+    }
+  ],
+  "differential_contract": {
+    "baseline_classes": [
+      "baseline"
+    ],
+    "comparison_dimensions": [
+      "output_digest",
+      "event_count",
+      "first_error_code",
+      "decision_path"
+    ],
+    "drift_thresholds_millionths": {
+      "output_digest_mismatch": 0,
+      "event_count_delta": 0,
+      "error_code_delta": 0,
+      "decision_path_delta": 0
+    },
+    "block_on_unexplained_drift": true
+  },
+  "operator_verification": [
+    "./scripts/run_frx_end_to_end_scenario_matrix_suite.sh ci",
+    "./scripts/e2e/frx_end_to_end_scenario_matrix_replay.sh ci",
+    "jq empty docs/frx_end_to_end_scenario_matrix_v1.json"
+  ]
+}

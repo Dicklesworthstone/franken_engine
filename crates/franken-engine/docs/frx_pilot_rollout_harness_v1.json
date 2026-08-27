@@ -1,0 +1,264 @@
+{
+  "schema_version": "frx.pilot-rollout-harness.v1",
+  "bead_id": "bd-mjh3.9.1",
+  "generated_by": "bd-mjh3.9.1",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "rgc_alignment": {
+    "bead_id": "bd-1lsy.10.3",
+    "track_id": "RGC-903",
+    "relationship": "dependency_safe_prework_contract_reused_from_frx_09_1"
+  },
+  "track": {
+    "id": "FRX-09.1",
+    "name": "Pilot App Program and A/B Rollout Harness"
+  },
+  "pilot_portfolio": {
+    "strata": [
+      {
+        "stratum_id": "low_risk_transactional_dashboard",
+        "workload_archetype": "transactional_dashboard",
+        "risk_tier": "low",
+        "target_share_bps": 3000,
+        "inclusion_criteria": [
+          "single-page dashboard",
+          "bounded mutation graph",
+          "no cross-tenant shared writes"
+        ],
+        "exclusion_criteria": [
+          "unbounded background synchronization",
+          "security-control-plane surfaces"
+        ]
+      },
+      {
+        "stratum_id": "medium_risk_data_sync_optimistic_ui",
+        "workload_archetype": "data_sync_optimistic_ui",
+        "risk_tier": "medium",
+        "target_share_bps": 3000,
+        "inclusion_criteria": [
+          "optimistic UI with deterministic retry policy",
+          "bounded cache invalidation graph"
+        ],
+        "exclusion_criteria": [
+          "cross-region write fanout without replay fixtures"
+        ]
+      },
+      {
+        "stratum_id": "high_risk_collaboration_concurrency",
+        "workload_archetype": "collaboration_concurrency",
+        "risk_tier": "high",
+        "target_share_bps": 2000,
+        "inclusion_criteria": [
+          "multi-actor shared state",
+          "documented conflict-resolution strategy",
+          "deterministic incident drill coverage"
+        ],
+        "exclusion_criteria": [
+          "known unresolved race-class regressions",
+          "missing rollback drill artifacts"
+        ]
+      },
+      {
+        "stratum_id": "security_sensitive_admin_policy_control",
+        "workload_archetype": "security_sensitive_admin_control",
+        "risk_tier": "critical",
+        "target_share_bps": 2000,
+        "inclusion_criteria": [
+          "explicit policy ownership",
+          "incident escalation runbooks",
+          "signed replay/evidence linkage"
+        ],
+        "exclusion_criteria": [
+          "incomplete oncall readiness",
+          "missing artifact integrity attestations"
+        ]
+      }
+    ],
+    "stratification_required": true,
+    "fail_closed_on_unclassified_workload": true
+  },
+  "experiment_harness": {
+    "modes": [
+      "ab_online",
+      "shadow_run"
+    ],
+    "deterministic_assignment_required": true,
+    "required_assignment_fields": [
+      "assignment_id",
+      "cohort_id",
+      "variant",
+      "propensity_millionths",
+      "policy_snapshot_id",
+      "seed"
+    ],
+    "required_observation_fields": [
+      "scenario_id",
+      "trace_id",
+      "latency_us",
+      "resource_delta",
+      "reward_millionths",
+      "loss_millionths",
+      "safety_outcome"
+    ]
+  },
+  "off_policy_evaluation": {
+    "estimators": [
+      "ips",
+      "doubly_robust"
+    ],
+    "propensity_clip_min_millionths": 5000,
+    "minimum_effective_sample_size": 500,
+    "require_baseline_predictions_for_dr": true,
+    "fail_closed_on_missing_propensity": true,
+    "fail_closed_on_weight_explosion": true
+  },
+  "sequential_monitoring": {
+    "evidence_mode": "anytime_valid_e_process",
+    "decision_actions": [
+      "stop",
+      "promote",
+      "rollback"
+    ],
+    "thresholds_millionths": {
+      "promote_min_confidence": 975000,
+      "stop_max_regret": 120000,
+      "rollback_incident_delta": 50000,
+      "rollback_tail_latency_delta": 80000
+    },
+    "require_loss_aware_decision_path": true
+  },
+  "rollout_phases": {
+    "phase_order": [
+      "shadow",
+      "canary",
+      "active"
+    ],
+    "fail_closed_on_missing_phase_exit_scorecard": true,
+    "require_forced_regression_drill": true,
+    "phases": [
+      {
+        "phase_id": "shadow",
+        "user_traffic_bps": 0,
+        "phase_exit_scorecard_id": "scorecard.shadow.v1",
+        "required_readiness_inputs": [
+          "preflight_verdict",
+          "compatibility_advisories",
+          "onboarding_scorecard",
+          "support_bundle_ref"
+        ],
+        "promotion_requirements": [
+          "divergence_budget_within_threshold",
+          "tail_latency_regression_within_threshold",
+          "security_incident_delta_within_threshold",
+          "evidence_bundle_complete"
+        ],
+        "rollback_trigger_ids": [
+          "shadow_divergence_budget_exceeded",
+          "shadow_security_incident_delta_exceeded"
+        ],
+        "automatic_rollback_required": true
+      },
+      {
+        "phase_id": "canary",
+        "user_traffic_bps": 500,
+        "phase_exit_scorecard_id": "scorecard.canary.v1",
+        "required_readiness_inputs": [
+          "preflight_verdict",
+          "compatibility_advisories",
+          "onboarding_scorecard",
+          "support_bundle_ref"
+        ],
+        "promotion_requirements": [
+          "error_budget_burn_within_threshold",
+          "p95_latency_regression_within_threshold",
+          "security_incident_delta_within_threshold",
+          "correlated_readiness_artifacts_complete"
+        ],
+        "rollback_trigger_ids": [
+          "canary_error_budget_burn_exceeded",
+          "canary_security_incident_delta_exceeded"
+        ],
+        "automatic_rollback_required": true
+      },
+      {
+        "phase_id": "active",
+        "user_traffic_bps": 10000,
+        "phase_exit_scorecard_id": "scorecard.active.v1",
+        "required_readiness_inputs": [
+          "preflight_verdict",
+          "compatibility_advisories",
+          "onboarding_scorecard",
+          "support_bundle_ref"
+        ],
+        "promotion_requirements": [
+          "active_cohort_error_budget_within_threshold",
+          "tail_latency_regression_within_threshold",
+          "containment_incident_delta_within_threshold",
+          "remediation_queue_drained_or_accepted"
+        ],
+        "rollback_trigger_ids": [
+          "active_error_budget_burn_exceeded",
+          "active_containment_incident_delta_exceeded"
+        ],
+        "automatic_rollback_required": true
+      }
+    ]
+  },
+  "readiness_inputs": {
+    "required_inputs": [
+      "preflight_verdict",
+      "compatibility_advisories",
+      "onboarding_scorecard",
+      "support_bundle_ref"
+    ],
+    "fail_closed_on_missing_inputs": true,
+    "require_remediation_queue_for_blocked_workloads": true,
+    "require_support_bundle_linkage": true
+  },
+  "artifact_contract": {
+    "artifact_root": "artifacts/frx_pilot_rollout_harness/<UTC_TIMESTAMP>/",
+    "required_files": [
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt",
+      "phase_exit_scorecards.json",
+      "migration_readiness_inputs.json",
+      "blocked_workload_remediation_queue.json",
+      "forced_regression_rollback_drill.json",
+      "pilot_cohort_manifest.json"
+    ],
+    "require_phase_exit_scorecard_per_phase": true,
+    "require_quantitative_thresholds": true,
+    "require_signed_promotion_decisions": true
+  },
+  "incident_linkage": {
+    "required_fields": [
+      "trace_id",
+      "incident_id",
+      "decision_id",
+      "replay_bundle_id",
+      "evidence_bundle_id",
+      "run_manifest_id"
+    ],
+    "require_replay_bundle": true,
+    "require_evidence_bundle": true
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_pilot_rollout_harness_suite.sh ci",
+    "./scripts/e2e/frx_pilot_rollout_harness_replay.sh ci",
+    "jq empty docs/frx_pilot_rollout_harness_v1.json"
+  ]
+}

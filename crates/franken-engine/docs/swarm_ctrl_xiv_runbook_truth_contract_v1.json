@@ -1,0 +1,76 @@
+{
+  "schema_version": "franken-engine.swarm-ctrl-xiv-runbook-truth-contract.v1",
+  "bead_id": "bd-j2rny.6",
+  "parent_bead_id": "bd-j2rny",
+  "drill_script": "scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh",
+  "operator_runbook": "docs/SWARM_CTRL_XIV_OPERATOR_RUNBOOK.md",
+  "required_repo_paths": [
+    "scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh",
+    "scripts/swarm_execution_queue_tuning_promotion_guard.sh",
+    "scripts/swarm_execution_queue_tuning_rollback_comparator.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh",
+    "scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh",
+    "docs/SWARM_CTRL_XIV_OPERATOR_RUNBOOK.md",
+    "docs/swarm_ctrl_xiv_runbook_truth_contract_v1.json"
+  ],
+  "required_artifact_references": [
+    "swarm_execution_queue_tuning_lifecycle_no_mock_drill_report.json",
+    "tuning-policy-bundle/tuning_policy_bundle.json",
+    "tuning-policy-bundle/policy_frontier_export.json",
+    "promotion-guard/promotion_guard_receipt.json",
+    "promotion-guard/manual_approval_rollout_plan.json",
+    "rollback-comparator/rollback_comparator_receipt.json",
+    "rollback-comparator/canary_verdict_ledger.json",
+    "operator-status/status.json",
+    "operator-status/report.md",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "required_commands": [
+    "./scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh selftest",
+    "./scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh check",
+    "./scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh run",
+    "./scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh selftest"
+  ],
+  "required_workflow_claims": [
+    "advisory-only",
+    "does not change the active queue",
+    "manual approval remains required",
+    "reject local fallback proof evidence",
+    "scripts/swarm_operator_status_report.sh remains the only predictive dashboard producer"
+  ],
+  "forbidden_claim_patterns": [
+    "automatically promotes",
+    "applies retuning automatically",
+    "changes active queue",
+    "live queue mutation",
+    "reopens beads automatically",
+    "automatic ownership transfer",
+    "second predictive dashboard producer",
+    "manual approval may be skipped",
+    "fallback proof may be used"
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh",
+    "jq empty docs/swarm_ctrl_xiv_runbook_truth_contract_v1.json",
+    "./scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_xiv_runbook_truth_gate.sh selftest",
+    "./scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh check",
+    "./scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh run",
+    "./scripts/e2e/swarm_execution_queue_tuning_lifecycle_no_mock_drill.sh selftest"
+  ],
+  "mutation_policy": {
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "changes_reservations": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false
+  }
+}

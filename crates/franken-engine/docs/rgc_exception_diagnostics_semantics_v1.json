@@ -1,0 +1,43 @@
+{
+  "schema_version": "franken-engine.rgc-exception-diagnostics-semantics.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.4.5",
+  "policy_id": "policy-rgc-exception-diagnostics-semantics-v1",
+  "required_semantics_classes": [
+    "sync_exception_propagation",
+    "async_exception_propagation",
+    "diagnostic_metadata_stability"
+  ],
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "scenario_id",
+    "lane",
+    "error_class",
+    "error_code",
+    "outcome"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "diagnostic_trace.json",
+    "step_logs/step_*.log"
+  ],
+  "test_vectors_source": "docs/rgc_exception_diagnostics_semantics_vectors_v1.json",
+  "gate_runner": {
+    "script": "scripts/run_rgc_exception_diagnostics_semantics.sh",
+    "replay_wrapper": "scripts/e2e/rgc_exception_diagnostics_semantics_replay.sh",
+    "strict_mode": "rch_only_no_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-exception-diagnostics-semantics.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_exception_diagnostics_semantics_v1.json",
+    "jq empty docs/rgc_exception_diagnostics_semantics_vectors_v1.json",
+    "./scripts/run_rgc_exception_diagnostics_semantics.sh ci",
+    "./scripts/e2e/rgc_exception_diagnostics_semantics_replay.sh ci"
+  ]
+}

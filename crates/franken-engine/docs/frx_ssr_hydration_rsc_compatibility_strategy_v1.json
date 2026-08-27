@@ -1,0 +1,106 @@
+{
+  "schema_version": "frx.ssr-hydration-rsc-compatibility-strategy.v1",
+  "bead_id": "bd-mjh3.7.2",
+  "generated_by": "bd-mjh3.7.2",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-07.2",
+    "name": "SSR/Hydration/RSC Compatibility Strategy"
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "strategy": {
+    "failure_mode": "fail_closed",
+    "default_fallback_route": "compatibility_fallback",
+    "deterministic_safe_mode_route": "deterministic_safe_mode",
+    "require_hydration_boundary_equivalence": true,
+    "require_explicit_rsc_routing": true
+  },
+  "scenarios": [
+    {
+      "scenario_id": "frx-react-007",
+      "fixture_ref": "compat.hydration.server_client_mismatch",
+      "category": "hydration_boundary",
+      "runtime_mode": "hydrate",
+      "expected_policy_action": "recover_client_render",
+      "expected_outcome": "pass",
+      "divergence_class": "server_client_mismatch",
+      "decision_path": "hydrate_path",
+      "structured_log_template": {
+        "scenario_id": "frx-07.2-hydration-boundary",
+        "component": "frx_ssr_hydration_rsc_compatibility_strategy",
+        "decision_path": "hydrate_path",
+        "outcome": "pass"
+      }
+    },
+    {
+      "scenario_id": "frx-react-011",
+      "fixture_ref": "compat.ssr.streaming.suspense_handoff",
+      "category": "ssr_streaming",
+      "runtime_mode": "server",
+      "expected_policy_action": "preserve_streaming_handoff",
+      "expected_outcome": "pass",
+      "divergence_class": "none",
+      "decision_path": "ssr_streaming_handoff",
+      "structured_log_template": {
+        "scenario_id": "frx-07.2-ssr-streaming",
+        "component": "frx_ssr_hydration_rsc_compatibility_strategy",
+        "decision_path": "ssr_streaming_handoff",
+        "outcome": "pass"
+      }
+    },
+    {
+      "scenario_id": "frx-react-012",
+      "fixture_ref": "compat.rsc.server_component_hook_violation",
+      "category": "rsc_boundary",
+      "runtime_mode": "server",
+      "expected_policy_action": "deterministic_safe_mode",
+      "expected_outcome": "fallback",
+      "divergence_class": "rsc_capability_gap",
+      "decision_path": "rsc_boundary_fallback",
+      "structured_log_template": {
+        "scenario_id": "frx-07.2-rsc-fallback",
+        "component": "frx_ssr_hydration_rsc_compatibility_strategy",
+        "decision_path": "rsc_boundary_fallback",
+        "outcome": "fallback"
+      }
+    }
+  ],
+  "known_divergences": [
+    {
+      "fixture_ref": "compat.hydration.server_client_mismatch",
+      "divergence_summary": "Server/client text mismatch at hydration boundary requires deterministic client recovery route.",
+      "fallback_route": "recover_client_render",
+      "mitigation_plan": "Expand server/client preflight parity diagnostics and enforce mismatch telemetry budget.",
+      "owner_lane": "frx-toolchain-lane",
+      "blocking_issue": "bd-mjh3.20.3",
+      "error_code": "FE-FRX-07-2-DIV-0001"
+    },
+    {
+      "fixture_ref": "compat.rsc.server_component_hook_violation",
+      "divergence_summary": "RSC server component includes unsupported client hook semantics and must fail closed.",
+      "fallback_route": "deterministic_safe_mode",
+      "mitigation_plan": "Route unsupported server-component patterns to explicit safe-mode bridge with diagnostics.",
+      "owner_lane": "frx-toolchain-lane",
+      "blocking_issue": "bd-mjh3.9.3",
+      "error_code": "FE-FRX-07-2-DIV-0002"
+    }
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_ssr_hydration_rsc_compatibility_strategy_suite.sh ci",
+    "./scripts/e2e/frx_ssr_hydration_rsc_compatibility_strategy_replay.sh ci",
+    "jq empty docs/frx_ssr_hydration_rsc_compatibility_strategy_v1.json"
+  ]
+}

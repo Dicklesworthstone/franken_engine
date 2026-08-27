@@ -1,0 +1,197 @@
+{
+  "schema_version": "franken-engine.swarm-ops-state-contract.v1",
+  "bead_id": "bd-eozx0",
+  "parent_bead_id": "bd-3rebe",
+  "track": "SWARM-OPS-P0",
+  "bundle_schema_version": "franken-engine.swarm-ops-state-bundle.v1",
+  "event_schema_version": "franken-engine.swarm-ops-state-event.v1",
+  "report_schema_version": "franken-engine.swarm-ops-state-contract-report.v1",
+  "fixture_schema_version": "franken-engine.swarm-ops-state-contract-fixtures.v1",
+  "docs": {
+    "runbook": "docs/SWARM_OPS_STATE_CONTRACT.md",
+    "contract": "docs/swarm_ops_state_contract_v1.json",
+    "fixtures": "scripts/testdata/swarm_ops_state_contract/cases.json",
+    "smoke_gate": "scripts/e2e/swarm_ops_state_contract_smoke.sh"
+  },
+  "source_components": [
+    {
+      "component": "br_ready",
+      "commands": [
+        "br ready --json",
+        "br list --status=in_progress --json",
+        "br sync --status --json"
+      ],
+      "required": true,
+      "required_fields": [
+        "ready_items",
+        "in_progress_items",
+        "sync_status.dirty_count",
+        "sync_status.db_newer",
+        "sync_status.jsonl_newer"
+      ],
+      "stale_decision": "fail_closed"
+    },
+    {
+      "component": "bv_plan",
+      "commands": [
+        "bv --recipe actionable --robot-plan"
+      ],
+      "required": true,
+      "required_fields": [
+        "track_id",
+        "bead_id",
+        "priority",
+        "blocked_state"
+      ],
+      "stale_decision": "blocked"
+    },
+    {
+      "component": "agent_mail",
+      "commands": [
+        "agent-mail list_agents",
+        "agent-mail fetch_inbox",
+        "agent-mail file_reservations"
+      ],
+      "required": false,
+      "required_fields": [
+        "agent_name",
+        "last_active_ts",
+        "reservation_path",
+        "expires_ts"
+      ],
+      "missing_decision": "degraded"
+    },
+    {
+      "component": "rch",
+      "commands": [
+        "rch status --workers --jobs --json",
+        "rch queue --json"
+      ],
+      "required": true,
+      "required_fields": [
+        "worker_id",
+        "worker_state",
+        "job_state",
+        "local_fallback_observed"
+      ],
+      "stale_decision": "degraded"
+    },
+    {
+      "component": "git",
+      "commands": [
+        "git status --short",
+        "git diff --check -- <paths>"
+      ],
+      "required": true,
+      "required_fields": [
+        "dirty_paths",
+        "unowned_dirty_paths",
+        "diff_check_status"
+      ],
+      "stale_decision": "blocked"
+    },
+    {
+      "component": "proof_cache_locality",
+      "commands": [
+        "fixture-fed proof-cache locality artifact"
+      ],
+      "required": false,
+      "required_fields": [
+        "locality_state",
+        "target_dir",
+        "source_artifact"
+      ],
+      "missing_decision": "degraded"
+    }
+  ],
+  "required_artifacts": [
+    "swarm_ops_state_bundle.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_event_keys": [
+    "trace_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "evidence_path"
+  ],
+  "freshness_states": [
+    "fresh",
+    "stale",
+    "missing"
+  ],
+  "trust_states": [
+    "trusted",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "proof_categories": [
+    {
+      "case_id": "healthy",
+      "expected_outcome": "pass",
+      "description": "all required sources are fresh and coherent"
+    },
+    {
+      "case_id": "stale_jsonl",
+      "expected_outcome": "fail_closed",
+      "expected_error_code": "FE-SWARM-OPS-STALE-JSONL",
+      "description": "br DB is newer than the exported JSONL tracker"
+    },
+    {
+      "case_id": "mail_missing",
+      "expected_outcome": "degraded",
+      "expected_error_code": "FE-SWARM-OPS-MAIL-MISSING",
+      "description": "Agent Mail state is missing while required br/rch/git evidence remains coherent"
+    },
+    {
+      "case_id": "rch_degraded",
+      "expected_outcome": "degraded",
+      "expected_error_code": "FE-SWARM-OPS-RCH-DEGRADED",
+      "description": "RCH reports degraded worker or queue health without contradictory remote state"
+    }
+  ],
+  "fail_closed_classes": [
+    "stale_br_jsonl",
+    "missing_required_source",
+    "worker_stall_without_bundle",
+    "dirty_unowned_files",
+    "contradictory_capacity_inputs",
+    "unsafe_live_mutation_claim"
+  ],
+  "degraded_classes": [
+    "missing_agent_mail_snapshot",
+    "degraded_rch_worker_state",
+    "missing_optional_proof_cache_locality"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "closes_beads": false,
+    "reopens_beads": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "repairs_target_dirs": false,
+    "writes_outside_output_dir": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_ops_state_contract_v1.json scripts/testdata/swarm_ops_state_contract/cases.json",
+    "bash -n scripts/e2e/swarm_ops_state_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_ops_state_contract_smoke.sh",
+    "bash scripts/e2e/swarm_ops_state_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_ops_state_contract_smoke.sh run /tmp/swarm-ops-state-contract",
+    "bash scripts/e2e/swarm_ops_state_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_OPS_STATE_CONTRACT.md docs/swarm_ops_state_contract_v1.json scripts/e2e/swarm_ops_state_contract_smoke.sh scripts/testdata/swarm_ops_state_contract"
+  ]
+}

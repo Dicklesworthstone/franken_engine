@@ -1,0 +1,78 @@
+{
+  "schema_version": "franken-engine.rch-worker-truth-parity-contract.v1",
+  "report_schema": "franken-engine.rch-worker-truth-parity-report.v1",
+  "required_inputs": [
+    "--daemon-workers-json",
+    "--probe-workers-json"
+  ],
+  "optional_inputs": [
+    "--queue-diagnostics-json",
+    "--incident-packet-json",
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.rch-incident-packet.v1"
+  ],
+  "required_artifacts": [
+    "worker_truth_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "decisions": {
+    "pass": {
+      "exit_code": 0,
+      "meaning": "Daemon, probe, queue, and incident evidence agree that no worker-state or ghost-job drift is present."
+    },
+    "fail_closed": {
+      "exit_code": 42,
+      "meaning": "The worker truth surface is unsafe because at least one state view drifted or incident evidence shows live remote work."
+    }
+  },
+  "finding_codes": [
+    "healthy_probe_absent_or_unschedulable_in_daemon",
+    "healthy_daemon_absent_or_unschedulable_in_probe",
+    "selector_drift_probe_schedulable_queue_blocked",
+    "drained_worker_missing_from_daemon",
+    "ghost_job_live_remote_compile"
+  ],
+  "worker_row_fields": [
+    "worker_id",
+    "daemon_present",
+    "daemon_status",
+    "daemon_drained",
+    "probe_present",
+    "probe_status",
+    "probe_schedulable",
+    "queue_present",
+    "queue_schedulable",
+    "queue_selection_reason",
+    "findings"
+  ],
+  "incident_evidence_fields": [
+    "status",
+    "failure_kind",
+    "remote_worker_id",
+    "live_remote_compile"
+  ],
+  "required_report_fields": [
+    "schema_version",
+    "decision",
+    "queue_snapshot_status",
+    "incident_snapshot_status",
+    "daemon_worker_count",
+    "probe_worker_count",
+    "queue_worker_count",
+    "drift_count",
+    "ghost_job_detected",
+    "worker_rows",
+    "findings",
+    "incident_evidence",
+    "artifact_paths"
+  ],
+  "determinism": {
+    "sorting": "Worker ids and findings are normalized before report composition.",
+    "execution_mode": "Classifier only; the parity ledger consumes preserved JSON snapshots and does not run Cargo, query rch live state, or mutate workers.",
+    "fail_closed_policy": "Any disagreement between daemon, probe, queue, or live-compile incident evidence produces a fail_closed decision."
+  }
+}

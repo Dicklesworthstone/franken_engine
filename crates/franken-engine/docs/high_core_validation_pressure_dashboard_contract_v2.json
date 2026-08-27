@@ -1,0 +1,94 @@
+{
+  "schema_version": "franken-engine.high-core-validation-pressure-dashboard-contract.v2",
+  "bead_id": "bd-f7zfw",
+  "surface_id": "high_core_validation_pressure_dashboard",
+  "purpose": "Emit deterministic advisory admission reports for high-core validation pressure using preserved resource, RCH, process, proof-shard, br, and Agent Mail snapshots.",
+  "required_inputs": [
+    "resource_envelope_json",
+    "rch_jobs_json",
+    "process_counts_json",
+    "proof_shard_plan_json",
+    "br_readiness_json",
+    "mail_health_json"
+  ],
+  "emitted_artifacts": [
+    "high_core_validation_pressure_dashboard.json",
+    "high_core_validation_pressure_dashboard.md",
+    "commands.txt",
+    "events.jsonl"
+  ],
+  "required_dashboard_fields": [
+    "schema_version",
+    "bead_id",
+    "recommendation",
+    "pressure_level",
+    "input_summary",
+    "pressure_reasons",
+    "recommended_commands",
+    "mutation_policy",
+    "artifacts"
+  ],
+  "recommendation_policy": {
+    "run_rch_proof": "resource envelope is nominal, RCH is below active-job budget, local cargo/rustc contention is absent, proof shards are ready, and ready beads exist",
+    "run_cheap_local_non_cargo_checks": "heavy proof is not admitted, but source-only validation remains useful during local cargo contention or degraded Agent Mail",
+    "wait": "host resources or RCH pressure are saturated, blocked, brownout, or contaminated",
+    "split_file_blocker_bead": "there are zero ready beads or the proof shard plan is stale, blocked, or empty"
+  },
+  "failure_reason_codes": [
+    "HCVD2-RESOURCE-ENVELOPE-BLOCKED",
+    "HCVD2-RCH-SATURATED",
+    "HCVD2-LOCAL-CARGO-CONTENTION",
+    "HCVD2-ZERO-READY-BEADS",
+    "HCVD2-PROOF-PLAN-BLOCKED",
+    "HCVD2-MAIL-DEGRADED"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "mutates_live_queues": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "queries_live_processes": false,
+    "queries_live_workers": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "rch_policy": {
+    "heavy_cargo_examples_allowed": true,
+    "required_prefix": "RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env",
+    "local_cargo_allowed": false,
+    "runs_rch": false
+  },
+  "fixture_cases": [
+    "idle_host_fixture",
+    "saturated_rch_fixture",
+    "local_cargo_contention_fixture",
+    "zero_ready_beads_fixture",
+    "degraded_mail_fixture"
+  ],
+  "validation": {
+    "syntax": "bash -n scripts/high_core_validation_pressure_dashboard.sh scripts/e2e/high_core_validation_pressure_dashboard_smoke.sh",
+    "json": "jq empty docs/high_core_validation_pressure_dashboard_contract_v2.json scripts/testdata/high_core_validation_pressure_dashboard/cases.json",
+    "selftest": "./scripts/e2e/high_core_validation_pressure_dashboard_smoke.sh selftest",
+    "runs_cargo": false,
+    "runs_rch": false
+  },
+  "integration_refs": [
+    {
+      "surface_id": "swarm_resource_envelope",
+      "artifact": "docs/swarm_resource_envelope_contract_v1.json",
+      "reuse": "host/resource envelope decision vocabulary"
+    },
+    {
+      "surface_id": "swarm_resource_governor",
+      "artifact": "scripts/swarm_resource_governor.sh",
+      "reuse": "local cargo/rustc contention and cheap-check posture"
+    },
+    {
+      "surface_id": "swarm_admission_budget_planner",
+      "artifact": "docs/swarm_admission_budget_planner_contract_v1.json",
+      "reuse": "advisory admission language and no-live-mutation policy"
+    }
+  ]
+}

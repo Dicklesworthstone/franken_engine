@@ -1,0 +1,135 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-replay-recipe-composer-contract.v1",
+  "bead_id": "bd-00ofm.3",
+  "parent_bead_id": "bd-00ofm",
+  "depends_on": [
+    "bd-00ofm.1",
+    "bd-00ofm.2"
+  ],
+  "script": "scripts/swarm_autopilot_replay_recipe_composer.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_replay_recipe_composer_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_REPLAY_RECIPE_COMPOSER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_replay_recipe_composer/cases.json",
+  "input_diff_schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipts.v1",
+  "input_cohort_schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
+  "input_replay_index_schema_version": "franken-engine.swarm-autopilot-replay-index.v1",
+  "recipe_bundle_schema_version": "franken-engine.swarm-autopilot-replay-recipe-bundle.v1",
+  "recipe_index_schema_version": "franken-engine.swarm-autopilot-replay-recipe-index.v1",
+  "event_schema_version": "franken-engine.swarm-autopilot-replay-recipe.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "cohort_diff_receipts_json",
+      "argument": "--cohort-diff-receipts-json",
+      "required": true
+    },
+    {
+      "source_id": "anomaly_cohorts_json",
+      "argument": "--anomaly-cohorts-json",
+      "required": true
+    },
+    {
+      "source_id": "replay_index_json",
+      "argument": "--replay-index-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "recipe_bundle_json": "swarm_autopilot_replay_recipe_bundle.json",
+    "recipe_index_json": "swarm_autopilot_replay_recipe_index.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "replay_modes": [
+    "reference_baseline_replay",
+    "counterexample_replay",
+    "quarantine_only"
+  ],
+  "required_recipe_fields": [
+    "recipe_id",
+    "receipt_id",
+    "replay_mode",
+    "replay_ready",
+    "reference_cohort_id",
+    "comparison_cohort_id",
+    "expected_classification",
+    "classification_transition",
+    "comparison_pivots",
+    "evidence_paths",
+    "safe_rerun_instruction"
+  ],
+  "decision_policy": {
+    "pass": "all requested replay recipes have complete replay-index evidence and no stale or contaminated-baseline conditions fired",
+    "fail_closed": "diff receipts are stale, replay index entries are incomplete, contaminated evidence would become a remote-only baseline, raw paths are missing, or schemas drift"
+  },
+  "fail_closed_rules": [
+    "stale diff receipts fail closed",
+    "incomplete replay indexes fail closed",
+    "contaminated remote-only baselines fail closed",
+    "missing raw evidence paths fail closed",
+    "schema drift in diff, cohort, or replay-index material fails closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-STALE-DIFF",
+    "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-INCOMPLETE-INDEX",
+    "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-CONTAMINATED-BASELINE",
+    "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-MISSING-EVIDENCE"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "approves_replay_automatically": false,
+    "promotes_evidence_automatically": false
+  },
+  "required_doc_text": [
+    "The replay recipe composer is advisory only and proof only.",
+    "Reference baseline replay remains distinct from blocked or degraded counterexample replay.",
+    "Blocked counterexample replay must preserve comparison pivots and raw replay evidence paths.",
+    "Contaminated evidence cannot be selected as a remote-only replay baseline.",
+    "Incomplete replay indexes fail closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "healthy_reference_replay",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_replay_mode": "reference_baseline_replay",
+      "required_expected_classification": "reference"
+    },
+    {
+      "case_id": "blocked_counterexample_replay",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_replay_mode": "counterexample_replay",
+      "required_expected_classification": "blocked"
+    },
+    {
+      "case_id": "contaminated_replay_refusal",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-CONTAMINATED-BASELINE"
+    },
+    {
+      "case_id": "missing_replay_index_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-INCOMPLETE-INDEX"
+    },
+    {
+      "case_id": "stale_diff_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-STALE-DIFF"
+    }
+  ]
+}

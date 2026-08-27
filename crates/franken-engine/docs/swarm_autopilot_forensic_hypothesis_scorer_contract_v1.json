@@ -1,0 +1,100 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-scorer-contract.v1",
+  "bead_id": "bd-00ofm.4",
+  "parent_bead_id": "bd-00ofm",
+  "depends_on": [
+    "bd-00ofm.1",
+    "bd-00ofm.2"
+  ],
+  "script": "scripts/swarm_autopilot_forensic_hypothesis_scorer.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_forensic_hypothesis_scorer_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_FORENSIC_HYPOTHESIS_SCORER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_forensic_hypothesis_scorer/cases.json",
+  "summary_schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1",
+  "evidence_schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-evidence.v1",
+  "required_inputs": [
+    {
+      "source_id": "cohort_diff_receipts_json",
+      "argument": "--cohort-diff-receipts-json",
+      "required": true
+    },
+    {
+      "source_id": "evidence_warehouse_json",
+      "argument": "--evidence-warehouse-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "summary_json": "swarm_autopilot_forensic_hypothesis_summary.json",
+    "evidence_json": "swarm_autopilot_forensic_hypothesis_evidence.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "hypothesis_pivots": [
+    "topology_drift",
+    "toolchain_skew",
+    "worker_locality_shift",
+    "evidence_fingerprint_delta",
+    "insufficient_evidence"
+  ],
+  "fail_closed_rules": [
+    "stale evidence fails closed",
+    "contradictory evidence fails closed",
+    "contaminated evidence fails closed",
+    "schema drift in diff or warehouse material fails closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-HYPOTHESIS-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-HYPOTHESIS-STALE-EVIDENCE",
+    "FE-SWARM-AUTOPILOT-HYPOTHESIS-CONTAMINATED-EVIDENCE",
+    "FE-SWARM-AUTOPILOT-HYPOTHESIS-CONTRADICTORY-EVIDENCE"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "promotes_hypotheses_automatically": false
+  },
+  "required_doc_text": [
+    "The forensic hypothesis scorer is advisory only and proof only.",
+    "Topology drift is promoted only when topology deltas are present in coherent diff receipts.",
+    "Each hypothesis preserves confidence band, counterevidence, supporting source ids, supporting receipts, and remediation suggestion.",
+    "Low-evidence cases degrade instead of overclaiming certainty.",
+    "Contaminated evidence is suppressed and cannot support promoted hypotheses."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "topology_drift_explanation",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_pivot": "topology_drift"
+    },
+    {
+      "case_id": "contaminated_evidence_suppression",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-HYPOTHESIS-CONTAMINATED-EVIDENCE"
+    },
+    {
+      "case_id": "low_evidence_degradation",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0,
+      "required_pivot": "insufficient_evidence"
+    },
+    {
+      "case_id": "contradictory_hypothesis_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-HYPOTHESIS-CONTRADICTORY-EVIDENCE"
+    }
+  ]
+}

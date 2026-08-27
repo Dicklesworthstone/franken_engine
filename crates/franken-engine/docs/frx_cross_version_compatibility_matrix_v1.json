@@ -1,0 +1,163 @@
+{
+  "schema_version": "franken-engine.frx-cross-version-compat-matrix.v1",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "policy_id": "policy-frx-cross-version-compat-v1",
+  "dimensions": {
+    "react_versions": ["18.3", "19.0"],
+    "browsers": ["chromium", "firefox", "webkit"],
+    "api_families": [
+      "hooks_effects_core",
+      "legacy_class_components",
+      "portals_refs",
+      "concurrent_primitives",
+      "browser_render_observers"
+    ],
+    "compatibility_routes": [
+      "compile_native",
+      "compatibility_fallback",
+      "deterministic_safe_mode"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "cvm-001",
+      "api_family": "hooks_effects_core",
+      "surface": "useEffect cleanup/create ordering",
+      "react18_status": "supported",
+      "react19_status": "supported",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compile_native",
+      "deterministic_fallback_required": false,
+      "risk_level": "medium",
+      "behavior_notes": "Insertion/layout/passive ordering remains canonical under both React versions.",
+      "test_selector_tags": ["effects", "frx02", "hooks", "react18", "react19"],
+      "release_claim_tags": ["frx-hooks-core-ordering", "frx-semantic-parity"]
+    },
+    {
+      "case_id": "cvm-002",
+      "api_family": "hooks_effects_core",
+      "surface": "dependency-array shape drift",
+      "react18_status": "guarded",
+      "react19_status": "guarded",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compatibility_fallback",
+      "deterministic_fallback_required": true,
+      "risk_level": "high",
+      "behavior_notes": "Compile path rejects unstable dep cardinality; compatibility lane preserves behavior.",
+      "test_selector_tags": ["deps", "fallback", "frx02", "react18", "react19"],
+      "release_claim_tags": ["frx-deterministic-fallback", "frx-semantic-parity"]
+    },
+    {
+      "case_id": "cvm-003",
+      "api_family": "legacy_class_components",
+      "surface": "class setState batching",
+      "react18_status": "guarded",
+      "react19_status": "fallback_only",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compatibility_fallback",
+      "deterministic_fallback_required": true,
+      "risk_level": "high",
+      "behavior_notes": "Legacy lifecycle interaction is routed through compatibility lane in React 19 profile.",
+      "test_selector_tags": ["class-components", "fallback", "frx02", "react18", "react19"],
+      "release_claim_tags": ["frx-legacy-api-coverage", "frx-migration-safe"]
+    },
+    {
+      "case_id": "cvm-004",
+      "api_family": "legacy_class_components",
+      "surface": "UNSAFE_ lifecycle ordering",
+      "react18_status": "fallback_only",
+      "react19_status": "fallback_only",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "deterministic_safe_mode",
+      "deterministic_fallback_required": true,
+      "risk_level": "high",
+      "behavior_notes": "Unsafe lifecycle sequencing is never lowered natively; deterministic safe-mode lane enforced.",
+      "test_selector_tags": ["class-components", "safe-mode", "frx02", "react18", "react19"],
+      "release_claim_tags": ["frx-safe-mode-correctness", "frx-unsupported-semantics-governance"]
+    },
+    {
+      "case_id": "cvm-005",
+      "api_family": "portals_refs",
+      "surface": "portal event retargeting",
+      "react18_status": "supported",
+      "react19_status": "guarded",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compile_native",
+      "deterministic_fallback_required": false,
+      "risk_level": "medium",
+      "behavior_notes": "Native lane supported with browser-normalized event target guarantees.",
+      "test_selector_tags": ["events", "frx02", "portals", "react18", "react19"],
+      "release_claim_tags": ["frx-browser-surface-coverage", "frx-semantic-parity"]
+    },
+    {
+      "case_id": "cvm-006",
+      "api_family": "portals_refs",
+      "surface": "ref callback timing with nested portals",
+      "react18_status": "guarded",
+      "react19_status": "guarded",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compatibility_fallback",
+      "deterministic_fallback_required": true,
+      "risk_level": "medium",
+      "behavior_notes": "When proof confidence drops, route to compatibility lane to preserve callback timing.",
+      "test_selector_tags": ["fallback", "frx02", "portals", "react18", "react19"],
+      "release_claim_tags": ["frx-deterministic-fallback", "frx-refs-compatibility"]
+    },
+    {
+      "case_id": "cvm-007",
+      "api_family": "concurrent_primitives",
+      "surface": "startTransition starvation envelope",
+      "react18_status": "guarded",
+      "react19_status": "supported",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compile_native",
+      "deterministic_fallback_required": false,
+      "risk_level": "medium",
+      "behavior_notes": "React19 primitives are supported natively under calibrated scheduler bounds.",
+      "test_selector_tags": ["concurrency", "frx02", "react18", "react19", "transitions"],
+      "release_claim_tags": ["frx-concurrency-parity", "frx-scheduler-stability"]
+    },
+    {
+      "case_id": "cvm-008",
+      "api_family": "concurrent_primitives",
+      "surface": "useDeferredValue with browser input burst",
+      "react18_status": "guarded",
+      "react19_status": "guarded",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compatibility_fallback",
+      "deterministic_fallback_required": true,
+      "risk_level": "high",
+      "behavior_notes": "Burst-driven ambiguity triggers deterministic fallback to preserve user-visible ordering.",
+      "test_selector_tags": ["concurrency", "fallback", "frx02", "react18", "react19"],
+      "release_claim_tags": ["frx-deterministic-fallback", "frx-user-visible-determinism"]
+    },
+    {
+      "case_id": "cvm-009",
+      "api_family": "browser_render_observers",
+      "surface": "ResizeObserver-driven render loops",
+      "react18_status": "guarded",
+      "react19_status": "guarded",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "deterministic_safe_mode",
+      "deterministic_fallback_required": true,
+      "risk_level": "high",
+      "behavior_notes": "Observer feedback loops enter deterministic safe-mode routing.",
+      "test_selector_tags": ["browser-api", "frx02", "react18", "react19", "safe-mode"],
+      "release_claim_tags": ["frx-browser-surface-coverage", "frx-safe-mode-correctness"]
+    },
+    {
+      "case_id": "cvm-010",
+      "api_family": "browser_render_observers",
+      "surface": "MutationObserver microtask ordering",
+      "react18_status": "supported",
+      "react19_status": "guarded",
+      "browser_constraints": ["chromium>=120", "firefox>=122", "webkit>=17.4"],
+      "compatibility_route": "compile_native",
+      "deterministic_fallback_required": false,
+      "risk_level": "medium",
+      "behavior_notes": "Microtask ordering normalized via canonical boundary policy.",
+      "test_selector_tags": ["browser-api", "effects", "frx02", "react18", "react19"],
+      "release_claim_tags": ["frx-browser-surface-coverage", "frx-semantic-parity"]
+    }
+  ]
+}

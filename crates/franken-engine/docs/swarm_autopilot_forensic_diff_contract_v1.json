@@ -1,0 +1,198 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-forensic-diff-contract.v1",
+  "bead_id": "bd-00ofm.1",
+  "parent_bead_id": "bd-00ofm",
+  "depends_on": [
+    "bd-gra1z.4"
+  ],
+  "upstream_contracts": [
+    "docs/swarm_autopilot_anomaly_cohort_packer_contract_v1.json",
+    "docs/swarm_autopilot_evidence_warehouse_contract_v1.json"
+  ],
+  "follow_on_beads": {
+    "cohort_diff_comparator": "bd-00ofm.2",
+    "replay_recipe_composer": "bd-00ofm.3",
+    "forensic_hypothesis_scorer": "bd-00ofm.4",
+    "operator_status_integration": "bd-00ofm.5",
+    "no_mock_drill": "bd-00ofm.6"
+  },
+  "planned_producer_scripts": [
+    "scripts/swarm_autopilot_cohort_diff_comparator.sh",
+    "scripts/swarm_autopilot_replay_recipe_composer.sh",
+    "scripts/swarm_autopilot_forensic_hypothesis_scorer.sh",
+    "scripts/e2e/swarm_autopilot_forensic_diff_no_mock_drill.sh"
+  ],
+  "operator_docs": "docs/SWARM_AUTOPILOT_FORENSIC_DIFF_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_autopilot_forensic_diff_contract_smoke.sh",
+  "comparison_bundle_schema_version": "franken-engine.swarm-autopilot-forensic-comparison-bundle.v1",
+  "cohort_diff_receipt_schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipt.v1",
+  "replay_recipe_bundle_schema_version": "franken-engine.swarm-autopilot-replay-recipe-bundle.v1",
+  "hypothesis_summary_schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1",
+  "operator_forensic_bundle_schema_version": "franken-engine.swarm-autopilot-operator-forensic-bundle.v1",
+  "required_inputs": [
+    "reference_anomaly_cohorts_json",
+    "comparison_anomaly_cohorts_json",
+    "reference_replay_index_json",
+    "comparison_replay_index_json"
+  ],
+  "optional_inputs": [
+    "warehouse_retention_plan_json",
+    "storage_budget_ledger_json",
+    "operator_status_snapshot_json",
+    "hindsight_outcome_bundle_json"
+  ],
+  "comparison_classes": [
+    "reference_vs_reference",
+    "reference_vs_degraded",
+    "reference_vs_blocked",
+    "reference_vs_contaminated"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "operator_wording": {
+    "advisory_only": "advisory only",
+    "proof_only": "proof only",
+    "no_automatic_replay_approval": "no automatic replay approval",
+    "no_automatic_promotion": "no automatic promotion",
+    "no_worker_mutation": "no worker mutation",
+    "no_queue_mutation": "no queue mutation"
+  },
+  "required_bundle_fields": [
+    "forensic_bundle_id",
+    "truth_state",
+    "decision",
+    "comparison_class",
+    "required_input_status.reference_cohorts_present",
+    "required_input_status.comparison_cohorts_present",
+    "required_input_status.reference_replay_index_present",
+    "required_input_status.comparison_replay_index_present",
+    "optional_snapshot_health.optional_snapshot_count",
+    "optional_snapshot_health.optional_present_count",
+    "optional_snapshot_health.optional_missing_count",
+    "cohort_diff_receipts",
+    "replay_recipe_bundles",
+    "hypothesis_summaries",
+    "operator_forensic_bundles",
+    "source_fingerprints",
+    "raw_artifact_paths",
+    "comparison_safe_mutation_policy",
+    "local_fallback_contamination",
+    "contradiction_count",
+    "error_codes"
+  ],
+  "cohort_diff_receipt_fields": [
+    "receipt_id",
+    "reference_cohort_id",
+    "comparison_cohort_id",
+    "classification_transition",
+    "added_fingerprints",
+    "removed_fingerprints",
+    "changed_fingerprints",
+    "worker_deltas",
+    "toolchain_deltas",
+    "topology_deltas",
+    "raw_artifact_paths"
+  ],
+  "replay_recipe_bundle_fields": [
+    "recipe_id",
+    "cohort_diff_receipt_id",
+    "replay_class",
+    "evidence_paths",
+    "expected_classification",
+    "safe_rerun_instructions",
+    "remote_truth_valid"
+  ],
+  "hypothesis_summary_fields": [
+    "hypothesis_id",
+    "top_failure_pivot",
+    "confidence_millionths",
+    "supporting_source_ids",
+    "counterevidence_source_ids",
+    "remediation_suggestions"
+  ],
+  "operator_forensic_bundle_fields": [
+    "operator_bundle_id",
+    "advisory_summary",
+    "top_cohort_delta_ids",
+    "replay_ready_recipe_ids",
+    "blocked_reason_codes",
+    "artifact_paths"
+  ],
+  "fail_closed_rules": [
+    "missing required cohort or replay-index inputs fail closed",
+    "stale references fail closed",
+    "missing raw artifact paths fail closed",
+    "contradictory cohort identity fails closed",
+    "local fallback contamination fails closed",
+    "unsupported mutation claims fail closed",
+    "contaminated evidence must not be selected as a remote-only baseline",
+    "automatic replay approval or automatic promotion claims fail closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-FORENSIC-MISSING-INPUT",
+    "FE-SWARM-AUTOPILOT-FORENSIC-STALE-REFERENCE",
+    "FE-SWARM-AUTOPILOT-FORENSIC-MISSING-RAW-PATH",
+    "FE-SWARM-AUTOPILOT-FORENSIC-CONTRADICTORY-COHORT",
+    "FE-SWARM-AUTOPILOT-FORENSIC-LOCAL-FALLBACK",
+    "FE-SWARM-AUTOPILOT-FORENSIC-UNSUPPORTED-MUTATION"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "comparison_safe": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "approves_replay_automatically": false,
+    "promotes_evidence_automatically": false
+  },
+  "fixture_examples": [
+    {
+      "fixture_id": "healthy_reference_comparison",
+      "expected_truth_state": "confirmed",
+      "expected_decision": "pass",
+      "expected_comparison_class": "reference_vs_reference"
+    },
+    {
+      "fixture_id": "degraded_optional_snapshot",
+      "expected_truth_state": "degraded",
+      "expected_decision": "degraded",
+      "expected_comparison_class": "reference_vs_degraded"
+    },
+    {
+      "fixture_id": "blocked_contradictory_cohort",
+      "expected_truth_state": "blocked",
+      "expected_decision": "blocked",
+      "required_error_code": "FE-SWARM-AUTOPILOT-FORENSIC-CONTRADICTORY-COHORT"
+    },
+    {
+      "fixture_id": "contaminated_local_fallback",
+      "expected_truth_state": "contaminated",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-FORENSIC-LOCAL-FALLBACK"
+    }
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_autopilot_forensic_diff_contract_v1.json",
+    "bash -n scripts/e2e/swarm_autopilot_forensic_diff_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_autopilot_forensic_diff_contract_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_forensic_diff_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_forensic_diff_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_FORENSIC_DIFF_CONTRACT.md docs/swarm_autopilot_forensic_diff_contract_v1.json scripts/e2e/swarm_autopilot_forensic_diff_contract_smoke.sh"
+  ]
+}

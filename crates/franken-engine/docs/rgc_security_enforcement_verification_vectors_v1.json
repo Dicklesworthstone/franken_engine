@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.rgc-security-enforcement-verification-vectors.v1",
+  "contract_version": "1.1.0",
+  "bead_id": "bd-1lsy.11.9",
+  "generated_by": "bd-1lsy.11.9",
+  "generated_at_utc": "2026-04-16T00:00:00Z",
+  "vectors": [
+    {
+      "scenario_id": "capability-hostcall-deny",
+      "attack_class": "capability_denial",
+      "severity": "high",
+      "path_type": "golden",
+      "deterministic_seed": 4101,
+      "expected_policy_action": "deny",
+      "expected_containment_state": "running",
+      "expected_outcome": "pass",
+      "command_template": "./scripts/run_rgc_security_enforcement_verification_pack.sh test",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "ifc-untrusted-declassify-block",
+      "attack_class": "ifc_declassification",
+      "severity": "critical",
+      "path_type": "golden",
+      "deterministic_seed": 4102,
+      "expected_policy_action": "quarantine",
+      "expected_containment_state": "quarantined",
+      "expected_outcome": "pass",
+      "command_template": "./scripts/run_rgc_security_enforcement_verification_pack.sh test",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "containment-escalation-kill-switch",
+      "attack_class": "containment_escalation",
+      "severity": "critical",
+      "path_type": "golden",
+      "deterministic_seed": 4103,
+      "expected_policy_action": "terminate",
+      "expected_containment_state": "terminated",
+      "expected_outcome": "pass",
+      "command_template": "./scripts/run_rgc_security_enforcement_verification_pack.sh test",
+      "requires_replay": true
+    }
+  ]
+}

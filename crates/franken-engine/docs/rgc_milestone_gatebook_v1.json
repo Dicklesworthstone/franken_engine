@@ -1,0 +1,454 @@
+{
+  "schema_version": "rgc.milestone-gatebook.v1",
+  "bead_id": "bd-1lsy.1.2",
+  "generated_by": "bd-1lsy.1.2",
+  "generated_at_utc": "2026-02-28T01:38:00Z",
+  "track": {
+    "id": "RGC-012",
+    "name": "Milestone Gatebook"
+  },
+  "automation": {
+    "ci_contract_version": "ci.gatebook.v1",
+    "required_structured_log_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ],
+    "required_artifact_triad": [
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt"
+    ],
+    "decision_event_required_fields": [
+      "milestone",
+      "gate_id",
+      "mode",
+      "decision",
+      "blocker_classes",
+      "rollback_trigger_ids"
+    ],
+    "default_mode": "report_only_then_fail_closed",
+    "report_only_transition_rules": [
+      {
+        "milestone": "M1",
+        "report_only_until_utc": "2026-03-14T00:00:00Z",
+        "fail_closed_after_utc": "2026-03-15T00:00:00Z",
+        "transition_predicate": "14 consecutive daily runs with zero blocker_class findings"
+      },
+      {
+        "milestone": "M2",
+        "report_only_until_utc": "2026-03-28T00:00:00Z",
+        "fail_closed_after_utc": "2026-03-29T00:00:00Z",
+        "transition_predicate": "14 consecutive daily runs with zero blocker_class findings"
+      },
+      {
+        "milestone": "M3",
+        "report_only_until_utc": "2026-04-11T00:00:00Z",
+        "fail_closed_after_utc": "2026-04-12T00:00:00Z",
+        "transition_predicate": "14 consecutive daily runs with zero blocker_class findings"
+      },
+      {
+        "milestone": "M4",
+        "report_only_until_utc": "2026-04-25T00:00:00Z",
+        "fail_closed_after_utc": "2026-04-26T00:00:00Z",
+        "transition_predicate": "14 consecutive daily runs with zero blocker_class findings"
+      },
+      {
+        "milestone": "M5",
+        "report_only_until_utc": "2026-05-09T00:00:00Z",
+        "fail_closed_after_utc": "2026-05-10T00:00:00Z",
+        "transition_predicate": "14 consecutive daily runs with zero blocker_class findings"
+      }
+    ]
+  },
+  "blocker_classes": [
+    {
+      "class_id": "correctness_regression",
+      "severity": "blocker",
+      "predicate": "any conformance row fails with deterministic replay artifact present",
+      "required_evidence": [
+        "events.jsonl",
+        "commands.txt"
+      ]
+    },
+    {
+      "class_id": "security_enforcement_failure",
+      "severity": "blocker",
+      "predicate": "any capability/IFC/containment gate reports fail-open behavior",
+      "required_evidence": [
+        "events.jsonl",
+        "run_manifest.json"
+      ]
+    },
+    {
+      "class_id": "artifact_incompleteness",
+      "severity": "blocker",
+      "predicate": "required artifact triad missing or unreadable",
+      "required_evidence": [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt"
+      ]
+    },
+    {
+      "class_id": "performance_claim_instability",
+      "severity": "blocker",
+      "predicate": "performance claim published without significance/variance evidence",
+      "required_evidence": [
+        "events.jsonl",
+        "run_manifest.json"
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "milestone": "M1",
+      "objective": "Real parse->lower->execute baseline path is active for declared baseline corpus",
+      "gate_owner": "RGC-300",
+      "pass_predicates": [
+        {
+          "predicate_id": "m1-parser-lowering-pass-rate",
+          "description": "Baseline parser+lowering corpus pass rate",
+          "metric": "baseline_corpus_pass_rate",
+          "comparator": ">=",
+          "threshold": 0.99,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.2.1",
+            "bd-1lsy.3.1",
+            "bd-1lsy.4.1"
+          ],
+          "evaluation_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_m1 cargo test -p frankenengine-engine --tests"
+        },
+        {
+          "predicate_id": "m1-replay-artifacts-complete",
+          "description": "Artifact triad and required decision logs are present",
+          "metric": "artifact_completeness_ratio",
+          "comparator": "==",
+          "threshold": 1.0,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.1.1",
+            "bd-1lsy.11.1"
+          ],
+          "evaluation_command": "jq empty artifacts/rgc_m1/latest/run_manifest.json"
+        }
+      ],
+      "required_artifacts": [
+        "artifacts/rgc_m1/latest/run_manifest.json",
+        "artifacts/rgc_m1/latest/events.jsonl",
+        "artifacts/rgc_m1/latest/commands.txt"
+      ],
+      "rollback_triggers": [
+        {
+          "trigger_id": "m1-determinism-break",
+          "condition_expression": "deterministic_replay_match_rate < 1.0",
+          "required_probe_command": "rch exec -- ./scripts/e2e/replay_m1_baseline.sh",
+          "rollback_action": "Revert to last green parser/lowering artifact set and freeze new promotions"
+        },
+        {
+          "trigger_id": "m1-critical-parser-regression",
+          "condition_expression": "new_p0_parser_failures > 0",
+          "required_probe_command": "rch exec -- cargo test -p frankenengine-engine parser_trait_ast -- --nocapture",
+          "rollback_action": "Rollback parser grammar changes to previous release tag"
+        }
+      ],
+      "decision_authority": {
+        "primary_role": "RuntimeLead",
+        "secondary_role": "ReleaseDutyEngineer",
+        "escalation_roles": [
+          "SecurityLead",
+          "ProgramOwner"
+        ]
+      },
+      "ci_gate": {
+        "workflow_id": "rgc-m1-gate",
+        "command": "./scripts/run_phase_a_exit_gate.sh check",
+        "report_only_until_utc": "2026-03-14T00:00:00Z",
+        "fail_closed_after_utc": "2026-03-15T00:00:00Z"
+      }
+    },
+    {
+      "milestone": "M2",
+      "objective": "Core semantics and module interop meet practical workload envelope",
+      "gate_owner": "RGC-400",
+      "pass_predicates": [
+        {
+          "predicate_id": "m2-module-resolution-parity",
+          "description": "Module resolution traces match expected deterministic decisions",
+          "metric": "module_resolution_drift_rate",
+          "comparator": "<=",
+          "threshold": 0.01,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.3.2",
+            "bd-1lsy.5.1",
+            "bd-1lsy.5.2"
+          ],
+          "evaluation_command": "rch exec -- cargo test -p frankenengine-engine --test ts_module_resolution_parity"
+        },
+        {
+          "predicate_id": "m2-module-behavior-conformance",
+          "description": "ESM/CJS interop conformance fixtures pass",
+          "metric": "module_interop_pass_rate",
+          "comparator": ">=",
+          "threshold": 0.99,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.4.2",
+            "bd-1lsy.5.3",
+            "bd-1lsy.5.4"
+          ],
+          "evaluation_command": "rch exec -- cargo test -p frankenengine-engine --test module_interop_conformance"
+        }
+      ],
+      "required_artifacts": [
+        "artifacts/rgc_m2/latest/run_manifest.json",
+        "artifacts/rgc_m2/latest/events.jsonl",
+        "artifacts/rgc_m2/latest/commands.txt"
+      ],
+      "rollback_triggers": [
+        {
+          "trigger_id": "m2-interop-break",
+          "condition_expression": "module_interop_pass_rate < 0.95",
+          "required_probe_command": "rch exec -- ./scripts/e2e/replay_m2_module_matrix.sh",
+          "rollback_action": "Disable latest module resolver change-set and route through previous stable resolver profile"
+        },
+        {
+          "trigger_id": "m2-ambient-authority-inflation",
+          "condition_expression": "invalid_or_missing_capability_metadata_count > 0",
+          "required_probe_command": "rch exec -- cargo test -p frankenengine-engine --test capability_contract_regression",
+          "rollback_action": "Fail closed on unresolved modules lacking capability annotations"
+        }
+      ],
+      "decision_authority": {
+        "primary_role": "ModuleInteropLead",
+        "secondary_role": "RuntimeLead",
+        "escalation_roles": [
+          "SecurityLead",
+          "ProgramOwner"
+        ]
+      },
+      "ci_gate": {
+        "workflow_id": "rgc-m2-gate",
+        "command": "./scripts/run_rgc_module_interop_gate.sh check",
+        "report_only_until_utc": "2026-03-28T00:00:00Z",
+        "fail_closed_after_utc": "2026-03-29T00:00:00Z"
+      }
+    },
+    {
+      "milestone": "M3",
+      "objective": "Security controls are enforced in-band on runtime execution paths",
+      "gate_owner": "RGC-500",
+      "pass_predicates": [
+        {
+          "predicate_id": "m3-capability-enforcement",
+          "description": "Capability contract checks fail closed across hostcalls",
+          "metric": "capability_fail_open_rate",
+          "comparator": "==",
+          "threshold": 0.0,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.6.1",
+            "bd-1lsy.6.2",
+            "bd-1lsy.6.3",
+            "bd-1lsy.6.4"
+          ],
+          "evaluation_command": "rch exec -- cargo test -p frankenengine-engine --test security_enforcement_matrix"
+        },
+        {
+          "predicate_id": "m3-containment-latency",
+          "description": "Containment decision latency remains bounded",
+          "metric": "containment_latency_p95_ms",
+          "comparator": "<=",
+          "threshold": 250,
+          "unit": "ms",
+          "source_beads": [
+            "bd-1lsy.6.3",
+            "bd-1lsy.6.4"
+          ],
+          "evaluation_command": "rch exec -- ./scripts/e2e/run_security_containment_scenarios.sh"
+        }
+      ],
+      "required_artifacts": [
+        "artifacts/rgc_m3/latest/run_manifest.json",
+        "artifacts/rgc_m3/latest/events.jsonl",
+        "artifacts/rgc_m3/latest/commands.txt"
+      ],
+      "rollback_triggers": [
+        {
+          "trigger_id": "m3-security-fail-open",
+          "condition_expression": "security_fail_open_findings > 0",
+          "required_probe_command": "rch exec -- cargo test -p frankenengine-engine --test security_fail_open_regression",
+          "rollback_action": "Immediately demote to safe mode and block untrusted extension execution lane"
+        },
+        {
+          "trigger_id": "m3-containment-timeout",
+          "condition_expression": "containment_latency_p95_ms > 250",
+          "required_probe_command": "rch exec -- ./scripts/e2e/replay_m3_containment_timeout.sh",
+          "rollback_action": "Rollback latest guardplane scheduling changes and re-enable prior enforcement profile"
+        }
+      ],
+      "decision_authority": {
+        "primary_role": "SecurityLead",
+        "secondary_role": "RuntimeLead",
+        "escalation_roles": [
+          "ProgramOwner",
+          "OnCallCommander"
+        ]
+      },
+      "ci_gate": {
+        "workflow_id": "rgc-m3-gate",
+        "command": "./scripts/run_security_release_gate.sh check",
+        "report_only_until_utc": "2026-04-11T00:00:00Z",
+        "fail_closed_after_utc": "2026-04-12T00:00:00Z"
+      }
+    },
+    {
+      "milestone": "M4",
+      "objective": "Tiered performance architecture is measurable and statistically valid",
+      "gate_owner": "RGC-700",
+      "pass_predicates": [
+        {
+          "predicate_id": "m4-benchmark-significance",
+          "description": "Speedup claims include variance and significance evidence",
+          "metric": "benchmark_claim_validity_rate",
+          "comparator": "==",
+          "threshold": 1.0,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.7.1",
+            "bd-1lsy.7.2",
+            "bd-1lsy.8.1",
+            "bd-1lsy.8.2"
+          ],
+          "evaluation_command": "rch exec -- ./scripts/run_performance_claim_gate.sh ci"
+        },
+        {
+          "predicate_id": "m4-regression-budget",
+          "description": "No workload exceeds permitted regression budget",
+          "metric": "regression_budget_violations",
+          "comparator": "==",
+          "threshold": 0,
+          "unit": "count",
+          "source_beads": [
+            "bd-1lsy.7.3",
+            "bd-1lsy.7.4"
+          ],
+          "evaluation_command": "rch exec -- cargo test -p frankenengine-engine --test performance_regression_budget"
+        }
+      ],
+      "required_artifacts": [
+        "artifacts/rgc_m4/latest/run_manifest.json",
+        "artifacts/rgc_m4/latest/events.jsonl",
+        "artifacts/rgc_m4/latest/commands.txt"
+      ],
+      "rollback_triggers": [
+        {
+          "trigger_id": "m4-tail-latency-regression",
+          "condition_expression": "tail_latency_regression_pct > 5",
+          "required_probe_command": "rch exec -- ./scripts/e2e/replay_m4_tail_latency_suite.sh",
+          "rollback_action": "Rollback latest tier-up policy and pin previous scheduler profile"
+        },
+        {
+          "trigger_id": "m4-invalid-speed-claim",
+          "condition_expression": "invalid_speed_claim_count > 0",
+          "required_probe_command": "rch exec -- ./scripts/run_benchmark_statistical_validation.sh",
+          "rollback_action": "Revoke benchmark publication and revert claim-bearing release notes"
+        }
+      ],
+      "decision_authority": {
+        "primary_role": "PerformanceLead",
+        "secondary_role": "RuntimeLead",
+        "escalation_roles": [
+          "ProgramOwner",
+          "ReleaseDutyEngineer"
+        ]
+      },
+      "ci_gate": {
+        "workflow_id": "rgc-m4-gate",
+        "command": "./scripts/run_performance_release_gate.sh check",
+        "report_only_until_utc": "2026-04-25T00:00:00Z",
+        "fail_closed_after_utc": "2026-04-26T00:00:00Z"
+      }
+    },
+    {
+      "milestone": "M5",
+      "objective": "GA evidence package is reproducible by third-party operators",
+      "gate_owner": "RGC-900",
+      "pass_predicates": [
+        {
+          "predicate_id": "m5-third-party-rerun-success",
+          "description": "Independent reruns reproduce gate decisions",
+          "metric": "third_party_replay_success_rate",
+          "comparator": ">=",
+          "threshold": 0.99,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.9.1",
+            "bd-1lsy.9.2",
+            "bd-1lsy.10.4",
+            "bd-1lsy.11.5"
+          ],
+          "evaluation_command": "rch exec -- ./scripts/e2e/run_ga_reproducibility_drill.sh"
+        },
+        {
+          "predicate_id": "m5-evidence-completeness",
+          "description": "All release claims are backed by signed reproducibility artifacts",
+          "metric": "claim_evidence_coverage",
+          "comparator": "==",
+          "threshold": 1.0,
+          "unit": "ratio",
+          "source_beads": [
+            "bd-1lsy.10.3",
+            "bd-1lsy.10.4",
+            "bd-1lsy.10.5"
+          ],
+          "evaluation_command": "rch exec -- ./scripts/run_release_evidence_integrity_gate.sh"
+        }
+      ],
+      "required_artifacts": [
+        "artifacts/rgc_m5/latest/run_manifest.json",
+        "artifacts/rgc_m5/latest/events.jsonl",
+        "artifacts/rgc_m5/latest/commands.txt"
+      ],
+      "rollback_triggers": [
+        {
+          "trigger_id": "m5-reproducibility-failure",
+          "condition_expression": "third_party_replay_success_rate < 0.95",
+          "required_probe_command": "rch exec -- ./scripts/e2e/replay_ga_release_bundle.sh",
+          "rollback_action": "Halt release promotion and revert to last independently reproducible release candidate"
+        },
+        {
+          "trigger_id": "m5-missing-audit-chain",
+          "condition_expression": "missing_signed_evidence_artifacts > 0",
+          "required_probe_command": "rch exec -- ./scripts/run_release_audit_chain_check.sh",
+          "rollback_action": "Invalidate release candidate and require regenerated signed evidence package"
+        }
+      ],
+      "decision_authority": {
+        "primary_role": "ProgramOwner",
+        "secondary_role": "ReleaseDutyEngineer",
+        "escalation_roles": [
+          "SecurityLead",
+          "RuntimeLead"
+        ]
+      },
+      "ci_gate": {
+        "workflow_id": "rgc-m5-gate",
+        "command": "./scripts/run_release_cutline_gate.sh",
+        "report_only_until_utc": "2026-05-09T00:00:00Z",
+        "fail_closed_after_utc": "2026-05-10T00:00:00Z"
+      }
+    }
+  ],
+  "operator_verification": [
+    "jq empty docs/rgc_milestone_gatebook_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_gatebook cargo test -p frankenengine-engine --test rgc_milestone_gatebook",
+    "./scripts/run_phase_a_exit_gate.sh check"
+  ]
+}

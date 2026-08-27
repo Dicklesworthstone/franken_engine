@@ -1,0 +1,254 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-routing-contract.v1",
+  "bead_id": "bd-sqm14.1",
+  "parent_bead_id": "bd-sqm14",
+  "docs": "docs/SWARM_NATIVE_DEPENDENCY_ROUTING_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_native_dependency_contract_smoke.sh",
+  "testdata": "scripts/testdata/swarm_native_dependency_contract/cases.json",
+  "bridged_surfaces": [
+    "docs/SWARM_CAPABILITY_AFFINITY_ROUTING_CONTRACT.md",
+    "docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md",
+    "docs/RCH_VALIDATION_PREFLIGHT_CONTRACT_V1.md",
+    "docs/RCH_WORKER_TRUTH_PARITY_LEDGER.md",
+    "scripts/e2e/rch_validation_preflight_contract_smoke.sh",
+    "scripts/e2e/rch_worker_truth_parity_ledger_smoke.sh"
+  ],
+  "required_preserved_inputs": [
+    "native_requirement_bundle_json",
+    "worker_native_probe_snapshot_json",
+    "rch_failure_log_excerpt_json",
+    "validation_command_context_json"
+  ],
+  "optional_preserved_inputs": [
+    "worker_capability_snapshot_json",
+    "worker_toolchain_snapshot_json",
+    "operator_status_snapshot_json"
+  ],
+  "minimum_advisory_subject_fields": [
+    "validation_id",
+    "command",
+    "cargo_package",
+    "path_dependency_closure",
+    "dependency_id",
+    "native_package_name",
+    "probe_kind",
+    "required",
+    "candidate_worker_ids",
+    "worker_id",
+    "probe_command",
+    "probe_status",
+    "observed_version",
+    "abi_fingerprint",
+    "probe_timestamp",
+    "freshness_state",
+    "contamination_state",
+    "reason_codes"
+  ],
+  "native_dependency_families": [
+    {
+      "dependency_id": "hdf5",
+      "rust_crates": [
+        "hdf5-metno-sys"
+      ],
+      "pkg_config_names": [
+        "hdf5"
+      ],
+      "environment_roots": [
+        "HDF5_DIR"
+      ],
+      "required_headers": [
+        "hdf5.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence",
+        "library_linkability"
+      ]
+    },
+    {
+      "dependency_id": "sqlite3",
+      "rust_crates": [
+        "libsqlite3-sys"
+      ],
+      "pkg_config_names": [
+        "sqlite3"
+      ],
+      "environment_roots": [
+        "SQLITE3_LIB_DIR",
+        "SQLITE3_INCLUDE_DIR"
+      ],
+      "required_headers": [
+        "sqlite3.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence"
+      ]
+    },
+    {
+      "dependency_id": "openssl",
+      "rust_crates": [
+        "openssl-sys"
+      ],
+      "pkg_config_names": [
+        "openssl"
+      ],
+      "environment_roots": [
+        "OPENSSL_DIR"
+      ],
+      "required_headers": [
+        "openssl/ssl.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence"
+      ]
+    },
+    {
+      "dependency_id": "zstd",
+      "rust_crates": [
+        "zstd-sys"
+      ],
+      "pkg_config_names": [
+        "libzstd"
+      ],
+      "environment_roots": [
+        "ZSTD_SYS_USE_PKG_CONFIG"
+      ],
+      "required_headers": [
+        "zstd.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence"
+      ]
+    },
+    {
+      "dependency_id": "unknown_build_script_native_dependency",
+      "rust_crates": [],
+      "pkg_config_names": [],
+      "environment_roots": [],
+      "required_headers": [],
+      "required_probe_kinds": [
+        "build_script_diagnostic"
+      ]
+    }
+  ],
+  "probe_kinds": [
+    "pkg_config_modversion",
+    "header_presence",
+    "library_linkability",
+    "env_root",
+    "build_script_diagnostic"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated",
+    "unknown"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "required_reason_codes": [
+    "required_native_dependency_present",
+    "hdf5_required_present",
+    "hdf5_required_missing",
+    "optional_native_dependency_absent",
+    "missing_required_native_package_metadata",
+    "missing_native_headers",
+    "pkg_config_unavailable",
+    "stale_worker_probe",
+    "contradictory_pkg_config_header_evidence",
+    "local_fallback_contaminated",
+    "unsupported_worker_mutation_advice",
+    "ambiguous_build_script_diagnostic"
+  ],
+  "fail_closed_rules": [
+    "missing required preserved inputs fail closed",
+    "required native package with missing pkg-config metadata blocks route",
+    "missing required headers block route",
+    "stale worker probe snapshots fail closed unless explicitly optional and degraded",
+    "contradictory pkg-config and header evidence fails closed",
+    "local fallback contamination fails closed",
+    "unsupported worker mutation advice fails closed",
+    "ambiguous build-script diagnostics fail closed"
+  ],
+  "blocked_rules": [
+    "hdf5 required and absent blocks candidate worker",
+    "required native dependency missing on candidate worker blocks route",
+    "pkg-config unavailable for required native dependency blocks route",
+    "missing required native headers blocks route"
+  ],
+  "degraded_rules": [
+    "optional native dependency absent degrades confidence",
+    "missing optional operator status snapshot degrades confidence",
+    "missing optional worker toolchain snapshot degrades confidence"
+  ],
+  "future_artifacts": [
+    "native_dependency_requirement_bundle.json",
+    "worker_native_probe_snapshot.json",
+    "native_dependency_routing_advisory.json",
+    "events.jsonl",
+    "commands.txt",
+    "summary.md"
+  ],
+  "future_advisory_fields": [
+    "native_dependency_advisory_id",
+    "truth_state",
+    "decision",
+    "source_artifacts",
+    "reason_codes",
+    "dependency_requirements",
+    "worker_probe_summary",
+    "candidate_worker_summary",
+    "fail_closed_reason",
+    "artifact_paths"
+  ],
+  "event_fields": [
+    "trace_id",
+    "validation_id",
+    "worker_id",
+    "dependency_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "mutation_policy": {
+    "contract_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "installs_remote_packages": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "proof_cases": [
+    "hdf5_required_present",
+    "hdf5_required_missing",
+    "optional_native_dependency_absent",
+    "stale_worker_probe",
+    "contradictory_pkg_config_header_evidence",
+    "local_fallback_contaminated"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_native_dependency_routing_contract_v1.json",
+    "jq empty scripts/testdata/swarm_native_dependency_contract/cases.json",
+    "bash -n scripts/e2e/swarm_native_dependency_contract_smoke.sh",
+    "bash scripts/e2e/swarm_native_dependency_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_native_dependency_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_NATIVE_DEPENDENCY_ROUTING_CONTRACT.md docs/swarm_native_dependency_routing_contract_v1.json scripts/e2e/swarm_native_dependency_contract_smoke.sh scripts/testdata/swarm_native_dependency_contract/cases.json"
+  ]
+}

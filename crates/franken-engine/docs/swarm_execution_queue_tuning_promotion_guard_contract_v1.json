@@ -1,0 +1,73 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-tuning-promotion-guard-contract.v1",
+  "bead_id": "bd-j2rny.3",
+  "parent_bead_id": "bd-j2rny",
+  "depends_on": [
+    "bd-j2rny.2"
+  ],
+  "script": "scripts/swarm_execution_queue_tuning_promotion_guard.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_TUNING_PROMOTION_GUARD.md",
+  "candidate_bundle_contract": "docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json",
+  "current_policy_state_schema_version": "franken-engine.swarm-execution-queue-current-policy-state.v1",
+  "receipt_schema_version": "franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1",
+  "rollout_plan_schema_version": "franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1",
+  "required_inputs": [
+    {
+      "field": "candidate_bundle_json",
+      "argument": "--candidate-bundle-json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1"
+    },
+    {
+      "field": "current_policy_state_json",
+      "argument": "--current-policy-state-json",
+      "schema_version": "franken-engine.swarm-execution-queue-current-policy-state.v1"
+    }
+  ],
+  "decisions": [
+    "safe_noop",
+    "eligible_canary",
+    "reject"
+  ],
+  "reject_rules": [
+    "stale evidence rejects promotion",
+    "missing rollback material rejects promotion",
+    "contradictory queue-policy provenance rejects promotion",
+    "rollback reference mismatch rejects promotion",
+    "missing manual approval requirement rejects promotion",
+    "autonomous scheduler mutation claims reject promotion",
+    "reject local fallback proof evidence"
+  ],
+  "mutation_policy": {
+    "planning_artifact_only": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false,
+    "operator_wording_required": "advisory-only planning artifact"
+  },
+  "artifact_paths": {
+    "promotion_guard_receipt_json": "promotion_guard_receipt.json",
+    "manual_approval_rollout_plan_json": "manual_approval_rollout_plan.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "selftest_scenarios": [
+    "safe_noop",
+    "eligible_canary",
+    "stale_evidence_reject",
+    "contradictory_provenance_reject",
+    "auto_retune_reject"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_tuning_promotion_guard.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_tuning_promotion_guard.sh scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh",
+    "jq empty docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh selftest"
+  ]
+}

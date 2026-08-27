@@ -1,0 +1,117 @@
+{
+  "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger-contract.v1",
+  "bead_id": "bd-7ayfz",
+  "parent_bead_id": "bd-3rebe",
+  "depends_on": [
+    "bd-eozx0",
+    "bd-lfwy6"
+  ],
+  "script": "scripts/swarm_rch_stall_rehabilitation_ledger.sh",
+  "smoke_script": "scripts/e2e/swarm_rch_stall_rehabilitation_ledger_smoke.sh",
+  "docs": "docs/SWARM_RCH_STALL_REHABILITATION_LEDGER.md",
+  "fixture_bundle": "scripts/testdata/swarm_rch_stall_rehabilitation/rehab_fixtures.json",
+  "ledger_schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+  "receipts_schema_version": "franken-engine.swarm-rch-stall-rehabilitation-receipts.v1",
+  "event_schema_version": "franken-engine.swarm-rch-stall-rehabilitation.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "swarm_ops_state_snapshot_json",
+      "argument": "--swarm-ops-state-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "worker_status_json",
+      "argument": "--worker-status-json",
+      "required": true
+    },
+    {
+      "source_id": "stall_observations_json",
+      "argument": "--stall-observations-json",
+      "required": true
+    }
+  ],
+  "optional_inputs": [
+    {
+      "source_id": "worker_capabilities_json",
+      "argument": "--worker-capabilities-json"
+    },
+    {
+      "source_id": "operator_actions_json",
+      "argument": "--operator-actions-json"
+    }
+  ],
+  "artifacts": {
+    "ledger_json": "swarm_rch_stall_rehabilitation_ledger.json",
+    "receipts_json": "swarm_rch_stall_rehabilitation_receipts.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "worker_classifications": [
+    "healthy",
+    "watch",
+    "probe_required",
+    "drain_recommended",
+    "drained",
+    "rehab_candidate"
+  ],
+  "required_receipt_fields": [
+    "worker_id",
+    "current_state",
+    "classification",
+    "latest_build_id",
+    "latest_command",
+    "latest_heartbeat_age_seconds",
+    "latest_progress_age_seconds",
+    "latest_cancellation_outcome",
+    "pressure_telemetry",
+    "evidence_summary",
+    "reason_codes",
+    "operator_commands"
+  ],
+  "operator_command_contract": [
+    "rch workers probe WORKER --json",
+    "rch workers drain -y WORKER",
+    "rch workers enable WORKER",
+    "rch workers capabilities --refresh --json"
+  ],
+  "decision_policy": {
+    "pass": "all classified workers are healthy and upstream swarm ops state is trusted",
+    "degraded": "one or more workers need watch, probe, drain, drained-state follow-up, or rehab follow-up",
+    "fail_closed": "required snapshots are malformed or upstream swarm ops state is already fail_closed"
+  },
+  "fail_closed_rules": [
+    "required swarm ops state, worker status, and stall observations must be valid JSON with required fields",
+    "upstream swarm ops state fail_closed is not promotable",
+    "worker/build/command identifiers must be present on stall observations",
+    "empty worker identity sets fail closed"
+  ],
+  "classification_rules": [
+    "repeated remote transport stalls on the same worker recommend drain before retry",
+    "single cleanly cancelled remote transport stall yields watch, not drain",
+    "telemetry gaps yield probe_required",
+    "local fallback contamination yields probe_required and must not be promoted into drain_recommended",
+    "drained workers stay drained until rehab evidence appears",
+    "successful rehab after prior drain yields rehab_candidate"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false
+  },
+  "selftest_scenarios": [
+    "fresh_progress",
+    "stale_progress_fresh_heartbeat",
+    "cancellation_clean",
+    "telemetry_gap",
+    "drained_worker",
+    "successful_rehab",
+    "local_fallback_contaminated"
+  ]
+}

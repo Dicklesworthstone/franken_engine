@@ -1,0 +1,107 @@
+{
+  "schema_version": "frx.objective_function.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.1",
+  "generated_by": "bd-mjh3.1",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "constitution_ref": "docs/FRX_PROGRAM_CONSTITUTION_V1.md",
+  "constitution_version": "frx.program.constitution.v1",
+  "objective": {
+    "target": "maximize",
+    "dimensions": [
+      "compatibility",
+      "deterministic_reliability",
+      "performance"
+    ],
+    "hard_constraints": [
+      "no_constitutional_invariant_violation",
+      "fail_closed_on_missing_required_artifacts",
+      "deterministic_safe_mode_on_low_confidence"
+    ]
+  },
+  "non_goals": [
+    "silent_semantic_drift_for_speed",
+    "undocumented_quirk_preservation_when_replay_safety_is_violated",
+    "promotion_without_replayable_evidence"
+  ],
+  "testable_invariants": [
+    {
+      "id": "FRX-CI-001",
+      "name": "compatibility_preservation",
+      "verification_ref": "docs/FRX_COMPATIBILITY_CONSTITUTION_V1.md"
+    },
+    {
+      "id": "FRX-CI-002",
+      "name": "deterministic_replay",
+      "verification_ref": "crates/franken-engine/src/forensic_replayer.rs"
+    },
+    {
+      "id": "FRX-CI-003",
+      "name": "safe_mode_guarantee",
+      "verification_ref": "crates/franken-engine/src/safe_mode_fallback.rs"
+    },
+    {
+      "id": "FRX-CI-004",
+      "name": "evidence_completeness",
+      "verification_ref": "crates/franken-engine/src/evidence_contract.rs"
+    },
+    {
+      "id": "FRX-CI-005",
+      "name": "fail_closed_governance",
+      "verification_ref": "docs/FRX_C0_FREEZE_MANIFEST_V1.json"
+    }
+  ],
+  "decision_model": {
+    "loss_matrix_source": "crates/franken-engine/src/expected_loss_selector.rs",
+    "calibration_source": "crates/franken-engine/src/runtime_decision_theory.rs",
+    "fallback_policy_source": "crates/franken-engine/src/safe_mode_fallback.rs"
+  },
+  "metrics": {
+    "north_star": [
+      {
+        "id": "compatibility_conformance_rate",
+        "direction": "maximize",
+        "source": "docs/FRX_COMPATIBILITY_CONSTITUTION_V1.md"
+      },
+      {
+        "id": "deterministic_replay_success_rate",
+        "direction": "maximize",
+        "source": "crates/franken-engine/src/forensic_replayer.rs"
+      },
+      {
+        "id": "performance_uplift_vs_baseline",
+        "direction": "maximize",
+        "source": "crates/franken-engine/src/northstar_scorecard.rs"
+      }
+    ],
+    "guardrails": [
+      {
+        "id": "safe_mode_fallback_frequency",
+        "direction": "minimize",
+        "source": "crates/franken-engine/src/northstar_scorecard.rs"
+      },
+      {
+        "id": "safe_mode_recovery_latency_ms",
+        "direction": "minimize",
+        "source": "crates/franken-engine/src/safe_mode_fallback.rs"
+      },
+      {
+        "id": "forbidden_regression_count",
+        "direction": "minimize",
+        "source": "docs/frx_forbidden_regressions_v1.json"
+      }
+    ]
+  },
+  "downstream_reference_policy": {
+    "constitution_ref_mandatory": true,
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

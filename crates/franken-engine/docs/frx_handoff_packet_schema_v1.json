@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "frx.handoff.packet.v1",
+  "title": "FRX Handoff Packet",
+  "type": "object",
+  "required": [
+    "packet_id",
+    "producer_track",
+    "consumer_track",
+    "producer_owner",
+    "consumer_owner",
+    "wave_id",
+    "artifact_ids",
+    "contract_version",
+    "confidence",
+    "readiness_class",
+    "created_at",
+    "max_wait_seconds",
+    "entry_criteria",
+    "exit_criteria",
+    "criteria_attestations",
+    "handoff_package"
+  ],
+  "properties": {
+    "packet_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "producer_track": {
+      "type": "string",
+      "pattern": "^track-[A-Z]$"
+    },
+    "consumer_track": {
+      "type": "string",
+      "pattern": "^track-[A-Z]$"
+    },
+    "producer_owner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "consumer_owner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wave_id": {
+      "type": "string",
+      "enum": [
+        "wave_0",
+        "wave_1",
+        "wave_2",
+        "wave_3"
+      ]
+    },
+    "artifact_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "contract_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "readiness_class": {
+      "type": "string",
+      "enum": [
+        "ready_now",
+        "ready_next",
+        "gated"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "max_wait_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "notes": {
+      "type": "string"
+    },
+    "entry_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/criterion"
+      }
+    },
+    "exit_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/criterion"
+      }
+    },
+    "criteria_attestations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/criterion_attestation"
+      }
+    },
+    "handoff_package": {
+      "$ref": "#/$defs/handoff_package"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "criterion": {
+      "type": "object",
+      "required": [
+        "criterion_id",
+        "bead_id",
+        "required_status",
+        "required_artifact",
+        "mandatory"
+      ],
+      "properties": {
+        "criterion_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bead_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "in_progress",
+            "closed"
+          ]
+        },
+        "required_artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mandatory": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "criterion_attestation": {
+      "type": "object",
+      "required": [
+        "criterion_id",
+        "bead_id",
+        "bead_status",
+        "artifact_ref"
+      ],
+      "properties": {
+        "criterion_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bead_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bead_status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "in_progress",
+            "closed"
+          ]
+        },
+        "artifact_ref": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "handoff_package": {
+      "type": "object",
+      "required": [
+        "changed_beads",
+        "artifact_links",
+        "open_risks",
+        "next_step_recommendations",
+        "completeness_score_milli"
+      ],
+      "properties": {
+        "changed_beads": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "artifact_links": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "open_risks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "next_step_recommendations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "completeness_score_milli": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

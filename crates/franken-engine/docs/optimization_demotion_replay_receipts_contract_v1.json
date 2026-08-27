@@ -1,0 +1,128 @@
+{
+  "schema_version": "franken-engine.optimization-demotion-replay-receipts-contract.v1",
+  "bead_id": "bd-or2e1",
+  "parent_bead_id": "bd-xg3d6",
+  "depends_on": ["bd-sisok"],
+  "script": "scripts/optimization_demotion_replay_receipts.sh",
+  "smoke_script": "scripts/e2e/optimization_demotion_replay_receipts_smoke.sh",
+  "docs": "docs/OPTIMIZATION_DEMOTION_REPLAY_RECEIPTS.md",
+  "fixture_bundle": "scripts/testdata/optimization_demotion_replay_receipts/cases.json",
+  "receipt_schema_version": "franken-engine.optimization-demotion-receipt.v1",
+  "counterexample_schema_version": "franken-engine.optimization-demotion-counterexample-bundle.v1",
+  "required_inputs": [
+    "proof_specialization_receipt",
+    "policy_epoch",
+    "semantic_parity",
+    "rollback_health",
+    "safe_mode_fallback",
+    "performance_regression",
+    "source_revision"
+  ],
+  "required_side_conditions": [
+    "source_revision_aligned",
+    "policy_epoch_aligned",
+    "proof_inputs_current",
+    "semantic_parity_matched",
+    "tail_budget_ok",
+    "rollback_token_present_when_needed",
+    "safe_mode_ready_when_needed",
+    "no_synthetic_contamination"
+  ],
+  "recommended_states": [
+    "keep_observed",
+    "demote_now",
+    "quarantine_candidate",
+    "fail_closed"
+  ],
+  "demotion_trigger_codes": [
+    "OPT_DEMOTION_STALE_PROOF_RECEIPT",
+    "OPT_DEMOTION_POLICY_EPOCH_DRIFT",
+    "OPT_DEMOTION_SEMANTIC_DIVERGENCE",
+    "OPT_DEMOTION_TAIL_REGRESSION"
+  ],
+  "fail_closed_error_codes": [
+    "FE-OPT-DEMOTION-MISSING-EVIDENCE",
+    "FE-OPT-DEMOTION-SOURCE-REVISION-MISMATCH",
+    "FE-OPT-DEMOTION-MISSING-ROLLBACK-TOKEN",
+    "FE-OPT-DEMOTION-SAFE-MODE-UNREADY",
+    "FE-OPT-DEMOTION-SYNTHETIC-CONTAMINATION"
+  ],
+  "artifacts": {
+    "receipt_json": "optimization_demotion_receipt.json",
+    "counterexample_bundle_json": "optimization_demotion_counterexample_bundle.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_runtime_policy": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "publishes_benchmark_claims": false
+  },
+  "required_doc_text": [
+    "The optimization demotion replay receipt producer is advisory only and proof only.",
+    "It emits keep_observed, demote_now, quarantine_candidate, or fail_closed receipts without mutating runtime policy.",
+    "Demote and quarantine receipts require a rollback token and a safe-mode replay command before they can pass.",
+    "The receipt preserves source evidence hashes and emits a minimal counterexample bundle for incident support.",
+    "Every replay and next validation command is rch-wrapped.",
+    "Missing rollback tokens or unready safe-mode fallback evidence fails closed when demotion or quarantine is required."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "current_evidence_keeps_observed",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "keep_observed"
+    },
+    {
+      "case_id": "stale_proof_receipt_demotes_with_safe_mode",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "demote_now",
+      "required_trigger_code": "OPT_DEMOTION_STALE_PROOF_RECEIPT"
+    },
+    {
+      "case_id": "policy_epoch_drift_demotes",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "demote_now",
+      "required_trigger_code": "OPT_DEMOTION_POLICY_EPOCH_DRIFT"
+    },
+    {
+      "case_id": "semantic_divergence_quarantines",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "quarantine_candidate",
+      "required_trigger_code": "OPT_DEMOTION_SEMANTIC_DIVERGENCE"
+    },
+    {
+      "case_id": "tail_regression_demotes",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "demote_now",
+      "required_trigger_code": "OPT_DEMOTION_TAIL_REGRESSION"
+    },
+    {
+      "case_id": "missing_rollback_token_fails_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_recommended_state": "fail_closed",
+      "required_error_code": "FE-OPT-DEMOTION-MISSING-ROLLBACK-TOKEN"
+    },
+    {
+      "case_id": "safe_mode_unready_fails_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_recommended_state": "fail_closed",
+      "required_error_code": "FE-OPT-DEMOTION-SAFE-MODE-UNREADY"
+    }
+  ]
+}

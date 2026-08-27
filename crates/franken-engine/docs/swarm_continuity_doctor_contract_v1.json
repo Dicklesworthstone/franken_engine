@@ -1,0 +1,83 @@
+{
+  "schema_version": "franken-engine.swarm-continuity-doctor-contract.v1",
+  "bead_id": "bd-bahyn",
+  "component": "swarm_continuity_doctor",
+  "purpose": "Unify preserved br, Agent Mail, git, reservation, and rch snapshots into one advisory continuity evidence bundle.",
+  "implementation_script": "scripts/swarm_continuity_doctor.sh",
+  "smoke_script": "scripts/e2e/swarm_continuity_doctor_smoke.sh",
+  "fixtures": "scripts/testdata/swarm_continuity_doctor/cases.json",
+  "reused_surfaces": [
+    "scripts/swarm_agent_mail_outage_continuity_bridge.sh",
+    "scripts/swarm_ops_state_snapshot_capture.sh",
+    "crates/franken-engine/src/workload_preflight_doctor.rs"
+  ],
+  "required_sources": [
+    {
+      "source_id": "br_ready_json",
+      "argument": "--br-ready-json",
+      "required": true
+    },
+    {
+      "source_id": "br_in_progress_json",
+      "argument": "--br-in-progress-json",
+      "required": true
+    }
+  ],
+  "optional_sources": [
+    "mail_health_json",
+    "mail_bootstrap_json",
+    "agent_profiles_json",
+    "git_status_json",
+    "file_reservations_json",
+    "rch_status_json",
+    "rch_queue_json"
+  ],
+  "output_schema": "franken-engine.swarm-continuity-doctor-report.v1",
+  "run_manifest_schema": "franken-engine.swarm-continuity-doctor-run-manifest.v1",
+  "event_schema": "franken-engine.swarm-continuity-doctor-event.v1",
+  "required_artifacts": [
+    "run_manifest.json",
+    "swarm_continuity_doctor_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md",
+    "mail_outage_bridge/mail_outage_continuity_bridge.json"
+  ],
+  "required_fixture_cases": [
+    "healthy",
+    "degraded_read_only",
+    "corrupt_mail_partial_read"
+  ],
+  "required_reason_codes": [
+    "FE-SWARM-CONTINUITY-MAIL-DEGRADED",
+    "FE-SWARM-CONTINUITY-MAIL-CORRUPT",
+    "FE-SWARM-CONTINUITY-PARTIAL-MAIL-READ",
+    "FE-SWARM-CONTINUITY-RCH-DEGRADED",
+    "FE-SWARM-CONTINUITY-RCH-LOCAL-FALLBACK",
+    "FE-SWARM-CONTINUITY-RESERVATIONS-MISSING"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_first": true,
+    "repairs_agent_mail_db": false,
+    "sends_agent_mail": false,
+    "mutates_br": false,
+    "claims_beads": false,
+    "closes_beads": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "validation_commands": [
+    "jq empty docs/swarm_continuity_doctor_contract_v1.json scripts/testdata/swarm_continuity_doctor/cases.json",
+    "bash -n scripts/swarm_continuity_doctor.sh scripts/e2e/swarm_continuity_doctor_smoke.sh",
+    "bash scripts/e2e/swarm_continuity_doctor_smoke.sh check",
+    "bash scripts/e2e/swarm_continuity_doctor_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_continuity_doctor.sh scripts/e2e/swarm_continuity_doctor_smoke.sh scripts/testdata/swarm_continuity_doctor/cases.json docs/swarm_continuity_doctor_contract_v1.json docs/SWARM_CONTINUITY_DOCTOR.md"
+  ]
+}

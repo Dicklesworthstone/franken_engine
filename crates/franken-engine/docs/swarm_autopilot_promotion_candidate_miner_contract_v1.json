@@ -1,0 +1,104 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-promotion-candidate-miner-contract.v1",
+  "bead_id": "bd-gra1z.3",
+  "parent_bead_id": "bd-gra1z",
+  "depends_on": [
+    "bd-gra1z.1",
+    "bd-09g6k"
+  ],
+  "script": "scripts/swarm_autopilot_promotion_candidate_miner.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_promotion_candidate_miner_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_PROMOTION_CANDIDATE_MINER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_promotion_candidate_miner/cases.json",
+  "candidate_schema_version": "franken-engine.swarm-autopilot-promotion-candidates.v1",
+  "receipt_schema_version": "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1",
+  "required_inputs": [
+    {
+      "source_id": "evidence_warehouse_json",
+      "argument": "--evidence-warehouse-json",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_chaos_scenarios_json",
+      "argument": "--hindsight-chaos-scenarios-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "promotion_candidates_json": "swarm_autopilot_promotion_candidates.json",
+    "promotion_candidate_receipts_json": "swarm_autopilot_promotion_candidate_receipts.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "candidate_types": [
+    "promotion_candidate",
+    "stable_non_promotion",
+    "degraded_insufficient_evidence"
+  ],
+  "fail_closed_rules": [
+    "stale hindsight inputs fail closed",
+    "contradictory hindsight blocks fail closed",
+    "contamination refusal fails closed",
+    "schema drift in warehouse or hindsight material fails closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-PROMOTION-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-PROMOTION-STALE-HINDSIGHT",
+    "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT",
+    "FE-SWARM-AUTOPILOT-PROMOTION-CONTAMINATED"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "promotes_candidates_automatically": false
+  },
+  "required_doc_text": [
+    "The promotion candidate miner is advisory only and proof only.",
+    "Promotion candidates require repeated healthy warehouse evidence and replayable hindsight scenarios.",
+    "Each candidate preserves confidence band, required evidence count, observed evidence count, contradictory outcome reasons, and exact source artifact paths.",
+    "Contradictory hindsight blocks promotion truth.",
+    "The miner never promotes automatically."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "promotable_repeated_success",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_candidate_type": "promotion_candidate"
+    },
+    {
+      "case_id": "insufficient_evidence_degradation",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0,
+      "required_candidate_type": "degraded_insufficient_evidence"
+    },
+    {
+      "case_id": "contradictory_hindsight_block",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT"
+    },
+    {
+      "case_id": "contamination_refusal",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTAMINATED"
+    },
+    {
+      "case_id": "stable_non_promotion_recommendation",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_candidate_type": "stable_non_promotion"
+    }
+  ]
+}

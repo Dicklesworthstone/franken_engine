@@ -1,0 +1,125 @@
+{
+  "schema_version": "franken-engine.swarm-topology-placement-no-mock-drill-contract.v1",
+  "bead_id": "bd-2r3eq",
+  "parent_bead_id": "bd-6arnx",
+  "depends_on": [
+    "bd-5p9ln",
+    "bd-3ynhq",
+    "bd-zp0m5",
+    "bd-cocup",
+    "bd-peqvp"
+  ],
+  "drill_script": "scripts/e2e/swarm_topology_placement_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_topology_placement_truth_gate.sh",
+  "composed_scripts": [
+    "scripts/swarm_topology_placement_normalizer.sh",
+    "scripts/swarm_topology_placement_planner.sh",
+    "scripts/swarm_topology_placement_receipt_ledger.sh",
+    "scripts/swarm_operator_status_report.sh"
+  ],
+  "fixture_bundles": [
+    "scripts/testdata/swarm_topology_placement/topology_placement_fixtures.json",
+    "scripts/testdata/swarm_topology_placement_planner/cases.json",
+    "scripts/testdata/swarm_topology_placement_receipt_ledger/cases.json"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_confirmed",
+      "proves": "healthy topology-aware placement planning with explicit hot-cache residency evidence",
+      "expected": {
+        "normalizer_decision": "pass",
+        "plan_decision": "pass",
+        "receipt_decision": "pass",
+        "operator_topology_readiness": "ready",
+        "warm_cache_residency_state": "hot"
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_cache_residency",
+      "proves": "partial topology or missing cache evidence remains degraded instead of healthy-by-default",
+      "expected": {
+        "normalizer_decision": "degraded",
+        "plan_decision": "degraded",
+        "receipt_decision": "degraded",
+        "operator_topology_readiness": "degraded",
+        "warm_cache_residency_state": "missing_optional"
+      }
+    },
+    {
+      "scenario_id": "blocked_contradictory_locality",
+      "proves": "contradictory locality evidence blocks placement adoption",
+      "expected": {
+        "normalizer_decision": "blocked",
+        "plan_decision": "blocked",
+        "receipt_decision": "blocked",
+        "operator_topology_readiness": "blocked",
+        "required_reason_code": "blocked_plan_not_adoptable"
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "proves": "local fallback contamination fails closed before operator placement advice is trusted",
+      "expected": {
+        "normalizer_decision": "fail_closed",
+        "plan_decision": "fail_closed",
+        "receipt_decision": "fail_closed",
+        "operator_topology_readiness": "contaminated",
+        "required_reason_code": "rch_local_fallback_contaminates_locality"
+      }
+    }
+  ],
+  "required_artifact_references": [
+    "swarm_topology_placement_input.json",
+    "swarm_topology_placement_sources.json",
+    "swarm_topology_placement_plan.json",
+    "swarm_topology_placement_receipt.json",
+    "swarm_topology_placement_evidence_ledger.json",
+    "status.json",
+    "swarm_topology_placement_no_mock_drill_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "operator_truth_claims": [
+    "The drill is fixture-fed, proof-only, and advisory-only.",
+    "The drill runs the real topology placement normalizer, planner, receipt ledger, and operator-status reporter against checked-in fixtures.",
+    "The drill does not run Cargo or RCH work.",
+    "The drill does not mutate live workers, change live queue policy, pin workers automatically, or rebind hosts automatically.",
+    "Missing topology or missing cache evidence cannot be treated as healthy by default.",
+    "Contradictory locality evidence must block placement adoption.",
+    "Local fallback contamination must fail closed before operator placement advice is trusted."
+  ],
+  "required_truth_gate_rejections": [
+    "heavy_cargo_or_rch_claim",
+    "live_worker_or_queue_mutation_claim",
+    "automatic_worker_pinning_or_host_rebinding_claim",
+    "missing_topology_or_cache_evidence_is_healthy_claim"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_live_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "treats_missing_topology_as_healthy": false,
+    "treats_missing_cache_evidence_as_healthy": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_topology_placement_no_mock_drill.sh scripts/e2e/swarm_topology_placement_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_topology_placement_no_mock_drill.sh scripts/e2e/swarm_topology_placement_truth_gate.sh",
+    "jq empty docs/swarm_topology_placement_no_mock_drill_contract_v1.json",
+    "bash scripts/e2e/swarm_topology_placement_truth_gate.sh check",
+    "bash scripts/e2e/swarm_topology_placement_truth_gate.sh selftest",
+    "bash scripts/e2e/swarm_topology_placement_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_topology_placement_no_mock_drill.sh selftest"
+  ],
+  "artifact_retention_notes": [
+    "The drill emits one scenario directory per proof case under the selected output directory.",
+    "Each scenario retains normalizer, planner, receipt-ledger, and operator-status stdout/stderr logs.",
+    "The top-level report records explicit artifact paths so operators can replay the proof without planning context."
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "schema_version": "franken-engine.proof-reuse-admission-bundle-contract.v1",
+  "bead_id": "bd-yb8kk",
+  "component": "proof_reuse_admission_bundle",
+  "purpose": "Integrate proof reuse cache planning into read-only RCH proof admission decisions.",
+  "implementation_script": "scripts/proof_reuse_admission_bundle.sh",
+  "smoke_script": "scripts/e2e/proof_reuse_admission_bundle_smoke.sh",
+  "fixtures": "scripts/testdata/proof_reuse_admission_bundle/cases.json",
+  "reused_surfaces": [
+    "scripts/proof_reuse_cache_planner.sh",
+    "scripts/swarm_proof_batch_planner.sh",
+    "scripts/all_target_cargo_proof_shard_planner.sh",
+    "scripts/rch_cache_miss_forensic_ledger.sh",
+    "docs/remote_proof_retention_class_contract_v1.json"
+  ],
+  "required_inputs": [
+    {
+      "argument": "--proof-index-json",
+      "schema_version": "franken-engine.proof-evidence-query.v1"
+    }
+  ],
+  "optional_inputs": [
+    {
+      "argument": "--freshness-report",
+      "schema_version": "franken-engine.proof-freshness-decay-report.v1"
+    },
+    {
+      "argument": "--changed-path",
+      "schema_version": "repository-relative path"
+    },
+    {
+      "argument": "--expected-source-revision",
+      "schema_version": "git revision string"
+    }
+  ],
+  "output_schema": "franken-engine.proof-reuse-admission-bundle.v1",
+  "classification_values": [
+    "reusable",
+    "refresh_required",
+    "invalid",
+    "unknown"
+  ],
+  "admission_decisions": [
+    "admit_reuse",
+    "partial_refresh_required",
+    "refresh_required",
+    "fail_closed"
+  ],
+  "required_fixture_cases": [
+    "exact_hit",
+    "stale_source_revision",
+    "changed_path_invalidation",
+    "missing_metadata",
+    "direct_cargo_command_rejection",
+    "unknown_missing_freshness"
+  ],
+  "required_reason_codes": [
+    "freshness report allows reuse",
+    "artifact source revision does not match the requested revision",
+    "changed paths invalidate the proof artifact coverage set",
+    "command_fingerprint_unproven",
+    "direct_cargo_command_rejected",
+    "matching freshness report is missing"
+  ],
+  "compatibility_requirements_for_reuse": [
+    "source_revision_ok",
+    "source_hash_ok",
+    "command_policy_ok",
+    "target_dir_policy_ok",
+    "artifact_role_ok",
+    "freshness_ok",
+    "metadata_valid",
+    "changed_path_overlap_false"
+  ],
+  "required_artifacts": [
+    "proof_reuse_admission_bundle.json",
+    "admission_rows.jsonl",
+    "proof_reuse_cache/proof_cache_plan.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "validation_commands": [
+    "jq empty docs/proof_reuse_admission_bundle_contract_v1.json scripts/testdata/proof_reuse_admission_bundle/cases.json",
+    "bash -n scripts/proof_reuse_admission_bundle.sh scripts/e2e/proof_reuse_admission_bundle_smoke.sh",
+    "shellcheck -x scripts/proof_reuse_admission_bundle.sh scripts/e2e/proof_reuse_admission_bundle_smoke.sh",
+    "bash scripts/e2e/proof_reuse_admission_bundle_smoke.sh check",
+    "bash scripts/e2e/proof_reuse_admission_bundle_smoke.sh selftest",
+    "bash scripts/e2e/proof_reuse_cache_planner_smoke.sh check",
+    "git diff --check -- scripts/proof_reuse_admission_bundle.sh scripts/e2e/proof_reuse_admission_bundle_smoke.sh scripts/testdata/proof_reuse_admission_bundle/cases.json docs/proof_reuse_admission_bundle_contract_v1.json docs/PROOF_REUSE_ADMISSION_BUNDLE.md"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.rgc-fault-injection-chaos-verification-vectors.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.11.6",
+  "generated_by": "bd-1lsy.11.6",
+  "generated_at_utc": "2026-03-03T07:15:00Z",
+  "vectors": [
+    {
+      "scenario_id": "rgc-053-security-chaos-01",
+      "chaos_class": "containment_trigger",
+      "severity": "critical",
+      "path_type": "golden",
+      "deterministic_seed": 421,
+      "expected_outcome": "expect_pass",
+      "expected_policy_action": "challenge_and_contain",
+      "command_template": "./scripts/run_rgc_fault_injection_chaos_verification_pack.sh test",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "rgc-053-security-fault-01",
+      "chaos_class": "fault_containment",
+      "severity": "critical",
+      "path_type": "golden",
+      "deterministic_seed": 429,
+      "expected_outcome": "expect_fail_with_containment",
+      "expected_policy_action": "quarantine",
+      "command_template": "./scripts/run_rgc_fault_injection_chaos_verification_pack.sh test",
+      "requires_replay": true
+    },
+    {
+      "scenario_id": "rgc-053-runtime-stress-01",
+      "chaos_class": "degraded_mode_recovery",
+      "severity": "high",
+      "path_type": "golden",
+      "deterministic_seed": 431,
+      "expected_outcome": "expect_pass",
+      "expected_policy_action": "degraded_mode",
+      "command_template": "./scripts/run_rgc_fault_injection_chaos_verification_pack.sh test",
+      "requires_replay": true
+    }
+  ]
+}

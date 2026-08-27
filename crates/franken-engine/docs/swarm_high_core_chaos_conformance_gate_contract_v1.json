@@ -1,0 +1,62 @@
+{
+  "schema_version": "franken-engine.swarm-high-core-chaos-conformance-gate-contract.v1",
+  "report_schema_version": "franken-engine.swarm-high-core-chaos-conformance-report.v1",
+  "producer_script": "scripts/swarm_high_core_chaos_conformance_gate.sh",
+  "smoke_script": "scripts/e2e/swarm_high_core_chaos_conformance_gate_smoke.sh",
+  "required_args": [
+    "--scenario-matrix-report-json",
+    "--threshold-receipt-json",
+    "--capacity-forecast-json"
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "required_output_fields": [
+    "decision",
+    "summary.total_rows",
+    "summary.pass_count",
+    "summary.fail_count",
+    "summary.expected_fail_count",
+    "rows",
+    "deviations",
+    "gate_failures",
+    "evidence_hashes.scenario_matrix_report_sha256",
+    "evidence_hashes.threshold_receipt_sha256",
+    "evidence_hashes.capacity_forecast_sha256",
+    "artifact_paths.swarm_high_core_chaos_conformance_report_json",
+    "artifact_paths.report_md"
+  ],
+  "required_row_fields": [
+    "claim_id",
+    "scenario_class",
+    "requirement_level",
+    "verdict",
+    "reason",
+    "evidence_source_paths",
+    "evidence_hashes"
+  ],
+  "verdicts": [
+    "pass",
+    "fail",
+    "expected_fail"
+  ],
+  "requirement_levels": [
+    "MUST",
+    "SHOULD",
+    "MAY"
+  ],
+  "compatibility_contracts": [
+    "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+    "franken-engine.swarm-slo-threshold-receipt.v1",
+    "franken-engine.swarm-capacity-forecast.v1"
+  ],
+  "truth_constraints": [
+    "The gate must fail closed on stale forecasts, bare Cargo command transcripts, missing evidence, and unexpected non-rch traceability.",
+    "The degraded-worker local-fallback scenario is the only reviewed scenario allowed to rely on local-or-unknown traceability without tripping a gate-level fail-closed error.",
+    "Archive and non-proof-cache ROI gaps must remain explicit expected_fail deviations instead of being silently treated as conformant.",
+    "The gate is report-only and must not spawn new fault injection, execute cargo, or mutate worker state."
+  ]
+}

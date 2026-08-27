@@ -1,0 +1,425 @@
+{
+  "schema_version": "franken-engine.extension-heavy-golden-outputs.v1",
+  "generated_at_utc": "2026-02-22T00:00:00Z",
+  "entries": [
+    {
+      "golden_output_id": "golden-boot-storm-s-v1",
+      "workload_id": "boot-storm-s",
+      "correctness_digest_sha256": "34109e8558f652b5261c5528a02ee3c0adf2a76c56ae3cdf4854631b8853b3cf",
+      "result_digest_sha256": "432866ee8515beb224ad3584aeed800843c812f56ead35629276639f2fbc0b21",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:9d8a7c45e9e836780c9760b393c0fba3c59e664addeb174af37f83ab932e09bb",
+        "side_effect_trace_class": {
+          "fs": "module-cache-warmup",
+          "network": "extension-registry-fetch",
+          "process": "bootstrap-scheduler",
+          "policy": "startup-capability-audit"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "S",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-boot-storm-m-v1",
+      "workload_id": "boot-storm-m",
+      "correctness_digest_sha256": "307ca4f4719821eb52b7f5f3440723b22842f9b28f3eebcfa3e06dea0e517bf7",
+      "result_digest_sha256": "414ca0e3acaed560a2470e0f9032c1ac9e43b20098dc84b996b454db73697c43",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:827bf1ae9fcc59bb85855cb9e284396f75b93e840e72119058c53109384877b9",
+        "side_effect_trace_class": {
+          "fs": "module-cache-warmup",
+          "network": "extension-registry-fetch",
+          "process": "bootstrap-scheduler",
+          "policy": "startup-capability-audit"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "M",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-boot-storm-l-v1",
+      "workload_id": "boot-storm-l",
+      "correctness_digest_sha256": "df8206ac082e4084fe8544f13a1d7a1b7a539e758d031433f3e2524eb101f7dc",
+      "result_digest_sha256": "197e712a1a63ea40f986b8a515c10539688cb681f820021d478202f9d5a8d209",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:085ec93d43e61d509711774d926f016ac34ab245f6f411a29ccb7008df04d372",
+        "side_effect_trace_class": {
+          "fs": "module-cache-warmup",
+          "network": "extension-registry-fetch",
+          "process": "bootstrap-scheduler",
+          "policy": "startup-capability-audit"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "L",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-capability-churn-s-v1",
+      "workload_id": "capability-churn-s",
+      "correctness_digest_sha256": "e18ced48fe9cd0b203920bda2d5cfbecbb895265ce93fa58441242812f4e0539",
+      "result_digest_sha256": "2a486b75a801aba948acaffa9b68bba4309843eab64c9d5a0d8442625a97a229",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:1e7b867a4463207579c5965ea999366761857d372acde97393cec9b64d524a93",
+        "side_effect_trace_class": {
+          "fs": "policy-ledger-append",
+          "network": "capability-sync-burst",
+          "process": "grant-revoke-loop",
+          "policy": "capability-decision-stream"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "S",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-capability-churn-m-v1",
+      "workload_id": "capability-churn-m",
+      "correctness_digest_sha256": "ded6f2b86480247de45769fc160f15d6821d876d62baabb59b70dfe71a00d26d",
+      "result_digest_sha256": "466d76f2f88968efb86a726649fc21f05be771ada0464a2dbc8ddc0f6c733e19",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:6a2c6073b1505f4b8fcbb27ac5ea68d0d93aeac8a2fe55d33e2eb5686c84780a",
+        "side_effect_trace_class": {
+          "fs": "policy-ledger-append",
+          "network": "capability-sync-burst",
+          "process": "grant-revoke-loop",
+          "policy": "capability-decision-stream"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "M",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-capability-churn-l-v1",
+      "workload_id": "capability-churn-l",
+      "correctness_digest_sha256": "b7734074f4ae80aeb95822e0741d2e2da080a13795c8550c3c1b6b32870b6d51",
+      "result_digest_sha256": "e3d07cedd1406210967a9ade116480fb75f655926db3beedc3134272302c2d1e",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:ce823fe46c50677cde04191cdd28cc915ad7277d050bf589a239d78f5ccfc9cd",
+        "side_effect_trace_class": {
+          "fs": "policy-ledger-append",
+          "network": "capability-sync-burst",
+          "process": "grant-revoke-loop",
+          "policy": "capability-decision-stream"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "L",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-mixed-cpu-io-agent-mesh-s-v1",
+      "workload_id": "mixed-cpu-io-agent-mesh-s",
+      "correctness_digest_sha256": "ce6e3ebfce5891bb40b512cba9e29dbf4b5343cd79e6319211c35eeb22c7115b",
+      "result_digest_sha256": "558a13d457b951b8c72dbf605ab9861671882ad8465da66e96c596f8a11e87a4",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:872e474414dbd68b2bacb6fb811b581db8a912612cd09bfe101d74349cd12471",
+        "side_effect_trace_class": {
+          "fs": "artifact-read-write-mix",
+          "network": "agent-mesh-rpc",
+          "process": "cpu-io-pipeline",
+          "policy": "mixed-load-policy-checks"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "S",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-mixed-cpu-io-agent-mesh-m-v1",
+      "workload_id": "mixed-cpu-io-agent-mesh-m",
+      "correctness_digest_sha256": "4356c24dfc7d37f019676cdf598c825a275274767c9c3761f66c7ca5d88a8ca5",
+      "result_digest_sha256": "64dfa33d3896391df14e1599df1f67f169606c3932f3dae393570b81dbff08fb",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:121514503a594fd2c89b8c1e63668aeb9817e2074f56e6a31286fc2eab87f1f3",
+        "side_effect_trace_class": {
+          "fs": "artifact-read-write-mix",
+          "network": "agent-mesh-rpc",
+          "process": "cpu-io-pipeline",
+          "policy": "mixed-load-policy-checks"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "M",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-mixed-cpu-io-agent-mesh-l-v1",
+      "workload_id": "mixed-cpu-io-agent-mesh-l",
+      "correctness_digest_sha256": "64dc60ebbfbb4b6c3c330046bfd2a514fa5e0e33404e44afa3c58f12a9791b6b",
+      "result_digest_sha256": "b189be8030a15c0aa1621dd8ae635acdf91adc088a8ec35f6dd65e5a289f2d78",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:e689984ce40051eeb2bfe5f35ebe3e9fb5b731324831c594f639202dcb41791c",
+        "side_effect_trace_class": {
+          "fs": "artifact-read-write-mix",
+          "network": "agent-mesh-rpc",
+          "process": "cpu-io-pipeline",
+          "policy": "mixed-load-policy-checks"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "L",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-reload-revoke-churn-s-v1",
+      "workload_id": "reload-revoke-churn-s",
+      "correctness_digest_sha256": "8c859503706593640fe5fff10bb79416d8fe22ba8790c1f113c5544b12950e80",
+      "result_digest_sha256": "d85c6516a4c078c789620b9a2a9658d76e39bbd1560ecde3f857b5e1eb6c69ae",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:eed04bf7a8757984bf296c7ef86a83c2c9bd448871611af6425d76b588085e3d",
+        "side_effect_trace_class": {
+          "fs": "hot-reload-artifact-swap",
+          "network": "revocation-head-fanout",
+          "process": "reload-revoke-transition",
+          "policy": "checkpoint-freshness-enforcement"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "S",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-reload-revoke-churn-m-v1",
+      "workload_id": "reload-revoke-churn-m",
+      "correctness_digest_sha256": "c7b148014083b7a211116b504dcc21f739f43f431c0097833fc93eb3a4b43f14",
+      "result_digest_sha256": "242ac4e645d5781c9231d0b2eb7c59f23a11efe199f63fe069345f4142fcd2f7",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:f4c38b1ce30cbe50217d42a6643866cfc98f8a278b0181a0023092c80f2f76ea",
+        "side_effect_trace_class": {
+          "fs": "hot-reload-artifact-swap",
+          "network": "revocation-head-fanout",
+          "process": "reload-revoke-transition",
+          "policy": "checkpoint-freshness-enforcement"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "M",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-reload-revoke-churn-l-v1",
+      "workload_id": "reload-revoke-churn-l",
+      "correctness_digest_sha256": "07688c80b579828a9686e98e9ed1f7b93cd0becea1c42920c63ad74bfdeb87f4",
+      "result_digest_sha256": "b94467a659a9fe4fb8d67be964305f38b011fb52d1703b5e906bf82e6d55537d",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:aeed3e95033eeaa5b7491f663e97109031b5b587691fe61b0bac434ce1c4b498",
+        "side_effect_trace_class": {
+          "fs": "hot-reload-artifact-swap",
+          "network": "revocation-head-fanout",
+          "process": "reload-revoke-transition",
+          "policy": "checkpoint-freshness-enforcement"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "L",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-adversarial-noise-under-load-s-v1",
+      "workload_id": "adversarial-noise-under-load-s",
+      "correctness_digest_sha256": "8040ac07f71236e9d4498037a8766f3a0cb59f34410e6df48c079a67e2ff6864",
+      "result_digest_sha256": "fe0cc65c5f42e5d0ceeb8dc1ab961a34ba6b01728e4bfa744ef61244f40280dd",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:724efac4c1e94484c3a8868477cb1fe8cc42e4284052c340afcfea3f7632af19",
+        "side_effect_trace_class": {
+          "fs": "noise-corpus-sampling",
+          "network": "adversarial-traffic-noise",
+          "process": "noise-isolation-sandbox",
+          "policy": "containment-action-escalation"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "S",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-adversarial-noise-under-load-m-v1",
+      "workload_id": "adversarial-noise-under-load-m",
+      "correctness_digest_sha256": "6a614b390fab37e465e5d8aaf5831ce0781c669f8298ce55f66f798343d0aabd",
+      "result_digest_sha256": "2d6c2dfca71df57ee092da1e071135f35adf2440c169cfbdae386c663a9ced20",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:db98a4f0a9711bc543ec9ae14ac9461eb16b38c783d0070d03c5903998131be7",
+        "side_effect_trace_class": {
+          "fs": "noise-corpus-sampling",
+          "network": "adversarial-traffic-noise",
+          "process": "noise-isolation-sandbox",
+          "policy": "containment-action-escalation"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "M",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+    ,
+    {
+      "golden_output_id": "golden-adversarial-noise-under-load-l-v1",
+      "workload_id": "adversarial-noise-under-load-l",
+      "correctness_digest_sha256": "63ff7ee4f124b4ff8e20b14afe27f10ee3b392feac6a9f56598ee3a9a440935d",
+      "result_digest_sha256": "9e7bdeac79064735f30fc93c2e7633d8c434f1dbbb3afc1e502318298a7e87a1",
+      "canonical_output": {
+        "behavior_equivalence_verdict": "pass",
+        "external_output_digest": "sha256:db382fc3a3e9e95353f5ef3765590bff6fb847890a9090b32c47cfe0bd412b08",
+        "side_effect_trace_class": {
+          "fs": "noise-corpus-sampling",
+          "network": "adversarial-traffic-noise",
+          "process": "noise-isolation-sandbox",
+          "policy": "containment-action-escalation"
+        },
+        "error_class_semantics": "equivalent",
+        "work_drop_detected": false,
+        "durability_relaxed": false,
+        "policy_checks_disabled": false
+      },
+      "security_envelope": {
+        "profile": "L",
+        "time_to_detect_ms_budget": 250,
+        "time_to_contain_ms_budget": 250,
+        "false_positive_envelope_ppm": 1000,
+        "false_negative_envelope_ppm": 100
+      }
+    }
+  ]
+}

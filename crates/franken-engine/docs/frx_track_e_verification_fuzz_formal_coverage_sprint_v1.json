@@ -1,0 +1,95 @@
+{
+  "schema_version": "frx.track-e.verification-fuzz-formal-coverage.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.11.5",
+  "generated_by": "bd-mjh3.11.5",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "track": {
+    "id": "FRX-11.5",
+    "name": "Parallel Track E: Verification/Fuzz/Formal Coverage Sprint"
+  },
+  "ownership": {
+    "lockstep_oracle_coverage": {
+      "required": true,
+      "continuous": true,
+      "corpus_expansion_required": true
+    },
+    "metamorphic_and_schedule_campaigns": {
+      "required": true,
+      "metamorphic_relations_required": true,
+      "schedule_perturbation_harnesses_required": true
+    },
+    "formal_modelcheck_stewardship": {
+      "required": true,
+      "scheduler_reactivity_invariants_required": true,
+      "replayable_artifacts_required": true
+    }
+  },
+  "inputs": [
+    "track_a_semantic_contracts",
+    "track_b_c_d_outputs",
+    "verification_corpora",
+    "governance_threshold_policy"
+  ],
+  "outputs": {
+    "confidence_trajectory_bundle": {
+      "required": true,
+      "required_fields": [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "coverage_ratio",
+        "failure_density",
+        "confidence_delta",
+        "trend_direction"
+      ]
+    },
+    "blocking_report": {
+      "required": true,
+      "required_fields": [
+        "counterexample_id",
+        "severity",
+        "owner_track",
+        "minimized_reproduction_id",
+        "replay_command",
+        "escalation_status"
+      ]
+    },
+    "promotion_gate_decision": {
+      "required": true,
+      "required_fields": [
+        "gate_id",
+        "decision",
+        "blocking_counterexamples",
+        "escalation_required",
+        "next_rerun_window"
+      ]
+    }
+  },
+  "activation_gate": {
+    "block_on_critical_unresolved_counterexample": true,
+    "block_on_confidence_regression": true,
+    "requires_ownership_routing": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "promotion_gatekeeper": true,
+    "escalation_behavior": {
+      "owner_paging_required": true,
+      "remediation_due_date_required": true,
+      "rerun_evidence_required": true
+    }
+  },
+  "logging_contract": {
+    "component": "frx_track_e_verification_fuzz_formal_coverage",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

@@ -1,0 +1,232 @@
+{
+  "schema_version": "franken-engine.typed-persistence-enforcement-contract.v1",
+  "bead_id": "bd-gvnex",
+  "parent_bead_id": "bd-xyku0",
+  "extension_bead_ids": [
+    "bd-q8x8x.5",
+    "bd-q8x8x.8",
+    "bd-q8x8x.9",
+    "bd-q8x8x.9.1",
+    "bd-q8x8x.9.2"
+  ],
+  "docs": "docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md",
+  "smoke_script": "scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
+  "inventory_doc": "docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md",
+  "scope_store_kinds": [
+    "FleetTrustState",
+    "ReplacementLineage",
+    "IfcProvenance",
+    "SpecializationIndex"
+  ],
+  "scope_inventory_rows": [
+    {
+      "store_label": "fleet trust state",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "FleetTrustState",
+      "typed_model": "FleetTrustStateEntry",
+      "integration_point": "sqlmodel_rust::FleetTrustStateEntry",
+      "primary_surface": "crates/franken-engine/src/fleet_immune_protocol.rs"
+    },
+    {
+      "store_label": "replacement lineage log",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "ReplacementLineage",
+      "typed_model": "ReplacementLineageEntry",
+      "integration_point": "sqlmodel_rust::ReplacementLineageEntry",
+      "primary_surface": "crates/franken-engine/src/replacement_lineage_log.rs"
+    },
+    {
+      "store_label": "IFC provenance index",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "IfcProvenance",
+      "typed_model": "IfcProvenanceEntry",
+      "integration_point": "sqlmodel_rust::IfcProvenanceEntry",
+      "primary_surface": "crates/franken-engine/src/ifc_provenance_index.rs"
+    },
+    {
+      "store_label": "specialization index",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "SpecializationIndex",
+      "typed_model": "SpecializationIndexEntry",
+      "integration_point": "sqlmodel_rust::SpecializationIndexEntry",
+      "primary_surface": "crates/franken-engine/src/specialization_index.rs"
+    }
+  ],
+  "typed_boundary_requirements": {
+    "primary_authority_required": true,
+    "authoritative_helpers": [
+      "TypedStoreRecord",
+      "FleetAuthorityId",
+      "FleetVerificationRegistryPersistence",
+      "StorageAdapter.compare_and_swap_fleet_trust_state",
+      "FleetTrustStateFrankensqliteStorageAdapter.open_fleet_trust_state_file",
+      "TypedStorageAdapterExt.put_typed",
+      "TypedStorageAdapterExt.get_typed_by_id",
+      "TypedStorageAdapterExt.query_typed"
+    ],
+    "legacy_planning_helpers": [
+      "plan_typed_store_backfill",
+      "map_legacy_replacement_lineage_record",
+      "map_legacy_ifc_provenance_record",
+      "map_legacy_specialization_index_record"
+    ],
+    "generic_authority_must_become_non_authoritative": true,
+    "legacy_inputs_allowed_only_for_explicit_lossless_backfill_planning": true,
+    "implicit_legacy_acceptance_forbidden": true,
+    "ambiguous_legacy_data_fails_closed": true
+  },
+  "code_evidence": [
+    {
+      "path": "crates/franken-engine/src/typed_persistence_models.rs",
+      "must_contain": [
+        "pub trait TypedStoreRecord",
+        "pub fn plan_typed_store_backfill",
+        "pub fn map_legacy_replacement_lineage_record",
+        "pub fn map_legacy_ifc_provenance_record",
+        "pub fn map_legacy_specialization_index_record",
+        "pub fn fleet_trust_state_create_table_sql",
+        "pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = \"fleet_trust_state_v2\"",
+        "pub struct FleetTrustStateEntry",
+        "pub struct ReplacementLineageEntry",
+        "pub struct IfcProvenanceEntry",
+        "pub struct SpecializationIndexEntry"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/storage_adapter.rs",
+      "must_contain": [
+        "Self::FleetTrustState => \"sqlmodel_rust::FleetTrustStateEntry\"",
+        "fn compare_and_swap_fleet_trust_state",
+        "pub struct FleetTrustStateFrankensqliteBackend",
+        "pub type FleetTrustStateFrankensqliteStorageAdapter",
+        "pub fn open_fleet_trust_state_file",
+        "Self::ReplacementLineage => \"sqlmodel_rust::ReplacementLineageEntry\"",
+        "Self::IfcProvenance => \"sqlmodel_rust::IfcProvenanceEntry\"",
+        "Self::SpecializationIndex => \"sqlmodel_rust::SpecializationIndexEntry\""
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/fleet_immune_protocol.rs",
+      "must_contain": [
+        "pub struct FleetAuthorityId",
+        "pub struct FleetVerificationRegistryPersistence",
+        "pub struct PendingFleetRegistryPublication",
+        "compare_and_swap_fleet_trust_state",
+        "VerifiedFleetRegistrySnapshotAnchor"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/replacement_lineage_log.rs",
+      "must_contain": [
+        "insert_typed_lineage_entry",
+        "get_typed_lineage_entry_by_id"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/ifc_provenance_index.rs",
+      "must_contain": [
+        "insert_typed_provenance_entry",
+        "get_typed_provenance_entry_by_id"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/specialization_index.rs",
+      "must_contain": [
+        "insert_typed_entry",
+        "get_typed_entry_by_id"
+      ]
+    }
+  ],
+  "required_doc_text": [
+    "sqlmodel_rust on frankensqlite",
+    "Primary authoritative writes and reads",
+    "Generic `StorageAdapter` operations for these typed-heavy stores must become non-authoritative",
+    "Fleet trust state has a stricter mutation rule",
+    "Backends without one transactional CAS must reject the operation",
+    "The current generic `FrankensqliteBackend` default remains fail closed",
+    "FleetTrustStateFrankensqliteStorageAdapter",
+    "Legacy `StoreRecord` inputs are allowed only for explicit lossless backfill planning",
+    "Ambiguous legacy data must fail closed",
+    "does not require rewriting unrelated `raw frankensqlite` stores"
+  ],
+  "current_limitations": [
+    "The generic FrankensqliteBackend remains fail closed; only the isolated FleetTrustStateFrankensqliteStorageAdapter implements real sibling-backed fleet authority CAS.",
+    "The current generic SQLModel file open uses NORMAL deferred WAL synchronization, lacks strict multi-process identity-bound admission, and exposes no streaming or metadata-only hard ingress bound for hostile oversized rows; bd-q8x8x.9.1 must close these sibling API gaps before production use.",
+    "bd-q8x8x.9.2 still requires retained-file no-mock restart, true subprocess crash, lost-response, simultaneous cross-process CAS, and stale or forked rollback proof against the real isolated fleet authority database."
+  ],
+  "selftest_scenarios": [
+    "missing_scope_store_fails",
+    "doc_missing_required_text_fails",
+    "code_evidence_symbol_missing_fails"
+  ],
+  "no_mock_drill": {
+    "script": "scripts/e2e/typed_persistence_no_mock_drill.sh",
+    "truth_gate_script": "scripts/e2e/typed_persistence_truth_gate.sh",
+    "smoke_script": "scripts/e2e/typed_persistence_no_mock_drill_smoke.sh",
+    "suite_json": "scripts/testdata/typed_persistence_no_mock_drill/cases.json",
+    "report_schema_version": "franken-engine.typed-persistence-no-mock-drill-report.v1",
+    "case_ids": [
+      "healthy_typed_primary_authority",
+      "supported_lossless_legacy_backfill_planning",
+      "unsupported_legacy_rejection",
+      "generic_authority_rejection"
+    ],
+    "artifact_names": [
+      "typed_persistence_no_mock_drill_report.json",
+      "case_results.jsonl",
+      "commands.txt",
+      "events.jsonl",
+      "report.md"
+    ]
+  },
+  "real_surface_paths": [
+    "crates/franken-engine/src/fleet_immune_protocol.rs",
+    "crates/franken-engine/src/replacement_lineage_log.rs",
+    "crates/franken-engine/src/ifc_provenance_index.rs",
+    "crates/franken-engine/src/specialization_index.rs",
+    "crates/franken-engine/src/storage_adapter.rs",
+    "crates/franken-engine/src/typed_persistence_models.rs",
+    "scripts/e2e/typed_persistence_no_mock_drill.sh",
+    "scripts/e2e/typed_persistence_truth_gate.sh",
+    "scripts/e2e/typed_persistence_no_mock_drill_smoke.sh"
+  ],
+  "required_runbook_claims": [
+    "fixture-fed, proof-only, and advisory-only",
+    "healthy typed writes",
+    "supported lossless legacy backfill planning",
+    "unsupported legacy rejection",
+    "generic-authority rejection",
+    "does not run Cargo or RCH",
+    "does not mutate live storage",
+    "does not update, reopen, close, or reassign beads",
+    "does not release file reservations",
+    "does not send Agent Mail",
+    "does not query live Agent Mail"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_live_storage": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "mutates_remote_workers": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
+    "jq empty docs/typed_persistence_enforcement_contract_v1.json",
+    "bash scripts/e2e/typed_persistence_enforcement_contract_smoke.sh check",
+    "bash scripts/e2e/typed_persistence_enforcement_contract_smoke.sh selftest",
+    "bash -n scripts/e2e/typed_persistence_no_mock_drill.sh scripts/e2e/typed_persistence_truth_gate.sh scripts/e2e/typed_persistence_no_mock_drill_smoke.sh",
+    "shellcheck -x scripts/e2e/typed_persistence_no_mock_drill.sh scripts/e2e/typed_persistence_truth_gate.sh scripts/e2e/typed_persistence_no_mock_drill_smoke.sh",
+    "jq empty scripts/testdata/typed_persistence_no_mock_drill/cases.json",
+    "bash scripts/e2e/typed_persistence_no_mock_drill_smoke.sh check",
+    "bash scripts/e2e/typed_persistence_no_mock_drill_smoke.sh selftest"
+  ]
+}

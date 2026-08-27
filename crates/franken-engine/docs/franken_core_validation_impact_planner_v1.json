@@ -1,0 +1,63 @@
+{
+  "schema_version": "franken-engine.franken-core-validation-impact-planner-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.3",
+  "parent_bead_id": "bd-4w7h9",
+  "policy_id": "policy-franken-core-validation-impact-planner-v1",
+  "status": "active",
+  "purpose": "Map franken-core graduation change classes to deterministic advisory validation commands without executing them.",
+  "docs": {
+    "operator_contract": "docs/FRANKEN_CORE_VALIDATION_IMPACT_PLANNER_V1.md",
+    "machine_contract": "docs/franken_core_validation_impact_planner_v1.json",
+    "planner": "scripts/franken_core_validation_impact_planner.sh",
+    "smoke": "scripts/e2e/franken_core_validation_impact_planner_smoke.sh",
+    "reused_concept": "docs/IDEA_WIZARD_IV_VALIDATION_IMPACT_PLANNER.md"
+  },
+  "required_change_classes": [
+    "docs_only",
+    "script_only",
+    "franken_core_only",
+    "franken_engine_api_adjacent",
+    "extension_host_adjacent",
+    "cargo_topology",
+    "unknown_path"
+  ],
+  "required_report_fields": [
+    "schema_version",
+    "bead_id",
+    "source_revision",
+    "decision",
+    "proof_sufficiency",
+    "changed_paths",
+    "change_classes",
+    "recommended_commands",
+    "reason_codes",
+    "rch_policy",
+    "workspace_inclusion_policy",
+    "artifact_paths"
+  ],
+  "decisions": [
+    "green",
+    "fail_closed"
+  ],
+  "required_heavy_cargo_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+  "fail_closed_reason_codes": [
+    "cargo_topology_requires_separate_membership_bead",
+    "unknown_path_requires_full_agents_gate",
+    "bare_heavy_cargo_recommendation",
+    "standalone_core_validation_not_workspace_inclusion"
+  ],
+  "workspace_inclusion_policy": {
+    "standalone_core_validation_sufficient_for_workspace_inclusion": false,
+    "acceptance_suite_required": "bd-4w7h9.8",
+    "separate_topology_change_required": true
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_validation_impact_planner_v1.json",
+    "bash -n scripts/franken_core_validation_impact_planner.sh",
+    "bash -n scripts/e2e/franken_core_validation_impact_planner_smoke.sh",
+    "bash scripts/e2e/franken_core_validation_impact_planner_smoke.sh check",
+    "bash scripts/e2e/franken_core_validation_impact_planner_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_VALIDATION_IMPACT_PLANNER_V1.md docs/franken_core_validation_impact_planner_v1.json scripts/franken_core_validation_impact_planner.sh scripts/e2e/franken_core_validation_impact_planner_smoke.sh"
+  ]
+}

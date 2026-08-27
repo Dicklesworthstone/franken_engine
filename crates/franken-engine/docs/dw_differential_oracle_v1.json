@@ -1,0 +1,84 @@
+{
+  "schema_version": "franken-engine.dw-differential-oracle-contract.v1",
+  "gate": "dw_differential_oracle",
+  "owning_bead": "bd-fqlfw.2.8",
+  "consensus_rank": "E2 (CONSENSUS #1)",
+  "title": "Differential Oracle test+verify capstone",
+  "description": "E2.TEST capstone for the live differential oracle and the Node/Bun denominator. Drives the differential-oracle stack through the DW.STD (bd-fqlfw.11) e2e bundle harness: the capstone integration test, the operator-facing `frankenctl oracle run|report` CLI, the differential-oracle integration, the E2.T5 divergence-preserving minimizer, and the in-module unit tests. In ci/test mode it also runs a fixed, hermetic franken+core corpus through the real CLI, persisting a content-addressed oracle bundle (manifest.json + report.json + repro.lock, plus a manifest-addressed degraded_receipt.json iff degraded) and re-verifying it byte-identically with `frankenctl oracle report`.",
+  "runner": "scripts/run_dw_differential_oracle.sh",
+  "replay": "scripts/e2e/dw_differential_oracle_replay.sh",
+  "modes": {
+    "check": "cargo check the frankenctl binary + the capstone and CLI test targets",
+    "test": "run the verification test suite (no live corpus distinction from ci)",
+    "ci": "run the verification test suite, then the live franken+core corpus",
+    "corpus": "run only the live franken+core corpus into the run dir"
+  },
+  "test_targets": [
+    "tests/dw_differential_oracle_capstone.rs",
+    "tests/oracle_cli_integration.rs",
+    "tests/differential_oracle_integration.rs",
+    "tests/differential_oracle_minimization_bd_fqlfw_2_5.rs",
+    "src/differential_oracle.rs::tests"
+  ],
+  "acceptance": {
+    "content_addressed_bundle": "Each corpus case emits manifest.json + report.json + repro.lock, plus degraded_receipt.json iff degraded. Emission requires a new 0700 directory beneath an existing trusted or sticky-protected parent, pins that parent before mkdir/open, uses exclusive no-follow artifact creation, and publishes the manifest last. `frankenctl oracle report` requires the exact declared artifact set, canonical source and artifact hashes, and bundle_id; reads through a pinned directory descriptor; rejects symlinks, semantic cross-file mismatches, stream-hash drift, escaping paths, or canonicalization drift; and conservatively reclassifies stored taxonomy from receipts.",
+    "canonicalization": "Canonicalization v2 requires unique backend identities and full selected-cohort coverage. Structured values are comparable only when every selected lane completed and contributed a value; exception classes are comparable only when every selected lane produced a recognized JavaScript exception with exit 1 or a stable typed internal eval namespace. Mixed completed/failed cohorts, duplicate identities, generic/crashed process failures, incomplete value coverage, or any unavailable/timeout/degraded lane are insufficient_data. Within a fully covered domain, canonical number formatting, NaN, Infinity, -0, float rounding, and BigInt-boundary integers are equated; real value or exception-class differences are surfaced.",
+    "divergence_taxonomy": "All seven divergence classes are enumerable with stable, unique wire labels.",
+    "taxonomy_trust_boundary": "Taxonomy v2 derives specialized classes only from private typed in-process runner signals. Values, group samples, stdout, stderr, serialized diagnostics, and structural group shape are evidence-only. Intentional-security classification requires an opaque live candidate plus an explicit in-memory authority record bound to source bytes, typed base class, mode, ignored lanes, and exact hash-to-backend membership topology; the default runner never synthesizes waiver authority.",
+    "engine_core_free_oracle": "The engine<->franken-core internal twin reports every classified divergence as a defect carrying a minimized reproducer that independently re-classifies to the same divergence signature (the minimizer never over-minimizes).",
+    "degraded_path": "A requested reference runtime that is unavailable, times out, crashes, exits without a recognized JavaScript exception, or suffers an infrastructure launch/I/O degradation yields a manifest-addressed, semantically cross-checked degraded_receipt.json (FE-REPRO-0007) and a non-zero exit (4) - never a silent pass. A recognized executed JavaScript exception is failed, remains comparable in an all-failed cohort, and is not automatically degraded. Legacy degraded bundle-v1 manifests that omit this artifact are intentionally rejected as incomplete.",
+    "claim": "FE-CLAIM-010 stays `target`. The preserved June bundle is a dirty-worktree, unweighted, lifecycle-asymmetric historical observation whose repro.lock reproduces correctness rather than timing; it is not the normative weighted denominator. The oracle refuses to fabricate a denominator from a single lane (insufficient_data, exit 4)."
+  },
+  "canonicalization": {
+    "schema_version": "franken-engine.differential-oracle.canonicalization.v2",
+    "selected_cohort_policy": "One semantic verdict requires unique backend identities and every selected lane in one domain: all completed with structured values, or all failed with recognized JavaScript exception classes from exit 1 or stable typed internal eval diagnostics. At least two lanes must participate.",
+    "inconclusive_policy": "Mixed completed/failed, duplicate identities, generic/crashed process failures, incomplete structured-value coverage, a single lane, or any unavailable/timeout/degraded status is insufficient_data and cannot enter divergence minimization.",
+    "legacy_v1": "A v1 report is validated against exact v1 recomputation and then migrated to an effective v2 canonicalization. A bundle whose manifest or lock asserts a now-invalid subgroup consensus fails semantic cross-file verification. Pre-v2 bundles that marked every reference Failed receipt degraded also fail bundle verification when v2 recognizes a comparable JavaScript exception; standalone reports remain readable."
+  },
+  "divergence_taxonomy": {
+    "schema_version": "franken-engine.differential-oracle.divergence-taxonomy.v2",
+    "trust_boundary": {
+      "classification_inputs": "private non-serialized FrankenEngine EvalErrorCode or FrankenCore stage/interpreter-error signals plus comparison mode; absent a trusted signal the class is runtime",
+      "evidence_only": ["structured values", "canonical group samples", "stdout", "stderr", "serialized diagnostics", "backend group shape"],
+      "intentional_security_authority": "opaque live candidate plus explicit DifferentialWaiverAuthority bound to the SHA-256 of live source bytes, typed base class, comparison mode, ignored lanes, and exact canonical hash-to-backend membership topology; only a typed candidate spanning a real reference and internal lane is eligible",
+      "default_policy": "no authority; no generated waiver ids; every engine-core divergence remains a defect",
+      "archive_ingestion": "supported schemas only; current canonicalization must match v2 receipts, legacy v1 is validated under v1 then recomputed under v2, and effective taxonomy is conservatively rebuilt without typed sidecars, so stored specialized classes and waiver ids are audit data rather than authority",
+      "legacy_v1": "readable for audit history and conservatively reclassified; stored auto-derived waiver ids are never taxonomy-v2 authority"
+    },
+    "classes": [
+      {"label": "parser", "meaning": "a trusted in-process runner signal identifies a parse-stage disagreement among comparable observations."},
+      {"label": "lowering", "meaning": "the lanes agree on the parse but lower the program to different executable IR shapes."},
+      {"label": "runtime", "meaning": "both lanes complete but produce different structured values or exception classes."},
+      {"label": "module_resolution", "meaning": "the lanes resolve an import/module specifier differently."},
+      {"label": "hostcall_policy", "meaning": "the lanes apply different capability/hostcall policy on the same edge."},
+      {"label": "intentional_security_divergence", "meaning": "FrankenEngine deliberately diverges from a reference runtime to enforce a security boundary; requires exact explicit authority and carries the caller-supplied waiver_id; it is NOT a defect."},
+      {"label": "reference_runtime_bug", "meaning": "reserved for separately authenticated reference-runtime attribution; guest-controlled backend grouping alone never assigns ownership."}
+    ]
+  },
+  "bundle_contract": {
+    "manifest.json": "schema franken-engine.oracle-run-bundle.v1: case_id, source_sha256, semantic_verdict, divergence_count, degraded flag, selected_backends, host facts, the exact sha256-indexed artifact set (report + lock, plus degraded_receipt iff degraded), and a content-addressed bundle_id.",
+    "report.json": "the full DifferentialOracleReport (per-backend receipts with timing, canonicalization report, divergence taxonomy report), canonical-JSON encoded and sha256-addressed by the manifest.",
+    "repro.lock": "schema franken-engine.repro-lock.v1: case_id, source_sha256, selected_backends, the re-run command, and the determinism contract. The reproducible assertion is the SEMANTIC VERDICT over canonical structured values and exception classes - NOT raw wall-clock timing (allow_wall_clock=true precisely because per-backend timing is non-deterministic).",
+    "degraded_receipt.json": "schema franken-engine.oracle-run-degraded-receipt.v1 (only when a requested reference runtime was unavailable, timed out, or infrastructure-degraded, and always sha256-addressed by the manifest): error_code FE-REPRO-0007, the unavailable runtime(s), and the policy statement that a degraded run does not assert cross-runtime consensus."
+  },
+  "exit_codes": {
+    "0": "consensus - every selected lane belongs to one fully covered semantic outcome domain and agrees",
+    "2": "io / usage error",
+    "3": "divergence - a classified semantic divergence was found",
+    "4": "insufficient-data or degraded - selected lanes did not form one fully covered semantic outcome domain, or a requested reference runtime was unavailable/timed out/degraded"
+  },
+  "fe_claim_010": {
+    "claim_id": "FE-CLAIM-010",
+    "state": "target",
+    "linked_artifact": "docs/perf/e2_denominator_bundle_v1",
+    "repro_lock_partner": "docs/perf/e2_denominator_bundle_v1/repro.lock",
+    "measured_geomean_speedup_millionths": {"node": 920, "bun": 791},
+    "meets_3x_floor": false,
+    "note": "The linked historical bundle records unweighted ratios of 920 millionths of Node and 791 millionths of Bun from a dirty worktree, links 31 manifest cases but reports 28, uses asymmetric lifecycles, and locks correctness rather than timing. The normative weighted >= 3x claim remains target."
+  },
+  "verification_commands": [
+    "./scripts/run_dw_differential_oracle.sh ci",
+    "./scripts/e2e/dw_differential_oracle_replay.sh bundle",
+    "./scripts/run_e2_denominator_bundle_gate.sh ci"
+  ]
+}

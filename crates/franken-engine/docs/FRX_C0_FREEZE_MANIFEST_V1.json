@@ -1,0 +1,33 @@
+{
+  "schema_version": "frx.c0-freeze-manifest.v1",
+  "milestone": "C0",
+  "generated_by": "bd-mjh3.12.1",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "artifacts": {
+    "objective_function_version": "frx.objective.v1",
+    "program_constitution": "docs/FRX_PROGRAM_CONSTITUTION_V1.md",
+    "objective_function_contract": "docs/frx_objective_function_v1.json",
+    "compatibility_constitution": "docs/FRX_COMPATIBILITY_CONSTITUTION_V1.md",
+    "forbidden_regressions": "docs/frx_forbidden_regressions_v1.json",
+    "compile_vs_fallback": "docs/frx_compile_vs_fallback_v1.json",
+    "semantics_lane_charter": "docs/FRX_SEMANTICS_LANE_CHARTER_V1.md",
+    "compiler_lane_charter": "docs/FRX_COMPILER_LANE_CHARTER_V1.md",
+    "compiler_lane_contract": "docs/frx_compiler_lane_contract_v1.json",
+    "verification_lane_charter": "docs/FRX_VERIFICATION_LANE_CHARTER_V1.md",
+    "verification_lane_contract": "docs/frx_verification_lane_contract_v1.json",
+    "optimization_lane_charter": "docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md",
+    "optimization_lane_contract": "docs/frx_optimization_lane_contract_v1.json",
+    "toolchain_lane_charter": "docs/FRX_TOOLCHAIN_ECOSYSTEM_LANE_CHARTER_V1.md",
+    "toolchain_lane_contract": "docs/frx_toolchain_lane_contract_v1.json",
+    "governance_lane_charter": "docs/FRX_GOVERNANCE_EVIDENCE_LANE_CHARTER_V1.md",
+    "governance_lane_contract": "docs/frx_governance_evidence_lane_contract_v1.json",
+    "adoption_lane_charter": "docs/FRX_ADOPTION_RELEASE_LANE_CHARTER_V1.md",
+    "adoption_lane_contract": "docs/frx_adoption_release_lane_contract_v1.json"
+  },
+  "promotion_block_rule": {
+    "rule_id": "C0-BLOCK-001",
+    "condition": "any_required_artifact_missing_or_inconsistent",
+    "action": "deny_c1_progress"
+  },
+  "downstream_reference_required": true
+}

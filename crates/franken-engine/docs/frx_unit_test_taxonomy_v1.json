@@ -1,0 +1,255 @@
+{
+  "schema_version": "frx.unit-test-taxonomy.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.20.1",
+  "generated_by": "bd-mjh3.20.1",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "taxonomy": {
+    "module_schema_version": "0.1.0",
+    "fixture_registry_schema_version": "0.1.0",
+    "classes": [
+      "core",
+      "edge",
+      "adversarial",
+      "regression",
+      "fault_injection"
+    ]
+  },
+  "fixture_registry": {
+    "required_fields": [
+      "fixture_id",
+      "description",
+      "test_class",
+      "surfaces",
+      "provenance",
+      "seed",
+      "content_hash",
+      "format_version",
+      "origin_ref",
+      "tags"
+    ],
+    "provenance_levels": [
+      "authored",
+      "generated",
+      "captured",
+      "synthesized"
+    ],
+    "seed_policy": {
+      "required_for_classes": [
+        "adversarial",
+        "fault_injection"
+      ],
+      "optional_for_classes": [
+        "core",
+        "edge",
+        "regression"
+      ]
+    },
+    "artifact_retention_hooks": [
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt",
+      "fixture_registry_snapshot",
+      "determinism_contract_snapshot"
+    ]
+  },
+  "determinism_contract": {
+    "strict_contract_schema": "0.1.0",
+    "seed_control_required_classes": [
+      "adversarial",
+      "fault_injection"
+    ],
+    "virtual_clock_required_classes": [
+      "adversarial",
+      "fault_injection"
+    ],
+    "deterministic_rng_required_classes": [
+      "adversarial",
+      "fault_injection"
+    ],
+    "environment_controls": [
+      "timezone",
+      "locale",
+      "rust_toolchain",
+      "seed_transcript_checksum",
+      "env_fingerprint"
+    ],
+    "replay_requirements": [
+      "record_replay_command",
+      "record_target_dir",
+      "record_rch_execution_mode",
+      "retain_gate_artifacts"
+    ]
+  },
+  "lane_ownership_map": [
+    {
+      "surface": "compiler",
+      "lane_charter_ref": "bd-mjh3.10.2",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "runtime",
+      "lane_charter_ref": "bd-mjh3.10.3",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "router",
+      "lane_charter_ref": "bd-mjh3.10.3",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "governance",
+      "lane_charter_ref": "bd-mjh3.10.7",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "parser",
+      "lane_charter_ref": "bd-mjh3.10.3",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "scheduler",
+      "lane_charter_ref": "bd-mjh3.10.3",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "evidence",
+      "lane_charter_ref": "bd-mjh3.10.7",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    },
+    {
+      "surface": "security",
+      "lane_charter_ref": "bd-mjh3.10.4",
+      "required_classes": [
+        "core",
+        "edge",
+        "adversarial",
+        "regression",
+        "fault_injection"
+      ]
+    }
+  ],
+  "unit_to_e2e_mappings": [
+    {
+      "test_class": "core",
+      "scenario_families": [
+        "normal_behavior",
+        "deterministic_baseline_replay"
+      ],
+      "coverage_rationale": "Protects canonical happy-path semantics and guards against accidental behavior drift in default execution paths."
+    },
+    {
+      "test_class": "edge",
+      "scenario_families": [
+        "boundary_conditions",
+        "ordering_transitions"
+      ],
+      "coverage_rationale": "Covers off-by-one and ordering edges that frequently regress when optimizations change scheduler/parser/runtime details."
+    },
+    {
+      "test_class": "adversarial",
+      "scenario_families": [
+        "malformed_input",
+        "containment_drills"
+      ],
+      "coverage_rationale": "Ensures malicious patterns cannot silently bypass policy gates and that fail-closed behavior remains deterministic."
+    },
+    {
+      "test_class": "regression",
+      "scenario_families": [
+        "known_failures",
+        "compatibility_backstops"
+      ],
+      "coverage_rationale": "Pins historically observed failures and preserves compatibility across incremental runtime/compiler/router changes."
+    },
+    {
+      "test_class": "fault_injection",
+      "scenario_families": [
+        "timeout_cancellation",
+        "resource_exhaustion",
+        "rollback_recovery"
+      ],
+      "coverage_rationale": "Validates degraded-mode behavior and recovery correctness under injected faults and constrained resource envelopes."
+    }
+  ],
+  "logging_contract": {
+    "component": "frx_unit_test_taxonomy_contract",
+    "required_fields": [
+      "scenario_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "seed",
+      "timing",
+      "decision_path",
+      "outcome",
+      "error_code",
+      "replay_command"
+    ],
+    "artifact_retention_hooks": [
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt"
+    ],
+    "fail_closed_on_missing_fields": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "error_code": "FE-FRX-20-1-TAXONOMY-0001",
+    "block_on_schema_drift": true,
+    "block_on_missing_lane_ownership": true,
+    "block_on_missing_unit_to_e2e_mapping": true,
+    "block_on_logging_contract_gap": true
+  },
+  "operator_verification": [
+    "./scripts/run_frx_unit_test_taxonomy_contract_suite.sh ci",
+    "./scripts/e2e/frx_unit_test_taxonomy_contract_replay.sh ci",
+    "cat artifacts/frx_unit_test_taxonomy_contract/<timestamp>/run_manifest.json",
+    "cat artifacts/frx_unit_test_taxonomy_contract/<timestamp>/events.jsonl",
+    "cat artifacts/frx_unit_test_taxonomy_contract/<timestamp>/commands.txt"
+  ]
+}

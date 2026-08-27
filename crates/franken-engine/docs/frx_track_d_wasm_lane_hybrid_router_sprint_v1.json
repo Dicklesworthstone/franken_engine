@@ -1,0 +1,100 @@
+{
+  "schema_version": "frx.track-d.wasm-lane-hybrid-router.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.11.4",
+  "generated_by": "bd-mjh3.11.4",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-11.4",
+    "name": "Parallel Track D: WASM Lane + Hybrid Router Sprint"
+  },
+  "ownership": {
+    "wasm_lane_kernel": {
+      "deterministic_scheduler_required": true,
+      "signal_kernel_required": true,
+      "abi_contract_required": true,
+      "abi_overhead_budget_required": true
+    },
+    "hybrid_router_policy": {
+      "calibration_required": true,
+      "conservative_override_required": true,
+      "policy_trace_required": true,
+      "demotion_event_required": true
+    },
+    "failover_replay_linkage": {
+      "required": true,
+      "deterministic": true,
+      "fallback_event_required": true,
+      "replay_command_required": true
+    }
+  },
+  "inputs": [
+    "track_c_js_lane_baseline",
+    "frx_10_3_runtime_kernel_ownership",
+    "verification_threshold_policy",
+    "governance_signoff_requirements"
+  ],
+  "outputs": {
+    "wasm_lane_artifact": {
+      "required_fields": [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "flush_summary_id",
+        "abi_overhead_us",
+        "safe_mode_reason"
+      ],
+      "deterministic": true
+    },
+    "router_decision_artifact": {
+      "required_fields": [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "lane_choice",
+        "calibration_snapshot_id",
+        "override_reason",
+        "failover_event_id",
+        "abi_overhead_us"
+      ],
+      "deterministic": true
+    },
+    "promotion_signoff_artifact": {
+      "required_fields": [
+        "verification_signoff_id",
+        "governance_signoff_id",
+        "blocking_issues",
+        "replay_command"
+      ],
+      "deterministic": true
+    }
+  },
+  "activation_gate": {
+    "block_on_missing_calibration_evidence": true,
+    "block_on_missing_failover_replay_linkage": true,
+    "block_on_abi_overhead_budget_violation": true,
+    "requires_verification_and_governance_signoff": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "conservative_override_default": true,
+    "on_missing_signoff": "reject_promotion",
+    "failover_behavior": {
+      "emit_fallback_event": true,
+      "emit_replay_command": true,
+      "replay_required": true
+    }
+  },
+  "logging_contract": {
+    "component": "frx_track_d_wasm_lane_hybrid_router_sprint",
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

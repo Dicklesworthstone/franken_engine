@@ -1,0 +1,28 @@
+{
+  "schema_version": "franken-engine.test262-compatibility-pass-rate.v1",
+  "generated_at_utc": "2026-05-02T11:37:43Z",
+  "component": "test262_release_gate",
+  "proof_state": "checked_in_vectors_provisional",
+  "claim_scope": "checked_in_test262_derived_vectors",
+  "selected_profile": "es2020-normative",
+  "test262_source_repo": "tc39/test262",
+  "test262_commit": "d0c1b4555b03dd404873fd6422a4b5da00136500",
+  "vector_source": "precomputed_observed_results",
+  "source_provenance": "crates/franken-engine/tests/test262_observed_results.jsonl with crates/franken-engine/tests/test262_es2020_profile.toml and crates/franken-engine/tests/test262_conformance_waivers.toml",
+  "runner_command": "cargo test -p frankenengine-engine --test test262_release_gate",
+  "denominator": 3,
+  "passed": 2,
+  "failed": 0,
+  "skipped": 0,
+  "waived": 1,
+  "timed_out": 0,
+  "crashed": 0,
+  "blocked_failures": 0,
+  "pass_rate_millionths": 666666,
+  "full_suite_claim_allowed": false,
+  "limitations": [
+    "checked-in vector profile, not a full official Test262 suite run",
+    "full official Test262 pass-rate claims require an official checkout run",
+    "profile excludes ECMA-402 and post-ES2020 proposal vectors"
+  ]
+}

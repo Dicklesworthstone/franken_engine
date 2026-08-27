@@ -1,0 +1,151 @@
+{
+  "schema_version": "franken-engine.validation-hygiene-rch-sync-policy.v1",
+  "bead_id": "bd-u9sp4.4",
+  "generated_by": "SilverPeak",
+  "status": "advisory",
+  "summary": "RCH source upload is a project-root rsync filtered by transfer defaults, runtime excludes, and .rchignore. Untracked source-shaped files are uploaded unless explicitly excluded. Artifact retrieval is narrower: it pulls declared artifact patterns and applies source-root excludes. Therefore untracked probe/test files should be classified as validation contamination, not hidden with broad .rchignore rules.",
+  "source_evidence": [
+    {
+      "path": ".rchignore",
+      "lines": "1-11",
+      "finding": "Project-local ignores cover target-like directories, .rch target directories, codex target directories, hierarchical-delta-review, and remote refs; they do not exclude untracked tests, patches, or scratch text."
+    },
+    {
+      "path": "/data/projects/remote_compilation_helper/rch/src/transfer.rs",
+      "lines": "792-841",
+      "finding": "Upload excludes merge configured transfer excludes, runtime excludes, and project .rchignore patterns."
+    },
+    {
+      "path": "/data/projects/remote_compilation_helper/rch/src/transfer.rs",
+      "lines": "1270-1333",
+      "finding": "Source upload uses rsync from the project root with --delete and the effective exclude set; without sync include patterns, it does not filter by git tracked state."
+    },
+    {
+      "path": "/data/projects/remote_compilation_helper/rch/src/transfer.rs",
+      "lines": "1849-1923",
+      "finding": "Artifact retrieval applies retrieval-safe excludes, excludes local source roots, includes directories for traversal, includes declared artifact patterns, and excludes everything else."
+    },
+    {
+      "path": "/data/projects/remote_compilation_helper/rch-common/src/types.rs",
+      "lines": "2331-2368",
+      "finding": "Default transfer excludes cover build outputs, dependency caches, beads runtime state, coverage outputs, credentials, and secrets; they do not exclude untracked Rust tests, patches, or scratch text."
+    },
+    {
+      "path": "/data/projects/remote_compilation_helper/rch/src/hook.rs",
+      "lines": "5685-5698",
+      "finding": "Cargo test/check/clippy retrieval uses minimal test artifact patterns, while build/doc retrieval can use broader Rust target artifact patterns."
+    }
+  ],
+  "policy": {
+    "rchignore_change_recommendation": "do_not_add_broad_untracked_probe_or_tests_excludes",
+    "reason": "A glob such as crates/franken-engine/tests/*probe*.rs or crates/franken-engine/tests/*.rs would prevent intentional new regression tests from reaching the worker, creating false-green package/workspace validation. RCH upload cannot know whether an untracked source-shaped file is accidental scratch or a bead's intended new test; the hygiene classifier must preserve that ambiguity.",
+    "safe_to_exclude_by_default": [
+      "target/",
+      "target_*/",
+      "target-*/",
+      ".rch-target/",
+      ".rch-target-*/",
+      ".cargo-target/",
+      ".cargo-target-*/",
+      ".codex-target*",
+      "known generated cache directories that are not source inputs"
+    ],
+    "unsafe_to_exclude_by_default": [
+      "crates/*/tests/*.rs",
+      "crates/franken-engine/tests/*probe*.rs",
+      "crates/franken-engine/tests/*diag*.rs",
+      "*.patch",
+      "*.txt",
+      "src/*.rs",
+      "docs/*.md",
+      "scripts/*.sh"
+    ],
+    "operator_action": "Leave untracked source-shaped files visible to RCH. Use validation hygiene reports to classify them as scoped, untracked_ephemeral_candidate, or untracked_source_candidate. Only add .rchignore entries for generated caches/artifacts whose exclusion cannot hide an intentional source or test input."
+  },
+  "fixture_cases": [
+    {
+      "case_id": "untracked-rust-probe-test",
+      "path": "crates/franken-engine/tests/gl_parser_gap_probe.rs",
+      "git_state": "untracked",
+      "rch_upload_visibility": "included_by_default",
+      "package_validation_visibility": "cargo_may_discover",
+      "recommended_classification": "untracked_ephemeral_candidate",
+      "recommended_gate_effect": "blocks_full_gate_claims",
+      "should_add_rchignore_pattern": false,
+      "false_negative_risk_if_excluded": "A future bead may intentionally add a probe-named regression test and receive a false-green remote cargo test/check result if the worker never receives it."
+    },
+    {
+      "case_id": "untracked-durable-regression-test",
+      "path": "crates/franken-engine/tests/new_regression.rs",
+      "git_state": "untracked",
+      "rch_upload_visibility": "included_by_default",
+      "package_validation_visibility": "cargo_may_discover",
+      "recommended_classification": "untracked_source_candidate",
+      "recommended_gate_effect": "blocks_full_gate_claims",
+      "should_add_rchignore_pattern": false,
+      "false_negative_risk_if_excluded": "The file may be the current bead's intended regression coverage."
+    },
+    {
+      "case_id": "scratch-patch",
+      "path": ".jh_zs4d5_ircontract.patch",
+      "git_state": "untracked",
+      "rch_upload_visibility": "included_by_default",
+      "package_validation_visibility": "usually_ignored_by_cargo",
+      "recommended_classification": "untracked_ephemeral_candidate",
+      "recommended_gate_effect": "report_for_handoff_and_transfer_context",
+      "should_add_rchignore_pattern": false,
+      "false_negative_risk_if_excluded": "Low cargo-discovery risk, but broad patch ignores can hide scoped patch evidence that an agent intended to commit or cite."
+    },
+    {
+      "case_id": "scratch-text-note",
+      "path": ".sandymeadow_class_module.txt",
+      "git_state": "untracked",
+      "rch_upload_visibility": "included_by_default",
+      "package_validation_visibility": "usually_ignored_by_cargo",
+      "recommended_classification": "untracked_ephemeral_candidate",
+      "recommended_gate_effect": "report_for_handoff_and_transfer_context",
+      "should_add_rchignore_pattern": false,
+      "false_negative_risk_if_excluded": "Low cargo-discovery risk, but broad text ignores can hide scoped audit artifacts or operator notes."
+    },
+    {
+      "case_id": "target-build-artifacts",
+      "path": "target/debug/deps/example",
+      "git_state": "ignored_or_generated",
+      "rch_upload_visibility": "excluded_by_default",
+      "package_validation_visibility": "not_source_input",
+      "recommended_classification": "ignored_artifact",
+      "recommended_gate_effect": "does_not_block_scoped_closeout_unless_command_reads_it",
+      "should_add_rchignore_pattern": true,
+      "false_negative_risk_if_excluded": "None for source validation; target outputs are generated artifacts."
+    },
+    {
+      "case_id": "remote-retrieved-target-artifact",
+      "path": "target/coverage/report.json",
+      "git_state": "generated",
+      "rch_upload_visibility": "excluded_by_default",
+      "rch_retrieval_visibility": "retrieved_only_when_declared_artifact_pattern_matches",
+      "package_validation_visibility": "not_source_input",
+      "recommended_classification": "ignored_artifact",
+      "recommended_gate_effect": "report_if_present_but_do_not_stage_accidentally",
+      "should_add_rchignore_pattern": true,
+      "false_negative_risk_if_excluded": "None for source validation when the artifact is generated and not an input."
+    }
+  ],
+  "consumer_guidance": {
+    "classifier": {
+      "treat_rch_upload_visibility_as": "context",
+      "never_convert_untracked_source_to_pass": true,
+      "untracked_probe_behavior": "classify as untracked_ephemeral_candidate outside scope and mark package/workspace gates contaminated if the command can discover it",
+      "untracked_source_behavior": "classify as untracked_source_candidate outside scope and block full-gate claims until reviewed or scoped"
+    },
+    "wrapper": {
+      "preserve_original_command": true,
+      "do_not_rewrite_to_hide_untracked_files": true,
+      "closeout_language": "Scoped files may pass while package/workspace validation remains blocked by untracked files visible to RCH."
+    },
+    "preflight": {
+      "surface_rch_upload_risk": true,
+      "suggest_narrow_scoped_checks_without_claiming_full_gate": true
+    }
+  }
+}

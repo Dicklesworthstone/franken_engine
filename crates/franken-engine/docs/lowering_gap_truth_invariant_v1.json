@@ -1,0 +1,162 @@
+{
+  "schema_version": "franken-engine.lowering-gap-truth-invariant.v1",
+  "bead_id": "bd-2muur.4.1",
+  "policy_id": "policy-lowering-gap-truth-invariant-v1",
+  "generated_by": "bd-2muur.4.1",
+  "generated_at_utc": "2026-04-04T01:10:00Z",
+  "track": {
+    "id": "RGC-920D.1",
+    "name": "Lowering Gap Truth Invariant"
+  },
+  "source_inputs": [
+    "README.md",
+    "docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md",
+    "crates/franken-engine/src/lowering_gap_inventory.rs",
+    "crates/franken-engine/src/zero_placeholder_scan.rs",
+    "crates/franken-engine/src/lowering_parity_evidence.rs",
+    "scripts/run_lowering_gap_truth_invariant.sh",
+    "scripts/e2e/lowering_gap_truth_invariant_replay.sh"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "rule_id",
+    "site_id",
+    "status",
+    "parser_ready_syntax",
+    "execution_ready_semantics"
+  ],
+  "generated_artifacts": [
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/run_manifest.json",
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/trace_ids.json",
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/events.jsonl",
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/commands.txt",
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/step_logs/step_000.log",
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/lowering_gap_truth_invariant.json",
+    "artifacts/lowering_gap_truth_invariant/<timestamp>/lowering_gap_truth_invariant_validation_report.json"
+  ],
+  "invariant_contract": {
+    "rule_set_id": "lowering_gap_truth_rules_v1",
+    "scope": "lowering_gap_inventory_only_tracks_parser_accepted_syntax_families",
+    "deferred_application_bead": "bd-2muur.4.2",
+    "consumer_alignment_bead": "bd-2muur.4.3",
+    "allowed_status_matrix": [
+      {
+        "rule_id": "resolved_exec_ready",
+        "status": "resolved",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": true,
+        "execution_consequence_prefix": "resolved:",
+        "user_visible_divergence_prefix": "resolved:",
+        "consumer_interpretation": "site is fully lowered and execution-ready"
+      },
+      {
+        "rule_id": "open_placeholder_parser_ready",
+        "status": "open_placeholder",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": false,
+        "execution_consequence_prefix": "open_placeholder:",
+        "user_visible_divergence_prefix": "open_placeholder:",
+        "consumer_interpretation": "parser accepts the syntax, lowering still relies on placeholder behavior"
+      },
+      {
+        "rule_id": "fail_closed_parser_ready",
+        "status": "fail_closed",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": false,
+        "execution_consequence_prefix": "fail_closed:",
+        "user_visible_divergence_prefix": "fail_closed:",
+        "consumer_interpretation": "parser accepts the syntax, lowering rejects execution deterministically"
+      }
+    ],
+    "disallowed_state_examples": [
+      {
+        "example_id": "resolved_without_execution_readiness",
+        "status": "resolved",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": false,
+        "execution_consequence": "resolved: lowers to typed IR",
+        "user_visible_divergence": "resolved: executes correctly",
+        "expected_violation": "resolved_requires_execution_ready"
+      },
+      {
+        "example_id": "resolved_without_resolved_prefix",
+        "status": "resolved",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": true,
+        "execution_consequence": "open_placeholder: still relies on fallback semantics",
+        "user_visible_divergence": "resolved: executes correctly",
+        "expected_violation": "resolved_requires_resolved_prefixes"
+      },
+      {
+        "example_id": "open_placeholder_claims_execution_ready",
+        "status": "open_placeholder",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": true,
+        "execution_consequence": "open_placeholder: placeholder lowering still active",
+        "user_visible_divergence": "open_placeholder: placeholder behavior visible to users",
+        "expected_violation": "open_placeholder_forbids_execution_ready"
+      },
+      {
+        "example_id": "open_placeholder_uses_resolved_prose",
+        "status": "open_placeholder",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": false,
+        "execution_consequence": "resolved: lowers to typed IR",
+        "user_visible_divergence": "resolved: executes correctly",
+        "expected_violation": "open_placeholder_requires_open_prefixes"
+      },
+      {
+        "example_id": "fail_closed_claims_execution_ready",
+        "status": "fail_closed",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": true,
+        "execution_consequence": "fail_closed: lowering rejects execution",
+        "user_visible_divergence": "fail_closed: lowering rejects execution",
+        "expected_violation": "fail_closed_forbids_execution_ready"
+      },
+      {
+        "example_id": "fail_closed_uses_resolved_prose",
+        "status": "fail_closed",
+        "parser_ready_syntax": true,
+        "execution_ready_semantics": false,
+        "execution_consequence": "resolved: lowers to typed IR",
+        "user_visible_divergence": "resolved: executes correctly",
+        "expected_violation": "fail_closed_requires_fail_closed_prefixes"
+      },
+      {
+        "example_id": "lowering_gap_site_with_parser_not_ready",
+        "status": "open_placeholder",
+        "parser_ready_syntax": false,
+        "execution_ready_semantics": false,
+        "execution_consequence": "open_placeholder: parser still rejects this syntax",
+        "user_visible_divergence": "open_placeholder: parser still rejects this syntax",
+        "expected_violation": "lowering_gap_sites_require_parser_ready_syntax"
+      }
+    ],
+    "consumer_fail_closed_reasons": [
+      "resolved status paired with execution_ready_semantics=false",
+      "resolved status paired with non-resolved prose",
+      "open_placeholder status paired with execution_ready_semantics=true",
+      "open_placeholder status paired with non-open_placeholder prose",
+      "fail_closed status paired with execution_ready_semantics=true",
+      "fail_closed status paired with non-fail_closed prose",
+      "lowering-gap site encoded with parser_ready_syntax=false",
+      "unknown lowering status label in invariant matrix"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/lowering_gap_truth_invariant_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_lowering_gap_truth_invariant_verify\" cargo test -p frankenengine-engine --test lowering_gap_truth_invariant",
+    "./scripts/run_lowering_gap_truth_invariant.sh ci",
+    "./scripts/e2e/lowering_gap_truth_invariant_replay.sh ci",
+    "LOWERING_GAP_TRUTH_INVARIANT_REPLAY_RUN_DIR=artifacts/lowering_gap_truth_invariant/<timestamp> ./scripts/e2e/lowering_gap_truth_invariant_replay.sh ci"
+  ]
+}

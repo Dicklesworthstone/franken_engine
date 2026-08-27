@@ -1,0 +1,331 @@
+{
+  "schema_version": "franken-engine.swarm-proof-command-preflight-contract.v1",
+  "bead_id": "bd-ua5n2.9",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.1"
+  ],
+  "script": "scripts/swarm_proof_command_preflight.sh",
+  "operator_docs": "docs/SWARM_PROOF_COMMAND_PREFLIGHT.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_command_preflight/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_command_preflight_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-command-preflight.v1",
+  "purpose": "Cheaply lint proof command text before it enters the proof broker. The preflight emits deterministic guidance and never executes the command being inspected.",
+  "valid_decisions": [
+    "proof_safe",
+    "proof_unsafe",
+    "needs_human_review",
+    "non_heavy_read_only"
+  ],
+  "valid_reason_codes": [
+    "direct_rch_cargo_proof",
+    "shell_wrapper_fallback_risk",
+    "bare_cargo_not_allowed",
+    "non_heavy_read_only",
+    "missing_target_dir_policy",
+    "target_dir_bead_mismatch",
+    "unsupported_env_leakage",
+    "unsupported_env_syntax",
+    "uncomposed_rustflags_override",
+    "missing_encoded_rustflags_clear",
+    "missing_rch_visibility",
+    "unsupported_heavy_command_shape",
+    "unknown_command_shape",
+    "missing_command"
+  ],
+  "valid_command_kinds": [
+    "cargo_test",
+    "cargo_check",
+    "cargo_clippy",
+    "cargo_build",
+    "cargo_run",
+    "cargo_bench",
+    "git_diff_check",
+    "jq",
+    "bash_syntax",
+    "shellcheck",
+    "unknown"
+  ],
+  "heavy_command_policy": {
+    "cargo_requires_rch_exec": true,
+    "accepted_heavy_prefix": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS",
+    "cargo_encoded_rustflags_clear": {
+      "client_required": true,
+      "remote_required": true,
+      "assignment_supported": false
+    },
+    "target_dir_required": true,
+    "linker_policy_source": ".cargo/config.toml",
+    "rustflags_override": {
+      "default": "omit and inherit the checked-in linker policy",
+      "required_token_when_present": "-Clinker-features=-lld",
+      "accepted_exact_token_sequences": [
+        [
+          "-Clinker-features=-lld"
+        ],
+        [
+          "-C",
+          "linker-features=-lld"
+        ]
+      ],
+      "matching_semantics": "Exact whitespace-delimited tokens after simple quote and backslash decoding; embedded substrings do not satisfy the policy.",
+      "cargo_encoded_rustflags_supported": false,
+      "cache_identity_when_present": true
+    },
+    "local_fallback_default": "refuse",
+    "shell_wrappers_allowed": false,
+    "bare_cargo_allowed": false,
+    "visibility_required_when_evidence_requires_it": true
+  },
+  "warm_target_command_matrix": [
+    {
+      "class": "source_only",
+      "canonical_command_shape": "rustfmt --edition 2024 --check <paths> OR git diff --check -- <paths> OR jq empty <json_paths> OR bash -n <scripts>",
+      "required_env": [],
+      "target_dir_template": null,
+      "reuse_safety_constraints": [
+        "May be used as lightweight evidence without RCH or Cargo execution.",
+        "Must not be cited as compile or runtime proof."
+      ],
+      "stale_cache_invalidation_inputs": [
+        "changed source paths",
+        "changed docs/json/script paths",
+        "tool invocation text"
+      ],
+      "prefer_narrower_proof_when": [
+        "The active change is docs-only, JSON-only, shell-only, or Rust formatting-only."
+      ],
+      "examples": [
+        {
+          "bead_id": "bd-7r53m.2",
+          "command": "git diff --check -- scripts/swarm_proof_command_preflight.sh docs/SWARM_PROOF_COMMAND_PREFLIGHT.md docs/swarm_proof_command_preflight_contract_v1.json scripts/testdata/swarm_proof_command_preflight/cases.json scripts/e2e/swarm_proof_command_preflight_smoke.sh"
+        }
+      ]
+    },
+    {
+      "class": "focused_lib_test",
+      "canonical_command_shape": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_<safe_bead_id>_<intent> CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib <test_filter> -- --nocapture",
+      "required_env": [
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_TARGET_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_BUILD_JOBS"
+      ],
+      "target_dir_template": "/tmp/rch_target_franken_engine_<safe_bead_id>_<intent>",
+      "reuse_safety_constraints": [
+        "Target dir must contain the normalized bead id.",
+        "Reuse only for the same package, test filter, toolchain, rustflags, and changed source set."
+      ],
+      "stale_cache_invalidation_inputs": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "test filter",
+        "changed Rust modules",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTFLAGS"
+      ],
+      "prefer_narrower_proof_when": [
+        "A single library unit regression covers the modified branch.",
+        "An all-targets job is already running for another bead."
+      ],
+      "examples": [
+        {
+          "bead_id": "bd-7eefz",
+          "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_7eefz_async_gen CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib async_generator_next_fails_closed_for_suspended_body -- --nocapture"
+        }
+      ]
+    },
+    {
+      "class": "focused_integration_test",
+      "canonical_command_shape": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_<safe_bead_id>_<test_name> CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --test <test_target> <test_filter> -- --nocapture",
+      "required_env": [
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_TARGET_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_BUILD_JOBS"
+      ],
+      "target_dir_template": "/tmp/rch_target_franken_engine_<safe_bead_id>_<test_name>",
+      "reuse_safety_constraints": [
+        "Target dir must contain the normalized bead id.",
+        "Reuse only when the same integration target, filter, toolchain, rustflags, and fixtures are unchanged."
+      ],
+      "stale_cache_invalidation_inputs": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "integration test target",
+        "fixture paths",
+        "changed Rust modules",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTFLAGS"
+      ],
+      "prefer_narrower_proof_when": [
+        "A named integration test exercises the changed user-facing contract."
+      ],
+      "examples": [
+        {
+          "bead_id": "bd-example-it",
+          "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_example_it_eval_pipeline CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --test eval_pipeline_integration quickjs_eval_array_ -- --nocapture"
+        }
+      ]
+    },
+    {
+      "class": "package_all_targets",
+      "canonical_command_shape": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_<safe_bead_id>_all_targets CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+      "required_env": [
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_TARGET_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_BUILD_JOBS"
+      ],
+      "target_dir_template": "/tmp/rch_target_franken_engine_<safe_bead_id>_all_targets",
+      "reuse_safety_constraints": [
+        "Target dir must contain the normalized bead id.",
+        "Prefer one active all-targets proof per branch when the queue is saturated.",
+        "Do not treat timeouts without compiler diagnostics as code failures."
+      ],
+      "stale_cache_invalidation_inputs": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "changed Rust modules",
+        "changed build scripts",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTFLAGS"
+      ],
+      "prefer_narrower_proof_when": [
+        "A focused lib or integration proof covers the touched behavior.",
+        "There is already an active all-targets RCH job for the branch."
+      ],
+      "examples": [
+        {
+          "bead_id": "bd-zy517",
+          "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_zy517_all_targets CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets"
+        }
+      ]
+    },
+    {
+      "class": "clippy_all_targets",
+      "canonical_command_shape": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_<safe_bead_id>_clippy_all_targets CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --all-targets -- -D warnings",
+      "required_env": [
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_TARGET_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_BUILD_JOBS"
+      ],
+      "target_dir_template": "/tmp/rch_target_franken_engine_<safe_bead_id>_clippy_all_targets",
+      "reuse_safety_constraints": [
+        "Target dir must contain the normalized bead id.",
+        "Use after focused checks or when the change touches shared lint-sensitive API surface."
+      ],
+      "stale_cache_invalidation_inputs": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "changed Rust modules",
+        "changed clippy configuration",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTFLAGS"
+      ],
+      "prefer_narrower_proof_when": [
+        "The change is confined to docs, shell, JSON, or a focused unit branch."
+      ],
+      "examples": [
+        {
+          "bead_id": "bd-example-clippy",
+          "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_example_clippy_clippy_all_targets CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --all-targets -- -D warnings"
+        }
+      ]
+    },
+    {
+      "class": "release_gate",
+      "canonical_command_shape": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_<safe_bead_id>_release CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 <release-grade cargo command>",
+      "required_env": [
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_TARGET_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_BUILD_JOBS"
+      ],
+      "target_dir_template": "/tmp/rch_target_franken_engine_<safe_bead_id>_release",
+      "reuse_safety_constraints": [
+        "Target dir must contain the normalized bead id.",
+        "Use only for release readiness or cross-crate proof, not for routine narrow changes.",
+        "Record the exact command and artifact path in the evidence ledger."
+      ],
+      "stale_cache_invalidation_inputs": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "scripts/reproduce.sh",
+        "release checklist docs",
+        "changed Rust modules",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTFLAGS"
+      ],
+      "prefer_narrower_proof_when": [
+        "The active bead is not release-prep or cross-crate validation."
+      ],
+      "examples": [
+        {
+          "bead_id": "bd-example-release",
+          "command": "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_example_release_release CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test"
+        }
+      ]
+    }
+  ],
+  "accepted_env_allowlist": [
+    "CARGO_TARGET_DIR",
+    "CARGO_INCREMENTAL",
+    "CARGO_BUILD_JOBS",
+    "CARGO_PROFILE_DEV_DEBUG",
+    "RCH_VISIBILITY",
+    "RCH_PRIORITY",
+    "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS",
+    "RUSTFLAGS",
+    "RUSTUP_TOOLCHAIN"
+  ],
+  "remediation_requirements": [
+    "Every non-proof-safe decision emits remediation text.",
+    "Every heavy cargo rejection emits a pasteable direct rch exec -- env command when a cargo suffix can be extracted.",
+    "Target-dir remediation uses /tmp/rch_target_franken_engine_<safe_bead_id>.",
+    "Unsupported env remediation lists rejected env names.",
+    "RUSTFLAGS remediation either omits the override or composes an accepted exact linker-policy token sequence."
+  ],
+  "required_outputs": [
+    "preflight_report.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "fixture_cases": [
+    "accepted_direct_rch_cargo",
+    "accepted_composed_rustflags",
+    "accepted_two_token_linker_policy",
+    "rejected_uncomposed_rustflags",
+    "rejected_rustflags_substring_bypass",
+    "rejected_shell_wrapper_fallback_risk",
+    "rejected_bare_cargo",
+    "accepted_read_only_non_heavy",
+    "rejected_missing_target_dir",
+    "rejected_target_dir_bead_mismatch",
+    "rejected_env_mismatch",
+    "rejected_encoded_rustflags",
+    "rejected_missing_visibility",
+    "unknown_command_needs_human_review"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_command_preflight_contract_v1.json scripts/testdata/swarm_proof_command_preflight/cases.json",
+    "bash -n scripts/swarm_proof_command_preflight.sh",
+    "bash -n scripts/e2e/swarm_proof_command_preflight_smoke.sh",
+    "bash scripts/e2e/swarm_proof_command_preflight_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_command_preflight_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_proof_command_preflight.sh docs/SWARM_PROOF_COMMAND_PREFLIGHT.md docs/swarm_proof_command_preflight_contract_v1.json scripts/testdata/swarm_proof_command_preflight/cases.json scripts/e2e/swarm_proof_command_preflight_smoke.sh"
+  ]
+}

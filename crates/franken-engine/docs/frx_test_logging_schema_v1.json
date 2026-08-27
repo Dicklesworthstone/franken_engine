@@ -1,0 +1,77 @@
+{
+  "schema_version": "frx.test-logging-schema.contract.v1",
+  "bead_id": "bd-mjh3.20.4",
+  "generated_by": "bd-mjh3.20.4",
+  "logging_schema": {
+    "event_schema_version": "frx.test-log-event.v1",
+    "required_fields": [
+      "scenario_id",
+      "fixture_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "lane",
+      "component",
+      "event",
+      "outcome",
+      "error_code",
+      "seed",
+      "timing_us",
+      "timestamp_unix_ms"
+    ],
+    "required_correlation_ids": [
+      "scenario_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "seed"
+    ],
+    "required_outcomes": ["pass", "fail", "warn"]
+  },
+  "correlation_policy": {
+    "require_cross_lane_id_consistency": true,
+    "correlation_key_fields": [
+      "scenario_id",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "seed"
+    ]
+  },
+  "retention_policy": {
+    "retention_days": 30,
+    "redact_sensitive": true,
+    "drop_secret": true
+  },
+  "local_semantic_links": {
+    "components": [
+      {
+        "component_id": "hooks-order-state-effect-memo-ref",
+        "fixture_ref": "compat.hooks.order.state_effect_memo_ref.fixture.json",
+        "trace_ref": "compat.hooks.order.state_effect_memo_ref.trace.json"
+      },
+      {
+        "component_id": "effects-lifecycle-parent-child-cleanup",
+        "fixture_ref": "compat.effects.lifecycle.parent_child_cleanup.fixture.json",
+        "trace_ref": "compat.effects.lifecycle.parent_child_cleanup.trace.json"
+      },
+      {
+        "component_id": "suspense-concurrent-reveal",
+        "fixture_ref": "compat.suspense.transitions.concurrent_reveal.fixture.json",
+        "trace_ref": "compat.suspense.transitions.concurrent_reveal.trace.json"
+      }
+    ]
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "error_code": "FE-FRX-20-4-LOG-SCHEMA-0001",
+    "block_on_missing_required_fields": true,
+    "block_on_correlation_mismatch": true,
+    "block_on_redaction_violation": true
+  },
+  "operator_verification": [
+    "./scripts/run_frx_test_logging_schema_suite.sh ci",
+    "./scripts/e2e/frx_test_logging_schema_replay.sh",
+    "jq empty docs/frx_test_logging_schema_v1.json"
+  ]
+}

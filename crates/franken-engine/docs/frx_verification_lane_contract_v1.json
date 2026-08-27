@@ -1,0 +1,139 @@
+{
+  "schema_version": "frx.verification.lane.contract.v1",
+  "status": "active",
+  "primary_bead": "bd-mjh3.10.4",
+  "generated_by": "bd-mjh3.10.4",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
+  "lane": {
+    "id": "FRX-10.4",
+    "name": "Verification/Formal Ownership Surface"
+  },
+  "ownership": {
+    "differential_oracle_quality": {
+      "required": true,
+      "triage_taxonomy": [
+        "semantic_drift",
+        "nondeterminism",
+        "harness_fault",
+        "spec_ambiguity",
+        "false_positive"
+      ]
+    },
+    "metamorphic_property_campaigns": {
+      "required": true,
+      "seed_reproducibility_required": true,
+      "corpus_evolution_policy": "versioned"
+    },
+    "formal_assurance_critical_sections": {
+      "required": true,
+      "critical_sections": [
+        "scheduler",
+        "reactivity_router",
+        "fallback_gate"
+      ],
+      "allowed_statuses": [
+        "proved",
+        "model_checked",
+        "waived_with_expiration"
+      ]
+    }
+  },
+  "inputs": [
+    "compatibility_corpus",
+    "runtime_execution_traces",
+    "compiler_witness_bundles",
+    "promotion_gate_requirements"
+  ],
+  "outputs": {
+    "differential_reports": {
+      "reproducible": true,
+      "required_fields": [
+        "trace_id",
+        "counterexample_id",
+        "taxonomy_label",
+        "confidence_delta",
+        "replay_command"
+      ]
+    },
+    "metamorphic_campaign_report": {
+      "required_fields": [
+        "seed",
+        "scenario_id",
+        "invariant_matrix",
+        "failure_classification",
+        "timing_summary"
+      ]
+    },
+    "formal_assurance_packet": {
+      "required_fields": [
+        "invariant_id",
+        "method",
+        "status",
+        "artifact_uri",
+        "waiver_expiration"
+      ]
+    },
+    "risk_advisory": {
+      "required_fields": [
+        "confidence_score",
+        "promotion_recommendation",
+        "blocking_reasons",
+        "remediation_class"
+      ]
+    }
+  },
+  "activation_gate": {
+    "require_differential_reports": true,
+    "require_metamorphic_campaign_report": true,
+    "require_formal_assurance_packet": true,
+    "block_on_missing_replay_artifact": true,
+    "block_on_confidence_below_threshold": true,
+    "minimum_confidence_score": 0.98
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "error_code": "FE-FRX-VERIFY-LANE-FAIL-CLOSED",
+    "on_insufficient_confidence": "block_promotion",
+    "on_non_reproducible_counterexample": "invalidate_artifact",
+    "on_formal_violation": "block_and_require_remediation"
+  },
+  "counterexample_triage": {
+    "repro_required": true,
+    "required_fields": [
+      "counterexample_id",
+      "taxonomy_label",
+      "replay_command",
+      "minimized_payload_ref",
+      "owner_lane",
+      "confidence_impact"
+    ]
+  },
+  "consumer_interfaces": {
+    "governance_lane": [
+      "risk_advisory",
+      "blocking_reasons",
+      "waiver_expiration"
+    ],
+    "compiler_lane": [
+      "counterexample_triage",
+      "witness_hash_linkage"
+    ],
+    "runtime_lane": [
+      "differential_reports",
+      "formal_assurance_packet"
+    ]
+  },
+  "logging_contract": {
+    "component": "frx_verification_lane",
+    "fail_closed_on_missing_fields": true,
+    "required_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code"
+    ]
+  }
+}

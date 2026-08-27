@@ -1,0 +1,93 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-replay-drill-contract.v1",
+  "bead_id": "bd-xbesa",
+  "parent_bead_id": "bd-xg3d6",
+  "depends_on": ["bd-sisok", "bd-4j2ck", "bd-or2e1", "bd-jp4r0", "bd-yo0eh"],
+  "script": "scripts/optimization_promotion_replay_drill.sh",
+  "smoke_script": "scripts/e2e/optimization_promotion_replay_drill_smoke.sh",
+  "docs": "docs/OPTIMIZATION_PROMOTION_REPLAY_DRILL.md",
+  "fixture_bundle": "scripts/testdata/optimization_promotion_replay_drill/cases.json",
+  "run_manifest_schema_version": "franken-engine.optimization-promotion-replay-drill.run-manifest.v1",
+  "required_stage_scripts": [
+    "scripts/optimization_promotion_control_contract.sh",
+    "scripts/optimization_promotion_eligibility_composer.sh",
+    "scripts/optimization_demotion_replay_receipts.sh",
+    "scripts/optimization_transfer_guard.sh",
+    "scripts/optimization_promotion_operator_status.sh"
+  ],
+  "covered_cases": [
+    "promotable_evidence",
+    "stale_evidence",
+    "transfer_refusal",
+    "rollback_demotion",
+    "synthetic_contamination",
+    "missing_artifact_fail_closed"
+  ],
+  "artifacts": {
+    "run_manifest_json": "run_manifest.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "trace_ids_json": "trace_ids.json",
+    "report_md": "report.md",
+    "stages_dir": "stages/"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_runtime_policy": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "publishes_benchmark_claims": false
+  },
+  "required_doc_text": [
+    "The optimization promotion replay drill is advisory only and proof only.",
+    "It invokes the real promotion-control child producers over checked-in deterministic fixtures and a checked-in real hot-path evidence bundle shape.",
+    "Replay mode verifies stable hashes and every stage output schema from a pinned run manifest.",
+    "The drill covers promotable evidence, stale evidence, transfer refusal, rollback demotion, synthetic contamination, and missing artifact fail_closed cases.",
+    "Every emitted validation command is rch-wrapped, and the drill itself never runs Cargo or RCH.",
+    "Truth-gate boundaries forbid live mutation claims, automatic benchmark publication, bare Cargo validation, and denominator-win claims without release gates."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "promotable_evidence",
+      "expected_exit_code": 0,
+      "expected_lane_state": "promote",
+      "expected_replay_exit_code": 0
+    },
+    {
+      "case_id": "stale_evidence",
+      "expected_exit_code": 0,
+      "expected_lane_state": "fail_closed",
+      "expected_replay_exit_code": 0
+    },
+    {
+      "case_id": "transfer_refusal",
+      "expected_exit_code": 0,
+      "expected_lane_state": "observe",
+      "expected_replay_exit_code": 0
+    },
+    {
+      "case_id": "rollback_demotion",
+      "expected_exit_code": 0,
+      "expected_lane_state": "demote",
+      "expected_replay_exit_code": 0
+    },
+    {
+      "case_id": "synthetic_contamination",
+      "expected_exit_code": 0,
+      "expected_lane_state": "fail_closed",
+      "expected_replay_exit_code": 0
+    },
+    {
+      "case_id": "missing_artifact_fail_closed",
+      "expected_exit_code": 42,
+      "expected_lane_state": "fail_closed",
+      "required_error_code": "FE-OPT-REPLAY-MISSING-HOT-PATH-BUNDLE"
+    }
+  ]
+}

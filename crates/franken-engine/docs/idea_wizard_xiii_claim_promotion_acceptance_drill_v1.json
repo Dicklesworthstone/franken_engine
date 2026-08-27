@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-claim-promotion-acceptance-drill.v1",
+  "bead_id": "bd-ly6hp.6",
+  "purpose": "Compose the IDEA-WIZARD-XIII proof reports and claim-promotion gate into one replayable no-mock acceptance drill.",
+  "composed_artifacts": [
+    "bd-ly6hp.2 transparency-log decision receipt proof report",
+    "bd-ly6hp.3 quarantine mesh convergence proof report",
+    "bd-ly6hp.4 capability-typed ambient-authority proof report",
+    "bd-ly6hp.5 claim-promotion live report gate output"
+  ],
+  "required_inputs": {
+    "transparency_report": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+    "quarantine_report": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+    "capability_report": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+    "readme": "README.md"
+  },
+  "required_outputs": [
+    "aggregate_report.json",
+    "operator_summary.md",
+    "source_inputs.json",
+    "commands.txt",
+    "events.jsonl",
+    "run_manifest.json",
+    "gate/claim_promotion_gate_report.json",
+    "gate/operator_status.json"
+  ],
+  "acceptance_assertions": {
+    "FE-CLAIM-004": [
+      "transparency proof subset is green",
+      "operator status remains degraded while TEE attestation is not promoted"
+    ],
+    "FE-CLAIM-005": [
+      "live quarantine proof subset is green",
+      "bounded convergence is measured within its SLO",
+      "de-escalation remains out of scope"
+    ],
+    "FE-CLAIM-006": [
+      "covered capability-typed manifest-to-IR subset is green",
+      "filesystem, network, and hostcall ambient authority are denied",
+      "full typed TypeScript-to-IR onboarding remains degraded"
+    ]
+  },
+  "fail_closed_inputs": [
+    "stale_proof",
+    "synthetic_proof",
+    "missing_artifact",
+    "overclaiming_readme_text"
+  ],
+  "golden_fixtures": "scripts/testdata/idea_wizard_xiii_claim_promotion_acceptance_drill/cases.json",
+  "mutation_policy": {
+    "promotes_claims": false,
+    "rewrites_readme": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "repairs_agent_mail_db": false
+  }
+}

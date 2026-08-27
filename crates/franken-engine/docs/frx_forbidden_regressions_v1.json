@@ -1,0 +1,70 @@
+{
+  "schema_version": "frx.forbidden-regressions.v1",
+  "generated_by": "bd-mjh3.1.1",
+  "entries": [
+    {
+      "id": "FR-CI-001",
+      "invariant": "CI-RENDER-001",
+      "description": "DOM snapshot differences for equivalent input state",
+      "severity": "critical",
+      "detection": "lockstep_dom_diff",
+      "fixture_ref": "compat.render.*"
+    },
+    {
+      "id": "FR-CI-002",
+      "invariant": "CI-HOOK-001",
+      "description": "Hook call-order/count divergence across re-renders",
+      "severity": "critical",
+      "detection": "hook_trace_diff",
+      "fixture_ref": "compat.hooks.order.*"
+    },
+    {
+      "id": "FR-CI-003",
+      "invariant": "CI-EFFECT-001",
+      "description": "Effect setup/cleanup ordering deviation",
+      "severity": "high",
+      "detection": "effect_lifecycle_oracle",
+      "fixture_ref": "compat.effects.lifecycle.*"
+    },
+    {
+      "id": "FR-CI-004",
+      "invariant": "CI-ERROR-001",
+      "description": "Error boundary capture/recovery mismatch",
+      "severity": "critical",
+      "detection": "error_boundary_oracle",
+      "fixture_ref": "compat.errors.boundary.*"
+    },
+    {
+      "id": "FR-CI-005",
+      "invariant": "CI-SUSPENSE-001",
+      "description": "Suspense fallback/reveal sequence mismatch",
+      "severity": "high",
+      "detection": "suspense_transition_oracle",
+      "fixture_ref": "compat.suspense.transitions.*"
+    },
+    {
+      "id": "FR-CI-006",
+      "invariant": "CI-HYDRATE-001",
+      "description": "Hydration mismatch handling divergence",
+      "severity": "critical",
+      "detection": "hydration_diff_oracle",
+      "fixture_ref": "compat.hydration.*"
+    },
+    {
+      "id": "FR-CI-007",
+      "invariant": "CI-STATE-001",
+      "description": "State batching/visibility contract break",
+      "severity": "high",
+      "detection": "state_transition_oracle",
+      "fixture_ref": "compat.state.batching.*"
+    },
+    {
+      "id": "FR-CI-008",
+      "invariant": "CI-EVENT-001",
+      "description": "Event dispatch/propagation ordering divergence",
+      "severity": "high",
+      "detection": "event_dispatch_oracle",
+      "fixture_ref": "compat.events.dispatch.*"
+    }
+  ]
+}

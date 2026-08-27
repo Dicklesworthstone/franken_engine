@@ -1,0 +1,110 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-fidelity-scorer-contract.v1",
+  "bead_id": "bd-eiqk4",
+  "parent_bead_id": "bd-d5daf",
+  "depends_on": [
+    "bd-7s7ui",
+    "bd-p5j9g"
+  ],
+  "script": "scripts/swarm_execution_queue_fidelity_scorer.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_FIDELITY_SCORER.md",
+  "fixture_bundle": "scripts/testdata/swarm_execution_queue/fidelity_scorer_fixtures.json",
+  "upstream_normalizer": "scripts/swarm_execution_queue_hindsight_normalizer.sh",
+  "upstream_contract": "docs/swarm_execution_queue_hindsight_input_contract_v1.json",
+  "receipt_schema_version": "franken-engine.swarm-execution-queue-fidelity-score-receipt.v1",
+  "drift_ledger_schema_version": "franken-engine.swarm-execution-queue-drift-ledger.v1",
+  "event_schema_version": "franken-engine.swarm-execution-queue-fidelity.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "hindsight_report_json",
+      "argument": "--hindsight-report-json",
+      "schema_version": "franken-engine.swarm-execution-queue-hindsight-report.v1",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_input_json",
+      "argument": "--hindsight-input-json",
+      "schema_version": "franken-engine.swarm-execution-queue-hindsight-input.v1",
+      "required": true
+    },
+    {
+      "source_id": "evidence_ledger_json",
+      "argument": "--evidence-ledger-json",
+      "schema_version": "franken-engine.swarm-execution-queue-hindsight-evidence-ledger.v1",
+      "required": true
+    },
+    {
+      "source_id": "counterfactual_candidates_json",
+      "argument": "--counterfactual-candidates-json",
+      "schema_version": "franken-engine.swarm-execution-queue-counterfactual-candidates.v1",
+      "required": true
+    }
+  ],
+  "artifact_paths": {
+    "fidelity_score_receipt_json": "fidelity_score_receipt.json",
+    "drift_ledger_json": "drift_ledger.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "component_scores": [
+    "start_order_agreement_millionths",
+    "defer_correctness_millionths",
+    "proof_health_prediction_millionths",
+    "owner_friction_prediction_millionths",
+    "conservative_mode_appropriateness_millionths"
+  ],
+  "mismatch_classes": [
+    "exact_match",
+    "conservative_but_correct",
+    "over_conservative",
+    "stale_owner_miss",
+    "proof_brownout_miss",
+    "missing_outcome",
+    "ranking_drift",
+    "timing_drift",
+    "contradictory_evidence",
+    "unclassified_drift"
+  ],
+  "fail_closed_rules": [
+    "upstream hindsight fail-closed reports fail closed",
+    "unknown task references fail closed",
+    "duplicate hindsight task IDs fail closed",
+    "missing recommended first actions fail closed",
+    "contradictory owner or reservation evidence fails closed",
+    "stale or rejected required evidence fails closed"
+  ],
+  "degraded_rules": [
+    "over-conservative advice degrades conservative-mode appropriateness",
+    "stale owner misses degrade owner-friction prediction quality",
+    "proof brownout misses degrade proof-health prediction quality",
+    "missing observed outcomes degrade confidence",
+    "ranking or timing drift degrades aggregate fidelity"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "reopens_beads": false,
+    "rewrites_historical_outcomes": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_active_queue": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "selftest_scenarios": [
+    "exact_match",
+    "conservative_correct",
+    "over_conservative",
+    "stale_owner_miss",
+    "proof_brownout_miss",
+    "contradictory_evidence"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_fidelity_scorer.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_fidelity_scorer.sh scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh",
+    "jq empty docs/swarm_execution_queue_fidelity_scorer_contract_v1.json scripts/testdata/swarm_execution_queue/fidelity_scorer_fixtures.json",
+    "bash scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh selftest"
+  ]
+}

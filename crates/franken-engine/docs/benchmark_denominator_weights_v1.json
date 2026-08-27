@@ -1,0 +1,84 @@
+{
+  "contract_version": "v1",
+  "bead_id": "bd-cixqu.5.4",
+  "track": "E",
+  "claim": "FE-CLAIM-010",
+  "rationale": "Workload-class weights for the throughput denominator S_B = exp(sum_i w_i * ln(r_i)), where r_i = throughput_franken_i / throughput_baseline_i over equivalence-passing workloads. Weights are assigned per workload CLASS (not per hand-picked workload) to reflect the relative prevalence of each class in representative real-world Node/Bun server-side and tooling workloads. Within a class, the class weight is split equally across the member workloads that are actually admitted (equivalence-passing) into the run, and class weights are renormalised over the classes that have at least one admitted member so that the per-case weights always sum to 1.0. This makes the score robust to a class being entirely quarantined for a given baseline while keeping the cross-class weighting fixed by policy rather than by per-run cherry-picking.",
+  "weight_policy": {
+    "normalization": "class weights renormalised over admitted classes; per-class weight split equally across admitted members",
+    "weights_sum_to": 1.0,
+    "weights_must_be_positive": true,
+    "members_unique_across_classes": true
+  },
+  "gate": {
+    "metric": "weighted_geometric_mean_speedup",
+    "threshold": 3.0,
+    "comparator": ">=",
+    "baselines": ["node", "bun"],
+    "statistical_significance_pipeline": "scripts/run_rgc_statistical_validation_pipeline.sh"
+  },
+  "workload_classes": [
+    {
+      "class_id": "json_processing",
+      "weight": 0.20,
+      "description": "JSON parse/stringify on small, medium, and deeply nested payloads — dominant in API servers and config tooling.",
+      "member_workload_ids": [
+        "json_parse_small",
+        "json_parse_large",
+        "json_stringify_nested",
+        "json_roundtrip_unicode"
+      ]
+    },
+    {
+      "class_id": "http_request_handling",
+      "weight": 0.22,
+      "description": "Request routing, header parsing, and response serialization — the dominant server-side hot path for both Node and Bun.",
+      "member_workload_ids": [
+        "http_route_dispatch",
+        "http_header_parse",
+        "http_response_serialize"
+      ]
+    },
+    {
+      "class_id": "string_and_text",
+      "weight": 0.15,
+      "description": "String concatenation, template assembly, encode/decode, and regex matching common to templating and validation layers.",
+      "member_workload_ids": [
+        "string_concat_heavy",
+        "template_render",
+        "base64_encode_decode",
+        "regex_email_validate"
+      ]
+    },
+    {
+      "class_id": "crypto_and_hashing",
+      "weight": 0.13,
+      "description": "Hashing, HMAC, and symmetric crypto used in auth, signing, and content-addressing paths.",
+      "member_workload_ids": [
+        "sha256_digest",
+        "hmac_sign_verify",
+        "aes_gcm_roundtrip"
+      ]
+    },
+    {
+      "class_id": "compute_bound",
+      "weight": 0.15,
+      "description": "Numeric and algorithmic compute (recurrences, sorting, matrix ops) representing data-transform and scientific workloads.",
+      "member_workload_ids": [
+        "fibonacci_recursive",
+        "array_sort_large",
+        "matrix_multiply"
+      ]
+    },
+    {
+      "class_id": "module_and_startup",
+      "weight": 0.15,
+      "description": "Module resolution, ESM/CJS interop, and cold-start initialization — heavily weighted in CLI and serverless tooling.",
+      "member_workload_ids": [
+        "module_resolution_deep",
+        "esm_cjs_interop",
+        "cold_start_init"
+      ]
+    }
+  ]
+}

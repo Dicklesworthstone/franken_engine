@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-policy-adoption-lifecycle-drill-contract.v1",
+  "bead_id": "bd-k6ng4",
+  "parent_bead_id": "bd-6qnx9",
+  "depends_on": [
+    "bd-my39p",
+    "bd-adgrb",
+    "bd-mj81s",
+    "bd-48ooe",
+    "bd-jtw90"
+  ],
+  "no_mock_drill_script": "scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_runbook_truth_gate.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_POLICY_ADOPTION_LIFECYCLE_DRILL.md",
+  "drill_receipt_schema_version": "franken-engine.swarm-execution-queue-policy-adoption-lifecycle-drill-receipt.v1",
+  "real_producers_required": [
+    "scripts/swarm_execution_queue_policy_adoption_receipt_writer.sh",
+    "scripts/swarm_execution_queue_policy_sustained_gain_scorer.sh",
+    "scripts/swarm_execution_queue_policy_expiry_supersession_planner.sh",
+    "scripts/swarm_operator_status_report.sh"
+  ],
+  "required_child_artifacts": [
+    "adoption_receipt.json",
+    "adoption_snapshot_bundle.json",
+    "sustained_gain_receipt.json",
+    "post_adoption_drift_ledger.json",
+    "expiry_supersession_plan.json",
+    "expiry_supersession_ledger.json",
+    "status.json"
+  ],
+  "mutation_policy": {
+    "no_mock_e2e_only": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false,
+    "retirement_executed": false,
+    "supersession_executed": false
+  },
+  "truth_gate_rules": [
+    "runbook names real producers",
+    "contract names real producers",
+    "operator status lifecycle section is required",
+    "automatic adoption claims fail closed",
+    "automatic promotion claims fail closed",
+    "executed retirement claims fail closed",
+    "executed supersession claims fail closed",
+    "reject local fallback proof evidence"
+  ],
+  "selftest_assertions": [
+    "adoption writer emits admitted receipt",
+    "sustained-gain scorer emits sustained_gain verdict",
+    "expiry planner emits retain_adopted_policy decision",
+    "operator status exposes queue_policy_adoption retained readiness",
+    "operator status mutation policy remains advisory-only",
+    "drill receipt uses child artifacts from real producer runs"
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_runbook_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_no_mock_drill.sh scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_runbook_truth_gate.sh",
+    "jq empty docs/swarm_execution_queue_policy_adoption_lifecycle_drill_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_runbook_truth_gate.sh check",
+    "bash scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_execution_queue_policy_adoption_lifecycle_no_mock_drill.sh selftest"
+  ]
+}

@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frankenengine.local/schemas/semantic_fidelity_frontier_ingest_contract_v1.json",
+  "title": "FrankenEngine Semantic Fidelity Frontier Ingest Bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "claim_policy",
+    "generated_from",
+    "determinism_policy",
+    "rows"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "franken-engine.semantic-fidelity-frontier-ingest.v1"
+    },
+    "scope": {
+      "const": "semantic_fidelity_subset"
+    },
+    "claim_policy": {
+      "const": "no_claim_promotion"
+    },
+    "generated_from": {
+      "$ref": "#/$defs/generated_from"
+    },
+    "determinism_policy": {
+      "$ref": "#/$defs/determinism_policy"
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/frontier_row"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "bead_id": {
+      "type": "string",
+      "pattern": "^bd-[a-z0-9]+(\\.[0-9]+)*$"
+    },
+    "semantic_family": {
+      "enum": [
+        "array_length_range",
+        "catchable_error_object",
+        "number_digits_range",
+        "number_range_or_radix",
+        "receiver_validation",
+        "string_from_char_code_touint16",
+        "string_from_code_point_range",
+        "string_index_tointeger",
+        "string_repeat_range",
+        "to_integer_or_infinity",
+        "unsupported_surface"
+      ]
+    },
+    "generated_from": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workbench_schema_version",
+        "source_bundle_path",
+        "source_suite_id",
+        "source_suite_sha256",
+        "run_manifest_sha256",
+        "vector_results_sha256",
+        "summary_sha256",
+        "source_bead_ids"
+      ],
+      "properties": {
+        "workbench_schema_version": {
+          "const": "franken-engine.semantic-fidelity-vectors.v1"
+        },
+        "source_bundle_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_suite_id": {
+          "type": "string",
+          "pattern": "^semfid-suite-[a-z0-9][a-z0-9._-]*$"
+        },
+        "source_suite_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "run_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "vector_results_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "summary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path_parity_report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "auto_triage_report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_bead_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/bead_id"
+          }
+        }
+      }
+    },
+    "determinism_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_ordering",
+        "hash_preimage",
+        "duplicate_row_policy"
+      ],
+      "properties": {
+        "row_ordering": {
+          "const": "lexicographic_by_cluster_vector_route"
+        },
+        "hash_preimage": {
+          "const": "length_prefixed_utf8_fields_v1"
+        },
+        "duplicate_row_policy": {
+          "const": "fail_closed"
+        }
+      }
+    },
+    "frontier_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_id",
+        "cluster_id",
+        "vector_id",
+        "semantic_family",
+        "source_hash",
+        "route",
+        "oracle_mode",
+        "observed_outcome",
+        "expected_outcome",
+        "scope_state",
+        "unsupported_reason",
+        "coverage_counting",
+        "related_bead_ids",
+        "evidence_paths"
+      ],
+      "properties": {
+        "row_id": {
+          "type": "string",
+          "pattern": "^semfid-frontier-row-[a-z0-9][a-z0-9._-]*$"
+        },
+        "cluster_id": {
+          "type": "string",
+          "pattern": "^semfid-cluster-[0-9a-f]{16,64}$"
+        },
+        "vector_id": {
+          "type": "string",
+          "pattern": "^semfid-[a-z0-9][a-z0-9._-]*$"
+        },
+        "semantic_family": {
+          "$ref": "#/$defs/semantic_family"
+        },
+        "source_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "route": {
+          "$ref": "#/$defs/route"
+        },
+        "oracle_mode": {
+          "enum": [
+            "external_oracle",
+            "internal_route",
+            "source_eval_declared",
+            "no_oracle",
+            "mixed"
+          ]
+        },
+        "observed_outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "expected_outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "scope_state": {
+          "enum": [
+            "accepted_external_oracle",
+            "declared_non_execution",
+            "expected_unknown",
+            "unsupported",
+            "mismatch",
+            "malformed",
+            "degraded"
+          ]
+        },
+        "unsupported_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "coverage_counting": {
+          "enum": [
+            "eligible_subset_row",
+            "non_passing_scoped_evidence",
+            "fail_closed"
+          ]
+        },
+        "related_bead_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/bead_id"
+          }
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidence_paths"
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route_id",
+        "route_kind"
+      ],
+      "properties": {
+        "route_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._:-]*$"
+        },
+        "route_kind": {
+          "enum": [
+            "source_eval",
+            "builtin_function_kind",
+            "hostcall_builtin",
+            "string_intrinsic_table",
+            "stdlib_reference",
+            "node_oracle",
+            "bun_oracle",
+            "test262_context"
+          ]
+        },
+        "engine_lane": {
+          "enum": [
+            "quickjs_inspired",
+            "v8_inspired",
+            "hybrid_router",
+            "not_applicable"
+          ]
+        },
+        "external_runtime": {
+          "enum": [
+            "node",
+            "bun"
+          ]
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "normal",
+            "js_error",
+            "unsupported",
+            "degraded",
+            "expected_unknown",
+            "malformed",
+            "not_executed"
+          ]
+        },
+        "value_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "normalized_value": {
+          "type": "string"
+        },
+        "error_class": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9]*Error$"
+        },
+        "message_fragment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        }
+      }
+    },
+    "evidence_paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_bundle_path",
+        "run_manifest_path",
+        "vector_results_path",
+        "summary_path"
+      ],
+      "properties": {
+        "source_bundle_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_manifest_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vector_results_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_parity_report_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auto_triage_report_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_fixture_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

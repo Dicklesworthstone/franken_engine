@@ -1,0 +1,155 @@
+{
+  "schema_version": "franken-engine.rch-validation-preflight.v1",
+  "bead_id": "bd-xxi8i",
+  "contract_name": "RCH validation preflight contract",
+  "heavy_command_policy": {
+    "cargo_requires_rch_exec": true,
+    "local_fallback_default": "refuse",
+    "allowed_heavy_command_prefix": "rch exec --"
+  },
+  "valid_command_kinds": [
+    "cargo_check",
+    "cargo_test",
+    "cargo_clippy",
+    "cargo_fmt",
+    "rustfmt",
+    "rustdoc"
+  ],
+  "valid_verdicts": [
+    "pass",
+    "fail_closed",
+    "degraded",
+    "skipped"
+  ],
+  "valid_reason_codes": [
+    "component_available",
+    "missing_required_component",
+    "stale_capability_snapshot",
+    "bare_cargo_not_allowed"
+  ],
+  "cases": [
+    {
+      "case_id": "missing-cargo-clippy",
+      "command_kind": "cargo_clippy",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-clippy CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo clippy --all-targets -- -D warnings",
+      "worker": {
+        "worker_id": "vmi1293453",
+        "host": "ubuntu@example-worker",
+        "toolchain": "nightly-2026-04-30-x86_64-unknown-linux-gnu",
+        "components": [
+          "cargo",
+          "rustc",
+          "rustfmt"
+        ]
+      },
+      "required_components": [
+        "cargo-clippy"
+      ],
+      "target_dir_policy": {
+        "isolated": true,
+        "path": "/data/tmp/franken_engine-clippy"
+      },
+      "local_fallback_policy": "refuse",
+      "capability_snapshot": {
+        "captured_at_utc": "2026-05-06T05:38:09Z",
+        "max_age_seconds": 600,
+        "fresh": true
+      },
+      "verdict": "fail_closed",
+      "reason_code": "missing_required_component",
+      "operator_guidance": "Do not count this as lint evidence; reroute to a worker with cargo-clippy or repair remote_compilation_helper worker capabilities."
+    },
+    {
+      "case_id": "remote-cargo-check-pass",
+      "command_kind": "cargo_check",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-check CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo check --all-targets",
+      "worker": {
+        "worker_id": "vmi1293453",
+        "host": "ubuntu@example-worker",
+        "toolchain": "nightly-2026-04-30-x86_64-unknown-linux-gnu",
+        "components": [
+          "cargo",
+          "rustc",
+          "rustfmt",
+          "cargo-clippy"
+        ]
+      },
+      "required_components": [
+        "cargo",
+        "rustc"
+      ],
+      "target_dir_policy": {
+        "isolated": true,
+        "path": "/data/tmp/franken_engine-check"
+      },
+      "local_fallback_policy": "refuse",
+      "capability_snapshot": {
+        "captured_at_utc": "2026-05-06T05:20:00Z",
+        "max_age_seconds": 600,
+        "fresh": true
+      },
+      "verdict": "pass",
+      "reason_code": "component_available",
+      "operator_guidance": "The worker has the required components; validation may be treated as source evidence if the remote command exits successfully."
+    },
+    {
+      "case_id": "stale-worker-capability-snapshot",
+      "command_kind": "cargo_test",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p frankenengine-engine --test array_every_map_callbacks",
+      "worker": {
+        "worker_id": "vmi1149989",
+        "host": "ubuntu@example-worker",
+        "toolchain": "nightly-2026-04-30-x86_64-unknown-linux-gnu",
+        "components": [
+          "cargo",
+          "rustc"
+        ]
+      },
+      "required_components": [
+        "cargo",
+        "rustc"
+      ],
+      "target_dir_policy": {
+        "isolated": true,
+        "path": "/data/tmp/franken_engine-test"
+      },
+      "local_fallback_policy": "refuse",
+      "capability_snapshot": {
+        "captured_at_utc": "2026-05-06T04:00:00Z",
+        "max_age_seconds": 600,
+        "fresh": false
+      },
+      "verdict": "fail_closed",
+      "reason_code": "stale_capability_snapshot",
+      "operator_guidance": "Refresh worker capabilities before relying on this validation attempt."
+    },
+    {
+      "case_id": "bare-cargo-command",
+      "command_kind": "cargo_check",
+      "validation_command": "cargo check --all-targets",
+      "worker": {
+        "worker_id": "none",
+        "host": "local-pane",
+        "toolchain": "unknown",
+        "components": []
+      },
+      "required_components": [
+        "cargo",
+        "rustc"
+      ],
+      "target_dir_policy": {
+        "isolated": false,
+        "path": "target"
+      },
+      "local_fallback_policy": "not_applicable",
+      "capability_snapshot": {
+        "captured_at_utc": "2026-05-06T06:00:00Z",
+        "max_age_seconds": 0,
+        "fresh": false
+      },
+      "verdict": "fail_closed",
+      "reason_code": "bare_cargo_not_allowed",
+      "operator_guidance": "Rerun through rch exec -- before treating the result as validation evidence."
+    }
+  ]
+}

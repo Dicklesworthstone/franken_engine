@@ -1,0 +1,30 @@
+{
+  "schema_version": "franken-engine.proof-economy-policy-evaluator-contract.v1",
+  "output_schema": "franken-engine.proof-economy-policy-scorecard.v1",
+  "required_inputs": [
+    "--replay-trace-json"
+  ],
+  "optional_inputs": [
+    "--output-dir",
+    "--max-heavy-per-agent",
+    "--pressure-mode"
+  ],
+  "required_artifacts": [
+    "policy_scorecard.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.proof-economy-replay-trace.v1"
+  ],
+  "determinism": {
+    "execution_mode": "fixture-only",
+    "sorting": "command rows are sorted by agent, bead, and command before scoring",
+    "hash": "policy_id is sha256 over canonical policy scorecard core JSON"
+  },
+  "failure_policy": {
+    "unwrapped_heavy_command": "fail_closed with exit code 42",
+    "p1_slo": "P1 commands must remain admitted or preemptively admitted"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-input-contract.v1",
+  "report_schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+  "producer_script": "scripts/swarm_starvation_rescue_input_normalizer.sh",
+  "required_inputs": [
+    {
+      "flag": "--brownout-report-json",
+      "schema_version": "franken-engine.proof-queue-brownout-report.v1"
+    },
+    {
+      "flag": "--stale-lock-recommendations-json",
+      "schema_version": "franken-engine.stale-lock-recommendations.v1"
+    },
+    {
+      "flag": "--lease-exchange-salvage-simulation-json",
+      "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1"
+    },
+    {
+      "flag": "--admission-budget-plan-json",
+      "schema_version": "franken-engine.swarm-admission-budget-plan.v1"
+    },
+    {
+      "flag": "--capacity-forecast-json",
+      "schema_version": "franken-engine.swarm-capacity-forecast.v1"
+    },
+    {
+      "flag": "--slo-threshold-receipt-json",
+      "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1"
+    }
+  ],
+  "required_top_level_fields": [
+    "decision",
+    "summary.readiness",
+    "summary.ownership_fail_closed_count",
+    "derived_truth.local_rch_fallback_detected",
+    "fail_closed_reasons",
+    "resolved_inputs",
+    "normalized_inputs",
+    "artifact_paths.swarm_starvation_rescue_input_json",
+    "artifact_paths.events_jsonl",
+    "artifact_paths.commands_txt",
+    "artifact_paths.report_md"
+  ],
+  "required_artifact_paths": [
+    "artifact_paths.swarm_starvation_rescue_input_json",
+    "artifact_paths.events_jsonl",
+    "artifact_paths.commands_txt",
+    "artifact_paths.report_md"
+  ],
+  "fail_closed_rules": [
+    "missing or invalid required inputs must fail closed",
+    "replayable timestamps older than the configured threshold must fail closed",
+    "contradictory ownership from the lease-exchange salvage simulation must fail closed",
+    "capacity forecast decision must stay pass and must not admit local-rch fallback as success",
+    "SLO threshold receipt decision must stay pass"
+  ],
+  "non_goals": [
+    "no live worker mutation",
+    "no br mutation",
+    "no reservation release",
+    "no cargo execution"
+  ],
+  "notes": [
+    "Brownout and admission-plan decisions are rescue signals rather than automatic blockers.",
+    "Inputs that lack replayable timestamps remain normalized but are called out as timestampless."
+  ]
+}

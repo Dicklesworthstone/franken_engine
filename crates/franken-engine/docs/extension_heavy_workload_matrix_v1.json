@@ -1,0 +1,214 @@
+{
+  "schema_version": "franken-engine.extension-heavy-workload-matrix.v1",
+  "generated_at_utc": "2026-02-22T00:00:00Z",
+  "normative_source": "docs/EXTENSION_HEAVY_BENCHMARK_SUITE_V1.md",
+  "profile_defaults": {
+    "S": {
+      "extension_count": 10,
+      "event_rate_per_sec": 1000,
+      "dependency_graph_edges": 200,
+      "policy_complexity_tier": "baseline"
+    },
+    "M": {
+      "extension_count": 100,
+      "event_rate_per_sec": 10000,
+      "dependency_graph_edges": 2000,
+      "policy_complexity_tier": "hardened"
+    },
+    "L": {
+      "extension_count": 1000,
+      "event_rate_per_sec": 50000,
+      "dependency_graph_edges": 20000,
+      "policy_complexity_tier": "stress"
+    }
+  },
+  "family_definitions": [
+    {
+      "family_id": "boot-storm",
+      "purpose": "Extension cold-start and initialization under load"
+    },
+    {
+      "family_id": "capability-churn",
+      "purpose": "Rapid capability grant/revoke cycles and policy pressure"
+    },
+    {
+      "family_id": "mixed-cpu-io-agent-mesh",
+      "purpose": "Combined CPU and I/O workload simulating agent mesh traffic"
+    },
+    {
+      "family_id": "reload-revoke-churn",
+      "purpose": "Hot-reload and revocation while traffic remains continuous"
+    },
+    {
+      "family_id": "adversarial-noise-under-load",
+      "purpose": "Legitimate workload with adversarial extension noise injected"
+    }
+  ],
+  "cases": [
+    {
+      "workload_id": "boot-storm-s",
+      "family_id": "boot-storm",
+      "profile": "S",
+      "dataset_checksum_sha256": "24e2e44871f022393223f42ae0a6409495765923d4488b50107df650421a7ba6",
+      "seed_transcript_sha256": "ee204769ba5fc31846f137d7ee68ae620439774f743973a44e59bd1b6c7aa676",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-boot-storm-s-v1"
+    },
+    {
+      "workload_id": "boot-storm-m",
+      "family_id": "boot-storm",
+      "profile": "M",
+      "dataset_checksum_sha256": "da0042266d6a2a1e5e1d962bed44a682ae030c98b51ccdb884045beafeee90d3",
+      "seed_transcript_sha256": "f8c68e8f74e3abddf53b5e2b42ef75ba4379b1e6a9428a8320506a312923c8ca",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-boot-storm-m-v1"
+    },
+    {
+      "workload_id": "boot-storm-l",
+      "family_id": "boot-storm",
+      "profile": "L",
+      "dataset_checksum_sha256": "fd9d8b80eb23b62652dea26baedbd638f68504e94c56330d931cc9416ef16d62",
+      "seed_transcript_sha256": "1ff91d738eedc377c4df26700195e4c847a34ff659edf54bb3490f506a832e8b",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-boot-storm-l-v1"
+    },
+    {
+      "workload_id": "capability-churn-s",
+      "family_id": "capability-churn",
+      "profile": "S",
+      "dataset_checksum_sha256": "7f530d0ea5c5d76659cad97361f3b9d96833de4decc4423875dd1b9a02e5d266",
+      "seed_transcript_sha256": "f4a625da6ad7dab40869764fac294831bebb396433249c3e3391f0a6824b27ef",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-capability-churn-s-v1"
+    },
+    {
+      "workload_id": "capability-churn-m",
+      "family_id": "capability-churn",
+      "profile": "M",
+      "dataset_checksum_sha256": "b0aaeed37ab92ce45883c991c4f4671d289bc3d9bfb28251a9398492705f5575",
+      "seed_transcript_sha256": "e62799ec5e32e318068a016f5ae3a9e379df98b5f1ae4ae8593174d67c2924c3",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-capability-churn-m-v1"
+    },
+    {
+      "workload_id": "capability-churn-l",
+      "family_id": "capability-churn",
+      "profile": "L",
+      "dataset_checksum_sha256": "312382922a0b9255bc453912fa2b35ebdd734894f4ad907b66a0ce48366ac244",
+      "seed_transcript_sha256": "86747764efd008ff17daeecf372873d0437813ef594052ecc86c86a4afe22ae8",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-capability-churn-l-v1"
+    },
+    {
+      "workload_id": "mixed-cpu-io-agent-mesh-s",
+      "family_id": "mixed-cpu-io-agent-mesh",
+      "profile": "S",
+      "dataset_checksum_sha256": "9626605986f3ec7efc1af55184677fbaf8015d0fdfa213804560fe47f88b72f9",
+      "seed_transcript_sha256": "52076d9367369c974e46da03f7bceb3fbdd4fa5ddb4da0944e60f2c1349f7a3d",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-mixed-cpu-io-agent-mesh-s-v1"
+    },
+    {
+      "workload_id": "mixed-cpu-io-agent-mesh-m",
+      "family_id": "mixed-cpu-io-agent-mesh",
+      "profile": "M",
+      "dataset_checksum_sha256": "72eae83e6445245cb2f6c265b0a4d2704589474b4c2b13a680389806c65c2143",
+      "seed_transcript_sha256": "4372f1f514bb790a2489e4abd4cb9d98d89740cd12e4167f3347e71a4c615842",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-mixed-cpu-io-agent-mesh-m-v1"
+    },
+    {
+      "workload_id": "mixed-cpu-io-agent-mesh-l",
+      "family_id": "mixed-cpu-io-agent-mesh",
+      "profile": "L",
+      "dataset_checksum_sha256": "16edc14ebf071e95880a648b5ace5e2c355fa7cf6b269bde7b7aca775f80388b",
+      "seed_transcript_sha256": "40daefaf907755853fba4841cf8dd72f963aff437b9b8d1a7644cebe172c7572",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-mixed-cpu-io-agent-mesh-l-v1"
+    },
+    {
+      "workload_id": "reload-revoke-churn-s",
+      "family_id": "reload-revoke-churn",
+      "profile": "S",
+      "dataset_checksum_sha256": "7b01d9c21cce19fddeb1b523e5d68c3483f410ef5444f4cb348c86b95fb8543c",
+      "seed_transcript_sha256": "3917671379d09653a93bc96ee0230f318063fae22c96314c3fb8d3a6dcd4c68d",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-reload-revoke-churn-s-v1"
+    },
+    {
+      "workload_id": "reload-revoke-churn-m",
+      "family_id": "reload-revoke-churn",
+      "profile": "M",
+      "dataset_checksum_sha256": "69d18c3778dbbcf101cb694af58b3c6ad73e324e382aad78e43d1e90328498bb",
+      "seed_transcript_sha256": "2add5e7163e0b9061c06f25b847e4ed2e1c81ef0ba942327e690f1c04be52bbc",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-reload-revoke-churn-m-v1"
+    },
+    {
+      "workload_id": "reload-revoke-churn-l",
+      "family_id": "reload-revoke-churn",
+      "profile": "L",
+      "dataset_checksum_sha256": "2e3ff532816a1108d2a10e8fcfee7a9f163e70ced842f98c5d17eb79ad23a563",
+      "seed_transcript_sha256": "8ec4e765debf80bdeb9b568cfd9d5c0d483be2bdd8632b2aef9b8370fe01f15f",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-reload-revoke-churn-l-v1"
+    },
+    {
+      "workload_id": "adversarial-noise-under-load-s",
+      "family_id": "adversarial-noise-under-load",
+      "profile": "S",
+      "dataset_checksum_sha256": "e5abbbb10d220a3bddb5dd8ee926b7a67b4f9e7f6b91bfee06d36a8ae7431165",
+      "seed_transcript_sha256": "329fd61eb739817011dbde76e1b32f694a98926aad72ae2acf96a153b97d7f23",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-adversarial-noise-under-load-s-v1"
+    },
+    {
+      "workload_id": "adversarial-noise-under-load-m",
+      "family_id": "adversarial-noise-under-load",
+      "profile": "M",
+      "dataset_checksum_sha256": "3e7776c312e5086be5ebf86337eb18ddff50dd089a4d5f6cb3abb0a7758fd6a5",
+      "seed_transcript_sha256": "3b848fc86b1e336aa83d2949111121532f0d228579bc4e8b48b3220993f3d539",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-adversarial-noise-under-load-m-v1"
+    },
+    {
+      "workload_id": "adversarial-noise-under-load-l",
+      "family_id": "adversarial-noise-under-load",
+      "profile": "L",
+      "dataset_checksum_sha256": "f2131456c6c08babb16132c7f094b6498fc68c42643049fb2dcc745c46407cff",
+      "seed_transcript_sha256": "dc47482ecb86558a832e09bec54e53f75beedbb6f04cfe3cf2002657d252458d",
+      "baseline_engine": "node_lts",
+      "comparison_targets": ["node_lts", "bun_stable"],
+      "candidate_engine": "franken_engine_main",
+      "golden_output_id": "golden-adversarial-noise-under-load-l-v1"
+    }
+  ]
+}

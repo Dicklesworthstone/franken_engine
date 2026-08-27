@@ -1,0 +1,82 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status-contract.v1",
+  "bead_id": "bd-ua5n2.6",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.2",
+    "bd-ua5n2.3",
+    "bd-ua5n2.4",
+    "bd-ua5n2.5"
+  ],
+  "script": "scripts/swarm_proof_broker_operator_status.sh",
+  "operator_docs": "docs/SWARM_PROOF_BROKER_OPERATOR_STATUS.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_broker_operator_status/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_broker_operator_status_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "frankentui_panel_contract_schema_version": "franken-engine.swarm-proof-broker-frankentui-panel-contract.v1",
+  "summary_counts": [
+    "pending_request_count",
+    "reusable_verdict_count",
+    "reuse_refusal_count",
+    "stale_proof_count",
+    "contaminated_proof_count",
+    "fairness_debt_total",
+    "coalesced_count"
+  ],
+  "row_statuses": [
+    "pending",
+    "reuse_allowed",
+    "reuse_refused",
+    "stale_refused",
+    "contaminated_refused",
+    "coalesced",
+    "fairness_debt_visible",
+    "fairness_clear"
+  ],
+  "required_outputs": [
+    "operator_status_bundle.json",
+    "frankentui_panel_contract.json",
+    "operator_status_rows.jsonl",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_row_fields": [
+    "row_id",
+    "kind",
+    "status",
+    "command",
+    "source_evidence",
+    "recommended_next_action"
+  ],
+  "fail_closed_reasons": [
+    "panel_claims_live_mutation_authority",
+    "panel_hides_stale_evidence",
+    "panel_omits_refusal_reasons"
+  ],
+  "frankentui_boundary": {
+    "renderer_repo": "/dp/frankentui",
+    "renderer_boundary": "frankentui",
+    "local_rich_renderer_implemented": false,
+    "mutation_authority": false,
+    "live_mutation_authority": false
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_broker_operator_status_contract_v1.json scripts/testdata/swarm_proof_broker_operator_status/cases.json",
+    "bash -n scripts/swarm_proof_broker_operator_status.sh",
+    "bash -n scripts/e2e/swarm_proof_broker_operator_status_smoke.sh",
+    "bash scripts/e2e/swarm_proof_broker_operator_status_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_broker_operator_status_smoke.sh selftest",
+    "git diff --check -- docs/swarm_proof_broker_operator_status_contract_v1.json docs/SWARM_PROOF_BROKER_OPERATOR_STATUS.md scripts/swarm_proof_broker_operator_status.sh scripts/testdata/swarm_proof_broker_operator_status/cases.json scripts/e2e/swarm_proof_broker_operator_status_smoke.sh"
+  ]
+}

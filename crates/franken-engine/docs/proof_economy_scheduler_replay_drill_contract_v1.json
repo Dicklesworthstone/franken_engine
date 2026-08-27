@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.proof-economy-scheduler-replay-drill-contract.v1",
+  "output_schema": "franken-engine.proof-economy-scheduler-replay-drill-report.v1",
+  "required_artifacts": [
+    "scheduler_replay_drill_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.proof-economy-replay-trace.v1",
+    "franken-engine.proof-economy-policy-scorecard.v1",
+    "franken-engine.proof-economy-counterfactual-replay-report.v1",
+    "franken-engine.proof-queue-brownout-report.v1",
+    "franken-engine.proof-economy-operator-what-if-report.v1"
+  ],
+  "required_truth_gate_rejections": [
+    "bare_heavy_cargo_example",
+    "missing_artifact_reference",
+    "missing_fair_share_field",
+    "missing_brownout_or_fair_share_dashboard_field"
+  ],
+  "determinism": {
+    "execution_mode": "fixture-only",
+    "hash": "drill_id is sha256 over canonical scheduler replay drill core JSON"
+  },
+  "fixture_contract": {
+    "minimum_agents": 20,
+    "priority_mix": [
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "requires_reservations": true,
+    "requires_proof_cache_receipts": true,
+    "requires_rch_resource_signals": true
+  }
+}

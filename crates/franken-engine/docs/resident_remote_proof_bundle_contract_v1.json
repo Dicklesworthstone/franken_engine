@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.resident-remote-proof-bundle-contract.v1",
+  "bundle_report_schema": "franken-engine.resident-remote-proof-bundle.v1",
+  "run_manifest_schema": "franken-engine.resident-remote-proof-run-manifest.v1",
+  "phase_manifest_schema": "franken-engine.resident-remote-proof-phase-manifest.v1",
+  "phase_receipts_schema": "franken-engine.resident-remote-proof-phase-receipts.v1",
+  "required_inputs": [
+    "--agent-id",
+    "--bead-id",
+    "--phase-manifest-json"
+  ],
+  "optional_inputs": [
+    "--phase-receipts-json",
+    "--output-dir"
+  ],
+  "required_manifest_fields": [
+    "bundle_id",
+    "expected_worker_id",
+    "expected_target_dir",
+    "phases[].phase",
+    "phases[].command_id",
+    "phases[].requested_command"
+  ],
+  "required_artifacts": [
+    "bundle_report.json",
+    "run_manifest.json",
+    "commands.txt",
+    "events.jsonl",
+    "summary.md",
+    "phase_logs/*.stdout.log",
+    "phase_logs/*.stderr.log"
+  ],
+  "decisions": {
+    "pass": {
+      "exit_code": 0,
+      "meaning": "All declared phases stayed on one worker and one CARGO_TARGET_DIR, exited zero, and produced completion markers."
+    },
+    "fail_closed": {
+      "exit_code": 42,
+      "meaning": "The bundle is not safe to reuse or promote because command wrapping, receipt coverage, worker identity, target-dir identity, local fallback rejection, exit status, or completion markers failed."
+    }
+  },
+  "fail_closed_reasons": [
+    "one or more phases are not rch exec -- env CARGO_TARGET_DIR wrapped",
+    "one or more manifest phases did not produce receipts",
+    "phase receipts show worker identity drift",
+    "phase receipts show CARGO_TARGET_DIR drift",
+    "rch local fallback marker detected in phase output",
+    "one or more phases exited nonzero",
+    "one or more phases are missing completion markers"
+  ],
+  "heavy_command_policy": {
+    "required_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+    "allowed_cargo_subcommands": [
+      "check",
+      "test",
+      "clippy"
+    ],
+    "local_fallback": "fail_closed"
+  },
+  "determinism": {
+    "hashes": [
+      "hash_basis.input_hash",
+      "hash_basis.bundle_hash"
+    ],
+    "sorting": "Phases and receipts are normalized by phase and command_id before hashing.",
+    "live_queries": "The smoke path uses preserved receipts and does not query live rch state."
+  }
+}

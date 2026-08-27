@@ -1,0 +1,130 @@
+{
+  "schema_version": "frx.incremental-adoption-controls.v1",
+  "bead_id": "bd-mjh3.7.4",
+  "generated_by": "bd-mjh3.7.4",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "track": {
+    "id": "FRX-07.4",
+    "name": "Incremental Adoption Controls, Canarying, and Migration UX"
+  },
+  "rollout_axes": [
+    "file",
+    "component",
+    "route",
+    "policy"
+  ],
+  "policy_toggles": {
+    "force_fallback": {
+      "required": true,
+      "default": false,
+      "description": "Immediately routes targeted class/axis to conservative compatibility mode.",
+      "fallback_route": "compatibility_fallback"
+    },
+    "policy_opt_out": {
+      "required": true,
+      "default": false,
+      "description": "Policy-level opt-out for unstable compatibility classes.",
+      "fallback_route": "compatibility_fallback"
+    },
+    "denylist_opt_out": {
+      "required": true,
+      "default": false,
+      "description": "Temporary denylist for stacks under active remediation.",
+      "fallback_route": "deterministic_safe_mode"
+    },
+    "canary_pause": {
+      "required": true,
+      "default": false,
+      "description": "Freezes rollout progression while preserving canary telemetry collection.",
+      "fallback_route": "deterministic_safe_mode"
+    }
+  },
+  "canary_flow": {
+    "stages": [
+      "shadow",
+      "canary",
+      "ramp",
+      "active"
+    ],
+    "allowed_transitions": [
+      {
+        "from": "shadow",
+        "to": "canary",
+        "kind": "promote"
+      },
+      {
+        "from": "canary",
+        "to": "ramp",
+        "kind": "promote"
+      },
+      {
+        "from": "ramp",
+        "to": "active",
+        "kind": "promote"
+      },
+      {
+        "from": "canary",
+        "to": "shadow",
+        "kind": "rollback"
+      },
+      {
+        "from": "ramp",
+        "to": "canary",
+        "kind": "rollback"
+      },
+      {
+        "from": "active",
+        "to": "canary",
+        "kind": "rollback"
+      }
+    ]
+  },
+  "migration_diagnostics": [
+    {
+      "diagnostic_code": "FRX-MIG-0001",
+      "compatibility_class": "state_lib_async_selector",
+      "fallback_route": "compatibility_fallback",
+      "remediation_id": "remediate-recoil-async-selector-boundary",
+      "remediation_summary": "Disable async selector fusion and isolate boundary updates until deterministic ordering is restored.",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.5"
+    },
+    {
+      "diagnostic_code": "FRX-MIG-0002",
+      "compatibility_class": "routing_prefetch_hydration_race",
+      "fallback_route": "deterministic_safe_mode",
+      "remediation_id": "remediate-react-router-prefetch-handoff",
+      "remediation_summary": "Pin lazy-route prefetch handoff to deterministic hydration checkpoint sequencing.",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.5"
+    },
+    {
+      "diagnostic_code": "FRX-MIG-0003",
+      "compatibility_class": "data_cache_optimistic_eviction",
+      "fallback_route": "compatibility_fallback",
+      "remediation_id": "remediate-apollo-optimistic-eviction-order",
+      "remediation_summary": "Serialize optimistic eviction invalidations under retry mode to restore stable order.",
+      "owner_lane": "frx-toolchain-lane",
+      "target_milestone": "FRX-07.5"
+    }
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "decision_path",
+    "seed",
+    "timing_us",
+    "outcome",
+    "error_code"
+  ],
+  "operator_verification": [
+    "./scripts/run_frx_incremental_adoption_controls_suite.sh ci",
+    "./scripts/e2e/frx_incremental_adoption_controls_replay.sh ci",
+    "jq empty docs/frx_incremental_adoption_controls_v1.json"
+  ]
+}

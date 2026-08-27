@@ -1,0 +1,42 @@
+{
+  "schema_version": "frx.milestone-release-test-evidence-integrator.contract.v1",
+  "bead_id": "bd-mjh3.20.6",
+  "generated_by": "bd-mjh3.20.6",
+  "required_signal_sources": [
+    "unit_depth_gate",
+    "end_to_end_scenario_matrix",
+    "test_logging_schema",
+    "flake_quarantine_workflow",
+    "proof_carrying_artifact_gate"
+  ],
+  "cut_line_quality_thresholds_millionths": {
+    "C0": 900000,
+    "C1": 930000,
+    "C2": 940000,
+    "C3": 950000,
+    "C4": 965000,
+    "C5": 975000
+  },
+  "staleness_policy": {
+    "max_signal_age_ns": 3600000000000,
+    "min_schema_major": 1,
+    "require_signed_artifacts": true,
+    "max_flake_burden_millionths": 120000
+  },
+  "release_workflow": {
+    "auto_apply_to_release_checklist": true,
+    "fail_closed_on_missing_signals": true,
+    "signed_link_required": true
+  },
+  "queue_risk_contract": {
+    "emit_machine_readable_summary": true,
+    "risk_field": "queue_risk_millionths"
+  },
+  "operator_verification": [
+    "./scripts/run_frx_milestone_release_test_evidence_integrator_suite.sh ci",
+    "./scripts/e2e/frx_milestone_release_test_evidence_integrator_replay.sh ci",
+    "cat artifacts/frx_milestone_release_test_evidence_integrator/<timestamp>/run_manifest.json",
+    "cat artifacts/frx_milestone_release_test_evidence_integrator/<timestamp>/events.jsonl",
+    "cat artifacts/frx_milestone_release_test_evidence_integrator/<timestamp>/commands.txt"
+  ]
+}

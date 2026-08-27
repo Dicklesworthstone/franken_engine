@@ -1,0 +1,62 @@
+{
+  "schema_version": "franken-engine.remote-proof-artifact-mirror-contract.v1",
+  "verification_schema": "franken-engine.remote-proof-artifact-mirror-verification.v1",
+  "mirror_manifest_schema": "franken-engine.remote-proof-artifact-mirror-manifest.v1",
+  "retrieval_pack_schema": "franken-engine.remote-proof-retrieval-pack.v1",
+  "required_inputs": [
+    "--bundle-report-json",
+    "--artifact-files-json",
+    "--retrieval-request-json",
+    "--retrieved-files-json"
+  ],
+  "required_artifacts": [
+    "artifact_mirror_manifest.json",
+    "retrieval_pack.json",
+    "retrieval_verification_report.json",
+    "commands.txt",
+    "events.jsonl",
+    "report.md"
+  ],
+  "artifact_metadata_fields": [
+    "path",
+    "sha256",
+    "size_bytes",
+    "roles",
+    "replay_critical"
+  ],
+  "decisions": {
+    "pass": {
+      "exit_code": 0,
+      "meaning": "The retrieved artifact pack exactly matches the minimal content-addressed set for the requested roles."
+    },
+    "fail_closed": {
+      "exit_code": 42,
+      "meaning": "The mirror or retrieved pack is unsafe because of invalid hashes, duplicate address collisions, bundle-surface drift, broad retrieval paths, missing replay-critical artifacts, or undeclared files."
+    }
+  },
+  "fail_closed_reasons": [
+    "artifact metadata is missing a path or valid sha256 content address",
+    "duplicate content-address collision maps multiple logical paths",
+    "artifact manifest includes paths absent from the bundle artifact surface",
+    "retrieval pack includes broad target-dir or wildcard paths",
+    "replay-critical artifact is missing from retrieved pack",
+    "retrieved pack is missing selected artifacts",
+    "retrieved pack contains undeclared files"
+  ],
+  "content_addressing": {
+    "format": "sha256:<64 lowercase hex characters>",
+    "collision_policy": "fail_closed when one content address maps to multiple logical paths"
+  },
+  "retrieval_policy": {
+    "minimal_selection": "Select artifacts whose roles intersect requested_roles, plus replay_critical artifacts.",
+    "broad_paths": "target directories, rch_target paths, and wildcard pulls are rejected."
+  },
+  "determinism": {
+    "hashes": [
+      "hash_basis.input_hash",
+      "hash_basis.verification_hash"
+    ],
+    "sorting": "Artifacts, roles, requested roles, and retrieved paths are normalized before hashing.",
+    "live_queries": "The smoke path is fixture-driven and does not query rch or fetch worker files."
+  }
+}

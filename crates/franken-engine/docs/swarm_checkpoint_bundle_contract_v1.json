@@ -1,0 +1,124 @@
+{
+  "schema_version": "franken-engine.swarm-checkpoint-bundle-contract.v1",
+  "bundle_schema_version": "franken-engine.swarm-checkpoint-bundle.v1",
+  "planned_producer_script": "scripts/swarm_checkpoint_bundle_packer.sh",
+  "required_inputs": [
+    {
+      "name": "swarm_capacity_snapshot",
+      "schema_version": "franken-engine.swarm-capacity-snapshot.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "swarm_capacity_forecast",
+      "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "swarm_admission_budget_plan",
+      "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "remote_proof_archive_pressure_scoreboard",
+      "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "stale_lock_recommendations",
+      "schema_version": "franken-engine.stale-lock-recommendations.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "swarm_lease_exchange_cancellation_salvage_simulation",
+      "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "swarm_starvation_rescue_plan",
+      "schema_version": "franken-engine.swarm-starvation-rescue-plan.v1",
+      "required_for_restore": true
+    },
+    {
+      "name": "swarm_operator_status_report",
+      "schema_version": "franken-engine.swarm-operator-status-report.v1",
+      "required_for_restore": true
+    }
+  ],
+  "optional_inputs": [
+    {
+      "name": "swarm_high_core_scenario_matrix_report",
+      "schema_version": "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+      "trust_behavior": "missing_or_degraded_only"
+    },
+    {
+      "name": "swarm_operator_slo_tuning_advisory",
+      "schema_version": "franken-engine.swarm-operator-slo-tuning-advisory.v1",
+      "trust_behavior": "missing_or_degraded_only"
+    },
+    {
+      "name": "proof_economy_replay_trace",
+      "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+      "trust_behavior": "missing_or_degraded_only"
+    }
+  ],
+  "required_top_level_fields": [
+    "checkpoint_id",
+    "capture_decision",
+    "restore_readiness_hint",
+    "captured_epoch_seconds",
+    "stale_after_seconds",
+    "upstream_evidence",
+    "artifact_ledger",
+    "blockers",
+    "artifact_paths.checkpoint_bundle_json",
+    "artifact_paths.events_jsonl",
+    "artifact_paths.commands_txt",
+    "artifact_paths.summary_md"
+  ],
+  "required_artifact_ledger_entries": [
+    "swarm_capacity_snapshot",
+    "swarm_capacity_forecast",
+    "swarm_admission_budget_plan",
+    "remote_proof_archive_pressure_scoreboard",
+    "stale_lock_recommendations",
+    "swarm_lease_exchange_cancellation_salvage_simulation",
+    "swarm_starvation_rescue_plan",
+    "swarm_operator_status_report"
+  ],
+  "required_artifact_paths": [
+    "artifact_paths.checkpoint_bundle_json",
+    "artifact_paths.events_jsonl",
+    "artifact_paths.commands_txt",
+    "artifact_paths.summary_md"
+  ],
+  "capture_decisions": [
+    "captured",
+    "captured_degraded",
+    "fail_closed"
+  ],
+  "restore_readiness_hints": [
+    "candidate",
+    "manual_review",
+    "blocked"
+  ],
+  "restore_blocking_rules": [
+    "missing or invalid required evidence must fail closed",
+    "required evidence older than the configured freshness window must fail closed",
+    "contradictory ownership or reservation evidence must fail closed",
+    "local-fallback heavy-proof evidence must fail closed",
+    "manual-review salvage pressure must keep restore readiness at manual_review or blocked",
+    "missing artifact links for required evidence must fail closed"
+  ],
+  "non_goals": [
+    "no live br mutation",
+    "no live Agent Mail mutation",
+    "no remote worker mutation",
+    "no automatic reopen or ownership transfer",
+    "no cargo execution in the contract-only smoke surface"
+  ],
+  "notes": [
+    "This contract-only bead defines the future bundle shape before the packer exists.",
+    "Optional evidence may enrich operator context but must never upgrade trust when absent or degraded.",
+    "The later restore planner bead is responsible for emitting the final restore decision."
+  ]
+}

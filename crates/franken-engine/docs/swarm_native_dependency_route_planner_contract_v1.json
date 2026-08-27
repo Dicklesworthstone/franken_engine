@@ -1,0 +1,96 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-route-planner-contract.v1",
+  "bead_id": "bd-sqm14.4",
+  "parent_bead_id": "bd-sqm14",
+  "depends_on": [
+    "bd-sqm14.1",
+    "bd-sqm14.2",
+    "bd-sqm14.3"
+  ],
+  "requirement_map": "docs/swarm_native_dependency_requirement_map_v1.json",
+  "worker_probe_contract": "docs/swarm_native_dependency_worker_probe_contract_v1.json",
+  "script": "scripts/swarm_native_dependency_route_planner.sh",
+  "smoke_script": "scripts/e2e/swarm_native_dependency_route_planner_smoke.sh",
+  "fixture_bundle": "scripts/testdata/swarm_native_dependency_route_planner/cases.json",
+  "output_schema_version": "franken-engine.native-dependency-routing-advisory.v1",
+  "source_schema_version": "franken-engine.native-dependency-routing-advisory-sources.v1",
+  "required_inputs": [
+    "native_requirement_bundle_json",
+    "worker_probe_snapshots_json"
+  ],
+  "advisory_fields": [
+    "routing_advisory_id",
+    "truth_state",
+    "decision",
+    "required_dependency_ids",
+    "compatible_worker_ids",
+    "incompatible_workers",
+    "fail_closed_workers",
+    "retry_advice",
+    "reason_codes",
+    "source_artifacts"
+  ],
+  "truth_states": [
+    "confirmed",
+    "blocked",
+    "unknown",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "blocked",
+    "fail_closed"
+  ],
+  "exit_codes": {
+    "pass": 0,
+    "blocked": 75,
+    "fail_closed": 42
+  },
+  "required_reason_codes": [
+    "compatible_worker_available",
+    "incompatible_worker_missing_native_dependency",
+    "hdf5_missing",
+    "no_compatible_workers",
+    "stale_worker_probe",
+    "contradictory_pkg_config_header_evidence",
+    "probe_unavailable",
+    "local_fallback_contaminated",
+    "missing_required_native_evidence",
+    "requirement_bundle_fail_closed"
+  ],
+  "routing_rules": [
+    "a worker is compatible only when every required dependency is classified present",
+    "workers missing a required native dependency are incompatible and produce blocked advice when no compatible worker exists",
+    "stale, contradictory, probe-unavailable, unknown, and contaminated worker evidence is fail-closed unless another compatible worker is selected",
+    "local fallback evidence must never be promoted to remote validation proof",
+    "retry advice prefers the first compatible worker from the candidate set and otherwise reports a blocker"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "installs_remote_packages": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "proof_cases": [
+    "present_hdf5_compatible_route",
+    "missing_hdf5_worker_rejected",
+    "stale_worker_evidence_fail_closed",
+    "contradictory_probe_fail_closed",
+    "all_incompatible_workers_blocked",
+    "local_fallback_contaminated_fail_closed"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_native_dependency_route_planner_contract_v1.json",
+    "jq empty scripts/testdata/swarm_native_dependency_route_planner/cases.json",
+    "bash -n scripts/swarm_native_dependency_route_planner.sh",
+    "bash -n scripts/e2e/swarm_native_dependency_route_planner_smoke.sh",
+    "bash scripts/e2e/swarm_native_dependency_route_planner_smoke.sh check",
+    "bash scripts/e2e/swarm_native_dependency_route_planner_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_native_dependency_route_planner.sh docs/swarm_native_dependency_route_planner_contract_v1.json scripts/e2e/swarm_native_dependency_route_planner_smoke.sh scripts/testdata/swarm_native_dependency_route_planner/cases.json"
+  ]
+}

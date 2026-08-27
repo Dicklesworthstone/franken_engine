@@ -1,0 +1,62 @@
+{
+  "schema_version": "frx.track-f.toolchain-ecosystem-adoption-sprint.contract.v1",
+  "generated_by": "bd-mjh3.7.1",
+  "generated_at_utc": "2026-02-26T00:00:00Z",
+  "primary_bead": "bd-mjh3.7.1",
+  "track": {
+    "id": "FRX-07.1",
+    "name": "Toolchain/Ecosystem/Adoption Sprint"
+  },
+  "scope": {
+    "requires_track_b_baseline": true,
+    "requires_track_c_baseline": true,
+    "execution_window": "alpha_to_ga"
+  },
+  "outputs": {
+    "integration_readiness_dashboard": {
+      "required_fields": [
+        "profile_id",
+        "bundler",
+        "compatibility_class",
+        "confidence_grade",
+        "fallback_route"
+      ]
+    },
+    "pilot_canary_evidence": {
+      "required_fields": [
+        "scenario_id",
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "outcome",
+        "fallback_reason"
+      ]
+    },
+    "regression_triage": {
+      "required_fields": [
+        "regression_id",
+        "compatibility_class",
+        "remediation_id",
+        "owner_lane",
+        "status"
+      ]
+    }
+  },
+  "activation_gate": {
+    "block_on_missing_bundler_adapter_coverage": true,
+    "block_on_missing_source_map_fidelity_evidence": true,
+    "block_on_untriaged_compatibility_regressions": true,
+    "block_on_missing_pilot_canary_bundle": true
+  },
+  "failure_policy": {
+    "mode": "fail_closed",
+    "fallback_mode": "conservative_compatibility",
+    "error_code": "FE-FRX-07-1-GATE-0001",
+    "promotion_block_on_repeated_class_regressions": true
+  },
+  "operator_verification": [
+    "./scripts/run_frx_track_f_toolchain_ecosystem_adoption_sprint_suite.sh ci",
+    "./scripts/e2e/frx_track_f_toolchain_ecosystem_adoption_sprint_replay.sh",
+    "jq empty docs/frx_track_f_toolchain_ecosystem_adoption_sprint_v1.json"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": "franken-engine.swarm-high-core-scenario-matrix-contract.v1",
+  "contract_id": "swarm-high-core-scenario-matrix-v1",
+  "script": "scripts/swarm_high_core_slo_scenario_matrix.sh",
+  "smoke_script": "scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh",
+  "matrix_fixture_json": "scripts/testdata/swarm_high_core_slo/scenario_matrix.json",
+  "checked_in_golden": "scripts/testdata/goldens/swarm_high_core_scenario_matrix.golden",
+  "matrix_schema_version": "franken-engine.swarm-high-core-scenario-matrix.v1",
+  "report_schema_version": "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+  "required_scenario_classes": [
+    "healthy_64plus_admission",
+    "disk_pressure_memory_headroom",
+    "degraded_worker_pool_local_fallback",
+    "manual_confirmation_lock_pressure",
+    "proof_cache_hit",
+    "proof_cache_stale_miss",
+    "chaos_recovery_saturated_queue"
+  ],
+  "golden_policy": {
+    "comparison_mode": "exact_scrubbed",
+    "update_goldens_review_command": "UPDATE_GOLDENS=1 bash scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh selftest",
+    "review_diff_checklist": [
+      "Review the diff for scripts/testdata/goldens/swarm_high_core_scenario_matrix.golden before accepting any update.",
+      "Reject any unexpected decision or traceability drift unless it is backed by an intentional contract change.",
+      "Confirm source revisions, snapshot ids, parent snapshot ids, and artifact paths remain scrubbed placeholders.",
+      "Reject any new bare cargo or local-fallback command lines unless the scenario explicitly models fail-closed degraded-worker behavior."
+    ],
+    "scrubbed_fields": [
+      "source_revision",
+      "snapshot_id",
+      "parent_snapshot_id",
+      "artifact_paths"
+    ]
+  },
+  "truth_constraints": [
+    "The scenario matrix is fixture-fed only and must not run live stress suites, live tail-latency control planes, or live chaos verification workers.",
+    "Representative degraded-worker cases must fail closed when high-core evidence is only local or otherwise non-rch-traceable.",
+    "Scrubbed goldens must remain platform-independent and must not preserve temp roots, live output directories, or host-specific worker aliases.",
+    "Golden updates require explicit human review through the documented UPDATE_GOLDENS command and diff checklist."
+  ]
+}

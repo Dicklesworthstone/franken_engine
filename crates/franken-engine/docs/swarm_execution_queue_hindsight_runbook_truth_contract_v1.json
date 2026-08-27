@@ -1,0 +1,63 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-hindsight-runbook-truth.v1",
+  "contract_id": "swarm-execution-queue-hindsight-runbook-truth-v1",
+  "bead_id": "bd-nt8fa",
+  "parent_bead_id": "bd-d5daf",
+  "runbook": "docs/SWARM_CTRL_XIII_OPERATOR_RUNBOOK.md",
+  "truth_gate": "scripts/e2e/swarm_ctrl_xiii_runbook_truth_gate.sh",
+  "no_mock_drill": "scripts/e2e/swarm_execution_queue_hindsight_no_mock_drill.sh",
+  "required_scripts": [
+    "scripts/swarm_execution_queue_hindsight_normalizer.sh",
+    "scripts/swarm_execution_queue_fidelity_scorer.sh",
+    "scripts/swarm_execution_queue_counterfactual_planner.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_execution_queue_hindsight_no_mock_drill.sh"
+  ],
+  "required_artifact_references": [
+    "hindsight/hindsight_report.json",
+    "hindsight/hindsight_input.json",
+    "hindsight/evidence_ledger.json",
+    "hindsight/counterfactual_candidates.json",
+    "fidelity/fidelity_score_receipt.json",
+    "fidelity/drift_ledger.json",
+    "counterfactual/counterfactual_backtest_report.json",
+    "counterfactual/tuning_plan.json",
+    "counterfactual/frontier.json",
+    "operator-status/status.json",
+    "operator-status/report.md"
+  ],
+  "required_runbook_text": [
+    "advisory-only",
+    "does not change the active queue",
+    "does not apply retuning automatically",
+    "reject local fallback proof evidence",
+    "owner recency contradiction",
+    "checkpoint restore fail-closed",
+    "proof brownout misprediction",
+    "counterfactual candidate disagreement"
+  ],
+  "covered_cases": [
+    "healthy",
+    "owner_recency_contradiction",
+    "checkpoint_restore_fail_closed",
+    "proof_brownout_misprediction",
+    "counterfactual_candidate_disagreement"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_remote_workers": false,
+    "promotes_local_fallback_proof": false
+  },
+  "validation_commands": [
+    "bash -n scripts/e2e/swarm_execution_queue_hindsight_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_ctrl_xiii_runbook_truth_gate.sh",
+    "bash scripts/e2e/swarm_ctrl_xiii_runbook_truth_gate.sh check",
+    "bash scripts/e2e/swarm_ctrl_xiii_runbook_truth_gate.sh selftest",
+    "bash scripts/e2e/swarm_execution_queue_hindsight_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_execution_queue_hindsight_no_mock_drill.sh selftest",
+    "jq empty docs/swarm_execution_queue_hindsight_runbook_truth_contract_v1.json"
+  ]
+}

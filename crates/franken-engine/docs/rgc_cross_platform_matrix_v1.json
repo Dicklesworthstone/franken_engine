@@ -1,0 +1,163 @@
+{
+  "schema_version": "franken-engine.rgc-cross-platform-matrix.v1",
+  "contract_version": "1.1.3",
+  "bead_id": "bd-cixqu.11.4",
+  "policy_id": "policy-rgc-cross-platform-matrix-v1",
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "target_id",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "matrix_target_deltas.jsonl",
+    "matrix_summary.json"
+  ],
+  "required_readme_fragments": [
+    "## RGC Cross-Platform Matrix Gate",
+    "./scripts/run_rgc_cross_platform_matrix_gate.sh ci",
+    "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix",
+    "docs/rgc_cross_platform_matrix_v1.json",
+    "artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json"
+  ],
+  "targets": [
+    {
+      "target_id": "linux-x64",
+      "os": "linux",
+      "arch": "x64",
+      "tier": "ga",
+      "required": true,
+      "path_style": "posix",
+      "line_endings": "lf",
+      "manifest_env_var": "RGC_CROSS_PLATFORM_LINUX_X64_MANIFEST",
+      "replay_command": "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+    },
+    {
+      "target_id": "linux-arm64",
+      "os": "linux",
+      "arch": "arm64",
+      "tier": "ga",
+      "required": true,
+      "path_style": "posix",
+      "line_endings": "lf",
+      "manifest_env_var": "RGC_CROSS_PLATFORM_LINUX_ARM64_MANIFEST",
+      "replay_command": "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+    },
+    {
+      "target_id": "macos-x64",
+      "os": "macos",
+      "arch": "x64",
+      "tier": "ga",
+      "required": true,
+      "path_style": "posix",
+      "line_endings": "lf",
+      "manifest_env_var": "RGC_CROSS_PLATFORM_MACOS_X64_MANIFEST",
+      "replay_command": "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+    },
+    {
+      "target_id": "macos-arm64",
+      "os": "macos",
+      "arch": "arm64",
+      "tier": "ga",
+      "required": true,
+      "path_style": "posix",
+      "line_endings": "lf",
+      "manifest_env_var": "RGC_CROSS_PLATFORM_MACOS_ARM64_MANIFEST",
+      "replay_command": "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+    },
+    {
+      "target_id": "windows-x64",
+      "os": "windows",
+      "arch": "x64",
+      "tier": "ga",
+      "required": true,
+      "path_style": "windows",
+      "line_endings": "crlf",
+      "manifest_env_var": "RGC_CROSS_PLATFORM_WINDOWS_X64_MANIFEST",
+      "replay_command": "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+    },
+    {
+      "target_id": "windows-arm64",
+      "os": "windows",
+      "arch": "arm64",
+      "tier": "candidate",
+      "required": false,
+      "path_style": "windows",
+      "line_endings": "crlf",
+      "manifest_env_var": "RGC_CROSS_PLATFORM_WINDOWS_ARM64_MANIFEST",
+      "replay_command": "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+    }
+  ],
+  "drift_classes": [
+    {
+      "class_id": "none",
+      "severity": "info",
+      "description": "Outcome, error code, and digest signatures match baseline target."
+    },
+    {
+      "class_id": "artifact_only_drift",
+      "severity": "warning",
+      "description": "Digest drift explained by normalized runtime+CLI equivalence."
+    },
+    {
+      "class_id": "toolchain_fingerprint_delta",
+      "severity": "warning",
+      "description": "Digest drift explained by target toolchain fingerprint difference."
+    },
+    {
+      "class_id": "workflow_behavior_drift",
+      "severity": "critical",
+      "description": "Outcome/error divergence indicates cross-platform behavior mismatch."
+    },
+    {
+      "class_id": "unexplained_digest_drift",
+      "severity": "critical",
+      "description": "Digest mismatch with no normalization/toolchain explanation."
+    },
+    {
+      "class_id": "missing_target_input",
+      "severity": "critical",
+      "description": "Required per-target manifest input was not provided."
+    },
+    {
+      "class_id": "candidate_target_input_missing",
+      "severity": "warning",
+      "description": "Candidate-tier target manifest input was not provided, so matrix evaluation remains informative but non-blocking."
+    },
+    {
+      "class_id": "missing_baseline_input",
+      "severity": "critical",
+      "description": "Baseline linux-x64 manifest missing, so pairwise comparison is invalid."
+    }
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_cross_platform_matrix_gate.sh",
+    "replay_wrapper": "scripts/e2e/rgc_cross_platform_matrix_replay.sh",
+    "strict_mode": "mode=ci or mode=matrix; RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1 remains accepted for explicit strict requests",
+    "manifest_schema_version": "franken-engine.rgc-cross-platform-matrix.run-manifest.v1",
+    "manifest_set_root_env": "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT",
+    "auto_discover_toggle_env": "RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS",
+    "auto_discover_mode": "scan the latest complete manifest set when per-target env vars are absent",
+    "manifest_filename_template": "<target-id>.run_manifest.json",
+    "matrix_input_sources": [
+      "env",
+      "auto_discovered",
+      "missing"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_cross_platform_matrix_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cross_platform_matrix_verify cargo test -p frankenengine-engine --test rgc_cross_platform_matrix",
+    "./scripts/run_rgc_cross_platform_matrix_gate.sh check",
+    "./scripts/run_rgc_cross_platform_matrix_gate.sh ci",
+    "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT=artifacts/rgc_cross_platform_matrix_inputs ./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix",
+    "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
+  ]
+}

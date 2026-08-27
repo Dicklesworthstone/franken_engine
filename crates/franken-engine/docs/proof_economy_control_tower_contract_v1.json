@@ -1,0 +1,68 @@
+{
+  "schema_version": "franken-engine.proof-economy-control-tower-contract.v1",
+  "bead_id": "bd-i36b4",
+  "component": "proof_economy_control_tower",
+  "purpose": "Expose the integrated proof-economy workflow through a documented script operator entry point.",
+  "operator_entrypoint": "scripts/proof_economy_control_tower.sh",
+  "smoke_script": "scripts/e2e/proof_economy_control_tower_smoke.sh",
+  "fixtures": "scripts/testdata/proof_economy_control_tower/cases.json",
+  "output_schema": "franken-engine.proof-economy-control-tower-report.v1",
+  "component_inputs": [
+    {
+      "argument": "--proof-reuse-admission-json",
+      "schema_version": "franken-engine.proof-reuse-admission-bundle.v1"
+    },
+    {
+      "argument": "--tail-latency-rescue-json",
+      "schema_version": "franken-engine.proof-queue-tail-latency-rescue-receipt.v1"
+    },
+    {
+      "argument": "--agent-run-evidence-index-json",
+      "schema_version": "franken-engine.agent-run-evidence-index.v1"
+    }
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "fail_closed"
+  ],
+  "required_artifacts": [
+    "proof_economy_control_tower_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_fixture_cases": [
+    "pass_all_components",
+    "degraded_refresh_advisory",
+    "fail_closed_component"
+  ],
+  "help_surface_required_terms": [
+    "Compose proof-economy control tower evidence for operator review.",
+    "--proof-reuse-admission-json",
+    "--tail-latency-rescue-json",
+    "--agent-run-evidence-index-json",
+    "read-only"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "queries_live_agent_mail": false,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "validation_commands": [
+    "jq empty docs/proof_economy_control_tower_contract_v1.json scripts/testdata/proof_economy_control_tower/cases.json",
+    "bash -n scripts/proof_economy_control_tower.sh scripts/e2e/proof_economy_control_tower_smoke.sh",
+    "shellcheck -x scripts/proof_economy_control_tower.sh scripts/e2e/proof_economy_control_tower_smoke.sh",
+    "bash scripts/e2e/proof_economy_control_tower_smoke.sh check",
+    "bash scripts/e2e/proof_economy_control_tower_smoke.sh selftest",
+    "git diff --check -- scripts/proof_economy_control_tower.sh scripts/e2e/proof_economy_control_tower_smoke.sh scripts/testdata/proof_economy_control_tower/cases.json docs/proof_economy_control_tower_contract_v1.json docs/PROOF_ECONOMY_CONTROL_TOWER.md"
+  ]
+}

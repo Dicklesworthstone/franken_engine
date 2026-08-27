@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.rgc-runtime-semantics-verification-pack.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.11.7",
+  "policy_id": "policy-rgc-runtime-semantics-verification-pack-v1",
+  "required_semantics_classes": [
+    "arithmetic_control_flow",
+    "object_closure_semantics",
+    "async_error_path"
+  ],
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "scenario_id",
+    "semantics_class",
+    "path_type",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "runtime_semantics_verification_report.json",
+    "step_logs/step_*.log"
+  ],
+  "test_vectors_source": "docs/rgc_runtime_semantics_verification_vectors_v1.json",
+  "failure_scenarios": [
+    {
+      "scenario_id": "missing_vectors_file",
+      "path_type": "failure",
+      "command_template": "run_rgc_runtime_semantics_verification_pack.sh ci (with missing vectors file)",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-057-VECTORS-0001",
+      "expected_message_fragment": "missing vectors JSON"
+    },
+    {
+      "scenario_id": "invalid_vectors_json",
+      "path_type": "failure",
+      "command_template": "run_rgc_runtime_semantics_verification_pack.sh ci (with invalid vectors JSON)",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-057-VECTORS-0002",
+      "expected_message_fragment": "failed to parse vectors JSON"
+    },
+    {
+      "scenario_id": "invalid_vectors_semantics",
+      "path_type": "failure",
+      "command_template": "run_rgc_runtime_semantics_verification_pack.sh ci (with duplicate seeds or missing semantics-class coverage)",
+      "expected_exit_code": 1,
+      "expected_error_code": "FE-RGC-057-VECTORS-0003",
+      "expected_message_fragment": "vector contract validation failed"
+    }
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_runtime_semantics_verification_pack.sh",
+    "replay_wrapper": "scripts/e2e/rgc_runtime_semantics_verification_pack_replay.sh",
+    "strict_mode": "rch_only_no_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-runtime-semantics-verification-pack.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_runtime_semantics_verification_pack_v1.json",
+    "jq empty docs/rgc_runtime_semantics_verification_vectors_v1.json",
+    "./scripts/run_rgc_runtime_semantics_verification_pack.sh ci",
+    "./scripts/e2e/rgc_runtime_semantics_verification_pack_replay.sh ci"
+  ]
+}

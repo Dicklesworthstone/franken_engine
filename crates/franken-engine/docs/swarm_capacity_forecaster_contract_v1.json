@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.swarm-capacity-forecaster-contract.v1",
+  "forecast_schema_version": "franken-engine.swarm-capacity-forecast.v1",
+  "producer_script": "scripts/swarm_capacity_forecaster.sh",
+  "upstream_snapshot_schema_version": "franken-engine.swarm-capacity-snapshot.v1",
+  "contract_doc": "docs/SWARM_CAPACITY_FORECASTER.md",
+  "required_args": [
+    "--telemetry-snapshot-json"
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "required_forecast_categories": [
+    "compile_pressure",
+    "disk_memory_pressure",
+    "rch_degradation",
+    "target_dir_heat",
+    "proof_availability",
+    "coordination_pressure"
+  ],
+  "required_fields": [
+    "decision",
+    "confidence_band",
+    "summary.overall_state",
+    "summary.brownout_state",
+    "resolved_inputs",
+    "fail_closed_reasons",
+    "forecasts.compile_pressure.state",
+    "forecasts.compile_pressure.confidence_band",
+    "forecasts.disk_memory_pressure.state",
+    "forecasts.rch_degradation.state",
+    "forecasts.target_dir_heat.state",
+    "forecasts.proof_availability.state",
+    "forecasts.coordination_pressure.state",
+    "forecasts.coordination_pressure.auto_reopen_allowed",
+    "forecasts.coordination_pressure.lease_exchange_allowed",
+    "artifact_paths.swarm_capacity_forecast_json",
+    "artifact_paths.report_md"
+  ],
+  "fixture_cases": [
+    "normal",
+    "degraded",
+    "brownout",
+    "contradictory_telemetry",
+    "active_owner_manual_confirmation",
+    "stale_required_telemetry"
+  ],
+  "truth_constraints": [
+    "The forecaster must remain fixture-fed and must not query live services or mutate tracker state.",
+    "The heuristics must stay deterministic and replayable; no ML or probabilistic service dependency is allowed.",
+    "Missing, malformed, or stale required telemetry must force fail_closed instead of optimistic forecasting.",
+    "Contradictory active-owner or manual-confirmation signals must block auto-reopen and lease exchange."
+  ]
+}

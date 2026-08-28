@@ -14,6 +14,191 @@ const TLS_MATERIAL: &str = r#"
     const KEY = 'engine-contained-private-key-marker';
 "#;
 
+// Real self-signed certificate (CN=localhost) lifted from the
+// `franken_node` `compat_corpus/tls/0008` fixture. The validity dates
+// (2026-07-12..2026-07-13 UTC) are already in the past at the time of
+// these tests, but the engine's hermetic TLS loopback does not enforce
+// notAfter — it only stores the DER for `getPeerCertificate()` readers
+// to surface. The 1-day window is the original fixture's choice; we
+// pin the same cert so the engine output matches the same Node oracle
+// the cross-repo fixture was designed for.
+const LOCALHOST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIDJzCCAg+gAwIBAgIUCnuirD955n02CW+OKsrgjTdSmiIwDQYJKoZIhvcNAQEL\n\
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDcxMjAyMjY1NloYDzIxMjYw\n\
+NjE4MDIyNjU2WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEB\n\
+AQUAA4IBDwAwggEKAoIBAQC9AvES/Kj2lU2cugS2KT+kwJOCSpzUq/eYgFJohyF6\n\
+OkrEH2rFuo0785vjR3Mz3qTmm0H47oaALaFNWqi9FjjSFrrSb069yMRdBhrIEwYf\n\
+/Oc7Q7Ih3YIJ2DKV6QJujpadGFj6tgIcvhViMzFuwEQLc9NSLrX3pYbubxrlFW9z\n\
+6slD3Hn5EraPa2cLUxVM/y9Gr6Rpg/HbviBujEVO7bAyFYKp1ba7beEKb5HYQbjr\n\
+HKDJ2uil+IimvyX4e5LI4MWgeb/0CaOWSVNDUuIFqqflla4Vnr6cci8yMS26Kol/\n\
+eimLlgAQFhFrzvnKnVgPYl8ETmsGZqH/CUVt+82dNSQ/AgMBAAGjbzBtMB0GA1Ud\n\
+DgQWBBR8pQ3tgHxacZF0VKtEfKiWUkkBDTAfBgNVHSMEGDAWgBR8pQ3tgHxacZF0\n\
+VKtEfKiWUkkBDTAPBgNVHRMBAf8EBTADAQH/MBoGA1UdEQQTMBGCCWxvY2FsaG9z\n\
+dIcEfwAAATANBgkqhkiG9w0BAQsFAAOCAQEAiK2Yy+0HU2hqVOKpIF65cFrzi5bd\n\
+ko87/RucGvT2/9zPSpyxDoHTHcVkzOnQiT6Q8AAwYb3NCQzOnjhwEhsfyL/Md24I\n\
+YIZf1QQlMMb+pFtD6YhlASrNgu75M0CcSNofLLQlBLmI4Qk+hnqM2FFdZcwVLC8E\n\
+XsrywCGXC0tS+KXEERlUofupBjVc8hptj34BKRDzVpKtsfMfTwrEvo+o83bxxn0Y\n\
+MerW+K2JtfZ3cHMMuCiSJuEFL/maNgp4gXqB7BmWxozL25oGXaSK6o7Nsj6mzKPk\n\
+MuBuJ7fs7RXPfUGm3EveNLiyi5aLTiwZ8ocZq6h4Bi1yJbnB5R+qHtl8QA==\n\
+-----END CERTIFICATE-----";
+
+const LOCALHOST_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC9AvES/Kj2lU2c\n\
+ugS2KT+kwJOCSpzUq/eYgFJohyF6OkrEH2rFuo0785vjR3Mz3qTmm0H47oaALaFN\n\
+Wqi9FjjSFrrSb069yMRdBhrIEwYf/Oc7Q7Ih3YIJ2DKV6QJujpadGFj6tgIcvhV\n\
+iMzFuwEQLc9NSLrX3pYbubxrlFW9z6slD3Hn5EraPa2cLUxVM/y9Gr6Rpg/HbviB\n\
+ujEVO7bAyFYKp1ba7beEKb5HYQbjrHKDJ2uil+IimvyX4e5LI4MWgeb/0CaOWSVN\n\
+DUuIFqqflla4Vnr6cci8yMS26Kol/eimLlgAQFhFrzvnKnVgPYl8ETmsGZqH/CUVt\n\
++82dNSQ/AgMBAAECggEAH2SOr82hLptrsZ0/zRWayX1mwpwr4jLRw9WEWnIfQFLQ\n\
+OjTRohey/4MdoCks3C+dieO9mF/dnQp3IQbuwcEgHNzDmNH97Q2cd6rc5eArA0MZ\n\
+EMHUo0VMJOBwvm9eBQjPwTXbCYETZry3hoDkM/XhF1ncfmjdtk0a1R1FBUmDImhR\n\
+39nhf+x10rhh4pUY3piIeZZGXW7X/u3CtS31NkNCjP8S5okx5P+b53EptwedSBgP\n\
+hZfRqq8Yz0L9DyHww+KPEzdrw04NtKfJhmNUHdjwPHQQE9M2rXax4/ni7WQ6uUFp\n\
+GFG6nxIF3EtUrr5V18NdwbXtQRT40U/WsrXH3BYp6QKBgQD7PNFVatKRaoHNN6Sz\n\
+v/8tFIsuZrm6B8NfEQ+G032IwYtuuiWz1cYgRxzN7zypB4WLSTTXTnU2yyZ6B4mD\n\
+S/N6zYs/C/+XcXTKMp+FoA+Y1FuiDCKLWAR8w9ZkWaru5POsC3MxEOKV3N3ScxBV\n\
+YKGBhoB5hGMr+prlp2zSf0OX8wKBgQDAmCi4kBYBdlQ+VyCHnHE5uHCFcitK9Dqv\n\
+/IEiAfoYVaqbRYEy/PNMCfi7fG03+LmwW28rUW1dg7xRfF0koqSk7dNE/Ml3EPgL\n\
+VKY5xfvP+y7K6qs/yWrdzp8cRgNIKNVQ/HWedY4Z+OOJdbmKegsT412AdCfewzLZ\n\
+Km5G05PBhQKBgQDlVyo8UAwx5EjjPaUi1OQqkbNPw0RNdmK5OIi06gCRQyR2CoT6\n\
+Oe3nbyLzNi1om04jzMrotF05jI7uHE1CRqXXdyRihCBobZBQN4/5WhiCyW9waKVs\n\
+EAfgoKDn8BaihuuNJNKdeq1sYjc3sgO5/EDSTSagRuKEtfqKI6CqMrRQUwKBgAMS\n\
+6qN3eUJwtwt/rH89mfkH3pPirJo3p7AjYZQ/X9R/mYd85oD/1IpEJnonlD6uc5hC\n\
+/VU9qXcyoRDT4VCyX9paCWMyfayu0qarpTOK22gIZEjM0grklhYQNC3pWCgQrsbq\n\
+IJ501d3IQSlyfZGePQsGN/nS4MgHaYpZyQTMX7FZAoGBAIvQ1I9x8F8cTSrA+RwL\n\
+E5hh6HqImT9lbfpDnvEo+oB5Co26sgBsCI2BRE6/GWhEYFBblyHiJmmEoLkOJtpn\n\
+0lBKrwmVzw5XYWuWsowj84qpsoPTQ8MoRCe02/+4SCRfEWzT2RG/THaQ1/d4XzV5\n\
+Dc95hIOE29WCbZoLR99gbNx2\n\
+-----END PRIVATE KEY-----";
+
+const LOCALHOST_CERT_MATERIAL: &str = r#"
+    const CERT = 'REAL_CERT_PLACEHOLDER';
+    const KEY = 'REAL_KEY_PLACEHOLDER';
+"#;
+
+// Build the material with the real PEM substituted in. We assemble the
+// raw string at runtime so the test source stays readable.
+fn localhost_cert_material() -> String {
+    LOCALHOST_CERT_MATERIAL
+        .replace("REAL_CERT_PLACEHOLDER", LOCALHOST_CERT_PEM)
+        .replace("REAL_KEY_PLACEHOLDER", LOCALHOST_KEY_PEM)
+}
+
+#[test]
+fn tls_get_peer_certificate_subject_cn_matches_franken_node_fixture_0008() {
+    // Mirror of `franken_node/tests/fixtures/compat_corpus/tls/0008_*`:
+    // after handshake the client observes `subject.CN` from
+    // `getPeerCertificate()`. The engine's bounded X.509 parser
+    // (bd-il0d9) is the only place this metadata comes from.
+    let material = localhost_cert_material();
+    let source = format!(
+        r#"
+        {material}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, sock => {{ sock.end(); }});
+        server.listen(0, '127.0.0.1', () => {{
+          const c = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            rejectUnauthorized: false,
+          }}, () => {{
+            console.log('cn:' + c.getPeerCertificate().subject.CN);
+            c.end();
+          }});
+          c.on('close', () => server.close());
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "cn:localhost");
+}
+
+#[test]
+fn tls_get_peer_certificate_issuer_cn_matches_franken_node_fixture_0022() {
+    // Mirror of `franken_node/tests/fixtures/compat_corpus/tls/0022_*`:
+    // both `subject.CN` and `issuer.CN` come back, and for this
+    // self-signed cert they are equal. Asserting both in one test
+    // makes a regression in either field obvious.
+    let material = localhost_cert_material();
+    let source = format!(
+        r#"
+        {material}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, sock => {{ sock.end(); }});
+        server.listen(0, '127.0.0.1', () => {{
+          const c = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            rejectUnauthorized: false,
+          }}, () => {{
+            const p = c.getPeerCertificate();
+            console.log('self-signed:' + (p.issuer.CN === p.subject.CN) + ' cn:' + p.subject.CN);
+            c.end();
+          }});
+          c.on('close', () => server.close());
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "self-signed:true cn:localhost");
+}
+
+#[test]
+fn tls_get_peer_certificate_validity_fields_match_franken_node_fixture_0023() {
+    // Mirror of `franken_node/tests/fixtures/compat_corpus/tls/0023_*`:
+    // `valid_from` and `valid_to` are returned as strings (the Node
+    // fixture only checks `typeof`, which is always 'string' for our
+    // parser's MMM DD HH:MM:SS YYYY GMT output).
+    let material = localhost_cert_material();
+    let source = format!(
+        r#"
+        {material}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, sock => {{ sock.end(); }});
+        server.listen(0, '127.0.0.1', () => {{
+          const c = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            rejectUnauthorized: false,
+          }}, () => {{
+            const p = c.getPeerCertificate();
+            console.log('from:' + (typeof p.valid_from === 'string') + ' to:' + (typeof p.valid_to === 'string'));
+            c.end();
+          }});
+          c.on('close', () => server.close());
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "from:true to:true");
+}
+
+#[test]
+fn tls_get_peer_certificate_malformed_der_does_not_corrupt_raw_buffer() {
+    // Adversarial: a server presenting only 4 bytes of placeholder DER
+    // (the `TLS_MATERIAL` CERT constant) must still surface `raw` as a
+    // Buffer; the bounded parser must return an `Err`, which the
+    // interpreter then elides as "no metadata fields" rather than
+    // dropping `raw` or surfacing garbage.
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, sock => {{ sock.end(); }});
+        server.listen(0, '127.0.0.1', () => {{
+          const c = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            rejectUnauthorized: false,
+          }}, () => {{
+            const p = c.getPeerCertificate();
+            console.log('raw:' + Buffer.isBuffer(p.raw) + ' subject:' + (p.subject === undefined));
+            c.end();
+          }});
+          c.on('close', () => server.close());
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "raw:true subject:true");
+}
+
 fn eval_console(source: &str) -> String {
     let mut engine = HybridRouter::default();
     let outcome = engine

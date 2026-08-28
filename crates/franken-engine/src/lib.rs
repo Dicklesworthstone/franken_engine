@@ -596,6 +596,7 @@ pub mod tier_eligibility_substrate;
 pub mod tier_telemetry_contract;
 pub mod tier_up_profiler;
 pub mod time_travel_debugger;
+pub mod tls_x509_metadata;
 pub mod timescale_separation_certificate;
 pub mod trace_fusion;
 pub mod trace_fusion_superinstruction;

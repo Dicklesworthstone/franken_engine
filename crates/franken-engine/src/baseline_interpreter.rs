@@ -15341,10 +15341,42 @@ impl InterpreterCore {
         let raw = raw_result?;
         let certificate_label = self.loopback_socket_label(socket);
         self.join_binary_storage_label(raw, &certificate_label)?;
-        Ok(Value::Object(self.alloc_object_with_properties(&[(
-            "raw",
-            Value::Object(raw),
-        )])?))
+
+        // Parse the narrow X.509 metadata surface (subject.CN,
+        // issuer.CN, valid_from, valid_to) via the bounded
+        // `tls_x509_metadata` parser. Any parse failure is
+        // fail-closed: the raw Buffer is still surfaced, the
+        // optional fields are simply absent.
+        let der_snapshot = self
+            .loopback_sockets
+            .get(&socket)
+            .and_then(|state| state.tls.as_ref())
+            .map(|tls| tls.peer_certificate_der.clone())
+            .unwrap_or_default();
+        let parsed = crate::tls_x509_metadata::parse_x509_metadata(&der_snapshot);
+
+        // Build a flat Vec of properties so we can interleave the
+        // nested `subject` / `issuer` objects alongside the scalars
+        // without juggling two allocations.
+        let mut props: Vec<(&str, Value)> = Vec::with_capacity(5);
+        props.push(("raw", Value::Object(raw)));
+        if let Ok(md) = &parsed {
+            if let Some(cn) = md.subject_cn.as_deref() {
+                let subject_id = self.alloc_object_with_properties(&[("CN", Value::str(cn))])?;
+                props.push(("subject", Value::Object(subject_id)));
+            }
+            if let Some(cn) = md.issuer_cn.as_deref() {
+                let issuer_id = self.alloc_object_with_properties(&[("CN", Value::str(cn))])?;
+                props.push(("issuer", Value::Object(issuer_id)));
+            }
+            if let Some(vf) = md.valid_from.as_deref() {
+                props.push(("valid_from", Value::str(vf)));
+            }
+            if let Some(vt) = md.valid_to.as_deref() {
+                props.push(("valid_to", Value::str(vt)));
+            }
+        }
+        Ok(Value::Object(self.alloc_object_with_properties(&props)?))
     }
 
     fn tls_handshake_complete(&self, receiver: Value) -> Result<bool, InterpreterError> {

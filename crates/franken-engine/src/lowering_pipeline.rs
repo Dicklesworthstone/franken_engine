@@ -8956,7 +8956,7 @@ pub fn lower_ir2_to_ir3(
                         falsy_jump_index,
                         label_id: *label_id,
                     });
-                    if matches!(body_ir1, Ir1Op::JumpIfFalsy { .. }) {
+                    if matches!(ir2_op.inner, Ir1Op::JumpIfFalsy { .. }) {
                         fn_value_stack.push(cond);
                     }
                 }

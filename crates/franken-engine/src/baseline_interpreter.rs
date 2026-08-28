@@ -14277,27 +14277,90 @@ impl InterpreterCore {
         self.connect_loopback_socket_with_tls(args, true)
     }
 
+    fn parse_loopback_connect_args(
+        &self,
+        args: RegRange,
+    ) -> Result<(Option<u16>, String, Option<Value>), InterpreterError> {
+        let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if matches!(first, Value::Object(_)) && !first.is_callable() {
+            let port = self.loopback_port_from_value(&first);
+            let mut host = self.loopback_host_from_connect_args(&first, args)?;
+            if host == "localhost" {
+                host = "127.0.0.1".to_string();
+            }
+            return Ok((port, host, Some(first)));
+        }
+
+        let port = self.loopback_port_from_value(&first);
+        let mut host_candidate = None;
+        let mut options_obj = None;
+
+        if args.count >= 2 {
+            let second = self.read_reg(args.start + 1)?;
+            if matches!(second, Value::Object(_)) && !second.is_callable() {
+                options_obj = Some(second);
+            } else if !second.is_callable() && !matches!(second, Value::Undefined) {
+                host_candidate = Some(self.bounded_loopback_host_string(&second)?);
+                if args.count >= 3 {
+                    let third = self.read_reg(args.start + 2)?;
+                    if matches!(third, Value::Object(_)) && !third.is_callable() {
+                        options_obj = Some(third);
+                    }
+                }
+            }
+        }
+
+        let final_port = port.or_else(|| {
+            options_obj
+                .as_ref()
+                .and_then(|opt| self.loopback_port_from_value(opt))
+        });
+
+        let mut host = if let Some(h) = host_candidate {
+            h
+        } else if let Some(opt) = &options_obj {
+            if let Some(h) = self.fs_object_property(opt, "host") {
+                self.bounded_loopback_host_string(&h)?
+            } else {
+                "127.0.0.1".to_string()
+            }
+        } else {
+            "127.0.0.1".to_string()
+        };
+
+        if host == "localhost" {
+            host = "127.0.0.1".to_string();
+        }
+
+        Ok((final_port, host, options_obj))
+    }
+
     fn connect_loopback_socket_with_tls(
         &mut self,
         args: RegRange,
         is_tls: bool,
     ) -> Result<Value, InterpreterError> {
+        let (port, mut host, options_obj) = self.parse_loopback_connect_args(args)?;
         let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let port = self.loopback_port_from_value(&first);
-        let mut host = self.loopback_host_from_connect_args(&first, args)?;
-        if host == "localhost" {
-            host = "127.0.0.1".to_string();
-        }
+        let options_ref = options_obj.as_ref().unwrap_or(&first);
         let prepared_tls = if is_tls {
-            let reject_unauthorized = self.tls_option_bool(&first, "rejectUnauthorized", true);
-            let servername_value = match self
-                .fs_object_property(&first, "servername")
-                .or_else(|| self.fs_object_property(&first, "host"))
-            {
-                Some(Value::Str(value)) => Some(value),
-                _ => None,
+            let reject_unauthorized = self.tls_option_bool(options_ref, "rejectUnauthorized", true);
+            let servername_opt = self
+                .fs_object_property(options_ref, "servername")
+                .or_else(|| self.fs_object_property(options_ref, "host"));
+            let servername = match servername_opt {
+                Some(Value::Str(value)) => Some(value.to_string()),
+                _ => {
+                    if host != "127.0.0.1" && host.parse::<std::net::IpAddr>().is_err() {
+                        Some(host.clone())
+                    } else if host == "127.0.0.1" {
+                        Some("localhost".to_string())
+                    } else {
+                        None
+                    }
+                }
             };
-            if servername_value
+            if servername
                 .as_ref()
                 .is_some_and(|value| value.len() > MAX_LOOPBACK_HOST_BYTES)
             {
@@ -14307,17 +14370,16 @@ impl InterpreterCore {
                     ),
                 });
             }
-            let servername_bytes = servername_value.as_ref().map_or(0, |value| {
+            let servername_bytes = servername.as_ref().map_or(0, |value| {
                 MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(value.len() as u64)
             });
             let alpn_protocols = self.tls_option_string_array(
-                &first,
+                options_ref,
                 "ALPNProtocols",
                 servername_bytes
                     .saturating_add(Self::estimate_string_bytes(&host))
                     .saturating_add(64 * 1024),
             )?;
-            let servername = servername_value.map(|value| value.to_string());
             Some(HermeticTlsSocketState {
                 server_side: false,
                 handshake_complete: false,
@@ -15324,6 +15386,70 @@ impl InterpreterCore {
         Ok(Value::Null)
     }
 
+    fn rfc6125_match_dns_name(pattern: &str, hostname: &str) -> bool {
+        let pattern = pattern.trim();
+        let hostname = hostname.trim();
+        if pattern.is_empty() || hostname.is_empty() {
+            return false;
+        }
+        if pattern.eq_ignore_ascii_case(hostname) {
+            return true;
+        }
+        if !pattern.contains('*') {
+            return false;
+        }
+        let pattern_labels: Vec<&str> = pattern.split('.').collect();
+        let host_labels: Vec<&str> = hostname.split('.').collect();
+
+        // RFC 6125: must have the same number of labels and cannot wildcard a TLD (*.com)
+        if pattern_labels.len() != host_labels.len() || pattern_labels.len() < 3 {
+            return false;
+        }
+
+        // Non-leftmost labels must match exactly (case-insensitively)
+        for (p_label, h_label) in pattern_labels[1..].iter().zip(&host_labels[1..]) {
+            if !p_label.eq_ignore_ascii_case(h_label) {
+                return false;
+            }
+        }
+
+        let p_first = pattern_labels[0];
+        let h_first = host_labels[0];
+
+        // Disallow wildcard on IDN A-labels
+        if p_first.to_ascii_lowercase().starts_with("xn--")
+            || h_first.to_ascii_lowercase().starts_with("xn--")
+        {
+            return false;
+        }
+
+        if p_first == "*" {
+            return !h_first.is_empty();
+        }
+
+        let star_count = p_first.chars().filter(|&c| c == '*').count();
+        if star_count != 1 {
+            return false;
+        }
+
+        let star_idx = match p_first.find('*') {
+            Some(idx) => idx,
+            None => return false,
+        };
+        let prefix = &p_first[..star_idx];
+        let suffix = &p_first[star_idx + 1..];
+
+        if h_first.len() < prefix.len() + suffix.len() {
+            return false;
+        }
+
+        let h_first_lower = h_first.to_ascii_lowercase();
+        let prefix_lower = prefix.to_ascii_lowercase();
+        let suffix_lower = suffix.to_ascii_lowercase();
+
+        h_first_lower.starts_with(&prefix_lower) && h_first_lower.ends_with(&suffix_lower)
+    }
+
     fn tls_check_server_identity(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
         use std::net::IpAddr;
 
@@ -15348,10 +15474,10 @@ impl InterpreterCore {
                         .strip_prefix("IP Address:")
                         .and_then(|address| address.parse::<IpAddr>().ok())
                         == Some(host_ip)
+                } else if let Some(dns_pattern) = entry.strip_prefix("DNS:") {
+                    Self::rfc6125_match_dns_name(dns_pattern, &host)
                 } else {
-                    entry
-                        .strip_prefix("DNS:")
-                        .is_some_and(|dns_name| dns_name.eq_ignore_ascii_case(&host))
+                    false
                 }
             })
         });
@@ -15364,7 +15490,7 @@ impl InterpreterCore {
         } else {
             common_name
                 .as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case(&host))
+                .is_some_and(|name| Self::rfc6125_match_dns_name(name, &host))
         };
         if identity_matches {
             return Ok(Value::Undefined);
@@ -15385,9 +15511,44 @@ impl InterpreterCore {
     }
 
     fn tls_root_certificates(&mut self) -> Result<Value, InterpreterError> {
-        let roots = [Value::str(
-            "-----BEGIN CERTIFICATE-----\nFRANKEN ENGINE HERMETIC ROOT\n-----END CERTIFICATE-----",
+        const HERMETIC_ROOT_CERTIFICATES: &[&str] = &[concat!(
+            "-----BEGIN CERTIFICATE-----\n",
+            "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRQB42JUo340wDQYJKoZIhvcNAQELBQAw\n",
+            "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n",
+            "cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n",
+            "WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n",
+            "ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n",
+            "MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJggGh2XTpbkgzld5\n",
+            "bEEtd904biuxxKyhxdaLwMrVOFsDT840IsCpuU7hZv5PDPl24dAoXOCTBVdYCRQj\n",
+            "nLNFdDd+TbFiV454Jud8fYDKHQBKUXmukPBPgVTrVoAkBa5nPUd0NDubBRNScK82\n",
+            "VU5BQqm100fMUmeR8othhnA163CMfMyJaP4qbUglEI5wIhXGMkeU78LwtZNTbkVH\n",
+            "r001BQ7v47mdIh3ko9J358lJ5MT+OgNndJA7TrUchWyaNNgh4MrOS0BlAF5Z61mx\n",
+            "Tk84nDbevSb3TvJNQGoWPn6+69vu7r2x3XOGcz846s4SmOjKA09WQDnxtJaTSBo3\n",
+            "4v6WDWXRhOVTK3bGXq0/0BXur+QmmUULkpvcJA62QW5sMpmkW3KiyNePnmJK1666\n",
+            "VFbDeViTueREXmnghBhPag47uJQytquno646DZnA8urRqtU4UxFKVQov144wMT55\n",
+            "6BQXYDetRHIbJGdlJ58gwP0Z4G48a70QqNf+QCEake+K98xlLEn08T98b5K361OO\n",
+            "79b2kdX6CBusSBDZ8570/06FPnlUCcC8LX5FL24v870v5PEnoq1QKJ7Aa8QGcSkL\n",
+            "hzPFWSjzDKPkKPNnLsZzQLBQzvlpmGL244IokGOm262LILrew9uEv4GTUEVVYLY4\n",
+            "SUOT8JZ37zg2vxQNUAHRRizmTKhFLN/iecgrp6LoH0VYNlSYNdRRnwIDAQABo0Iw\n",
+            "QDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUebRZ\n",
+            "KN4o01GHMorTBgBhGpjtHTCwDQYJKoZIhvcNAQELBQADggIBABn9bb6hQgWFiYFs\n",
+            "HsOGPTTO0wQYZd89xwd55++c+eeBMLGBK00EEUya+U0CEcLGIJK+68KGOVW350tz\n",
+            "5MCbgtT9WGqIvAx+4342Os1OIJuR5SLPO980WDRIbvnZLq9k9t654ee6gAKoVFiP\n",
+            "06UQkKUMdPTUM4Bl8amOJpH00R/5xskZ096vYtWwR5ee385/65BunHX09/uvUwNi\n",
+            "w1sezpG9YB+IO8zma0RwGBF88+WRBQGTVDPvnCJKZX87tNW4htHZRmbWZTtnpzDY\n",
+            "FIBPdJNxGmtWTKsKSq5OBeaW876fFiXY1e4b869UCEPbOKyFEltnNmquM00eT97b\n",
+            "mWZf86OWALPO7cmSG/40eaX07OEsnR+vlOvOr2GO6If+29msFG2T76JC5WQOOYOi\n",
+            "ccWApXYVMbxS76APsG8u6URZeJ5af/4DtC1zMBBO48rDYAhTrAGnXU37Lay5gNie\n",
+            "m43onnMPTogoUHz9CNFmlSZHBJTrxmKuidKGfwT8W/80uPGUaxahnCqcvL3BUeVI\n",
+            "GySp4w565D2LK85988226MCXBL64S614n2NaQVM302ISICbKX30A34645Nhpbbf6\n",
+            "74/7TGD7JThq4EReCeamZeXVSpwcSkGoTKdZNmspn0MH44FWZGoWootNTe/82599\n",
+            "P2K0325R3ShZaXM242MxsgG9OPEb\n",
+            "-----END CERTIFICATE-----"
         )];
+        let roots: Vec<Value> = HERMETIC_ROOT_CERTIFICATES
+            .iter()
+            .map(|pem| Value::str(*pem))
+            .collect();
         Ok(Value::Object(self.alloc_array_from_values(&roots)?))
     }
 

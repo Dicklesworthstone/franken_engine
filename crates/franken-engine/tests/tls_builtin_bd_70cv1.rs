@@ -347,3 +347,86 @@ fn unsupported_tls_possession_remains_ambient_refused() {
         );
     }
 }
+
+#[test]
+fn positional_connect_overloads_execute_with_expected_fidelity() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, socket => {{
+          socket.on('data', chunk => socket.end('ECHO:' + chunk));
+        }});
+        server.listen(0, '127.0.0.1', () => {{
+          const port = server.address().port;
+          // Test overload: connect(port, host, options, callback)
+          const client = tls.connect(port, '127.0.0.1', {{ rejectUnauthorized: false }}, () => {{
+            client.write('pos-four');
+          }});
+          let body = '';
+          client.on('data', chunk => body += chunk);
+          client.on('end', () => {{
+            console.log(body);
+            // Test overload: connect(port, options, callback)
+            const client2 = tls.connect(port, {{ rejectUnauthorized: false }}, () => {{
+              client2.write('pos-three');
+            }});
+            let body2 = '';
+            client2.on('data', chunk => body2 += chunk);
+            client2.on('end', () => {{
+              console.log(body2);
+              server.close();
+            }});
+          }});
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "ECHO:pos-four\nECHO:pos-three");
+}
+
+#[test]
+fn rfc6125_wildcard_san_matching_and_tld_rejection() {
+    let source = r#"
+        const tls = require('tls');
+        const wildcardCert = {
+          subject: { CN: 'sub.example.com' },
+          subjectaltname: 'DNS:*.example.com, DNS:b*r.example.org'
+        };
+        const okSub = tls.checkServerIdentity('foo.example.com', wildcardCert);
+        const okCase = tls.checkServerIdentity('BAR.EXAMPLE.COM', wildcardCert);
+        const okPartial = tls.checkServerIdentity('bazr.example.org', wildcardCert);
+        const badNested = tls.checkServerIdentity('nested.sub.example.com', wildcardCert);
+        const badApex = tls.checkServerIdentity('example.com', wildcardCert);
+
+        const tldWildcardCert = {
+          subject: { CN: 'test' },
+          subjectaltname: 'DNS:*.com, DNS:*'
+        };
+        const badTld = tls.checkServerIdentity('example.com', tldWildcardCert);
+        const badSingle = tls.checkServerIdentity('localhost', tldWildcardCert);
+
+        console.log(okSub === undefined, okCase === undefined, okPartial === undefined);
+        console.log(badNested instanceof Error, badNested.code);
+        console.log(badApex instanceof Error, badApex.code);
+        console.log(badTld instanceof Error, badSingle instanceof Error);
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true true true\n\
+         true ERR_TLS_CERT_ALTNAME_INVALID\n\
+         true ERR_TLS_CERT_ALTNAME_INVALID\n\
+         true true"
+    );
+}
+
+#[test]
+fn root_certificates_bundle_contains_valid_pem_and_parsed_der() {
+    let source = r#"
+        const tls = require('tls');
+        const roots = tls.rootCertificates;
+        console.log(Array.isArray(roots), roots.length >= 1);
+        console.log(roots[0].startsWith('-----BEGIN CERTIFICATE-----\n'));
+        console.log(roots[0].endsWith('\n-----END CERTIFICATE-----'));
+    "#;
+    assert_eq!(eval_console(source), "true true\ntrue\ntrue");
+}

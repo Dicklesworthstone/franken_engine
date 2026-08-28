@@ -125,13 +125,22 @@ impl fmt::Display for DerError {
                 write!(f, "DER input too large ({actual} > {cap})")
             }
             Self::Truncated { offset, needed } => {
-                write!(f, "DER truncated at offset {offset} (needed {needed} bytes)")
+                write!(
+                    f,
+                    "DER truncated at offset {offset} (needed {needed} bytes)"
+                )
             }
             Self::IndefiniteLength { offset } => {
-                write!(f, "DER indefinite-length form at offset {offset} not supported")
+                write!(
+                    f,
+                    "DER indefinite-length form at offset {offset} not supported"
+                )
             }
             Self::LengthTooLarge { offset, octets } => {
-                write!(f, "DER long-form length at offset {offset} uses {octets} octets")
+                write!(
+                    f,
+                    "DER long-form length at offset {offset} uses {octets} octets"
+                )
             }
             Self::BadLength { offset } => {
                 write!(f, "DER length field at offset {offset} is malformed")
@@ -232,7 +241,9 @@ impl<'a> Reader<'a> {
             return Ok(first as usize);
         }
         if first == length_byte::LONG_FORM_MARKER {
-            return Err(DerError::IndefiniteLength { offset: self.pos - 1 });
+            return Err(DerError::IndefiniteLength {
+                offset: self.pos - 1,
+            });
         }
         let octets = first & length_byte::LONG_FORM_VALUE_MASK;
         if octets == 0 || octets > length_byte::LONG_FORM_MAX_OCTETS {
@@ -512,27 +523,18 @@ fn decode_string_value(tag: u8, body: &[u8]) -> Result<String, DerError> {
 /// `tls.TLSSocket.getPeerCertificate()`.
 fn decode_time_value(tag: u8, body: &[u8]) -> Result<String, DerError> {
     if !body.ends_with(b"Z") {
-        return Err(DerError::UnsupportedTag {
-            offset: 0,
-            tag,
-        });
+        return Err(DerError::UnsupportedTag { offset: 0, tag });
     }
     let digits = &body[..body.len() - 1];
     if !digits.iter().all(|b| b.is_ascii_digit()) {
-        return Err(DerError::UnsupportedTag {
-            offset: 0,
-            tag,
-        });
+        return Err(DerError::UnsupportedTag { offset: 0, tag });
     }
     let (year, month, day, hour, minute, second) = match tag {
         tag::UTCTIME => {
             // UTCTime: two-digit year; RFC 5280 §4.1.2.5.1: 00–49 → 20YY,
             // 50–99 → 19YY. This matches historical Node behavior.
             if digits.len() != 12 {
-                return Err(DerError::UnsupportedTag {
-                    offset: 0,
-                    tag,
-                });
+                return Err(DerError::UnsupportedTag { offset: 0, tag });
             }
             let yy = parse_two(&digits[0..2]);
             let year = if yy < 50 { 2000 + yy } else { 1900 + yy };
@@ -547,10 +549,7 @@ fn decode_time_value(tag: u8, body: &[u8]) -> Result<String, DerError> {
         }
         tag::GENERALIZED_TIME => {
             if digits.len() != 14 {
-                return Err(DerError::UnsupportedTag {
-                    offset: 0,
-                    tag,
-                });
+                return Err(DerError::UnsupportedTag { offset: 0, tag });
             }
             (
                 parse_four(&digits[0..4]),
@@ -561,12 +560,7 @@ fn decode_time_value(tag: u8, body: &[u8]) -> Result<String, DerError> {
                 parse_two(&digits[12..14]),
             )
         }
-        _ => {
-            return Err(DerError::UnsupportedTag {
-                offset: 0,
-                tag,
-            })
-        }
+        _ => return Err(DerError::UnsupportedTag { offset: 0, tag }),
     };
 
     if !(1..=12).contains(&month)
@@ -575,10 +569,7 @@ fn decode_time_value(tag: u8, body: &[u8]) -> Result<String, DerError> {
         || minute > 59
         || second > 59
     {
-        return Err(DerError::UnsupportedTag {
-            offset: 0,
-            tag,
-        });
+        return Err(DerError::UnsupportedTag { offset: 0, tag });
     }
     let month_name = month_abbr(month);
     Ok(format!(
@@ -717,16 +708,13 @@ mod tests {
             0xa0, 0x1e, // [0] EXPLICIT tbsCertificate (30 bytes)
             0x30, 0x1c, // SEQUENCE (28 bytes)
             // serialNumber INTEGER 1
-            0x02, 0x01, 0x01,
-            // signature AlgorithmIdentifier SEQUENCE { OID, NULL }
-            0x30, 0x05, 0x06, 0x01, 0x2a, 0x05, 0x00,
-            // issuer Name (empty SEQUENCE)
+            0x02, 0x01, 0x01, // signature AlgorithmIdentifier SEQUENCE { OID, NULL }
+            0x30, 0x05, 0x06, 0x01, 0x2a, 0x05, 0x00, // issuer Name (empty SEQUENCE)
             0x30, 0x00,
             // validity SEQUENCE { UTCTime 2015-06-04 11:04:38Z, UTCTime 2035-06-04 11:04:38Z }
             0x30, 0x10, 0x17, 0x0d, b'1', b'5', b'0', b'6', b'0', b'4', b'1', b'1', b'0', b'4',
             b'3', b'8', b'Z', 0x17, 0x0d, b'3', b'5', b'0', b'6', b'0', b'4', b'1', b'1', b'0',
-            b'4', b'3', b'8', b'Z',
-            // subject Name (empty SEQUENCE)
+            b'4', b'3', b'8', b'Z', // subject Name (empty SEQUENCE)
             0x30, 0x00,
         ];
         let md = parse_x509_metadata(&cert).expect("valid empty-CN cert should parse");

@@ -8603,16 +8603,13 @@ pub fn lower_ir2_to_ir3(
             }
         }
 
-        // Classify body ops into Ir2 and lower to IR3.
-        for body_ir1 in body_ops {
-            let (effect, cap, flow) = classify_ir1_op(body_ir1);
-            let ir2_op = Ir2Op {
-                inner: body_ir1.clone(),
-                effect,
-                required_capability: cap,
-                flow,
-                span: None,
-            };
+        // Classify body ops into Ir2, then run the same operand-aware flow
+        // inference as the module-level pass so nested HostCalls get the
+        // `ifc.check_flow` seam (bd-wyazf). classify_ir1_op alone leaves body
+        // HostCalls un-inferred and they would skip the runtime guard.
+        let annotated_body_ops =
+            annotate_nested_body_ops(body_ops, HostIoExceptionProvenance::Unknown)?;
+        for ir2_op in &annotated_body_ops {
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
                 Ir1Op::LoadLiteral { value } => {
@@ -9765,7 +9762,9 @@ pub fn lower_ir2_to_ir3(
                 // (bd-bg9l1.27.10). A builtin recognized at lowering (e.g.
                 // `Symbol.iterator` or `new Error(...)`) can appear inside
                 // any function, so this must mirror the module-level arm rather
-                // than panic.
+                // than panic. Operand-aware flow (bd-wyazf) inserts the same
+                // `ifc.check_flow` seam the top-level HostcallEffect intercept
+                // uses, so Secret nested callbacks cannot skip egress checks.
                 Ir1Op::HostCall {
                     capability,
                     arg_count,
@@ -9787,9 +9786,22 @@ pub fn lower_ir2_to_ir3(
                             src: arg_reg,
                         });
                     }
+                    let capability_tag = CapabilityTag(capability.clone());
+                    if flow_requires_runtime_check(ir2_op.flow.as_ref(), &capability_tag) {
+                        required_capabilities.insert(IFC_RUNTIME_GUARD_CAPABILITY.to_string());
+                        let guard_dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::HostCall {
+                            capability: CapabilityTag(IFC_RUNTIME_GUARD_CAPABILITY.to_string()),
+                            args: RegRange {
+                                start: start_reg,
+                                count: *arg_count,
+                            },
+                            dst: guard_dst,
+                        });
+                    }
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::HostCall {
-                        capability: CapabilityTag(capability.clone()),
+                        capability: capability_tag,
                         args: RegRange {
                             start: start_reg,
                             count: *arg_count,
@@ -10107,7 +10119,9 @@ fn build_ir2_flow_proof_artifact(
         runtime_checkpoints: Vec::new(),
     };
 
-    for (op_index, op) in ir2.ops.iter().enumerate() {
+    let mut nested_body_ops = Vec::new();
+    collect_annotated_nested_function_bodies(&ir2.ops, &mut nested_body_ops)?;
+    for (op_index, op) in ir2.ops.iter().chain(nested_body_ops.iter()).enumerate() {
         let Some(flow) = op.flow.as_ref() else {
             continue;
         };
@@ -27941,6 +27955,56 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
     Label::Internal
 }
 
+/// Operand-aware flow annotations for a nested `DeclareFunction` /
+/// `CreateFunction` body (bd-wyazf). Top-level IR1→IR2 only classifies the
+/// function *value* op; body HostCalls otherwise reach IR3 without
+/// `infer_ir2_flow_annotations` and skip the `ifc.check_flow` seam.
+fn annotate_nested_body_ops(
+    body_ops: &[Ir1Op],
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> Result<Vec<Ir2Op>, LoweringPipelineError> {
+    let mut ir2 = Ir2Module::new(
+        ContentHash::compute(b"nested-function-body"),
+        "nested_function_body",
+    );
+    for op in body_ops {
+        let (effect, required_capability, flow) = classify_ir1_op(op);
+        ir2.ops.push(Ir2Op {
+            inner: op.clone(),
+            effect,
+            required_capability,
+            flow,
+            span: None,
+        });
+    }
+    infer_ir2_flow_annotations(&mut ir2, host_io_exception_provenance)?;
+    Ok(ir2.ops)
+}
+
+fn nested_function_body_ops(op: &Ir1Op) -> Option<&[Ir1Op]> {
+    match op {
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            Some(body_ops.as_slice())
+        }
+        _ => None,
+    }
+}
+
+fn collect_annotated_nested_function_bodies(
+    ops: &[Ir2Op],
+    out: &mut Vec<Ir2Op>,
+) -> Result<(), LoweringPipelineError> {
+    for op in ops {
+        let Some(body_ops) = nested_function_body_ops(&op.inner) else {
+            continue;
+        };
+        let annotated = annotate_nested_body_ops(body_ops, HostIoExceptionProvenance::Unknown)?;
+        collect_annotated_nested_function_bodies(&annotated, out)?;
+        out.extend(annotated);
+    }
+    Ok(())
+}
+
 fn flow_requires_runtime_check(flow: Option<&FlowAnnotation>, capability: &CapabilityTag) -> bool {
     let capability_is_dynamic = capability.0 == "hostcall.invoke";
     let flow_is_ambiguous = flow.is_some_and(|annotation| {
@@ -28753,6 +28817,172 @@ mod tests {
             })
             .expect("dynamic hostcall");
         assert!(guard_index < invoke_index);
+    }
+
+    fn nested_function_with_body(body_ops: Vec<Ir1Op>) -> Ir1Op {
+        Ir1Op::CreateFunction {
+            name: None,
+            param_names: Vec::new(),
+            body_ops,
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            is_arrow: false,
+            rest_param_index: None,
+        }
+    }
+
+    #[test]
+    fn nested_dynamic_hostcall_inserts_runtime_ifc_guard_bd_wyazf() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"nested-dynamic-flow"),
+            "nested_dynamic_flow.js",
+        );
+        ir1.ops.push(nested_function_with_body(vec![
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("secret_token".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "hostcall.invoke".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Return,
+        ]));
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("nested dynamic IR1->IR2")
+            .module;
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("nested dynamic IR2->IR3")
+            .module;
+        let hostcall_caps: Vec<&str> = ir3
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Ir3Instruction::HostCall { capability, .. } => Some(capability.0.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            hostcall_caps.contains(&IFC_RUNTIME_GUARD_CAPABILITY),
+            "nested hostcall.invoke must insert ifc.check_flow, got {hostcall_caps:?}"
+        );
+        assert!(hostcall_caps.contains(&"hostcall.invoke"));
+        let guard_index = hostcall_caps
+            .iter()
+            .position(|cap| *cap == IFC_RUNTIME_GUARD_CAPABILITY)
+            .expect("guard");
+        let invoke_index = hostcall_caps
+            .iter()
+            .position(|cap| *cap == "hostcall.invoke")
+            .expect("invoke");
+        assert!(guard_index < invoke_index);
+
+        let context = LoweringContext::new("trace-nested", "decision-nested", "policy-nested");
+        let artifact = build_ir2_flow_proof_artifact(&ir2, &context).expect("nested flow artifact");
+        assert!(
+            artifact
+                .runtime_checkpoints
+                .iter()
+                .any(|entry| { entry.capability.as_deref() == Some("hostcall.invoke") }),
+            "artifact must record the nested dynamic hostcall checkpoint, got {:?}",
+            artifact.runtime_checkpoints
+        );
+    }
+
+    #[test]
+    fn nested_static_hostcall_skips_runtime_ifc_guard_bd_wyazf() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"nested-static-flow"),
+            "nested_static_flow.js",
+        );
+        ir1.ops.push(nested_function_with_body(vec![
+            Ir1Op::HostCall {
+                capability: "promise:resolve".to_string(),
+                arg_count: 0,
+            },
+            Ir1Op::Return,
+        ]));
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("nested static IR1->IR2")
+            .module;
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("nested static IR2->IR3")
+            .module;
+        let hostcall_caps: Vec<&str> = ir3
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Ir3Instruction::HostCall { capability, .. } => Some(capability.0.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(hostcall_caps.contains(&"promise:resolve"));
+        assert!(
+            !hostcall_caps.contains(&IFC_RUNTIME_GUARD_CAPABILITY),
+            "public nested promise:resolve must not insert ifc.check_flow"
+        );
+    }
+
+    #[test]
+    fn nested_multi_arg_hostcall_join_is_operand_order_invariant_bd_wyazf() {
+        for values in [
+            ["secret_token", "public-value"],
+            ["public-value", "secret_token"],
+        ] {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(b"nested-flow-order"),
+                "nested_flow_order.js",
+            );
+            let mut body_ops = Vec::new();
+            for value in values {
+                body_ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(value.into()),
+                });
+            }
+            body_ops.push(Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 2,
+            });
+            body_ops.push(Ir1Op::Return);
+            ir1.ops.push(nested_function_with_body(body_ops));
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("nested operand-aware IR1->IR2")
+                .module;
+            let annotated = annotate_nested_body_ops(
+                nested_function_body_ops(&ir2.ops[0].inner).expect("nested body"),
+                HostIoExceptionProvenance::Unknown,
+            )
+            .expect("nested body flow");
+            let flow = annotated
+                .iter()
+                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .and_then(|op| op.flow.as_ref())
+                .expect("nested hostcall flow");
+            assert_eq!(flow.data_label, Label::Secret, "{values:?}");
+            assert!(flow.declassification_required, "{values:?}");
+
+            let ir3 = lower_ir2_to_ir3(&ir2)
+                .expect("nested guarded IR2->IR3")
+                .module;
+            assert!(
+                ir3.instructions.iter().any(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::HostCall { capability, .. }
+                        if capability.0 == IFC_RUNTIME_GUARD_CAPABILITY
+                )),
+                "Secret-vs-Public nested net.write must insert ifc.check_flow for {values:?}"
+            );
+        }
     }
 
     #[test]

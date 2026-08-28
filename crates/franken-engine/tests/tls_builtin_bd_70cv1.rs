@@ -4,6 +4,9 @@
 //! networking. They pin the finite API/verification/event surface exposed to
 //! guest code while preserving the ambient-authority boundary.
 
+use std::io::Write;
+use std::process::Command;
+
 use frankenengine_engine::HybridRouter;
 
 const TLS_MATERIAL: &str = r#"
@@ -429,4 +432,140 @@ fn root_certificates_bundle_contains_valid_pem_and_parsed_der() {
         console.log(roots[0].endsWith('\n-----END CERTIFICATE-----'));
     "#;
     assert_eq!(eval_console(source), "true true\ntrue\ntrue");
+}
+
+/// Prefer a real Node binary over bun's `node` shim, which rejects `--version`.
+fn live_node_binary() -> Option<String> {
+    for candidate in ["node", "nodejs"] {
+        let output = match Command::new(candidate).arg("--version").output() {
+            Ok(output) => output,
+            Err(_) => continue,
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let version = String::from_utf8_lossy(&output.stdout);
+        if version.trim_start().starts_with('v') {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn live_node_eval_js(script: &str) -> Option<String> {
+    let node = live_node_binary()?;
+    let child = Command::new(&node)
+        .arg("-e")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[test]
+fn live_node_check_server_identity_oracle_matches_engine() {
+    const IDENTITY_SCRIPT: &str = r#"
+        const tls = require('tls');
+        function report(host, cert) {
+          const result = tls.checkServerIdentity(host, cert);
+          const code = result === undefined ? 'ok' : ('' + result.code);
+          console.log(host + '|' + code);
+        }
+        const wildcard = { subject: { CN: 'sub.example.com' }, subjectaltname: 'DNS:*.example.com, DNS:b*r.example.org' };
+        const tld = { subject: { CN: 'test' }, subjectaltname: 'DNS:*.com, DNS:*' };
+        const idn = { subject: { CN: 'x' }, subjectaltname: 'DNS:xn--*.example.com' };
+        report('foo.example.com', wildcard);
+        report('BAR.EXAMPLE.COM', wildcard);
+        report('bazr.example.org', wildcard);
+        report('nested.sub.example.com', wildcard);
+        report('example.com', wildcard);
+        report('example.com', tld);
+        report('localhost', tld);
+        report('foo.example.com', idn);
+    "#;
+
+    let Some(node_stdout) = live_node_eval_js(IDENTITY_SCRIPT) else {
+        eprintln!(
+            "skipping live-Node oracle: no Node binary that accepts --version was found on PATH"
+        );
+        return;
+    };
+    let engine_stdout = eval_console(IDENTITY_SCRIPT);
+    assert_eq!(
+        node_stdout, engine_stdout,
+        "engine checkServerIdentity must match live Node for RFC 6125 vectors"
+    );
+}
+
+#[test]
+fn live_node_parses_engine_isrg_root_pem() {
+    let Some(node) = live_node_binary() else {
+        eprintln!(
+            "skipping live-Node PEM oracle: no Node binary that accepts --version was found on PATH"
+        );
+        return;
+    };
+
+    let pem = eval_console(
+        r#"
+        const tls = require('tls');
+        console.log(tls.rootCertificates[0]);
+        "#,
+    );
+    assert!(
+        pem.contains("BEGIN CERTIFICATE"),
+        "engine root bundle should be PEM, got: {pem:?}"
+    );
+
+    let mut child = Command::new(&node)
+        .arg("-e")
+        .arg(
+            r#"
+            const { X509Certificate } = require('crypto');
+            const chunks = [];
+            process.stdin.on('data', chunk => chunks.push(chunk));
+            process.stdin.on('end', () => {
+              const pem = Buffer.concat(chunks).toString('utf8');
+              const cert = new X509Certificate(pem);
+              process.stdout.write(JSON.stringify({
+                subject: cert.subject,
+                issuer: cert.issuer,
+                validFrom: cert.validFrom,
+                validTo: cert.validTo
+              }));
+            });
+            "#,
+        )
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("live Node X509 parse should spawn");
+    {
+        let mut stdin = child.stdin.take().expect("live Node stdin");
+        stdin
+            .write_all(pem.as_bytes())
+            .expect("live Node stdin write");
+    }
+    let output = child
+        .wait_with_output()
+        .expect("live Node X509 parse should finish");
+    assert!(
+        output.status.success(),
+        "Node rejected engine ISRG Root X1 PEM: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        parsed.contains("ISRG Root X1"),
+        "parsed subject/issuer should name ISRG Root X1, got: {parsed}"
+    );
 }

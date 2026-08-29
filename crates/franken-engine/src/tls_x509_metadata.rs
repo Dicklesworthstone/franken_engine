@@ -344,26 +344,39 @@ pub fn parse_x509_metadata(der: &[u8]) -> Result<X509Metadata, DerError> {
     let mut cert = Reader::new(cert_body);
     cert.enter()?;
 
-    // tbsCertificate [0] EXPLICIT SEQUENCE
-    let tbs_tag = cert.read_byte()?;
-    if tbs_tag != tag::CONTEXT_SPECIFIC_0 {
+    // RFC 5280 Certificate ::= SEQUENCE {
+    //   tbsCertificate       TBSCertificate,  -- SEQUENCE, tag 0x30
+    //   signatureAlgorithm   AlgorithmIdentifier,
+    //   signatureValue       BIT STRING
+    // }
+    // A previous revision treated tbsCertificate as `[0] EXPLICIT`, which
+    // matches no produced X.509 encoding and made getPeerCertificate()
+    // elide subject/issuer/validity on every real loopback cert (bd-il0d9).
+    let (tbs_tag, tbs_len) = cert.peek_header()?;
+    if tbs_tag != tag::SEQUENCE {
         return Err(DerError::UnsupportedTag {
-            offset: cert.pos - 1,
+            offset: cert.pos.saturating_sub(1),
             tag: tbs_tag,
         });
     }
-    let tbs_len = cert.read_length()?;
     let tbs_body = cert.read_body(tbs_len)?;
     let mut tbs = Reader::new(tbs_body);
     tbs.enter()?;
 
-    // Skip any optional [0] EXPLICIT version field.
+    // Skip optional [0] EXPLICIT version (v3 certificates).
     if tbs.remaining() > 0 && tbs.input[tbs.pos] == tag::CONTEXT_SPECIFIC_0 {
         tbs.skip_tlv()?;
     }
 
     // serialNumber INTEGER
-    tbs.skip_tlv()?;
+    let (serial_tag, serial_len) = tbs.peek_header()?;
+    if serial_tag != tag::INTEGER {
+        return Err(DerError::UnsupportedTag {
+            offset: tbs.pos.saturating_sub(1),
+            tag: serial_tag,
+        });
+    }
+    let _serial = tbs.read_body(serial_len)?;
     // signature AlgorithmIdentifier SEQUENCE
     tbs.skip_tlv()?;
 
@@ -612,12 +625,76 @@ fn month_abbr(month: u32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::tag;
     use super::*;
 
-    /// A real, self-signed, RFC-compliant X.509v3 certificate (PEM from
-    /// the engine's existing `tls_root_certificates` fixture, base64-decoded).
-    /// Subject CN=ISRG Root X1, validity 2015-06-04..2035-06-04, public.
-    const ISRG_ROOT_X1_DER: &[u8] = &[
+    fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+        assert!(
+            body.len() <= 127,
+            "test helper only supports short-form DER length"
+        );
+        let mut out = Vec::with_capacity(2 + body.len());
+        out.push(tag);
+        out.push(body.len() as u8);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn concat(parts: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for part in parts {
+            out.extend_from_slice(part);
+        }
+        out
+    }
+
+    fn name_with_cn(cn: Option<&str>) -> Vec<u8> {
+        let Some(cn) = cn else {
+            return tlv(tag::SEQUENCE, &[]);
+        };
+        let value = tlv(tag::PRINTABLE_STRING, cn.as_bytes());
+        let atv = tlv(
+            tag::SEQUENCE,
+            &concat(&[&[0x06, 0x03, 0x55, 0x04, 0x03], value.as_slice()]),
+        );
+        let rdn = tlv(tag::SET, &atv);
+        tlv(tag::SEQUENCE, &rdn)
+    }
+
+    fn dummy_alg_id() -> Vec<u8> {
+        tlv(
+            tag::SEQUENCE,
+            &concat(&[&[0x06, 0x01, 0x2a], &[0x05, 0x00]]),
+        )
+    }
+
+    fn validity_2015_2035() -> Vec<u8> {
+        let not_before = tlv(tag::UTCTIME, b"150604110438Z");
+        let not_after = tlv(tag::UTCTIME, b"350604110438Z");
+        tlv(
+            tag::SEQUENCE,
+            &concat(&[not_before.as_slice(), not_after.as_slice()]),
+        )
+    }
+
+    /// RFC 5280 Certificate wrapping a TBSCertificate SEQUENCE.
+    fn self_signed_der(cn: Option<&str>, include_v3_version: bool) -> Vec<u8> {
+        let mut tbs_body = Vec::new();
+        if include_v3_version {
+            tbs_body.extend(tlv(tag::CONTEXT_SPECIFIC_0, &[0x02, 0x01, 0x02]));
+        }
+        tbs_body.extend([tag::INTEGER, 0x01, 0x01]);
+        tbs_body.extend(dummy_alg_id());
+        tbs_body.extend(name_with_cn(cn));
+        tbs_body.extend(validity_2015_2035());
+        tbs_body.extend(name_with_cn(cn));
+        let tbs = tlv(tag::SEQUENCE, &tbs_body);
+        tlv(tag::SEQUENCE, &tbs)
+    }
+
+    /// Prefix of the real ISRG Root X1 DER (serial 82:10:cf:b0:…). Declared
+    /// outer length exceeds the truncated slice, so parse must fail closed.
+    const ISRG_ROOT_X1_DER_PREFIX: &[u8] = &[
         0x30, 0x82, 0x05, 0xba, 0x30, 0x82, 0x03, 0xa2, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x10,
         0x82, 0x10, 0xcf, 0xb0, 0xd2, 0x40, 0xe3, 0x59, 0x50, 0x07, 0xe3, 0x62, 0x54, 0xa0, 0x37,
         0x8d, 0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05,
@@ -637,13 +714,25 @@ mod tests {
     ];
 
     #[test]
-    fn parses_isrg_root_x1_subject_and_issuer() {
-        let md = parse_x509_metadata(ISRG_ROOT_X1_DER).expect("ISRG Root X1 should parse");
+    fn parses_self_signed_cn_and_validity() {
+        let der = self_signed_der(Some("ISRG Root X1"), true);
+        let md = parse_x509_metadata(&der).expect("hand-rolled v3 cert should parse");
         assert_eq!(md.subject_cn.as_deref(), Some("ISRG Root X1"));
         assert_eq!(md.issuer_cn.as_deref(), Some("ISRG Root X1"));
-        // Validity: 2015-06-04 11:04:38 GMT .. 2035-06-04 11:04:38 GMT
         assert_eq!(md.valid_from.as_deref(), Some("Jun 04 11:04:38 2015 GMT"));
         assert_eq!(md.valid_to.as_deref(), Some("Jun 04 11:04:38 2035 GMT"));
+    }
+
+    #[test]
+    fn truncated_isrg_prefix_is_rejected() {
+        let err = parse_x509_metadata(ISRG_ROOT_X1_DER_PREFIX).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DerError::Truncated { .. } | DerError::ElementTooLarge { .. }
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -698,25 +787,7 @@ mod tests {
 
     #[test]
     fn missing_cn_returns_none() {
-        // Hand-rolled minimal certificate with empty issuer/Name.
-        // Layout: SEQUENCE { tbs [0] EXPLICIT SEQUENCE { version omitted,
-        // serialNumber INTEGER 1, signature AlgorithmIdentifier,
-        // issuer SEQUENCE {}, validity SEQUENCE { notBefore UTCTime,
-        // notAfter UTCTime }, subject SEQUENCE {} } }
-        let cert: Vec<u8> = vec![
-            0x30, 0x20, // outer SEQUENCE body 32 bytes
-            0xa0, 0x1e, // [0] EXPLICIT tbsCertificate (30 bytes)
-            0x30, 0x1c, // SEQUENCE (28 bytes)
-            // serialNumber INTEGER 1
-            0x02, 0x01, 0x01, // signature AlgorithmIdentifier SEQUENCE { OID, NULL }
-            0x30, 0x05, 0x06, 0x01, 0x2a, 0x05, 0x00, // issuer Name (empty SEQUENCE)
-            0x30, 0x00,
-            // validity SEQUENCE { UTCTime 2015-06-04 11:04:38Z, UTCTime 2035-06-04 11:04:38Z }
-            0x30, 0x10, 0x17, 0x0d, b'1', b'5', b'0', b'6', b'0', b'4', b'1', b'1', b'0', b'4',
-            b'3', b'8', b'Z', 0x17, 0x0d, b'3', b'5', b'0', b'6', b'0', b'4', b'1', b'1', b'0',
-            b'4', b'3', b'8', b'Z', // subject Name (empty SEQUENCE)
-            0x30, 0x00,
-        ];
+        let cert = self_signed_der(None, false);
         let md = parse_x509_metadata(&cert).expect("valid empty-CN cert should parse");
         assert!(md.subject_cn.is_none());
         assert!(md.issuer_cn.is_none());

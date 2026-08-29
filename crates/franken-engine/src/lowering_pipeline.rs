@@ -11601,7 +11601,18 @@ fn try_lower_simple_binary_expression_to_ir1(
     else {
         return Ok(false);
     };
-    if *operator == BinaryOperator::Instanceof {
+    if matches!(
+        *operator,
+        BinaryOperator::Instanceof
+            | BinaryOperator::LogicalAnd
+            | BinaryOperator::LogicalOr
+            | BinaryOperator::NullishCoalescing
+    ) {
+        // Logical operators must keep their short-circuit Jump form
+        // (`try_lower_logical_expression_to_ir1`). Emitting a BinaryOp
+        // here made nested `Array.isArray(value) && value.length`
+        // bodies fail IR2/IR3 with "logical operators must be
+        // short-circuit lowered before IR3" (bd-jux2l).
         return Ok(false);
     }
     lower_expression_to_ir1(
@@ -26257,7 +26268,15 @@ fn ir1_exception_flow_label(
         // emit("error", payload) throws the payload value itself carrying
         // the joined emit-argument labels; a payload-less emit throws an
         // engine-constructed Error and stays fail-high below.
-        Ir1Op::CallMethod { .. } if is_event_emitter_error_throw => {
+        //
+        // Finite engine methods (summarized callee, primitive receiver, or
+        // closed aggregate) share the HostCall operand-derived exception
+        // contract. Without this, `'x'.repeat(n)` inside `try` around
+        // `tls.connect({ servername })` poisoned catch as TopSecret and
+        // denied `console.log(error.name)` (bd-jux2l).
+        Ir1Op::CallMethod { .. }
+            if is_event_emitter_error_throw || operation_exception_is_operand_derived =>
+        {
             Some(Label::Internal.join(inferred_label))
         }
         // Named builtins are fail-high unless their exception contract is
@@ -26583,10 +26602,15 @@ fn simulate_ir2_flow_labels(
                 // over the receiver's own label. Failing them high made
                 // nested TLS callbacks a TopSecret -> Internal console
                 // denial after nested-body IFC walking (bd-jux2l / bd-wyazf).
-                let label = if callee_is_summarized
+                let finite_engine_method = callee_is_summarized
                     || receiver_shape == FlowValueShape::Primitive
-                    || receiver_shape.is_closed()
-                {
+                    || receiver_shape.is_closed();
+                // Payload-less EventEmitter.emit stays fail-high (engine Error).
+                // The payload-throw path is handled via
+                // `operation_exception_is_event_emitter_error` above.
+                operation_exception_is_operand_derived = finite_engine_method
+                    && callee_shape != FlowValueShape::EventEmitterEmitMethod;
+                let label = if finite_engine_method {
                     join_flow_values(&inputs)
                 } else {
                     Label::TopSecret
@@ -26907,6 +26931,29 @@ fn simulate_ir2_flow_labels(
                         FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
                         Ir1PropertyKey::Dynamic,
                     ) => FlowValueShape::ClosedResult,
+                    // bd-jux2l: TLSSocket observation methods are engine-owned
+                    // even when the receiver is an isolated nested-body
+                    // LoadBinding (Unknown shape). Without this, nested
+                    // `c.getPeerCertificate()` / `getProtocol()` CallMethods
+                    // fail-high TopSecret into console.log.
+                    (
+                        FlowValueShape::Unknown
+                        | FlowValueShape::FreshAggregate
+                        | FlowValueShape::ClosedResult,
+                        Ir1PropertyKey::Static(key),
+                    ) if matches!(
+                        key.as_str(),
+                        Some(
+                            "getPeerCertificate"
+                                | "getProtocol"
+                                | "getCipher"
+                                | "isSessionReused"
+                                | "getSession"
+                        )
+                    ) =>
+                    {
+                        FlowValueShape::Callable
+                    }
                     _ => FlowValueShape::Unknown,
                 };
                 inputs.push(object);
@@ -35067,6 +35114,59 @@ mod tests {
                client.on('data', chunk => body += chunk);\n\
                client.on('end', () => { console.log(body); server.close(); });\n\
              });\n",
+        );
+        assert_flow_clean(
+            "nested_get_peer_certificate",
+            "const tls = require('tls');\n\
+             const CERT = '-----BEGIN CERTIFICATE-----\\nAQIDBA==\\n-----END CERTIFICATE-----';\n\
+             const KEY = 'engine-contained-private-marker';\n\
+             const server = tls.createServer({ cert: CERT, key: KEY }, sock => { sock.end(); });\n\
+             server.listen(0, '127.0.0.1', () => {\n\
+               const c = tls.connect({\n\
+                 port: server.address().port,\n\
+                 host: '127.0.0.1',\n\
+                 rejectUnauthorized: false,\n\
+               }, () => {\n\
+                 const p = c.getPeerCertificate();\n\
+                 console.log('cn:' + p.subject.CN);\n\
+                 c.end();\n\
+               });\n\
+               c.on('close', () => server.close());\n\
+             });\n",
+        );
+        assert_flow_clean(
+            "pre_handshake_get_protocol",
+            "const tls = require('tls');\n\
+             const client = tls.connect({ port: 65535, host: '127.0.0.1', rejectUnauthorized: false });\n\
+             console.log(client.getProtocol() === undefined, client.getCipher() === undefined);\n\
+             client.on('error', () => {});\n",
+        );
+        assert_flow_clean(
+            "default_param_ciphers_and",
+            "const tls = require('tls');\n\
+             function hasCiphers(value = tls.getCiphers()) {\n\
+               return Array.isArray(value) && value.length > 0;\n\
+             }\n\
+             console.log(hasCiphers());\n",
+        );
+        assert_flow_clean(
+            "option_string_rangeerror_name",
+            "const tls = require('tls');\n\
+             try {\n\
+               tls.createServer({ ALPNProtocols: { length: 9223372036854775807 } });\n\
+             } catch (error) {\n\
+               console.log(error.name);\n\
+             }\n\
+             try {\n\
+               tls.connect({\n\
+                 port: 1,\n\
+                 host: '127.0.0.1',\n\
+                 servername: 'x'.repeat(254),\n\
+                 rejectUnauthorized: false\n\
+               });\n\
+             } catch (error) {\n\
+               console.log(error.name);\n\
+             }\n",
         );
     }
 

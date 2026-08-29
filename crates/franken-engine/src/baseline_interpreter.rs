@@ -14340,7 +14340,7 @@ impl InterpreterCore {
         args: RegRange,
         is_tls: bool,
     ) -> Result<Value, InterpreterError> {
-        let (port, mut host, options_obj) = self.parse_loopback_connect_args(args)?;
+        let (port, host, options_obj) = self.parse_loopback_connect_args(args)?;
         let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let options_ref = options_obj.as_ref().unwrap_or(&first);
         let prepared_tls = if is_tls {
@@ -15543,38 +15543,41 @@ impl InterpreterCore {
     }
 
     fn tls_root_certificates(&mut self) -> Result<Value, InterpreterError> {
+        // Official ISRG Root X1 from https://letsencrypt.org/certs/isrgrootx1.pem
+        // (SHA1 CA:BD:2A:79:A1:07:6A:31:F2:1D:25:36:35:CB:03:9D:43:29:A5:E8).
+        // A widely copied PEM with serial `RQB42JUo340w` is ASN.1-corrupt
+        // (cryptography ExtraData / Node ERR_OSSL_ASN1_TOO_LONG).
         const HERMETIC_ROOT_CERTIFICATES: &[&str] = &[concat!(
             "-----BEGIN CERTIFICATE-----\n",
-            "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRQB42JUo340wDQYJKoZIhvcNAQELBQAw\n",
+            "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n",
             "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n",
             "cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n",
             "WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n",
             "ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n",
-            "MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJggGh2XTpbkgzld5\n",
-            "bEEtd904biuxxKyhxdaLwMrVOFsDT840IsCpuU7hZv5PDPl24dAoXOCTBVdYCRQj\n",
-            "nLNFdDd+TbFiV454Jud8fYDKHQBKUXmukPBPgVTrVoAkBa5nPUd0NDubBRNScK82\n",
-            "VU5BQqm100fMUmeR8othhnA163CMfMyJaP4qbUglEI5wIhXGMkeU78LwtZNTbkVH\n",
-            "r001BQ7v47mdIh3ko9J358lJ5MT+OgNndJA7TrUchWyaNNgh4MrOS0BlAF5Z61mx\n",
-            "Tk84nDbevSb3TvJNQGoWPn6+69vu7r2x3XOGcz846s4SmOjKA09WQDnxtJaTSBo3\n",
-            "4v6WDWXRhOVTK3bGXq0/0BXur+QmmUULkpvcJA62QW5sMpmkW3KiyNePnmJK1666\n",
-            "VFbDeViTueREXmnghBhPag47uJQytquno646DZnA8urRqtU4UxFKVQov144wMT55\n",
-            "6BQXYDetRHIbJGdlJ58gwP0Z4G48a70QqNf+QCEake+K98xlLEn08T98b5K361OO\n",
-            "79b2kdX6CBusSBDZ8570/06FPnlUCcC8LX5FL24v870v5PEnoq1QKJ7Aa8QGcSkL\n",
-            "hzPFWSjzDKPkKPNnLsZzQLBQzvlpmGL244IokGOm262LILrew9uEv4GTUEVVYLY4\n",
-            "SUOT8JZ37zg2vxQNUAHRRizmTKhFLN/iecgrp6LoH0VYNlSYNdRRnwIDAQABo0Iw\n",
-            "QDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUebRZ\n",
-            "KN4o01GHMorTBgBhGpjtHTCwDQYJKoZIhvcNAQELBQADggIBABn9bb6hQgWFiYFs\n",
-            "HsOGPTTO0wQYZd89xwd55++c+eeBMLGBK00EEUya+U0CEcLGIJK+68KGOVW350tz\n",
-            "5MCbgtT9WGqIvAx+4342Os1OIJuR5SLPO980WDRIbvnZLq9k9t654ee6gAKoVFiP\n",
-            "06UQkKUMdPTUM4Bl8amOJpH00R/5xskZ096vYtWwR5ee385/65BunHX09/uvUwNi\n",
-            "w1sezpG9YB+IO8zma0RwGBF88+WRBQGTVDPvnCJKZX87tNW4htHZRmbWZTtnpzDY\n",
-            "FIBPdJNxGmtWTKsKSq5OBeaW876fFiXY1e4b869UCEPbOKyFEltnNmquM00eT97b\n",
-            "mWZf86OWALPO7cmSG/40eaX07OEsnR+vlOvOr2GO6If+29msFG2T76JC5WQOOYOi\n",
-            "ccWApXYVMbxS76APsG8u6URZeJ5af/4DtC1zMBBO48rDYAhTrAGnXU37Lay5gNie\n",
-            "m43onnMPTogoUHz9CNFmlSZHBJTrxmKuidKGfwT8W/80uPGUaxahnCqcvL3BUeVI\n",
-            "GySp4w565D2LK85988226MCXBL64S614n2NaQVM302ISICbKX30A34645Nhpbbf6\n",
-            "74/7TGD7JThq4EReCeamZeXVSpwcSkGoTKdZNmspn0MH44FWZGoWootNTe/82599\n",
-            "P2K0325R3ShZaXM242MxsgG9OPEb\n",
+            "MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n",
+            "h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n",
+            "0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n",
+            "A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n",
+            "T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n",
+            "B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n",
+            "B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n",
+            "KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n",
+            "OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n",
+            "jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n",
+            "qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n",
+            "rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n",
+            "HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n",
+            "hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n",
+            "ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n",
+            "3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n",
+            "NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n",
+            "ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur\n",
+            "TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC\n",
+            "jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc\n",
+            "oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq\n",
+            "4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\n",
+            "mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n",
+            "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n",
             "-----END CERTIFICATE-----"
         )];
         let roots: Vec<Value> = HERMETIC_ROOT_CERTIFICATES

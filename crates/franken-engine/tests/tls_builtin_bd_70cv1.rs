@@ -76,12 +76,51 @@ const LOCALHOST_CERT_MATERIAL: &str = r#"
     const KEY = 'REAL_KEY_PLACEHOLDER';
 "#;
 
+/// Escape a PEM (or any text) so it is legal inside a JS single-quoted
+/// literal. Real newlines in the Rust PEM constants would otherwise
+/// terminate the guest string and yield `unterminated or malformed
+/// string literal` (bd-il0d9 fixtures 0008/0022/0023).
+fn js_embed_single_quoted(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 // Build the material with the real PEM substituted in. We assemble the
 // raw string at runtime so the test source stays readable.
 fn localhost_cert_material() -> String {
     LOCALHOST_CERT_MATERIAL
-        .replace("REAL_CERT_PLACEHOLDER", LOCALHOST_CERT_PEM)
-        .replace("REAL_KEY_PLACEHOLDER", LOCALHOST_KEY_PEM)
+        .replace(
+            "REAL_CERT_PLACEHOLDER",
+            &js_embed_single_quoted(LOCALHOST_CERT_PEM),
+        )
+        .replace(
+            "REAL_KEY_PLACEHOLDER",
+            &js_embed_single_quoted(LOCALHOST_KEY_PEM),
+        )
+}
+
+#[test]
+fn localhost_cert_material_embeds_pem_as_js_single_quoted_literals() {
+    let material = localhost_cert_material();
+    assert!(
+        material.contains("const CERT = '-----BEGIN CERTIFICATE-----\\n"),
+        "PEM newlines must be JS-escaped, got: {material}"
+    );
+    assert!(
+        !material.contains("const CERT = '-----BEGIN CERTIFICATE-----\nM"),
+        "raw newline inside the CERT single-quoted literal is a JS parse error"
+    );
+    assert!(
+        material.contains("-----END CERTIFICATE-----';"),
+        "CERT literal must close on the same JS statement, got: {material}"
+    );
+    assert!(
+        material.contains("-----END PRIVATE KEY-----';"),
+        "KEY literal must close on the same JS statement, got: {material}"
+    );
 }
 
 #[test]

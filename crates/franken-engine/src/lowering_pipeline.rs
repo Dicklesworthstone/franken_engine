@@ -26106,14 +26106,19 @@ fn hostcall_exception_is_operand_derived(
         "builtin:NetCreateServer"
         | "builtin:NetConnect"
         | "builtin:NetCreateConnection"
-        | "builtin:NetServerAddress" => !inputs.is_empty()
-            && inputs.iter().all(|value| {
-                value.shape.is_closed()
-                    || matches!(
-                        value.shape,
-                        FlowValueShape::Callable | FlowValueShape::CallableContainer
-                    )
-            }),
+        | "builtin:NetServerAddress"
+        | "builtin:TlsCreateServer"
+        | "builtin:TlsConnect"
+        | "builtin:TlsCreateSecureContext"
+        | "builtin:TlsCheckServerIdentity"
+        | "builtin:TlsGetCiphers"
+        | "builtin:TlsRootCertificates" => inputs.iter().all(|value| {
+            value.shape.is_closed()
+                || matches!(
+                    value.shape,
+                    FlowValueShape::Callable | FlowValueShape::CallableContainer
+                )
+        }),
         // qs.stringify walks own enumerable string keys of a closed data
         // object and formats primitive values. Fresh object literals and
         // parse results stay finite; unknown objects remain fail-high.
@@ -26572,7 +26577,16 @@ fn simulate_ir2_flow_labels(
                 );
                 inputs.push(callee);
                 inputs.push(receiver);
-                let label = if callee_is_summarized {
+                // Primitive receivers (`str.startsWith`, `str.endsWith`) and
+                // engine-owned closed aggregates (hermetic net/tls sockets
+                // and `tls.rootCertificates` entries) are finite operations
+                // over the receiver's own label. Failing them high made
+                // nested TLS callbacks a TopSecret -> Internal console
+                // denial after nested-body IFC walking (bd-jux2l / bd-wyazf).
+                let label = if callee_is_summarized
+                    || receiver_shape == FlowValueShape::Primitive
+                    || receiver_shape.is_closed()
+                {
                     join_flow_values(&inputs)
                 } else {
                     Label::TopSecret
@@ -26880,15 +26894,36 @@ fn simulate_ir2_flow_labels(
                     {
                         FlowValueShape::Callable
                     }
+                    // bd-jux2l: engine-owned arrays (`tls.rootCertificates`,
+                    // `tls.getCiphers()`) expose finite `length` and index
+                    // reads. Without this, `roots[0].startsWith` saw an
+                    // Unknown receiver and fail-high CallMethod poisoned
+                    // the console sink.
+                    (
+                        FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
+                        Ir1PropertyKey::Static(key),
+                    ) if key.as_str() == Some("length") => FlowValueShape::Primitive,
+                    (
+                        FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
+                        Ir1PropertyKey::Dynamic,
+                    ) => FlowValueShape::ClosedResult,
                     _ => FlowValueShape::Unknown,
                 };
                 inputs.push(object);
                 let label = join_flow_values(&inputs);
-                // Finite Object.keys `.join` lookup cannot alias-mutate other
-                // closed values; keep FreshAggregate bindings intact for later
-                // stringify / own-property reads on the same object.
-                if shape != FlowValueShape::OwnKeyJoinMethod
-                    && inputs.last().map(|obj| obj.shape) != Some(FlowValueShape::ConstantsObject)
+                // Finite Object.keys `.join` lookup and engine-owned array
+                // `length` / index / string-method lookups cannot alias-mutate
+                // other closed values; keep FreshAggregate bindings intact
+                // for later stringify or own-property reads on the same object.
+                if !matches!(
+                    shape,
+                    FlowValueShape::OwnKeyJoinMethod
+                        | FlowValueShape::Primitive
+                        | FlowValueShape::ClosedResult
+                        | FlowValueShape::Callable
+                        | FlowValueShape::EventEmitterFluentMethod
+                        | FlowValueShape::EventEmitterEmitMethod
+                ) && inputs.last().map(|obj| obj.shape) != Some(FlowValueShape::ConstantsObject)
                 {
                     invalidate_nonprimitive_flow_shapes(&mut value_stack);
                     invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
@@ -27590,11 +27625,25 @@ fn simulate_ir2_flow_labels(
                             | "builtin:NetConnect"
                             | "builtin:NetCreateConnection"
                             | "builtin:NetServerAddress"
+                            | "builtin:TlsCreateServer"
+                            | "builtin:TlsConnect"
+                            | "builtin:TlsCreateSecureContext"
                     )
                 {
-                    // bd-dmnqx: the constructed server/socket (and the
-                    // address summary) are engine-owned data aggregates.
+                    // bd-dmnqx / bd-jux2l: constructed net/tls server/socket
+                    // (and the TLS secure-context handle) are engine-owned
+                    // data aggregates.
                     result_shape = FlowValueShape::FreshAggregate;
+                }
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:TlsGetCiphers"
+                            | "builtin:TlsRootCertificates"
+                            | "builtin:TlsCheckServerIdentity"
+                    )
+                {
+                    result_shape = FlowValueShape::ClosedResult;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:ArrayIsArrayFunction" {
                     result_shape = FlowValueShape::ArrayIsArrayFunction;
@@ -27888,11 +27937,12 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
     if normalized == "hostcall.invoke" {
         return Label::Internal;
     }
-    // `builtin:Net*` is the authenticated, engine-owned hermetic loopback
-    // facade. Callback registration and in-memory socket state are not public
-    // network egress and may retain values at any lattice level. Actual host
-    // network operations use `net.*` capabilities and remain Public below.
-    if normalized.starts_with("builtin:net") {
+    // `builtin:Net*` / `builtin:Tls*` are authenticated, engine-owned
+    // hermetic loopback facades. Callback registration and in-memory
+    // socket/certificate state are not public network egress and may
+    // retain values at any lattice level. Actual host network operations
+    // use `net.*` capabilities and remain Public below.
+    if normalized.starts_with("builtin:net") || normalized.starts_with("builtin:tls") {
         return Label::TopSecret;
     }
     // Authenticated crypto lifecycle calls only mutate/read the engine-private
@@ -34963,6 +35013,60 @@ mod tests {
             !ops_deep_match(&ops, &|op| matches!(op,
                 Ir1Op::HostCall { capability, .. } if capability == "module:require")),
             "an unshadowed supported default expression should confirm the TLS alias"
+        );
+    }
+
+    #[test]
+    fn hermetic_tls_loopback_and_primitive_string_methods_are_flow_clean_bd_jux2l() {
+        fn assert_flow_clean(name: &str, source: &str) {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_jux2l.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+            let ir2 = lower_ir1_to_ir2_with_host_io_exception_provenance(
+                &ir1,
+                HostIoExceptionProvenance::ProviderInternal,
+            )
+            .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+            .module;
+            let context =
+                LoweringContext::new("trace-bd-jux2l", "decision-bd-jux2l", "policy-bd-jux2l");
+            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &context) {
+                panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+        }
+
+        assert_flow_clean(
+            "primitive_starts_with",
+            "console.log('hello'.startsWith('h'));\n",
+        );
+        assert_flow_clean(
+            "root_certificates_starts_with",
+            "const tls = require('tls');\n\
+             const roots = tls.rootCertificates;\n\
+             console.log(Array.isArray(roots), roots.length >= 1);\n\
+             console.log(roots[0].startsWith('-----BEGIN CERTIFICATE-----\\n'));\n\
+             console.log(roots[0].endsWith('\\n-----END CERTIFICATE-----'));\n",
+        );
+        assert_flow_clean(
+            "nested_connect_callback",
+            "const tls = require('tls');\n\
+             const CERT = '-----BEGIN CERTIFICATE-----\\nAQIDBA==\\n-----END CERTIFICATE-----';\n\
+             const KEY = 'engine-contained-private-marker';\n\
+             const server = tls.createServer({ cert: CERT, key: KEY }, socket => {\n\
+               socket.on('data', chunk => socket.end('ECHO:' + chunk));\n\
+             });\n\
+             server.listen(0, '127.0.0.1', () => {\n\
+               const port = server.address().port;\n\
+               const client = tls.connect(port, '127.0.0.1', { rejectUnauthorized: false }, () => {\n\
+                 client.write('pos-four');\n\
+               });\n\
+               let body = '';\n\
+               client.on('data', chunk => body += chunk);\n\
+               client.on('end', () => { console.log(body); server.close(); });\n\
+             });\n",
         );
     }
 

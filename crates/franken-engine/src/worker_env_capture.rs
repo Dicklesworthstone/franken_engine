@@ -417,12 +417,11 @@ impl LinuxX64EnvCapture {
 
     /// Get the kernel release from `uname`.
     fn get_kernel_release(&self) -> Result<String, EnvCaptureError> {
-        let output = Command::new("uname")
-            .arg("-r")
-            .output()
-            .map_err(|_| EnvCaptureError::CommandExecution {
+        let output = Command::new("uname").arg("-r").output().map_err(|_| {
+            EnvCaptureError::CommandExecution {
                 command: "uname -r".to_string(),
-            })?;
+            }
+        })?;
 
         if !output.status.success() {
             return Err(EnvCaptureError::CommandFailed {

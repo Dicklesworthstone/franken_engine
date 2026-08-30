@@ -26577,6 +26577,12 @@ fn simulate_ir2_flow_labels(
                 let receiver_shape = receiver.shape;
                 let callee = pop_flow_value(&mut value_stack)?;
                 let callee_shape = callee.shape;
+                if std::env::var_os("FRANKEN_IFC_DEBUG").is_some() {
+                    eprintln!(
+                        "[ifc-debug] CallMethod arg_count={arg_count} callee_shape={callee_shape:?} receiver_shape={:?}",
+                        receiver_shape
+                    );
+                }
                 // bd-l0d6z Node parity: emit("error", payload) with no
                 // listener throws the payload VALUE itself, labeled with the
                 // joined emit-argument labels (runtime

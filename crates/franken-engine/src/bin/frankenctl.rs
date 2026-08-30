@@ -10693,7 +10693,9 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
                 Ok(0)
             } else {
                 let code = status.code().unwrap_or(-1);
-                Err(format!("Signature drift gate failed with exit code: {code}"))
+                Err(format!(
+                    "Signature drift gate failed with exit code: {code}"
+                ))
             }
         }
         GatesMode::CompoundingRedTeam { out_dir, config } => {
@@ -15393,10 +15395,8 @@ mod tests {
 
     #[test]
     fn lowering_gap_emits_a_real_inventory_bundle() {
-        let out_dir = std::env::temp_dir().join(format!(
-            "frankenctl-lowering-gap-{}",
-            current_unix_ns()
-        ));
+        let out_dir =
+            std::env::temp_dir().join(format!("frankenctl-lowering-gap-{}", current_unix_ns()));
 
         let exit = execute_reports(ReportsArgs {
             mode: ReportsMode::LoweringGap {
@@ -15415,8 +15415,8 @@ mod tests {
         assert!(out_dir.join("trace_ids.json").is_file());
         assert!(out_dir.join("step_logs").is_dir());
 
-        let manifest_text = std::fs::read_to_string(out_dir.join("run_manifest.json"))
-            .expect("manifest read");
+        let manifest_text =
+            std::fs::read_to_string(out_dir.join("run_manifest.json")).expect("manifest read");
         let manifest: serde_json::Value =
             serde_json::from_str(&manifest_text).expect("manifest json");
         assert!(manifest.is_object(), "run manifest must be a JSON object");

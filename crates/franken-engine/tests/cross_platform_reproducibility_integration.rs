@@ -281,8 +281,7 @@ fn export_results_round_trips_losslessly() {
 fn platform_environment_is_real_on_host_and_marked_unavailable_remotely() {
     let input = ReproducibilityTestInput {
         test_id: "env_capture_honesty".to_string(),
-        description: "host env must be captured, remote env must be marked unavailable"
-            .to_string(),
+        description: "host env must be captured, remote env must be marked unavailable".to_string(),
         source_code: "console.log('env')".to_string(),
         output_type: OutputType::Stdout,
         module_type: ModuleType::Script,
@@ -313,7 +312,11 @@ fn platform_environment_is_real_on_host_and_marked_unavailable_remotely() {
                 "host platform environment must be captured, not marked unavailable"
             );
             assert!(
-                !exec.worker_env.rust_toolchain.version.starts_with("unavailable"),
+                !exec
+                    .worker_env
+                    .rust_toolchain
+                    .version
+                    .starts_with("unavailable"),
                 "host toolchain version must be captured, not marked unavailable"
             );
         } else {

@@ -2381,10 +2381,16 @@ mod tests {
             "fs:write",
             &["/test.txt".to_string(), "Hello, World!".to_string()],
         );
-        assert!(matches!(write_result, Err(EffectError::CapabilityDenied { .. })));
+        assert!(matches!(
+            write_result,
+            Err(EffectError::CapabilityDenied { .. })
+        ));
 
         let read_result = adapter.dispatch_hostcall("fs:read", &["/test.txt".to_string()]);
-        assert!(matches!(read_result, Err(EffectError::CapabilityDenied { .. })));
+        assert!(matches!(
+            read_result,
+            Err(EffectError::CapabilityDenied { .. })
+        ));
 
         // Note: `adapter.can_handle("fs:read")` still reports true because
         // the legacy capability mapping recognizes the hostcall name; the

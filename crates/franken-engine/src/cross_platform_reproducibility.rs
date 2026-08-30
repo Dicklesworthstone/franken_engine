@@ -340,20 +340,16 @@ impl CrossPlatformReproducibilityTester {
     ) -> Result<WorkerEnvironment, ReproducibilityTestError> {
         if Some(platform) == host_platform() {
             return match platform {
-                WorkerPlatform::MacOSArm64 => {
-                    crate::worker_env_capture::MacOSArm64EnvCapture
-                        .capture_environment()
-                        .map_err(|e| ReproducibilityTestError::Configuration {
-                            details: format!("host environment capture failed: {e}"),
-                        })
-                }
-                WorkerPlatform::WindowsX64 => {
-                    crate::worker_env_capture::WindowsX64EnvCapture
-                        .capture_environment()
-                        .map_err(|e| ReproducibilityTestError::Configuration {
-                            details: format!("host environment capture failed: {e}"),
-                        })
-                }
+                WorkerPlatform::MacOSArm64 => crate::worker_env_capture::MacOSArm64EnvCapture
+                    .capture_environment()
+                    .map_err(|e| ReproducibilityTestError::Configuration {
+                        details: format!("host environment capture failed: {e}"),
+                    }),
+                WorkerPlatform::WindowsX64 => crate::worker_env_capture::WindowsX64EnvCapture
+                    .capture_environment()
+                    .map_err(|e| ReproducibilityTestError::Configuration {
+                        details: format!("host environment capture failed: {e}"),
+                    }),
                 // `host_platform()` only selects LinuxX64 on x86_64 Linux, but
                 // the capture itself re-validates the platform fail-closed.
                 WorkerPlatform::LinuxX64 | WorkerPlatform::LinuxArm64 => {

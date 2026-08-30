@@ -18,7 +18,7 @@
     "scope": "ifc",
     "state": "observed"
   },
-  "generated_at_utc": "2026-08-30T01:39:10.622766+00:00",
+  "generated_at_utc": "2026-08-30T08:06:44.611347+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -32,14 +32,14 @@
   "outputs": {
     "decision_artifacts": "generated",
     "environment_fingerprint": {
-      "digest": "sha256:33df98daa599ffe7f46c074f2b01548ab364dfec20f2b13e535a6aa9066169bb",
+      "digest": "sha256:c2de9b2a0ad29ef480b85920f6efe67079906e77e0afcd39b891015829cd244c",
       "fields": {
         "architecture": "x86_64",
         "cargo_version": "cargo 1.100.0-nightly (e8cb624d5 2026-08-22)",
         "kernel_release": "7.0.0-30-generic",
         "platform": "linux",
         "rustc_host_triple": "x86_64-unknown-linux-gnu",
-        "rustc_version": "rustc 1.100.0-nightly (17fd5b8a3 2026-08-28)"
+        "rustc_version": "rustc 1.100.0-nightly (fd7ed57df 2026-08-29)"
       },
       "material_digest": "sha256:a452b6cb06cba17409fb6dab125704955dc93575d644a10696c7a24fd7b056db",
       "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
@@ -48,7 +48,7 @@
     "exit_code": 0,
     "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh",
     "verification_result": "passed",
-    "verified_at_utc": "2026-08-30T01:39:10.622766+00:00"
+    "verified_at_utc": "2026-08-30T08:06:44.611347+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.1",
@@ -60,11 +60,11 @@
     "immutable": true,
     "policy": "permanent"
   },
-  "schema_hash": "sha256:7b7eb8bcf8b7b1508f65a23032a039e866dfcf7952e0aeac2c375ae445324e44",
+  "schema_hash": "sha256:5e0bfa2670ff66eca5978ec0a8f0ad091c5ef36f522808a7114e3830341027a2",
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "08aa44884d7d6ff6739a09eed84d08bd19ceaa1d",
+    "commit": "74fec6198d5786f7c53a60c8f867b437198f4015",
     "repository": "franken_engine",
     "worktree_dirty": false
   },

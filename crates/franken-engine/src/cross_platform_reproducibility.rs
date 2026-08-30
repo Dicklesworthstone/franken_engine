@@ -8,7 +8,7 @@
 
 use crate::hash_tiers::ContentHash;
 use crate::rch_worker_registry::{RchWorkerError, RchWorkerRegistry, WorkerPlatform};
-use crate::worker_env_capture::WorkerEnvironment;
+use crate::worker_env_capture::{WorkerEnvCapture, WorkerEnvironment};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -184,6 +184,23 @@ impl std::fmt::Debug for CrossPlatformReproducibilityTester {
     }
 }
 
+/// The worker platform this process is running on, when it is one of the
+/// platforms that has a real environment capture implementation. Platforms
+/// without a capture implementation (e.g. Linux arm64 hosts) deliberately
+/// return `None` so callers fall through to explicit unavailability markers
+/// instead of a fabricated environment.
+fn host_platform() -> Option<WorkerPlatform> {
+    if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+        Some(WorkerPlatform::LinuxX64)
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        Some(WorkerPlatform::MacOSArm64)
+    } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
+        Some(WorkerPlatform::WindowsX64)
+    } else {
+        None
+    }
+}
+
 impl CrossPlatformReproducibilityTester {
     /// Create a new reproducibility tester.
     pub fn new(worker_registry: RchWorkerRegistry, config: ReproducibilityTestConfig) -> Self {
@@ -311,29 +328,62 @@ impl CrossPlatformReproducibilityTester {
     }
 
     /// Get environment information for a platform.
+    ///
+    /// The host platform is captured for real via `worker_env_capture`.
+    /// Remote platforms have no connected worker in a local registry, so
+    /// their environment fields carry explicit `unavailable` markers rather
+    /// than fabricated versions; the execution itself fails downstream with
+    /// `PlatformNotConfigured` instead of pretending it measured a worker.
     fn get_platform_environment(
         &self,
         platform: WorkerPlatform,
     ) -> Result<WorkerEnvironment, ReproducibilityTestError> {
-        // For now, return a mock environment
-        // In a real implementation, this would query the actual worker
+        if Some(platform) == host_platform() {
+            return match platform {
+                WorkerPlatform::MacOSArm64 => {
+                    crate::worker_env_capture::MacOSArm64EnvCapture
+                        .capture_environment()
+                        .map_err(|e| ReproducibilityTestError::Configuration {
+                            details: format!("host environment capture failed: {e}"),
+                        })
+                }
+                WorkerPlatform::WindowsX64 => {
+                    crate::worker_env_capture::WindowsX64EnvCapture
+                        .capture_environment()
+                        .map_err(|e| ReproducibilityTestError::Configuration {
+                            details: format!("host environment capture failed: {e}"),
+                        })
+                }
+                // `host_platform()` only selects LinuxX64 on x86_64 Linux, but
+                // the capture itself re-validates the platform fail-closed.
+                WorkerPlatform::LinuxX64 | WorkerPlatform::LinuxArm64 => {
+                    crate::worker_env_capture::LinuxX64EnvCapture
+                        .capture_environment()
+                        .map_err(|e| ReproducibilityTestError::Configuration {
+                            details: format!("host environment capture failed: {e}"),
+                        })
+                }
+            };
+        }
+
+        // Remote platform: declared identity only, no fabricated measurements.
+        let (os, arch) = match platform {
+            WorkerPlatform::MacOSArm64 => ("macos", "arm64"),
+            WorkerPlatform::WindowsX64 => ("windows", "x64"),
+            WorkerPlatform::LinuxX64 => ("linux", "x64"),
+            WorkerPlatform::LinuxArm64 => ("linux", "arm64"),
+        };
+        let unavailable = "unavailable: remote platform, no connected worker";
         Ok(WorkerEnvironment {
-            os: match platform {
-                WorkerPlatform::MacOSArm64 => "macos".to_string(),
-                WorkerPlatform::WindowsX64 => "windows".to_string(),
-                WorkerPlatform::LinuxX64 | WorkerPlatform::LinuxArm64 => "linux".to_string(),
-            },
-            arch: match platform {
-                WorkerPlatform::MacOSArm64 | WorkerPlatform::LinuxArm64 => "arm64".to_string(),
-                WorkerPlatform::WindowsX64 | WorkerPlatform::LinuxX64 => "x64".to_string(),
-            },
-            os_version: "test".to_string(),
+            os: os.to_string(),
+            arch: arch.to_string(),
+            os_version: unavailable.to_string(),
             rust_toolchain: crate::worker_env_capture::RustToolchainInfo {
-                version: "1.75.0".to_string(),
-                target: "test-target".to_string(),
+                version: unavailable.to_string(),
+                target: unavailable.to_string(),
                 commit_hash: None,
                 commit_date: None,
-                channel: "stable".to_string(),
+                channel: "unknown".to_string(),
             },
             dev_tools: BTreeMap::new(),
             env_vars: BTreeMap::new(),

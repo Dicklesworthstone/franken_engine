@@ -137,17 +137,17 @@ Closure verification fails for:
 ## Operator Commands
 
 ```bash
-# Generate closure matrix
-./scripts/run_placeholder_closure_matrix.sh generate
+# Schema sanity
+jq empty docs/rgc_placeholder_closure_verification_v1.json
 
-# Verify closure completeness
-./scripts/run_placeholder_closure_verification.sh verify
+# Contract test (schema, dispositions, closure states)
+cargo test -p frankenengine-engine --test placeholder_closure_verification
 
-# Produce closure bundle
-./scripts/run_placeholder_closure_bundle.sh bundle
+# Release-time enforcement: scan protected surfaces for placeholder/mock/stub code
+./scripts/run_rgc_zero_placeholder_gate.sh ci
 
-# Validate waiver registry
-./scripts/run_placeholder_waiver_validation.sh check
+# Same enforcement from the operator CLI
+frankenctl gates zero-placeholder --out-dir <dir> [--waivers <path>]
 ```
 
 ## Integration Points

@@ -71,6 +71,70 @@ pub enum EnvCaptureError {
     UnsupportedPlatform { platform: String },
 }
 
+/// Shared `rustc --version --verbose` capture used by every platform
+/// implementation so one parser owns toolchain-identity semantics.
+fn capture_rust_toolchain() -> Result<RustToolchainInfo, EnvCaptureError> {
+    let output = Command::new("rustc")
+        .arg("--version")
+        .arg("--verbose")
+        .output()
+        .map_err(|_| EnvCaptureError::CommandExecution {
+            command: "rustc --version --verbose".to_string(),
+        })?;
+
+    if !output.status.success() {
+        return Err(EnvCaptureError::CommandFailed {
+            code: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut version = String::new();
+    let mut commit_hash = None;
+    let mut commit_date = None;
+    let mut target = String::new();
+    let mut channel = String::new();
+
+    for line in output_str.lines() {
+        if let Some(version_part) = line.strip_prefix("rustc ") {
+            if let Some(space_pos) = version_part.find(' ') {
+                version = version_part[..space_pos].to_string();
+            } else {
+                version = version_part.to_string();
+            }
+
+            if version.contains("nightly") {
+                channel = "nightly".to_string();
+            } else if version.contains("beta") {
+                channel = "beta".to_string();
+            } else {
+                channel = "stable".to_string();
+            }
+        } else if let Some(rest) = line.strip_prefix("commit-hash: ") {
+            commit_hash = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("commit-date: ") {
+            commit_date = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("host: ") {
+            target = rest.to_string();
+        }
+    }
+
+    if version.is_empty() {
+        return Err(EnvCaptureError::ParseError {
+            details: "Could not parse rustc version".to_string(),
+        });
+    }
+
+    Ok(RustToolchainInfo {
+        version,
+        target,
+        commit_hash,
+        commit_date,
+        channel,
+    })
+}
+
 /// macOS ARM64 worker environment capture implementation.
 #[derive(Debug)]
 pub struct MacOSArm64EnvCapture;
@@ -126,71 +190,9 @@ impl MacOSArm64EnvCapture {
         Ok(version_line)
     }
 
-    /// Get Rust toolchain information.
+    /// Get Rust toolchain information (shared capture implementation).
     fn get_rust_toolchain(&self) -> Result<RustToolchainInfo, EnvCaptureError> {
-        let output = Command::new("rustc")
-            .arg("--version")
-            .arg("--verbose")
-            .output()
-            .map_err(|_| EnvCaptureError::CommandExecution {
-                command: "rustc --version --verbose".to_string(),
-            })?;
-
-        if !output.status.success() {
-            return Err(EnvCaptureError::CommandFailed {
-                code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let mut version = String::new();
-        let mut commit_hash = None;
-        let mut commit_date = None;
-        let mut target = String::new();
-        let mut channel = String::new();
-
-        for line in output_str.lines() {
-            if line.starts_with("rustc ") {
-                // Parse version from "rustc 1.75.0-nightly (commit 2023-12-01)"
-                if let Some(version_part) = line.strip_prefix("rustc ") {
-                    if let Some(space_pos) = version_part.find(' ') {
-                        version = version_part[..space_pos].to_string();
-                    } else {
-                        version = version_part.to_string();
-                    }
-
-                    // Determine channel from version
-                    if version.contains("nightly") {
-                        channel = "nightly".to_string();
-                    } else if version.contains("beta") {
-                        channel = "beta".to_string();
-                    } else {
-                        channel = "stable".to_string();
-                    }
-                }
-            } else if line.starts_with("commit-hash: ") {
-                commit_hash = Some(line.strip_prefix("commit-hash: ").unwrap_or("").to_string());
-            } else if line.starts_with("commit-date: ") {
-                commit_date = Some(line.strip_prefix("commit-date: ").unwrap_or("").to_string());
-            } else if line.starts_with("host: ") {
-                target = line.strip_prefix("host: ").unwrap_or("").to_string();
-            }
-        }
-
-        if version.is_empty() {
-            return Err(EnvCaptureError::ParseError {
-                details: "Could not parse rustc version".to_string(),
-            });
-        }
-
-        Ok(RustToolchainInfo {
-            version,
-            target,
-            commit_hash,
-            commit_date,
-            channel,
-        })
+        capture_rust_toolchain()
     }
 }
 
@@ -322,69 +324,9 @@ impl WindowsX64EnvCapture {
         Ok("Not available".to_string())
     }
 
-    /// Get Rust toolchain information (reuse logic from macOS).
+    /// Get Rust toolchain information (shared capture implementation).
     fn get_rust_toolchain(&self) -> Result<RustToolchainInfo, EnvCaptureError> {
-        let output = Command::new("rustc")
-            .arg("--version")
-            .arg("--verbose")
-            .output()
-            .map_err(|_| EnvCaptureError::CommandExecution {
-                command: "rustc --version --verbose".to_string(),
-            })?;
-
-        if !output.status.success() {
-            return Err(EnvCaptureError::CommandFailed {
-                code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let mut version = String::new();
-        let mut commit_hash = None;
-        let mut commit_date = None;
-        let mut target = String::new();
-        let mut channel = String::new();
-
-        for line in output_str.lines() {
-            if line.starts_with("rustc ") {
-                if let Some(version_part) = line.strip_prefix("rustc ") {
-                    if let Some(space_pos) = version_part.find(' ') {
-                        version = version_part[..space_pos].to_string();
-                    } else {
-                        version = version_part.to_string();
-                    }
-
-                    if version.contains("nightly") {
-                        channel = "nightly".to_string();
-                    } else if version.contains("beta") {
-                        channel = "beta".to_string();
-                    } else {
-                        channel = "stable".to_string();
-                    }
-                }
-            } else if line.starts_with("commit-hash: ") {
-                commit_hash = Some(line.strip_prefix("commit-hash: ").unwrap_or("").to_string());
-            } else if line.starts_with("commit-date: ") {
-                commit_date = Some(line.strip_prefix("commit-date: ").unwrap_or("").to_string());
-            } else if line.starts_with("host: ") {
-                target = line.strip_prefix("host: ").unwrap_or("").to_string();
-            }
-        }
-
-        if version.is_empty() {
-            return Err(EnvCaptureError::ParseError {
-                details: "Could not parse rustc version".to_string(),
-            });
-        }
-
-        Ok(RustToolchainInfo {
-            version,
-            target,
-            commit_hash,
-            commit_date,
-            channel,
-        })
+        capture_rust_toolchain()
     }
 }
 
@@ -458,6 +400,125 @@ impl WorkerEnvCapture for WindowsX64EnvCapture {
 }
 
 impl Default for WindowsX64EnvCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Linux x64 worker environment capture implementation.
+#[derive(Debug)]
+pub struct LinuxX64EnvCapture;
+
+impl LinuxX64EnvCapture {
+    /// Create a new Linux x64 environment capture instance.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Get the kernel release from `uname`.
+    fn get_kernel_release(&self) -> Result<String, EnvCaptureError> {
+        let output = Command::new("uname")
+            .arg("-r")
+            .output()
+            .map_err(|_| EnvCaptureError::CommandExecution {
+                command: "uname -r".to_string(),
+            })?;
+
+        if !output.status.success() {
+            return Err(EnvCaptureError::CommandFailed {
+                code: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Best-effort development-tool probe; `None` when the tool is absent.
+    fn probe_dev_tool(&self, command: &str, args: &[&str]) -> Option<String> {
+        let output = Command::new(command).args(args).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let first_line = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()?
+            .trim()
+            .to_string();
+        if first_line.is_empty() {
+            None
+        } else {
+            Some(first_line)
+        }
+    }
+}
+
+impl WorkerEnvCapture for LinuxX64EnvCapture {
+    fn capture_environment(&self) -> Result<WorkerEnvironment, EnvCaptureError> {
+        // Verify we're on x86_64 Linux
+        let arch = std::env::consts::ARCH;
+        let os = std::env::consts::OS;
+
+        if os != "linux" {
+            return Err(EnvCaptureError::UnsupportedPlatform {
+                platform: format!("{}-{}", os, arch),
+            });
+        }
+
+        if arch != "x86_64" {
+            return Err(EnvCaptureError::UnsupportedPlatform {
+                platform: format!("{}-{}", os, arch),
+            });
+        }
+
+        let os_version = self.get_kernel_release()?;
+        let rust_toolchain = capture_rust_toolchain()?;
+
+        // Capture development tools (best-effort probes)
+        let mut dev_tools = BTreeMap::new();
+        for (key, command, args) in [
+            ("cc_version", "cc", &["--version"][..]),
+            ("git_version", "git", &["--version"][..]),
+        ] {
+            match self.probe_dev_tool(command, args) {
+                Some(version) => {
+                    dev_tools.insert(key.to_string(), version);
+                }
+                None => {
+                    dev_tools.insert(key.to_string(), "Not available".to_string());
+                }
+            }
+        }
+
+        // Capture relevant environment variables
+        let mut env_vars = BTreeMap::new();
+        let env_var_names = ["PATH", "RUST_TOOLCHAIN", "RUSTFLAGS", "CARGO_TARGET_DIR"];
+
+        for var_name in &env_var_names {
+            if let Ok(value) = std::env::var(var_name) {
+                env_vars.insert(var_name.to_string(), value);
+            }
+        }
+
+        let captured_at = chrono::Utc::now().to_rfc3339();
+
+        Ok(WorkerEnvironment {
+            os: "linux".to_string(),
+            arch: "x64".to_string(),
+            os_version,
+            rust_toolchain,
+            dev_tools,
+            env_vars,
+            captured_at,
+        })
+    }
+
+    fn platform_id(&self) -> String {
+        "linux-x64".to_string()
+    }
+}
+
+impl Default for LinuxX64EnvCapture {
     fn default() -> Self {
         Self::new()
     }
@@ -593,6 +654,52 @@ mod tests {
         let result = capture.capture_environment();
 
         // On non-Windows x64 platforms, this should fail
+        assert!(
+            result.is_err(),
+            "Environment capture should fail on wrong platform"
+        );
+
+        match result.unwrap_err() {
+            EnvCaptureError::UnsupportedPlatform { .. } => {
+                // Expected error type
+            }
+            other => panic!("Expected UnsupportedPlatform error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_linux_x64_platform_id() {
+        let capture = LinuxX64EnvCapture::new();
+        assert_eq!(capture.platform_id(), "linux-x64");
+    }
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn test_linux_x64_environment_capture() {
+        let capture = LinuxX64EnvCapture::new();
+        let result = capture.capture_environment();
+
+        // On actual Linux x64, this should succeed
+        assert!(
+            result.is_ok(),
+            "Environment capture should succeed on Linux x64"
+        );
+
+        let env = result.unwrap();
+        assert_eq!(env.os, "linux");
+        assert_eq!(env.arch, "x64");
+        assert!(!env.os_version.is_empty());
+        assert!(!env.rust_toolchain.version.is_empty());
+        assert!(!env.captured_at.is_empty());
+    }
+
+    #[test]
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn test_linux_x64_environment_capture_wrong_platform() {
+        let capture = LinuxX64EnvCapture::new();
+        let result = capture.capture_environment();
+
+        // On non-Linux x64 platforms, this should fail
         assert!(
             result.is_err(),
             "Environment capture should fail on wrong platform"

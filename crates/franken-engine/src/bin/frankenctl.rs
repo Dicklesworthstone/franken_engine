@@ -10669,12 +10669,32 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             }
         }
         GatesMode::SignatureDrift { out_dir, config } => {
-            let report_path = out_dir.join("signature_drift_analysis.json");
-            Err(fail_closed_placeholder_command(
-                "gates signature-drift",
-                Some(&report_path),
-                config.as_deref(),
-            ))
+            if config.is_some() {
+                return Err(
+                    "gates signature-drift does not accept --config: the canonical \
+                     franken_signature_drift_gate binary exposes no config input"
+                        .to_string(),
+                );
+            }
+
+            // Delegate to the canonical RGC gate binary (same crate, built
+            // alongside frankenctl) so there is exactly one implementation.
+            let binary = resolve_sibling_binary("franken_signature_drift_gate")?;
+            std::fs::create_dir_all(&out_dir)
+                .map_err(|e| format!("Failed to create output directory: {e}"))?;
+            let status = Command::new(&binary)
+                .arg("--out-dir")
+                .arg(path_to_str(&out_dir)?)
+                .status()
+                .map_err(|e| format!("Failed to execute {}: {e}", binary.display()))?;
+            if status.success() {
+                println!("✅ Signature drift gate completed successfully");
+                println!("📁 Output directory: {}", out_dir.display());
+                Ok(0)
+            } else {
+                let code = status.code().unwrap_or(-1);
+                Err(format!("Signature drift gate failed with exit code: {code}"))
+            }
         }
         GatesMode::CompoundingRedTeam { out_dir, config } => {
             use frankenengine_engine::compounding_red_team_campaign::{
@@ -10853,12 +10873,31 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
             }
         }
         ReportsMode::LoweringGap { out } => {
-            let output_path = out.unwrap_or_else(|| PathBuf::from("lowering_gap_report.json"));
-            Err(fail_closed_placeholder_command(
-                "reports lowering-gap",
-                Some(&output_path),
-                None,
-            ))
+            use frankenengine_engine::lowering_gap_inventory::write_lowering_gap_inventory_bundle;
+
+            // Same lib entry point as the `franken_lowering_gap_inventory`
+            // operator binary, so the CLI surface and the RGC bundle stay
+            // compatible with the replay wrapper contract.
+            let out_dir = out.unwrap_or_else(|| {
+                let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+                PathBuf::from("artifacts")
+                    .join("lowering_gap_inventory")
+                    .join(timestamp)
+            });
+            let command_lines = vec![
+                "frankenctl reports lowering-gap".to_string(),
+                "CARGO_TARGET_DIR=<TARGET_DIR> CARGO_INCREMENTAL=0 cargo run -p \
+                 frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>"
+                    .to_string(),
+            ];
+            let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &command_lines)
+                .map_err(|e| e.to_string())?;
+            println!("✅ Lowering-gap inventory bundle written");
+            println!("📁 Bundle directory: {}", artifacts.out_dir.display());
+            println!("📄 Inventory: {}", artifacts.inventory_path.display());
+            println!("🔖 Inventory hash: {}", artifacts.inventory_hash);
+            println!("📊 Sites: {}", artifacts.site_count);
+            Ok(0)
         }
         _ => {
             Err("Unsupported reports subcommand. Use 'frankenctl help reports' to see available commands.".to_string())
@@ -10904,12 +10943,28 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             }
         }
         TestMode::Lockstep { config, out } => {
-            let output_path = out.unwrap_or_else(|| PathBuf::from("lockstep_test_results.json"));
-            Err(fail_closed_placeholder_command(
-                "test lockstep",
-                Some(&output_path),
-                config.as_deref(),
-            ))
+            // Delegate to the canonical lockstep harness binary (same
+            // crate) so there is exactly one lockstep implementation;
+            // `--config` maps to the runner's primary `--runtime-specs`
+            // input.
+            let binary = resolve_sibling_binary("franken_lockstep_runner")?;
+            let mut cmd = Command::new(&binary);
+            if let Some(config_path) = &config {
+                cmd.arg("--runtime-specs").arg(path_to_str(config_path)?);
+            }
+            if let Some(out_path) = &out {
+                cmd.arg("--out").arg(path_to_str(out_path)?);
+            }
+            let status = cmd
+                .status()
+                .map_err(|e| format!("Failed to execute {}: {e}", binary.display()))?;
+            if status.success() {
+                println!("✅ Lockstep differential harness completed");
+                Ok(0)
+            } else {
+                let code = status.code().unwrap_or(-1);
+                Err(format!("Lockstep harness failed with exit code: {code}"))
+            }
         }
         _ => Err(
             "Unsupported test subcommand. Use 'frankenctl help test' to see available commands."
@@ -10918,26 +10973,43 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
     }
 }
 
-fn fail_closed_placeholder_command(
-    command: &str,
-    output_path: Option<&Path>,
-    config_path: Option<&Path>,
-) -> String {
-    let mut details = vec![format!(
-        "{CODE_UNSUPPORTED_PLACEHOLDER_COMMAND}: {command} is not implemented; refusing to emit placeholder success artifacts"
-    )];
-
-    if let Some(output_path) = output_path {
-        details.push(format!(
-            "no placeholder artifact was written to {}",
-            output_path.display()
-        ));
+/// Resolve an internal operator binary that ships in the same crate as
+/// `frankenctl`. Prefers a sibling of the running executable (the cargo
+/// target layout), then falls back to `PATH` lookup. The error names the
+/// build command so an operator can fix the environment instead of
+/// receiving a silent placeholder.
+fn resolve_sibling_binary(name: &str) -> Result<PathBuf, String> {
+    if let Some(exe) = std::env::current_exe().ok() {
+        if let Some(dir) = exe.parent() {
+            if let Some(path) = sibling_in_dir(dir, name) {
+                return Ok(path);
+            }
+        }
     }
-    if let Some(config_path) = config_path {
-        details.push(format!("config requested: {}", config_path.display()));
+    if which_on_path(name) {
+        return Ok(PathBuf::from(name));
     }
+    Err(format!(
+        "required operator binary `{name}` was not found next to frankenctl or on PATH; \
+         build it with: cargo build --release -p frankenengine-engine --bin {name}"
+    ))
+}
 
-    details.join("; ")
+/// Find `name` directly inside `dir`, if it is a regular file.
+fn sibling_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = dir.join(name);
+    candidate.is_file().then_some(candidate)
+}
+
+/// `PATH`-only lookup for an executable name (no current-dir fallback).
+fn which_on_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .any(|dir| dir.join(name).is_file())
+        })
+        .unwrap_or(false)
 }
 
 fn execute_synth(args: SynthArgs) -> Result<i32, String> {
@@ -15298,55 +15370,90 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_analysis_commands_fail_closed_without_writing_artifacts() {
+    fn signature_drift_rejects_config_before_touching_the_filesystem() {
         let temp_root = std::env::temp_dir().join(format!(
-            "frankenctl-placeholder-fail-closed-{}",
+            "frankenctl-signature-drift-config-{}",
+            current_unix_ns()
+        ));
+        let out_dir = temp_root.join("signature");
+        let config = temp_root.join("signature-config.json");
+
+        let error = execute_gates(GatesArgs {
+            mode: GatesMode::SignatureDrift {
+                out_dir: out_dir.clone(),
+                config: Some(config.clone()),
+            },
+        })
+        .expect_err("--config must be refused");
+
+        assert!(error.contains("--config"));
+        assert!(error.contains("franken_signature_drift_gate"));
+        assert!(!out_dir.exists(), "refusal must not create the out dir");
+    }
+
+    #[test]
+    fn lowering_gap_emits_a_real_inventory_bundle() {
+        let out_dir = std::env::temp_dir().join(format!(
+            "frankenctl-lowering-gap-{}",
             current_unix_ns()
         ));
 
-        let signature_out_dir = temp_root.join("signature");
-        let signature_config = temp_root.join("signature-config.json");
-        let signature_report = signature_out_dir.join("signature_drift_analysis.json");
-        let signature_error = execute_gates(GatesArgs {
-            mode: GatesMode::SignatureDrift {
-                out_dir: signature_out_dir.clone(),
-                config: Some(signature_config.clone()),
-            },
-        })
-        .expect_err("signature-drift should fail closed");
-        assert!(signature_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
-        assert!(signature_error.contains("gates signature-drift"));
-        assert!(signature_error.contains(&signature_report.display().to_string()));
-        assert!(signature_error.contains(&signature_config.display().to_string()));
-        assert!(!signature_out_dir.exists());
-        assert!(!signature_report.exists());
-
-        let lowering_report = temp_root.join("lowering-gap.json");
-        let lowering_error = execute_reports(ReportsArgs {
+        let exit = execute_reports(ReportsArgs {
             mode: ReportsMode::LoweringGap {
-                out: Some(lowering_report.clone()),
+                out: Some(out_dir.clone()),
             },
         })
-        .expect_err("lowering-gap should fail closed");
-        assert!(lowering_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
-        assert!(lowering_error.contains("reports lowering-gap"));
-        assert!(lowering_error.contains(lowering_report.display().to_string().as_str()));
-        assert!(!lowering_report.exists());
+        .expect("lowering-gap must execute the real inventory writer");
+        assert_eq!(exit, 0);
 
-        let lockstep_report = temp_root.join("lockstep.json");
-        let lockstep_config = temp_root.join("lockstep-config.json");
-        let lockstep_error = execute_test(TestArgs {
-            mode: TestMode::Lockstep {
-                config: Some(lockstep_config.clone()),
-                out: Some(lockstep_report.clone()),
-            },
-        })
-        .expect_err("lockstep should fail closed");
-        assert!(lockstep_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
-        assert!(lockstep_error.contains("test lockstep"));
-        assert!(lockstep_error.contains(lockstep_report.display().to_string().as_str()));
-        assert!(lockstep_error.contains(lockstep_config.display().to_string().as_str()));
-        assert!(!lockstep_report.exists());
+        // The bundle must satisfy the shared artifact contract: inventory,
+        // manifest, events, transcript, and trace ids all present.
+        assert!(out_dir.join("lowering_gap_inventory.json").is_file());
+        assert!(out_dir.join("run_manifest.json").is_file());
+        assert!(out_dir.join("events.jsonl").is_file());
+        assert!(out_dir.join("commands.txt").is_file());
+        assert!(out_dir.join("trace_ids.json").is_file());
+        assert!(out_dir.join("step_logs").is_dir());
+
+        let manifest_text = std::fs::read_to_string(out_dir.join("run_manifest.json"))
+            .expect("manifest read");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_text).expect("manifest json");
+        assert!(manifest.is_object(), "run manifest must be a JSON object");
+    }
+
+    #[test]
+    fn sibling_resolution_helpers_are_fail_closed() {
+        let temp = std::env::temp_dir().join(format!(
+            "frankenctl-sibling-resolution-{}",
+            current_unix_ns()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+
+        assert!(
+            sibling_in_dir(&temp, "franken_lockstep_runner").is_none(),
+            "empty dir must not resolve a sibling"
+        );
+
+        let fake = temp.join("franken_lockstep_runner");
+        std::fs::write(&fake, b"#!/bin/sh\n").expect("write fake binary");
+        assert_eq!(
+            sibling_in_dir(&temp, "franken_lockstep_runner"),
+            Some(fake.clone()),
+            "existing sibling file must resolve"
+        );
+
+        assert!(
+            !which_on_path("franken_no_such_operator_binary_zzz"),
+            "absent binary must not resolve on PATH"
+        );
+
+        let error = resolve_sibling_binary("franken_no_such_operator_binary_zzz")
+            .expect_err("unresolvable binary must fail with build guidance");
+        assert!(
+            error.contains("cargo build --release"),
+            "resolution failure must name the build command, got: {error}"
+        );
     }
 
     #[test]

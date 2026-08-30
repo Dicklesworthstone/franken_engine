@@ -555,6 +555,10 @@ fn test_migration_adapter_console_round_trip() {
 fn test_migration_adapter_file_round_trip() {
     let mut adapter = HostcallMigrationAdapter::new();
 
+    // The default adapter stack is console-only (fail-closed fs), so this
+    // round-trip test installs the mock filesystem explicitly.
+    adapter.add_handler(Arc::new(MockFsHandler::new()));
+
     // Write file through migration adapter
     let write_result = adapter
         .dispatch_hostcall(

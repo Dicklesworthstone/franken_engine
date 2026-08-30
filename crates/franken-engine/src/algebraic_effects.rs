@@ -1423,9 +1423,12 @@ impl HostcallMigrationAdapter {
     pub fn new() -> Self {
         let mut stack = HandlerStack::new();
 
-        // Add default handlers
+        // Add default handlers. The default stack is intentionally
+        // console-only: `fs:read`/`fs:write` have no handler here, so a
+        // filesystem effect fails closed (the stack's capability gate
+        // reports `CapabilityDenied`) until a caller installs a real
+        // handler or a test installs `MockFsHandler` explicitly.
         stack.add_handler(Arc::new(ConsoleHandler::new()));
-        stack.add_handler(Arc::new(MockFsHandler::new()));
 
         // Set up capability mappings for legacy hostcalls
         let mut capability_mapping = BTreeMap::new();
@@ -2337,6 +2340,10 @@ mod tests {
     fn test_migration_adapter_fs_operations() {
         let mut adapter = HostcallMigrationAdapter::new();
 
+        // The default adapter stack is console-only (fail-closed fs), so
+        // this round-trip test installs the mock filesystem explicitly.
+        adapter.add_handler(Arc::new(MockFsHandler::new()));
+
         // Write a file
         let write_result = adapter
             .dispatch_hostcall(
@@ -2361,6 +2368,27 @@ mod tests {
         } else {
             panic!("Expected Data result from fs:read");
         }
+    }
+
+    #[test]
+    fn test_migration_adapter_fs_fails_closed_without_handler() {
+        let mut adapter = HostcallMigrationAdapter::new();
+
+        // No fs handler is installed by default: the effect must fail
+        // closed instead of silently succeeding against an in-memory
+        // mock filesystem.
+        let write_result = adapter.dispatch_hostcall(
+            "fs:write",
+            &["/test.txt".to_string(), "Hello, World!".to_string()],
+        );
+        assert!(matches!(write_result, Err(EffectError::CapabilityDenied { .. })));
+
+        let read_result = adapter.dispatch_hostcall("fs:read", &["/test.txt".to_string()]);
+        assert!(matches!(read_result, Err(EffectError::CapabilityDenied { .. })));
+
+        // Note: `adapter.can_handle("fs:read")` still reports true because
+        // the legacy capability mapping recognizes the hostcall name; the
+        // fail-closed behavior lives at dispatch time, asserted above.
     }
 
     #[test]

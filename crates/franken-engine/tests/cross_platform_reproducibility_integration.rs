@@ -278,6 +278,63 @@ fn export_results_round_trips_losslessly() {
 }
 
 #[test]
+fn platform_environment_is_real_on_host_and_marked_unavailable_remotely() {
+    let input = ReproducibilityTestInput {
+        test_id: "env_capture_honesty".to_string(),
+        description: "host env must be captured, remote env must be marked unavailable"
+            .to_string(),
+        source_code: "console.log('env')".to_string(),
+        output_type: OutputType::Stdout,
+        module_type: ModuleType::Script,
+        flags: vec![],
+        deterministic: true,
+    };
+
+    let mut tester = workerless_tester();
+    let result = tester.execute_test(input).expect("execute_test");
+
+    let host_os = std::env::consts::OS;
+    let host_arch = std::env::consts::ARCH;
+    for (platform, exec) in &result.platform_results {
+        let is_host = match (host_os, host_arch) {
+            ("linux", "x86_64") => *platform == WorkerPlatform::LinuxX64,
+            ("macos", "aarch64") => *platform == WorkerPlatform::MacOSArm64,
+            ("windows", "x86_64") => *platform == WorkerPlatform::WindowsX64,
+            _ => false,
+        };
+
+        if is_host {
+            assert_eq!(
+                exec.worker_env.os, host_os,
+                "host platform environment must reflect the real OS"
+            );
+            assert!(
+                !exec.worker_env.os_version.starts_with("unavailable"),
+                "host platform environment must be captured, not marked unavailable"
+            );
+            assert!(
+                !exec.worker_env.rust_toolchain.version.starts_with("unavailable"),
+                "host toolchain version must be captured, not marked unavailable"
+            );
+        } else {
+            assert!(
+                exec.worker_env.os_version.starts_with("unavailable"),
+                "remote platform environment must be marked unavailable, got {:?}",
+                exec.worker_env.os_version
+            );
+            assert!(
+                exec.worker_env
+                    .rust_toolchain
+                    .version
+                    .starts_with("unavailable"),
+                "remote toolchain version must be marked unavailable, got {:?}",
+                exec.worker_env.rust_toolchain.version
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "bd-bg9l1.15 follow-up: requires provisioned remote macOS/Windows/Linux \
             workers (RchWorkerRegistry with real platform_configs). With workers \
             configured, run_test_suite() over the deterministic standard suite must \

@@ -470,8 +470,7 @@ impl RegimeDetector {
         let mut new_stats = Vec::with_capacity(max_rl + 1);
         new_stats.push(RunLengthStats::new()); // r=0: fresh
 
-        for r in 0..max_rl {
-            let mut s = self.run_length_stats[r].clone();
+        for mut s in self.run_length_stats[..max_rl].iter().cloned() {
             s.add_observation(x_millionths);
             new_stats.push(s);
         }

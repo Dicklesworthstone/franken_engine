@@ -10426,6 +10426,11 @@ impl Drop for InterpreterCore {
     }
 }
 
+/// Resolved public-facing parts of a live key-pair handle: the algorithm,
+/// the private material, the public material, and the IFC label carried by
+/// the key at derivation time.
+type CryptoKeyPairParts = (CryptoKeyPairAlgorithm, Zeroizing<Vec<u8>>, Vec<u8>, Label);
+
 impl InterpreterCore {
     fn scoped_constant_name(module: &Ir3Module, name_pool_index: u32) -> Cow<'_, str> {
         module
@@ -60102,11 +60107,13 @@ impl InterpreterCore {
         quality: u32,
         lgwin: u32,
     ) -> Result<Vec<u8>, ZlibOperationFailure> {
-        let mut params = brotli::enc::backward_references::BrotliEncoderParams::default();
         // brotli 8.x stores both knobs as i32; the parser above already
         // range-checked quality into 0..=11 and lgwin into 10..=24.
-        params.quality = quality as i32;
-        params.lgwin = lgwin as i32;
+        let params = brotli::enc::backward_references::BrotliEncoderParams {
+            quality: quality as i32,
+            lgwin: lgwin as i32,
+            ..brotli::enc::backward_references::BrotliEncoderParams::default()
+        };
         let mut output = Vec::new();
         let mut writer = brotli::CompressorWriter::with_params(&mut output, 4096, &params);
         use std::io::Write as _;
@@ -62300,11 +62307,7 @@ impl InterpreterCore {
     }
 
     /// Resolve a live KeyPairActive handle to all four public-facing parts.
-    fn crypto_key_pair_parts(
-        &self,
-        value: &Value,
-    ) -> Result<(CryptoKeyPairAlgorithm, Zeroizing<Vec<u8>>, Vec<u8>, Label), InterpreterError>
-    {
+    fn crypto_key_pair_parts(&self, value: &Value) -> Result<CryptoKeyPairParts, InterpreterError> {
         let Value::Object(object_id) = value else {
             return Err(InterpreterError::TypeError {
                 expected: "key pair handle".to_string(),

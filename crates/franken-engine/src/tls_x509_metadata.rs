@@ -512,11 +512,11 @@ fn decode_string_value(tag: u8, body: &[u8]) -> Result<String, DerError> {
         }
         tag::BMP_STRING => {
             // UCS-2 big-endian, two bytes per code point, BMP only.
-            if body.len() % 2 != 0 {
+            if !body.len().is_multiple_of(2) {
                 return Ok(String::new());
             }
             let mut out = String::with_capacity(body.len() / 2);
-            for pair in body.chunks_exact(2) {
+            for pair in body.as_chunks::<2>().0 {
                 let cp = u16::from_be_bytes([pair[0], pair[1]]);
                 if let Some(ch) = char::from_u32(cp as u32) {
                     out.push(ch);

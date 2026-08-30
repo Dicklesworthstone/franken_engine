@@ -1750,11 +1750,7 @@ fn import_type_keyword_uses_type_only_syntax(statement: &str, type_index: usize)
     let Some(next_char) = statement[next_index..].chars().next() else {
         return false;
     };
-    if next_char == ',' || starts_with_keyword(statement, next_index, "from") {
-        return false;
-    }
-
-    true
+    !(next_char == ',' || starts_with_keyword(statement, next_index, "from"))
 }
 
 fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {

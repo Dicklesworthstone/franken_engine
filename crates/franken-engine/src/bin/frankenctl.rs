@@ -166,7 +166,6 @@ const CODE_BUNDLE_CONTEXT_MISMATCH: &str = "FE-TPV-BUNDLE-0003";
 const CODE_BUNDLE_REMOTE_EXEC: &str = "FE-TPV-BUNDLE-0004";
 const CODE_BUNDLE_DIGEST_MISMATCH: &str = "FE-TPV-BUNDLE-0005";
 const CODE_BUNDLE_SCHEMA_MISMATCH: &str = "FE-TPV-BUNDLE-0006";
-const CODE_UNSUPPORTED_PLACEHOLDER_COMMAND: &str = "FE-FRANKENCTL-UNSUPPORTED-PLACEHOLDER";
 const BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION: &str = "franken-engine.env.v1";
 const BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.manifest.v1";
 const BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
@@ -10981,12 +10980,11 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
 /// build command so an operator can fix the environment instead of
 /// receiving a silent placeholder.
 fn resolve_sibling_binary(name: &str) -> Result<PathBuf, String> {
-    if let Some(exe) = std::env::current_exe().ok() {
-        if let Some(dir) = exe.parent() {
-            if let Some(path) = sibling_in_dir(dir, name) {
-                return Ok(path);
-            }
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+        && let Some(path) = sibling_in_dir(dir, name)
+    {
+        return Ok(path);
     }
     if which_on_path(name) {
         return Ok(PathBuf::from(name));

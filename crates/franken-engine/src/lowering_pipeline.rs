@@ -26289,9 +26289,16 @@ fn ir1_exception_flow_label(
         Ir1Op::Construct { .. } if operation_exception_is_operand_derived => {
             Some(Label::Internal.join(inferred_label))
         }
+        // bd-kx70h engine residual: a static property read on a closed
+        // receiver touches only data descriptors the engine itself
+        // materialized, so it cannot invoke guest accessors or throw guest
+        // values; its exceptional outcomes are engine-owned. Dynamic keys
+        // and open receivers stay fail-high in the default arm below.
+        Ir1Op::GetProperty { .. } if operation_exception_is_operand_derived => {
+            Some(Label::Internal.join(inferred_label))
+        }
         Ir1Op::Call { .. }
         | Ir1Op::CallMethod { .. }
-        | Ir1Op::Construct { .. }
         | Ir1Op::ConstructSuper { .. }
         | Ir1Op::RegisterDerivedConstructor { .. }
         | Ir1Op::Await
@@ -26614,8 +26621,8 @@ fn simulate_ir2_flow_labels(
                 // Payload-less EventEmitter.emit stays fail-high (engine Error).
                 // The payload-throw path is handled via
                 // `operation_exception_is_event_emitter_error` above.
-                operation_exception_is_operand_derived = finite_engine_method
-                    && callee_shape != FlowValueShape::EventEmitterEmitMethod;
+                operation_exception_is_operand_derived =
+                    finite_engine_method && callee_shape != FlowValueShape::EventEmitterEmitMethod;
                 let label = if finite_engine_method {
                     join_flow_values(&inputs)
                 } else {
@@ -26859,6 +26866,23 @@ fn simulate_ir2_flow_labels(
                     inputs.push(pop_flow_value(&mut value_stack)?);
                 }
                 let object = pop_flow_value(&mut value_stack)?;
+                // bd-kx70h: a static read on an UNFORGEABLE engine-branded
+                // receiver is finite (the runtime owns the layout; guest
+                // Object.defineProperty cannot retrofit accessors onto
+                // branded objects), so the read's exceptional outcomes are
+                // engine-owned. FreshAggregate is guest-mutable through
+                // defineProperty and stays excluded; dynamic keys and open
+                // receivers leave the flag false and stay fail-high.
+                operation_exception_is_operand_derived =
+                    matches!(
+                        object.shape,
+                        FlowValueShape::EventEmitterObject
+                            | FlowValueShape::ConstantsObject
+                            | FlowValueShape::OwnKeyArray
+                            | FlowValueShape::BufferObject
+                            | FlowValueShape::ClosedResult
+                            | FlowValueShape::Primitive
+                    ) && matches!(key, Ir1PropertyKey::Static(_));
                 let shape = match (&object.shape, key) {
                     (FlowValueShape::ConstantsObject, _) => FlowValueShape::Primitive,
                     (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
@@ -33576,6 +33600,111 @@ mod tests {
     }
 
     #[test]
+    fn eventemitter_emit_error_try_catch_message_sinks_finite_bd_kx70h() {
+        fn lower_source_to_ir2(name: &str, source: &str) -> Ir2Module {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_kx70h.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+            lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module
+        }
+        // The exact compatibility-corpus shape (bd-kx70h / events::0017):
+        // destructured EventEmitter constructor, emit('error', ...) inside
+        // try, err.message sunk to console:log in the catch. Before the
+        // fix, the `.emit` member read fail-highed the catch region as
+        // TopSecret and the whole module was refused.
+        let ir2 = lower_source_to_ir2(
+            "emit_error_try_catch",
+            "const {EventEmitter} = require('events');\n\
+             const e = new EventEmitter();\n\
+             try {\n\
+               e.emit('error', new Error('boom'));\n\
+               console.log('no-throw');\n\
+             } catch (err) {\n\
+               console.log('threw:' + err.message);\n\
+             }\n",
+        );
+        let top_secret_sinks = ir2
+            .ops
+            .iter()
+            .filter_map(|op| op.flow.as_ref())
+            .any(|flow| {
+                matches!(flow.data_label, Label::TopSecret)
+                    && matches!(flow.sink_clearance, Label::Internal)
+            });
+        assert!(
+            !top_secret_sinks,
+            "emit-in-try catch region must not poison err.message sinks"
+        );
+    }
+
+    #[test]
+    fn getproperty_exception_finiteness_contract_bd_kx70h() {
+        // Direct contract for the audited arm: a static read on a CLOSED
+        // receiver is exception-finite (engine-owned TypeError at worst);
+        // with the finiteness flag unset the read stays fail-high.
+        // (Source-level dynamic-key probes fold `const k = 'a'` to a static
+        // key during lowering, so the contract is pinned here on the exact
+        // flag inputs instead.)
+        let op = Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static("emit".to_string().into()),
+        };
+        assert_eq!(
+            ir1_exception_flow_label(&op, &Label::Public, true, false),
+            Some(Label::Internal.join(&Label::Public))
+        );
+        assert_eq!(
+            ir1_exception_flow_label(&op, &Label::Public, false, false),
+            Some(Label::TopSecret),
+            "flag must gate the finite-read arm"
+        );
+    }
+
+    #[test]
+    fn fresh_aggregate_static_read_in_try_stays_fail_high_bd_kx70h() {
+        // FreshAggregate is guest-mutable (Object.defineProperty can attach
+        // accessors), so it is deliberately excluded from the finite-read
+        // brand list: the try/catch read stays fail-closed.
+        let tree = crate::parser_api_stability::parse_script(
+            "const o = {a: 1};\n\
+             try {\n\
+               const v = o.a;\n\
+               console.log(v);\n\
+             } catch (err) {\n\
+               console.log('e:' + err.message);\n\
+             }\n",
+        )
+        .expect("fresh aggregate probe parses");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "fresh_aggregate_bd_kx70h.js".to_string());
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .unwrap_or_else(|error| panic!("fresh aggregate probe lowers to IR1: {error}"))
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .unwrap_or_else(|error| panic!("fresh aggregate probe lowers to IR2: {error}"))
+            .module;
+        let context = LoweringContext::new(
+            "eval-hybrid-fresh-aggregate",
+            "eval-decision-fresh-aggregate",
+            "eval-policy-hybrid",
+        );
+        let result = build_ir2_flow_proof_artifact(&ir2, &context).map(|_| ());
+        assert!(
+            matches!(
+                result,
+                Err(LoweringPipelineError::UnauthorizedFlow {
+                    source_label: Label::TopSecret,
+                    ..
+                })
+            ),
+            "FreshAggregate reads in try must stay fail-closed, got {result:?}"
+        );
+    }
+
+    #[test]
     fn builtin_construct_and_catch_provenance_stays_exact_bd_zyndq() {
         fn lower_source(name: &str, source: &str) -> (Ir0Module, Ir2Module) {
             let tree = crate::parser_api_stability::parse_script(source)
@@ -33632,23 +33761,27 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{name} eval-equivalent IR0→IR3: {error}"));
         }
 
-        let (_, unknown_ir2) = lower_source(
+        // bd-kx70h refinement: `new` over a closed non-callable aggregate
+        // can only raise the engine's own TypeError (fresh data objects
+        // carry no guest constructors and no accessors), so the catch
+        // provenance is exact Internal — not the old blanket TopSecret.
+        // The guest-callable fail-high contract lives in
+        // unknown_callable_construct_in_try_stays_fail_high_bd_kx70h.
+        let (aggregate_ctor_ir0, aggregate_ctor_ir2) = lower_source(
             "unknown_constructor",
             "const ctor={}; try { new ctor(); } catch (error) { console.log(error); }",
         );
-        let unknown_context = LoweringContext::new(
+        let aggregate_ctor_context = LoweringContext::new(
             "eval-hybrid-unknown-constructor",
             "eval-decision-unknown-constructor",
             "eval-policy-hybrid",
         );
-        assert!(matches!(
-            build_ir2_flow_proof_artifact(&unknown_ir2, &unknown_context),
-            Err(LoweringPipelineError::UnauthorizedFlow {
-                source_label: Label::TopSecret,
-                sink_clearance: Label::Internal,
-                ..
-            })
-        ));
+        build_ir2_flow_proof_artifact(&aggregate_ctor_ir2, &aggregate_ctor_context).unwrap_or_else(
+            |error| panic!("closed-aggregate constructor catch must lower exactly: {error}"),
+        );
+        lower_ir0_to_ir3(&aggregate_ctor_ir0, &aggregate_ctor_context).unwrap_or_else(|error| {
+            panic!("closed-aggregate constructor eval-equivalent IR0→IR3: {error}")
+        });
     }
 
     #[test]

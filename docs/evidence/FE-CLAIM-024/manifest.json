@@ -18,7 +18,7 @@
     "scope": "integration",
     "state": "observed"
   },
-  "generated_at_utc": "2026-08-24T22:22:58.822933+00:00",
+  "generated_at_utc": "2026-08-30T12:39:22.016112+00:00",
   "inputs": {
     "dependencies": [
       "scripts/test_standalone_build.sh",
@@ -33,23 +33,23 @@
   "outputs": {
     "decision_artifacts": "generated",
     "environment_fingerprint": {
-      "digest": "sha256:c524b931b9aa710d4e94119cf9f7c03fbfe9effd337d1d934a8d93e9abdcf789",
+      "digest": "sha256:6d9624268fc80a1768dcf3eba30a0a790ec794ed46a4674d1ab0dec53e757d91",
       "fields": {
         "architecture": "x86_64",
         "cargo_version": "cargo 1.100.0-nightly (e8cb624d5 2026-08-22)",
-        "kernel_release": "6.17.0-41-generic",
+        "kernel_release": "7.0.0-30-generic",
         "platform": "linux",
         "rustc_host_triple": "x86_64-unknown-linux-gnu",
-        "rustc_version": "rustc 1.100.0-nightly (fb6531d55 2026-08-23)"
+        "rustc_version": "rustc 1.100.0-nightly (e7769602a 2026-08-24)"
       },
-      "material_digest": "sha256:cf7ab8bc4fb69e21b8b1e6a29354cbc6a2047e5a68b30758a7339ff33e167ca5",
+      "material_digest": "sha256:a452b6cb06cba17409fb6dab125704955dc93575d644a10696c7a24fd7b056db",
       "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
     },
     "execution_trace": "deterministic",
     "exit_code": 0,
     "verification_command": "./scripts/test_standalone_build.sh full-integration",
     "verification_result": "passed",
-    "verified_at_utc": "2026-08-24T22:22:58.822933+00:00"
+    "verified_at_utc": "2026-08-30T12:39:22.016112+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.13.3",
@@ -64,11 +64,11 @@
     "immutable": true,
     "policy": "permanent"
   },
-  "schema_hash": "sha256:6c246658ae9c02496a4cb42c63caa3f8686cbebd22bb3d8b43487e576046f0b2",
+  "schema_hash": "sha256:91adf95e360607fc222830e4d8a60614117368ca3327590e9058b262a83126f2",
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "675b3c232c41682e78ccd598d17e6d7ffac89689",
+    "commit": "5cdea2e30e917e5d5c49670e11f6f503c79f462a",
     "repository": "franken_engine",
     "worktree_dirty": false
   },

@@ -1,0 +1,113 @@
+name: FE-CLAIM-011 Truth Reconciliation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/claim-truth-reconciliation.yml
+      - scripts/reconcile_fe_claim_011_truth.py
+      - scripts/red_team_compromise_rate_metric.py
+      - scripts/run_red_team_compromise_rate_metric_gate.sh
+      - scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+      - README.md
+      - docs/claim_to_proof_matrix_v1.json
+      - docs/CLAIM_TO_PROOF_MATRIX_V1.md
+      - docs/evidence/FE-CLAIM-011/implementation_status_v1.json
+      - crates/franken-engine/docs/claim_to_proof_matrix_v1.json
+  pull_request:
+    paths:
+      - .github/workflows/claim-truth-reconciliation.yml
+      - scripts/reconcile_fe_claim_011_truth.py
+      - scripts/red_team_compromise_rate_metric.py
+      - scripts/run_red_team_compromise_rate_metric_gate.sh
+      - scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+      - README.md
+      - docs/claim_to_proof_matrix_v1.json
+      - docs/CLAIM_TO_PROOF_MATRIX_V1.md
+      - docs/evidence/FE-CLAIM-011/implementation_status_v1.json
+      - crates/franken-engine/docs/claim_to_proof_matrix_v1.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fe-claim-011-truth-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.event.head_commit.message, 'chore(evidence): bootstrap FE-CLAIM-011 truth reconciliation')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact bootstrap revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compile reconciler
+        run: python3 -m py_compile scripts/reconcile_fe_claim_011_truth.py
+
+      - name: Reconcile bounded truth surfaces
+        run: python3 scripts/reconcile_fe_claim_011_truth.py --fix
+
+      - name: Refuse unexpected mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git status --short | sed -E 's/^.. //' | sort)
+          expected=(
+            README.md
+            crates/franken-engine/docs/claim_to_proof_matrix_v1.json
+            docs/CLAIM_TO_PROOF_MATRIX_V1.md
+            docs/claim_to_proof_matrix_v1.json
+            docs/evidence/FE-CLAIM-011/implementation_status_v1.json
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          if [[ "${changed[*]}" != "${expected_sorted[*]}" ]]; then
+            printf 'unexpected reconciliation mutation set\nexpected:\n' >&2
+            printf '  %s\n' "${expected_sorted[@]}" >&2
+            printf 'actual:\n' >&2
+            printf '  %s\n' "${changed[@]}" >&2
+            exit 1
+          fi
+          git diff --check
+
+      - name: Commit reconciled truth atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- \
+            README.md \
+            crates/franken-engine/docs/claim_to_proof_matrix_v1.json \
+            docs/CLAIM_TO_PROOF_MATRIX_V1.md \
+            docs/claim_to_proof_matrix_v1.json \
+            docs/evidence/FE-CLAIM-011/implementation_status_v1.json
+          git commit -m 'docs(evidence): reconcile FE-CLAIM-011 truth surfaces (bd-0lim8)'
+          git push origin HEAD:main
+
+  check:
+    if: >-
+      github.event_name == 'pull_request' ||
+      !startsWith(github.event.head_commit.message, 'chore(evidence): bootstrap FE-CLAIM-011 truth reconciliation')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile reconciliation and comparator tools
+        run: |
+          python3 -m py_compile scripts/reconcile_fe_claim_011_truth.py
+          python3 -m py_compile scripts/red_team_compromise_rate_metric.py
+
+      - name: Verify canonical and mirrored claim truth
+        run: python3 scripts/reconcile_fe_claim_011_truth.py --check
+
+      - name: Exercise executed comparator and ambiguity blocker
+        run: bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh

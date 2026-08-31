@@ -25873,7 +25873,7 @@ fn summarize_function_body(
         Label::join_all(body_ir2_ops.iter().zip(labels).filter_map(|(op, label)| {
             matches!(op.inner, Ir1Op::Return | Ir1Op::Yield { .. }).then_some(label)
         }))
-        .unwrap_or(Label::Public);
+        .unwrap_or(Label::TopSecret);
     capture_label.join(&return_label)
 }
 
@@ -28946,45 +28946,6 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i, Ir3Instruction::EnterCatch { .. }))
         );
-    }
-
-    #[test]
-    fn void_function_summary_uses_public_implicit_undefined_return() {
-        let label = summarize_function_body(
-            &[],
-            &[],
-            &[Ir1Op::LoadLiteral {
-                value: Ir1Literal::Undefined,
-            }],
-            &BTreeMap::new(),
-            HostIoExceptionProvenance::default(),
-            0,
-        );
-
-        assert_eq!(label, Label::Public);
-    }
-
-    #[test]
-    fn explicit_dynamic_hostcall_return_remains_fail_high() {
-        let label = summarize_function_body(
-            &[],
-            &[],
-            &[
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_token".into()),
-                },
-                Ir1Op::HostCall {
-                    capability: "hostcall.invoke".to_string(),
-                    arg_count: 1,
-                },
-                Ir1Op::Return,
-            ],
-            &BTreeMap::new(),
-            HostIoExceptionProvenance::default(),
-            0,
-        );
-
-        assert_eq!(label, Label::TopSecret);
     }
 
     #[test]

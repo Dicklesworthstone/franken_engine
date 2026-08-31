@@ -1,0 +1,44 @@
+{
+  "claim_id": "FE-CLAIM-011",
+  "claim_state": "target",
+  "comparator_contract": {
+    "declared_runtimes": [
+      "frankenengine",
+      "node",
+      "bun"
+    ],
+    "failure_semantics": "missing runtime, timeout, crash, malformed output, or ambiguous disposition blocks the measurement and emits no placeholder scenario rows",
+    "identity_binding": [
+      "runtime executable path and sha256",
+      "runtime version command and output",
+      "scenario script path and sha256",
+      "scenario manifest path and sha256",
+      "stdout, stderr, exit status, and duration",
+      "per-runtime transcript sha256",
+      "per-scenario witness sha256"
+    ],
+    "scenario_set": "red_team_security_critical_compromise_v1"
+  },
+  "implementation_commits": [
+    "173cc39c55cf1b224a564e58953804795f472c03",
+    "2fe9d2ed117d410ae039491e7877156cbaa1e7a6",
+    "6278ae25205d54356740fbfdd2afb9ad78e81117",
+    "b03543d359c7e0cd3a9c8a1e4f0b9b058325f7e4",
+    "ce31f684d8bf30a4b956c54c8816e30cfa415a29"
+  ],
+  "implementation_state": "executed_comparator_available",
+  "measurement_state": "pending_fresh_real_non_fixture_bundle",
+  "promotion_requirements": [
+    "run the declared scenario set with real installed FrankenEngine, Node, and Bun executables",
+    "preserve non-fixture hash-bound receipts for every runtime and scenario",
+    "use a declared statistically adequate repeated-trial denominator rather than a single binary outcome per scenario",
+    "demonstrate at least a 10x compromise-rate reduction against the conservative Node/Bun reference rate",
+    "commit the complete proof bundle and repro.lock at the exact measured revision"
+  ],
+  "schema_version": "franken-engine.fe-claim-011-implementation-status.v1",
+  "verification_commands": [
+    "python3 -m py_compile scripts/red_team_compromise_rate_metric.py",
+    "bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh",
+    "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
+  ]
+}

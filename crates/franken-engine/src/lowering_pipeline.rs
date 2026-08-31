@@ -25760,9 +25760,7 @@ fn canonical_function_capture_origins(
                     runtime_name
                 );
             }
-            let enclosing_id = parse_cell
-                .or_else(|| parse_self)
-                .map(|(origin_id, _)| origin_id)?;
+            let enclosing_id = parse_cell.or(parse_self).map(|(origin_id, _)| origin_id)?;
             if !enclosing_ids.insert(enclosing_id) || !body_ids.insert(*body_id) {
                 return None;
             }
@@ -25864,7 +25862,7 @@ fn summarize_function_body(
         Label::join_all(body_ir2_ops.iter().zip(labels).filter_map(|(op, label)| {
             matches!(op.inner, Ir1Op::Return | Ir1Op::Yield { .. }).then_some(label)
         }))
-        .unwrap_or(Label::TopSecret);
+        .unwrap_or(Label::Public);
     capture_label.join(&return_label)
 }
 
@@ -26894,15 +26892,16 @@ fn simulate_ir2_flow_labels(
                 // engine-owned. FreshAggregate is guest-mutable through
                 // defineProperty and stays excluded; dynamic keys and open
                 // receivers leave the flag false and stay fail-high.
-                operation_exception_is_operand_derived = matches!(
-                    object.shape,
-                    FlowValueShape::EventEmitterObject
-                        | FlowValueShape::ConstantsObject
-                        | FlowValueShape::OwnKeyArray
-                        | FlowValueShape::BufferObject
-                        | FlowValueShape::ClosedResult
-                        | FlowValueShape::Primitive
-                ) && matches!(key, Ir1PropertyKey::Static(_));
+                operation_exception_is_operand_derived =
+                    matches!(
+                        object.shape,
+                        FlowValueShape::EventEmitterObject
+                            | FlowValueShape::ConstantsObject
+                            | FlowValueShape::OwnKeyArray
+                            | FlowValueShape::BufferObject
+                            | FlowValueShape::ClosedResult
+                            | FlowValueShape::Primitive
+                    ) && matches!(key, Ir1PropertyKey::Static(_));
                 let shape = match (&object.shape, key) {
                     (FlowValueShape::ConstantsObject, _) => FlowValueShape::Primitive,
                     (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
@@ -28664,9 +28663,15 @@ mod tests {
         ));
 
         let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
-        for i in inner.op_start..inner.op_end {
+        for (i, op) in ir2
+            .ops
+            .iter()
+            .enumerate()
+            .take(inner.op_end)
+            .skip(inner.op_start)
+        {
             assert_eq!(
-                ir2.ops[i].span,
+                op.span,
                 Some(inner_span),
                 "inner-member op {i} must carry the narrower inner span"
             );
@@ -28895,6 +28900,45 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i, Ir3Instruction::EnterCatch { .. }))
         );
+    }
+
+    #[test]
+    fn void_function_summary_uses_public_implicit_undefined_return() {
+        let label = summarize_function_body(
+            &[],
+            &[],
+            &[Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            }],
+            &BTreeMap::new(),
+            HostIoExceptionProvenance::Unknown,
+            0,
+        );
+
+        assert_eq!(label, Label::Public);
+    }
+
+    #[test]
+    fn explicit_dynamic_hostcall_return_remains_fail_high() {
+        let label = summarize_function_body(
+            &[],
+            &[],
+            &[
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_token".into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "hostcall.invoke".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Return,
+            ],
+            &BTreeMap::new(),
+            HostIoExceptionProvenance::Unknown,
+            0,
+        );
+
+        assert_eq!(label, Label::TopSecret);
     }
 
     #[test]

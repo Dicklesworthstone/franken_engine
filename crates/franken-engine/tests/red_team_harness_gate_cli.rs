@@ -35,7 +35,7 @@ impl Drop for TestDir {
 }
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_franken-red-team-harness-gate")
+    env!("CARGO_BIN_EXE_franken_red_team_harness_gate")
 }
 
 fn fixture() -> Value {

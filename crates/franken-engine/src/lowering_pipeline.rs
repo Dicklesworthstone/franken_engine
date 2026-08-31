@@ -26991,6 +26991,26 @@ fn simulate_ir2_flow_labels(
                         FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
                         Ir1PropertyKey::Static(key),
                     ) if key.as_str() == Some("length") => FlowValueShape::Primitive,
+                    // Engine-owned fresh aggregates (array literals, os.loadavg,
+                    // etc.) expose the standard non-mutating Array.prototype
+                    // methods. Treating the method value as a summarized
+                    // callable keeps the CallMethod on the JoinInputs lane
+                    // instead of fail-high TopSecret.
+                    (
+                        FlowValueShape::FreshAggregate,
+                        Ir1PropertyKey::Static(key),
+                    ) if matches!(
+                        key.as_str(),
+                        Some(
+                            "join" | "slice" | "every" | "some" | "map" | "filter"
+                                | "sort" | "forEach" | "reduce" | "reduceRight"
+                                | "find" | "findIndex" | "indexOf" | "lastIndexOf"
+                                | "includes" | "flat" | "flatMap"
+                        )
+                    ) =>
+                    {
+                        FlowValueShape::Callable
+                    }
                     (
                         FlowValueShape::ClosedResult | FlowValueShape::FreshAggregate,
                         Ir1PropertyKey::Dynamic,
@@ -27795,6 +27815,15 @@ fn simulate_ir2_flow_labels(
                 // the input's provenance, and a non-operand-derived
                 // invocation keeps its fail-high exception contract and the
                 if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
+                    result_shape = FlowValueShape::FreshAggregate;
+                }
+                // bd-qmy52: `os` pure-compute accessors that return aggregate
+                // structures are engine-owned fresh arrays/objects; summarize
+                // them so chained Array.prototype operations stay finite.
+                if matches!(
+                    capability.as_str(),
+                    "builtin:OsLoadavg" | "builtin:OsCpus" | "builtin:OsNetworkInterfaces"
+                ) {
                     result_shape = FlowValueShape::FreshAggregate;
                 }
                 // not opened up — only the catch observation

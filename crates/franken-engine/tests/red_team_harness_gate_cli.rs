@@ -43,6 +43,33 @@ fn fixture() -> Value {
         .expect("valid harness fixture")
 }
 
+fn ten_scenario_fixture() -> Value {
+    let mut value = fixture();
+    let additions = value["results"]
+        .as_array()
+        .expect("results array")
+        .clone()
+        .into_iter()
+        .map(|mut result| {
+            let scenario_id = result["scenario_id"]
+                .as_str()
+                .expect("scenario id")
+                .to_string();
+            result["scenario_id"] = Value::from(format!("{scenario_id}_variant_b"));
+            for field in ["witness_path", "transcript_path", "replay_command"] {
+                let original = result[field].as_str().expect("string field").to_string();
+                result[field] = Value::from(format!("{original}.variant-b"));
+            }
+            result
+        })
+        .collect::<Vec<_>>();
+    value["results"]
+        .as_array_mut()
+        .expect("results array")
+        .extend(additions);
+    value
+}
+
 fn write_json(path: &Path, value: &Value) {
     fs::write(
         path,
@@ -51,13 +78,22 @@ fn write_json(path: &Path, value: &Value) {
     .expect("write test JSON");
 }
 
+fn run_with_input(test_dir: &TestDir, value: &Value) -> std::process::Output {
+    let input = test_dir.path().join("input.json");
+    write_json(&input, value);
+    Command::new(binary())
+        .args(["--input", input.to_str().expect("UTF-8 input path")])
+        .output()
+        .expect("run harness gate")
+}
+
 #[test]
-fn passing_harness_emits_machine_and_markdown_reports() {
+fn ten_distinct_scenarios_emit_passing_machine_and_markdown_reports() {
     let test_dir = TestDir::new("pass");
     let input = test_dir.path().join("input.json");
     let output = test_dir.path().join("report.json");
     let markdown = test_dir.path().join("report.md");
-    write_json(&input, &fixture());
+    write_json(&input, &ten_scenario_fixture());
 
     let result = Command::new(binary())
         .args([
@@ -81,34 +117,45 @@ fn passing_harness_emits_machine_and_markdown_reports() {
         serde_json::from_slice(&fs::read(output).expect("read report")).expect("parse report");
     assert_eq!(
         report["schema_version"],
-        "franken-engine.red-team-harness-gate-output.v1"
+        "franken-engine.red-team-harness-gate-output.v2"
     );
-    assert_eq!(report["summary"]["node"]["attempts_successful"], 500);
-    assert_eq!(
-        report["summary"]["frankenengine"]["attempts_successful"],
-        0
-    );
+    assert_eq!(report["report"]["scenario_count"], 10);
+    assert_eq!(report["report"]["attack_class_count"], 3);
+    assert_eq!(report["report"]["conservative_reduction_floor_x"], 10);
     assert_eq!(
         report["report"]["reason"],
-        "red_team_compromise_rate_reduction_verified"
+        "red_team_compromise_rate_reduction_verified_on_declared_scenario_corpus"
+    );
+    assert_eq!(
+        report["report"]["confidence_interpretation"],
+        "receipt completeness and outcome stability; not statistical population confidence"
     );
     let markdown = fs::read_to_string(markdown).expect("read markdown");
-    assert!(markdown.contains("Red-Team Compromise-Rate Metric Gate"));
+    assert!(markdown.contains("Red-Team Scenario-Corpus Compromise-Rate Gate"));
+    assert!(markdown.contains("not treated as independent population samples"));
+}
+
+#[test]
+fn five_scenarios_cannot_turn_zero_candidate_events_into_infinite_claim() {
+    let test_dir = TestDir::new("five-scenario-guard");
+    let result = run_with_input(&test_dir, &fixture());
+    assert_eq!(result.status.code(), Some(1));
+    assert!(result.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&result.stdout).expect("parse gate output");
+    assert_eq!(report["report"]["scenario_count"], 5);
+    assert_eq!(report["report"]["conservative_reduction_floor_x"], 5);
+    assert_eq!(
+        report["report"]["reason"],
+        "insufficient_distinct_scenario_denominator"
+    );
 }
 
 #[test]
 fn below_minimum_harness_is_rejected_as_invalid_input() {
     let test_dir = TestDir::new("minimum");
-    let input = test_dir.path().join("input.json");
-    let mut value = fixture();
+    let mut value = ten_scenario_fixture();
     value["min_trials_per_runtime"] = Value::from(99);
-    write_json(&input, &value);
-
-    let result = Command::new(binary())
-        .args(["--input", input.to_str().expect("UTF-8 input path")])
-        .output()
-        .expect("run harness gate");
-
+    let result = run_with_input(&test_dir, &value);
     assert_eq!(result.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("below required 100"),
@@ -118,34 +165,75 @@ fn below_minimum_harness_is_rejected_as_invalid_input() {
 }
 
 #[test]
-fn measured_candidate_compromise_exits_fail_closed_with_report() {
-    let test_dir = TestDir::new("fail-closed");
-    let input = test_dir.path().join("input.json");
-    let mut value = fixture();
+fn mixed_repeated_outcomes_fail_closed_instead_of_becoming_confidence() {
+    let test_dir = TestDir::new("mixed");
+    let mut value = ten_scenario_fixture();
+    let result = value["results"]
+        .as_array_mut()
+        .expect("results array")
+        .iter_mut()
+        .find(|result| result["runtime"] == "franken_engine")
+        .expect("FrankenEngine row");
+    result["attempts_successful"] = Value::from(1);
+
+    let output = run_with_input(&test_dir, &value);
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("parse gate output");
+    assert_eq!(
+        report["report"]["reason"],
+        "unstable_runtime_scenario_outcomes"
+    );
+    assert_eq!(
+        report["report"]["mixed_outcome_pairs"]
+            .as_array()
+            .expect("mixed pairs")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn two_compromised_candidate_scenarios_fail_guarded_ten_x_floor() {
+    let test_dir = TestDir::new("candidate-compromise");
+    let mut value = ten_scenario_fixture();
     for result in value["results"]
         .as_array_mut()
         .expect("results array")
         .iter_mut()
+        .filter(|result| result["runtime"] == "franken_engine")
+        .take(2)
     {
-        if result["runtime"] == "franken_engine" {
-            result["attempts_successful"] = Value::from(100);
-        }
+        result["attempts_successful"] = result["attempts_total"].clone();
     }
-    write_json(&input, &value);
 
-    let result = Command::new(binary())
-        .args(["--input", input.to_str().expect("UTF-8 input path")])
-        .output()
-        .expect("run harness gate");
-
-    assert_eq!(result.status.code(), Some(1));
-    assert!(result.stderr.is_empty());
-    let report: Value = serde_json::from_slice(&result.stdout).expect("parse gate output");
+    let output = run_with_input(&test_dir, &value);
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("parse gate output");
+    assert_eq!(report["report"]["frankenengine_compromised_scenarios"], 2);
+    assert_eq!(report["report"]["conservative_reduction_floor_x"], 5);
     assert_eq!(
         report["report"]["reason"],
-        "compromise_rate_reduction_below_baseline"
+        "zero_cell_guarded_reduction_below_threshold"
     );
-    assert_eq!(report["report"]["reduction_factor_x"], 1);
+}
+
+#[test]
+fn unequal_runtime_attempt_denominators_are_invalid_input() {
+    let test_dir = TestDir::new("unequal-denominator");
+    let mut value = ten_scenario_fixture();
+    let result = value["results"]
+        .as_array_mut()
+        .expect("results array")
+        .iter_mut()
+        .find(|result| result["runtime"] == "node")
+        .expect("Node row");
+    result["attempts_total"] = Value::from(101);
+
+    let output = run_with_input(&test_dir, &value);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unequal runtime attempt denominators")
+    );
 }
 
 #[test]

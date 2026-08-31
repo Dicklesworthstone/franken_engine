@@ -1,318 +1,282 @@
 # Contributing to FrankenEngine
 
-Thank you for your interest in contributing to FrankenEngine! This guide provides everything you need to get started as a human contributor to this native Rust runtime for adversarial extension workloads.
+FrankenEngine is a native Rust execution substrate for adversarial JavaScript/TypeScript extension workloads. Changes are accepted only when the implementation, failure semantics, focused verification, tracker state, and published claim boundary agree.
 
-## Prerequisites
+## Read This First
 
-### Required Tools
+Read these in order before editing:
 
-- **Rust Nightly**: FrankenEngine uses Rust 2024 edition features
-  ```bash
-  rustup install nightly
-  rustup default nightly
-  ```
-
-- **Git**: For version control and collaboration
-  ```bash
-  git --version  # Should be 2.0+
-  ```
-
-- **Additional Tools** (recommended):
-  ```bash
-  # For development workflow
-  cargo install cargo-watch
-  cargo install cargo-edit
-  
-  # For code quality
-  rustup component add clippy rustfmt
-  ```
-
-### Platform Support
-
-FrankenEngine supports Linux, macOS, and Windows with architecture-aware builds. Development is primarily done on Linux, but all platforms are tested in CI.
-
-## Quick Start
-
-### 1. Clone and Build
+1. `AGENTS.md` — binding repository rules.
+2. `README.md` — product surface and current bounded claims.
+3. `docs/ARCHITECTURE_OVERVIEW.md` — the implemented call graph and architectural boundaries.
+4. `docs/RUNTIME_CHARTER.md` — constitutional runtime constraints.
+5. The route emitted for the files you plan to touch:
 
 ```bash
-git clone https://github.com/Dicklesworthstone/franken_engine.git
-cd franken_engine
-
-# Build in development mode
-cargo check --all-targets
-cargo build --workspace
-
-# Run basic tests
-cargo test --workspace
+python3 scripts/agent_route.py --path crates/franken-engine/src/lowering_pipeline.rs
+python3 scripts/agent_route.py --changed HEAD~1 --include-worktree
+python3 scripts/agent_route.py --claim FE-CLAIM-011 --format commands
 ```
 
-### 2. Verify Your Setup
+`docs/agent_change_routes_v1.json` is the machine-readable ownership map behind that command. It binds paths to semantic anchors, governing documents, focused checks, downstream truth artifacts, claim IDs, tracker search terms, and collision risk. Keep it current when a new subsystem or source-of-truth file appears.
 
-```bash
-# Test the CLI
-cargo run --bin frankenctl -- version
+## The Execution Model
 
-# Run a simple compile/execute cycle
-mkdir -p ./artifacts
-echo 'const answer = 40 + 2;' > ./demo.js
-cargo run --bin frankenctl -- compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
-cargo run --bin frankenctl -- run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
-```
+The core path is:
 
-## Architecture Overview
-
-FrankenEngine follows a layered architecture from parsing to execution:
-
-```
-Source Code (JS/TS)
-       ↓
-   parser.rs → ast.rs
-       ↓
-lowering_pipeline.rs (IR0→IR1→IR2→IR3)
-       ↓
-baseline_interpreter.rs
-       ↓
+```text
+JavaScript/TypeScript source
+        |
+        v
+parser.rs + ast.rs
+        |
+        v
+Ir0Module -> Ir1Module -> Ir2Module -> Ir3Module
+        lowering_pipeline.rs
+        |
+        v
 execution_orchestrator.rs
-       ↓
-   evidence_ledger.rs
+        |
+        v
+LaneRouter -> InterpreterCore
+        baseline_interpreter.rs
+        |
+        v
+ExecutionResult + nondeterminism trace + evidence + IR4/witness artifacts
 ```
 
-For detailed architecture documentation, see `docs/ARCHITECTURE_OVERVIEW.md` (when available).
+The orchestrator owns prepare, guard, execute, containment, and evidence phases. The baseline interpreter is the production execution core reached by the named lanes. IR4 is a post-execution witness surface, not another executable tier. Compatibility belongs above the core; dependency direction remains `franken_node -> franken_engine`.
 
-### Key Components
+`crates/franken-extension-host` is a separate signed-manifest and extension-policy boundary. Do not copy engine semantics into it or introduce a reverse dependency into the core.
 
-- **Parser**: Converts source code to AST
-- **Lowering Pipeline**: Transforms AST through multiple IR levels  
-- **Interpreter**: Executes IR3 bytecode
-- **Orchestrator**: Manages execution profiles and resource allocation
-- **Evidence**: Records cryptographic decision receipts
+## Before You Claim Work
 
-## Module Organization
-
-The codebase is organized into several key areas:
-
-### Core Runtime (`crates/franken-engine/src/`)
-- `parser.rs`, `ast.rs` - Source parsing and AST representation
-- `lowering_pipeline.rs` - Multi-stage IR lowering
-- `baseline_interpreter.rs` - Core execution engine
-- `execution_orchestrator.rs` - Runtime coordination
-
-### Governance & Security
-- `capability_*` - Authority and capability management
-- `security_epoch.rs` - Temporal security boundaries  
-- `evidence_ledger.rs` - Decision receipt generation
-- `hash_tiers.rs` - Content addressing and integrity
-
-### Testing & Validation
-- `tests/` - Integration tests (one per source module)
-- `conformance_*` - Compliance and compatibility validation
-- Gate scripts in `scripts/` for CI validation
-
-## Code Conventions
-
-### Rust Standards
-
-- **Edition**: Rust 2024 with nightly features
-- **Safety**: `#![forbid(unsafe_code)]` - no unsafe code anywhere
-- **Error Handling**: Use `Result<T, E>` consistently, avoid panics in library code
-- **Documentation**: All public APIs must have doc comments
-
-### Data Structures
-
-- **Deterministic Collections**: Use `BTreeMap`/`BTreeSet` instead of `HashMap`/`HashSet` for deterministic ordering
-- **Serialization**: All types should implement `serde::Serialize` and `serde::Deserialize`
-- **Fixed-Point Math**: Use millionths (1_000_000 = 1.0) for deterministic decimal representation
-
-### Modern Rust Features
-
-```rust
-// Use let-chains (Rust 2024)
-if let Some(x) = expr && condition {
-    // ...
-}
-
-// Prefer BTreeMap for determinism
-let mut map = BTreeMap::new();
-
-// Always forbid unsafe
-#![forbid(unsafe_code)]
-```
-
-### Module Registration
-
-- Add new modules alphabetically in `lib.rs`
-- Each source module must have corresponding integration tests
-- Follow the naming pattern: `src/foo.rs` → `tests/foo_integration.rs`
-
-## Development Workflow
-
-### Finding Work
-
-FrankenEngine uses a bead-based task management system:
+This repository uses `br` for beads. The durable JSONL file is a mirror of the local tracker database, not a safe substitute for tracker commands.
 
 ```bash
-# List available work (requires beads tooling)
-br list --status open --priority 0-2
-
-# Check task details
-br show bd-task-id
-
-# Claim a task
-br update bd-task-id --assignee YourName
-br update bd-task-id --status in_progress
+br ready
+br show <bead-id>
+br update <bead-id> --status in_progress
 ```
 
-### Implementation Process
+Before claiming:
 
-1. **Reserve Files**: Use `br` tooling to reserve files you'll modify
-2. **Implement**: Write code following conventions above
-3. **Format**: `cargo fmt` (required)
-4. **Lint**: `cargo clippy -- -D warnings` (must pass)
-5. **Test**: `cargo test` (all tests must pass)
-6. **Close**: `br close bd-task-id --reason "done: description"`
-7. **Commit**: Git commit with proper attribution
+- inspect dependencies and blockers;
+- inspect recent commits and tracker activity;
+- inspect `git log -8 --oneline -- <path>` for every hotspot you expect to edit;
+- confirm another agent is not already changing the same semantic boundary;
+- prefer the smallest unblocked bead that unlocks downstream work.
 
-### Common Clippy Gotchas
-
-- **collapsible_if + let-chains**: Combine nested if-let statements
-- **manual_is_multiple_of**: Use `.is_multiple_of()` for unsigned types only
-- **too_many_arguments**: Max 7 function arguments (use structs for more)
-- **for_kv_map**: Use `.keys()` when iterating over keys only
-
-### Remote Compilation
-
-The project uses `rch` for remote compilation to handle resource-intensive builds:
+After a verified implementation:
 
 ```bash
-# Check remote build status  
-rch status
-
-# For environment variable issues
-rch exec 'env CARGO_INCREMENTAL=0 cargo check ...'
-
-# Clean cache corruption
-cargo clean && CARGO_INCREMENTAL=0 cargo clippy
+br close <bead-id> --reason "implemented and verified: <concise evidence>"
+br sync --flush-only
 ```
 
-## Testing
+Do not mark a bead complete from code shape alone. A security, performance, replay, or evidence task is complete only when its adversarial/failure path and preserved proof surface are also correct.
 
-### Unit Tests
+## Direct-to-Main Discipline
 
-Every source module should have comprehensive unit tests (minimum 20 tests per module):
+The repository is developed incrementally on `main`.
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_basic_functionality() {
-        // Test implementation
-    }
-}
+- Re-read the target file from current `main` immediately before each write.
+- Keep each commit to one coherent semantic change.
+- Commit tests or executable guards next to the behavior they protect.
+- Do not accumulate a large private patch and land it as one batch.
+- Do not rewrite, revert, or “clean up” unrelated concurrent work.
+- Never delete files without explicit permission.
+- Never run destructive cleanup such as `git reset --hard`, `git clean`, or `cargo clean`.
+- Use a unique `CARGO_TARGET_DIR` when build isolation is needed.
+
+A good sequence is:
+
+```text
+claim bead -> inspect route/history -> implement narrow delta -> run focused proof
+-> commit -> add adversarial/drift guard -> commit -> update truth artifacts
+-> commit -> close/sync bead
 ```
 
-### Integration Tests
+## Build Modes
 
-Each source module must have a corresponding integration test file:
+The root workspace uses Rust nightly and edition 2024.
 
-- `src/parser.rs` → `tests/parser_integration.rs`
-- `src/ast.rs` → `tests/ast_integration.rs`
-
-Integration tests should cover public API contracts, serialization, and cross-module interactions.
-
-### Running Tests
+Standalone engine work:
 
 ```bash
-# All tests
-cargo test --workspace
-
-# Specific module
-cargo test --test parser_integration
-
-# With output
-cargo test --test parser_integration -- --nocapture
+CARGO_TARGET_DIR=/tmp/franken_engine_target_<agent> \
+CARGO_INCREMENTAL=0 \
+cargo check --release --no-default-features -p frankenengine-engine --bin frankenctl
 ```
 
-## Quality Gates
+Default/full-integration work may use sibling projects under `/dp`. Do not introduce a local replacement for a stronger sibling substrate without explicit approval. Do not add a binding-led V8, QuickJS, or equivalent core path.
 
-### Pre-commit Requirements
+## Validation Ladder
 
-All code must pass these checks before merging:
+Run the smallest command that actually proves the changed invariant, then expand only as the boundary requires.
 
-1. **Compilation**: `cargo check --all-targets`
-2. **Formatting**: `cargo fmt --check`  
-3. **Linting**: `cargo clippy --all-targets -- -D warnings`
-4. **Testing**: `cargo test --workspace`
-5. **Documentation**: All public APIs documented
+### 1. Cheap syntax and contract checks
 
-### Performance Standards
+```bash
+python3 -m py_compile <changed-python-files>
+bash -n <changed-shell-files>
+python3 scripts/agent_route.py --check
+cargo fmt --check
+```
 
-- No performance regressions in benchmark suite
-- Memory usage should be bounded and predictable
-- All optimizations must include correctness proofs
+### 2. Focused semantic checks
 
-### Security Standards
+Use the commands returned by `scripts/agent_route.py`. Examples:
 
-- All cryptographic operations must be deterministic and reproducible
-- Evidence generation for high-impact decisions
-- Capability-based access control throughout
+```bash
+cargo test -p frankenengine-engine lowering --lib
+cargo test -p frankenengine-engine declassification_pipeline --lib
+./scripts/run_lowering_gap_truth_invariant.sh ci
+./scripts/run_replay_coverage_metric_gate.sh ci
+```
 
-## Review Process
+### 3. Negative or ambiguity drills
 
-### Pull Request Guidelines
+Every fail-closed boundary needs a test that proves the guard can fail. Examples include:
 
-1. **Scope**: Keep PRs focused on a single logical change
-2. **Tests**: Include tests for all new functionality
-3. **Documentation**: Update docs for API changes
-4. **Commit Messages**: Use conventional commit format with Co-Authored-By attribution
+- malformed or missing runtime output;
+- replay or nonce reuse;
+- conflicting identities or schema versions;
+- fixture-only evidence presented as observed evidence;
+- a drifted manifest or documentation mirror;
+- timeout/crash/parser failure that must not count as containment.
 
-### Review Checklist
+### 4. Crate-level gates
 
-Reviewers will check:
-- [ ] Code follows established conventions
-- [ ] All tests pass and coverage is adequate
-- [ ] Documentation is complete and accurate
-- [ ] Performance impact is understood
-- [ ] Security implications are considered
+```bash
+cargo check -p frankenengine-engine
+cargo clippy -p frankenengine-engine --all-targets -- -D warnings
+cargo test -p frankenengine-engine
+cargo fmt --check
+```
 
-## Getting Help
+Use remote compilation only when the local environment provides it and the command is genuinely heavy. Preserve the exact command, revision, exit status, and relevant artifacts in the bead or evidence bundle.
 
-### Documentation
+## Semantic Rules
 
-- **README.md**: Project overview and quick start
-- **docs/**: Detailed technical documentation
-- **Source Comments**: Implementation details and rationales
+### Determinism
 
-### Community
+- Use `BTreeMap`/`BTreeSet` when iteration order reaches hashes, serialization, replay, or user-visible output.
+- Sort vectors before canonical hashing.
+- Length-prefix variable-length fields.
+- Distinguish `None` from `Some(empty)` in preimages.
+- Use fixed-point millionths for hashed/public ratios; do not put platform-sensitive floating-point values in canonical artifacts.
+- Make overflow behavior explicit with checked, saturating, or wrapping arithmetic.
 
-- **Issues**: Report bugs and request features via GitHub Issues
-- **Discussions**: Technical discussions and questions
-- **Agent Coordination**: The project includes AI agents - see AGENTS.md for coordination protocols
+### Safety and authority
 
-### Common Issues
+- Production engine source must remain unsafe-free; do not broaden unsafe usage.
+- Every host effect must pass the appropriate capability and IFC boundary.
+- A declassification receipt must bind every identity needed to justify its claims: policy, route, sink, site, transform, output, replay identity, and cryptographic key/nonce identity where applicable.
+- Absence of evidence is never evidence of containment, authorization, replay success, or comparator success.
+- Unknown, blocked, degraded, refused, fixture-only, and observed are distinct states.
 
-- **Build Failures**: Check `rch status` for remote build infrastructure
-- **Test Timeouts**: Large test suites may need increased timeouts
-- **File Locks**: Multiple agents can cause file lock contention
+### Error behavior
 
-## Project Values
+Prefer typed refusal over fabricated compatibility. A parser error, runtime crash, malformed report, missing comparator, or timeout must remain visible as its own outcome. Do not collapse it into a favorable boolean.
 
-### Design Principles
+### Optimization
 
-1. **Deterministic First**: All execution must be reproducible
-2. **Evidence-Based**: Claims backed by artifacts
-3. **Security by Construction**: Built-in containment and authority boundaries
-4. **Performance with Proofs**: Optimizations verified for correctness
+An optimization is incomplete without:
 
-### Code Quality
+- semantic parity on the executed path;
+- preserved IFC/capability/replay/evidence behavior;
+- an adversarial or rollback guard;
+- a reproducible measurement against the correct lifecycle;
+- countermetrics for memory, tail latency, and failure behavior where relevant.
 
-- Prefer explicit over implicit behavior
-- Fail closed on security-relevant decisions  
-- Maintain compatibility with existing evidence chains
-- Keep abstractions minimal and well-justified
+A plan, provenance record, quickening candidate, or AOT artifact is not machine-code execution.
 
----
+## Parser and Language-Surface Work
 
-Ready to contribute? Start by exploring the codebase, picking up a small task from the bead system, and following the workflow above. Welcome to FrankenEngine!
+For a new or repaired construct, trace the entire tower:
+
+```text
+parser -> AST -> IR0 -> IR1 -> IR2 -> IR3 -> interpreter
+       -> error semantics -> replay/evidence -> gap inventories
+```
+
+Update both `parser_gap_inventory.rs` and `lowering_gap_inventory.rs` when their truth changes. “Parsed,” “lowered,” and “execution-ready” are separate states. Refusal is not implementation.
+
+Do not make broad edits to `lowering_pipeline.rs` or `baseline_interpreter.rs`. They are critical shared hotspots. Isolate one construct or invariant, use narrow helpers, and commit before beginning the next semantic unit.
+
+## Evidence and Claim Work
+
+The authoritative claim state is `docs/claim_to_proof_matrix_v1.json`. Its human-readable and crate-local mirrors are:
+
+- `docs/CLAIM_TO_PROOF_MATRIX_V1.md`
+- `crates/franken-engine/docs/claim_to_proof_matrix_v1.json`
+
+Update producer, negative drill, canonical JSON, mirrors, and README wording together. Keep a claim `TARGET` or `HYPOTHESIS` until a fresh real proof bundle exists. A gate implementation alone is not an observed measurement.
+
+For cross-runtime metrics:
+
+- execute every comparator on the same declared scenario/workload;
+- bind executable identity/version and hash;
+- preserve stdout, stderr, exit status, duration, and disposition source;
+- prove output equivalence before comparing performance;
+- refuse malformed, ambiguous, missing, or crashed lanes;
+- never substitute hardcoded comparator outcomes.
+
+Run:
+
+```bash
+./scripts/run_claim_to_proof_matrix_gate.sh ci
+```
+
+## Tests
+
+Add the tests needed to prove the invariant; do not optimize for a blanket per-file count.
+
+Strong coverage normally includes:
+
+- focused unit tests for local state transitions;
+- an integration test for the cross-module contract;
+- at least one negative/adversarial case;
+- deterministic serialization/hash/replay checks for persisted types;
+- a drift guard when prose, inventories, schemas, or generated mirrors can diverge.
+
+Fixture-only tests are useful, but their outputs must stay labeled as fixtures and must not back an observed product claim.
+
+## Adding a Module
+
+Before creating a file, confirm the behavior does not belong in an existing module.
+
+When a new module is justified:
+
+1. use a semantic name; do not create `_v2`, `_new`, `_improved`, or similar parallel implementations;
+2. register it in `lib.rs` in the existing ordering convention;
+3. add focused tests and a cross-module proof where needed;
+4. add the path to `docs/agent_change_routes_v1.json`;
+5. update architecture inventory/truth surfaces that enumerate modules;
+6. run route validation and the relevant crate gates.
+
+## Commit Messages
+
+Use a conventional, specific subject and include the bead ID when the commit advances one:
+
+```text
+fix(ifc): bind nonce uniqueness to key identity (bd-...)
+test(replay): reject cross-epoch witness reuse (bd-...)
+docs(agent): route module-loader changes through lifecycle checks
+```
+
+The commit subject should describe the invariant changed, not merely the file touched.
+
+## Definition of Done
+
+A change is done when:
+
+- the live behavior is implemented;
+- the unfavorable and ambiguous paths are explicit;
+- focused tests and negative drills pass;
+- broader checks appropriate to the boundary pass;
+- bead status and notes reflect reality;
+- generated inventories and mirrors agree;
+- claim wording does not exceed the preserved evidence;
+- commits are small enough to bisect and safe for concurrent agents.

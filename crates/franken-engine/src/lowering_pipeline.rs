@@ -28934,11 +28934,8 @@ mod tests {
             FlowValueShape::Callable,
             &mut next_identity,
         );
-        let unknown = fresh_shaped_flow_value(
-            Label::Internal,
-            FlowValueShape::Unknown,
-            &mut next_identity,
-        );
+        let unknown =
+            fresh_shaped_flow_value(Label::Internal, FlowValueShape::Unknown, &mut next_identity);
 
         for capability in [
             "builtin:HttpCreateServer",

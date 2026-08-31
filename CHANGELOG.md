@@ -116,7 +116,117 @@ and the per-bead closed-history entries.
 
 > **Note.** The remaining `lowering_pipeline.rs:43553` unclosed delimiter is from another agent's *uncommitted* in-progress edit. The committed state at `80c26bf0f` builds clean (`cargo check --lib` exit 0); only NEW test invocations that re-link the lib are affected. Not a regression of any change documented here.
 
----
+## Post-Snapshot Update — Team work in the same window (2026-08-20 → 2026-08-31)
+
+A separate, agent-recorded catch-up of the work other teams drove in the
+same window. This is a research-led summary, not an independently-verified
+synthesis — bead close-reasons and commit messages were sampled for
+thematic clustering; specific behavior claims are owned by the originating
+beads. For a full Standard-Rebuild pass with link verification and a coverage
+ledger, this section is the index, not the audit.
+
+The wave that began with the 2026-08-19 product-authority push
+(charter §2, charter §7) closed into five cross-cutting themes during this
+window: **(1) live-Node / live-bun hardening of TLS, crypto, and child-process
+boundaries**, **(2) a third-pass IFC summarize / capture-origins / flow-shape
+wave**, **(3) shadow-daemon no-mock adoption + evidence-receipt execution layer**,
+(4) bridge-2026 program decomposition, and **(5) a wide reality-check defect
+cluster against the rewritten CLI/replay surface**.
+
+### Delivered capability (sampled, by theme)
+
+- **Theme 1 — TLS, crypto, child-process, Zlib.** Peer-certificate metadata
+  extractor with bounded X.509 DER parsing and Node-oracle fixtures
+  (`bd-il0d9`: `5ee847e10`, `46c8d93c3`, `cf3612917`); RFC 6125 wildcard matching +
+  root bundle + connect positional overloads (`c7024687c`); X.509 / IFC fix for
+  TBSCertificate tag parsing + flow labels (`08aa44884`); Node-compatible
+  `process.nextTick` queue without exposing raw process authority, required by
+  stream fixture 0013 (`bd-8nrud`); P-256 ECDSA detached signing + DER verification
+  + crypto.sign/verify lowering with IFC labels (`42bd30256`, `a25c259e4`,
+  `f7e303e6b`); ed25519 sign/verify + generateKeyPairSync via typed `RandomRead`
+  entropy + asymmetric key-lifecycle contract + zeroization lifecycle verification
+  (`fff2c4f7e`, `7faab498c`, `5fd27394b`, `2c28f7113f`); AES-256-GCM variable-IV
+  transform with GHASH on decryption (`dd251eba7`, `99e5edf06`); ChildProcess
+  lifecycle bridge with bounded stdin + process effect errors retaining partial
+  stdout/stderr on timeout / I/O / provider limits (`bd-m42c2`, `bd-k709s`); brotli
+  runtime dispatch + sync-family closed-input flow + zlib / Buffer.equals IFC
+  summaries (`edd93e42b`, `0cfb17480`, `ac689bc72`, `f4afa45d9`, `e9f929a4b`,
+  `e2490c45d`, `856a61de5`); pull-based Brotli reader to throw on corrupt
+  decompress input (`89b926d4f`, `a6c2aea8e`, `b5fd26175` follow-up); brotli
+  sync result → authenticated BufferObject classification (`f4afa45d9`).
+- **Theme 2 — IFC summarize, capture-origins, flow shape.** `bd-dign3` partials
+  2-5 closed-result summaries for `toString` / `valueOf` / `ArrayBuffer`
+  allocations / crypto metadata (`58203b48f`, `e1362cf6d`, `39696dc06`,
+  `4d0f63435`); the new `EngineParsedAggregate` flow shape for
+  `builtin:QuerystringParse` results, propagated through IFC summarization
+  (`80c26bf0f`, `9d4874057`, `151502548`); ConstantsObject static-method +
+  OwnKeyArray + `matches!` length/size recognition in flow labels
+  (`d8a84c418`, `c5b706838`); FRANKEN_CAPTURE_DEBUG gate for capture-origins
+  resolution (`a7116c2fd`).
+- **Theme 3 — shadow + evidence layer.** Authoritative shadow-daemon no-mock
+  lifecycle drill (posture advisory-only, all five adoption gates green) —
+  `698b9ae0a`, `8b20e5f43`, `e8f58696e`, `129a2f0f6`, `b5fd26175`;
+  execution-derived receipt layer with recomputable seals + receipt-integrity
+  gate in main body + bd-q0cwt / bd-8hh0g close (`ad43cd2a0`, `675b3c232`,
+  `68690399b`, `5ec3d7cb7`, `c432e530a`); native promises in reaction
+  completions, resolve, async returns (`0bb43d4e7`).
+- **Theme 4 — BRIDGE-2026 program work.** README structural-inventory drift +
+  three nonexistent module references + repo hygiene (`tu32j.1.8`); restore
+  repo-wide `unsafe-code` prohibition in test builds (`tu32j.1.9`);
+  generate the live coverage matrix from authoritative beads / claims / harness
+  inventory (`tu32j.22.1.1`); BRIDGE-21.61 enforces decomposed-parent closeout
+  and exact required-child completion (`4e37b213d`).
+- **Theme 5 — reality-check defect cluster (bd-sxh8o*).** Promise/async
+  then-handlers fix on `frankenctl run` + Array.prototype.toString prints
+  `[object Array]` + benign frankenctl run reports `containment_action=challenge`
+  + `examples/21` verify.sh can green on usage errors + replay self-compares
+  traces (`bd-sxh8o.1..6`, `bd-25il9` was false-closed).
+
+Plus the other open wave: ESM async module-graph evaluation with owned compiled
+IR per module, `AsyncEvaluating` dependency status, parent-import continuation,
+and rejection propagation for imported top-level await (`bd-yn3lv`); full set
+of [REALITY-2026-08-20] CLI defects resolved into the rewritten CLI; v0.1.0
+release remains the only published GitHub Release.
+
+### Closed workstreams (sampled)
+
+`bd-53l89` (asymmetric key-lifecycle, phases 1-2), `bd-acwe9` (zeroization
+lifecycle), `bd-dign3` (crypto/IFC summarize, 5 partials), `bd-nil04`
+(shadow no-mock drill, 5 gates), `bd-q0cwt` + `bd-8hh0g` (execution-derived
+receipts), `bd-ifc-internal-label-cell-transcript-hplvg`, `bd-hwjbi`
+(callback recursion), `bd-fw7zd.9` / `bd-fw7zd.13` (post-close / promise
+ownership), `bd-z1peg` (static IFC source labels), `bd-z1peg.1..3`
+(authority/provenance registry + delegation accounting), `bd-zco6t` (fs
+compat residual), `bd-8nrud` (nextTick), `bd-yn3lv` (ESM async module-graph),
+`bd-pafik` (stream/promise provenance), `bd-qjh7y` (static IFC function
+summaries), `bd-sblaq` (lexical cells), `bd-asw4m.3/.5` (lexical this / implicit
+net), `bd-36e01` (Reflect.construct), `bd-ur3tk.21` (PromiseStore),
+`bd-i7cw8` (Readable reset), `bd-sxh8o*` (reality-check CLI cluster),
+`bd-m42c2` (ChildProcess), `bd-k709s` (process effect errors), `bd-lmchj`
+(console hostcalls), `bd-zyndq` (BuiltinFunction new), `bd-6o8kt` (reduce
+BuiltinFunction), `bd-25il9` (false-close correction), `bd-mpm0l`
+(per-iteration lexical), `bd-es2ra` (core for-of), `bd-bscab` (IR2 IFC
+multi-arg), `bd-cbsgh` (static reads on unforgeable brands), `bd-22e1y`
+(tls API fidelity), `bd-2l1u2` (stream timers), `bd-ur3tk` (IFC
+register-label), `bd-bscab` (IR2 HostCall label join), `bd-3gs6q`
+(FullCapsHandler mock), `bd-6a61n.2.7` (timer mock), `bd-6wc97` (hostcall
+placeholders), `bd-l4t7n` (TLS), `bd-h7p1a` (capture-origins), `bd-znj5l`
+(Buffer.from over fresh aggregates).
+
+### Representative commits
+
+- [`80c26bf0f`](https://github.com/Dicklesworthstone/franken_engine/commit/80c26bf0f) — `feat(ifc): add FlowValueShape::EngineParsedAggregate for querystring parse results`
+- [`151502548`](https://github.com/Dicklesworthstone/franken_engine/commit/151502548) — `chore(engine,ifc): gated FRANKEN_CAPTURE_DEBUG diagnostic for capture-origins resolution`
+- [`08aa44884`](https://github.com/Dicklesworthstone/franken_engine/commit/08aa44884) — `fix(tls): correct X.509 TBSCertificate tag parsing and IFC flow labels for observation methods`
+- [`42bd30256`](https://github.com/Dicklesworthstone/franken_engine/commit/42bd30256) — `feat(crypto): implement P-256 ECDSA detached signing and verification with DER encoding`
+- [`fff2c4f7e`](https://github.com/Dicklesworthstone/franken_engine/commit/fff2c4f7e) — `feat(crypto): implement ed25519_sign_detached and ed25519_verify_detached with unit tests`
+- [`7faab498c`](https://github.com/Dicklesworthstone/franken_engine/commit/7faab498c) — `feat(crypto): ed25519 generateKeyPairSync via typed RandomRead entropy`
+- [`dd251eba7`](https://github.com/Dicklesworthstone/franken_engine/commit/dd251eba7) — `feat(crypto): implement NIST SP 800-38D AES-256-GCM variable-length IV transform`
+- [`698b9ae0a`](https://github.com/Dicklesworthstone/franken_engine/commit/698b9ae0a) — `feat(shadow): authoritative no-mock lifecycle drill passes; no_mock_drill gate GREEN`
+- [`ad43cd2a0`](https://github.com/Dicklesworthstone/franken_engine/commit/ad43cd2a0) — `feat(evidence): execution-derived receipt layer with recomputable seals and gate enforcement`
+- [`4e37b213d`](https://github.com/Dicklesworthstone/franken_engine/commit/4e37b213d) — `feat(tracker): enforce BRIDGE decomposed-parent closeout via native gates`
+- [`5ee847e10`](https://github.com/Dicklesworthstone/franken_engine/commit/5ee847e10) — `feat(tls): add bounded X.509 DER metadata extractor (bd-il0d9)`
+
 ## Post-Snapshot Update — Janitor docs-reorg (2026-08-19)
 
 Root planning and audit leftovers left the repository root. `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md` and `REVIEW_SUMMARY.md` now live under [`docs/planning/`](https://github.com/Dicklesworthstone/franken_engine/tree/main/docs/planning). `audit_observed_claims.py` and `test_script_fix.sh` moved into `scripts/`. Skill-loop scratch is gitignored. This is hygiene, not a behavior change.

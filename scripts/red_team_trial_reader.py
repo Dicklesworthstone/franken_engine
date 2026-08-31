@@ -45,6 +45,25 @@ def verify_trial(
             f"{trial_id} revision {inventory.get('code_revision')!r} != {expected_revision!r}",
         )
     runtime_inventory_key(inventory)
+    inventory_by_runtime: dict[str, dict[str, Any]] = {}
+    for raw_identity in inventory["runtimes"]:
+        identity = require_object(raw_identity, f"{trial_id} runtime inventory entry")
+        runtime_name = identity.get("runtime")
+        if not isinstance(runtime_name, str):
+            raise AggregationBlocked(
+                "invalid_runtime_inventory",
+                "Regenerate the trial with named runtime identities",
+                f"{trial_id} runtime inventory contains an unnamed entry",
+            )
+        executable_path = resolve_artifact(
+            identity.get("executable_path"), root, f"{trial_id}/{runtime_name} executable_path"
+        )
+        verify_hash(
+            executable_path,
+            identity.get("executable_sha256"),
+            f"{trial_id}/{runtime_name} executable_sha256",
+        )
+        inventory_by_runtime[runtime_name] = identity
     rows = load_jsonl(trial_dir / "scenarios.jsonl", f"{trial_id} scenario rows")
     if not rows:
         raise AggregationBlocked(
@@ -174,6 +193,28 @@ def verify_trial(
             validate_sha256(
                 identity.get("executable_sha256"), f"{trial_id}/{runtime} executable_sha256"
             )
+            if canonical_json(identity) != canonical_json(inventory_by_runtime[runtime]):
+                raise AggregationBlocked(
+                    "runtime_identity_binding_mismatch",
+                    "Discard the inconsistent trial and rerun it against the pinned runtime inventory",
+                    f"{trial_id}/{scenario_id}/{runtime} transcript identity does not match runtime_inventory.json",
+                )
+            script_path = resolve_artifact(
+                transcript.get("script_path"), root, f"{trial_id}/{scenario_id}/{runtime} script_path"
+            )
+            script_hash = verify_hash(
+                script_path,
+                transcript.get("script_sha256"),
+                f"{trial_id}/{scenario_id}/{runtime} script_sha256",
+            )
+            manifest_path = resolve_artifact(
+                transcript.get("manifest_path"), root, f"{trial_id}/{scenario_id}/{runtime} manifest_path"
+            )
+            manifest_hash = verify_hash(
+                manifest_path,
+                transcript.get("manifest_sha256"),
+                f"{trial_id}/{scenario_id}/{runtime} manifest_sha256",
+            )
             receipts.append(
                 TrialReceipt(
                     trial_id=trial_id,
@@ -187,16 +228,10 @@ def verify_trial(
                     witness_path=root_relative(witness_path, root),
                     witness_hash=witness_hash,
                     runtime_identity=identity,
-                    script_path=str(transcript.get("script_path", "")),
-                    script_hash=validate_sha256(
-                        transcript.get("script_sha256"),
-                        f"{trial_id}/{scenario_id}/{runtime} script_sha256",
-                    ),
-                    manifest_path=str(transcript.get("manifest_path", "")),
-                    manifest_hash=validate_sha256(
-                        transcript.get("manifest_sha256"),
-                        f"{trial_id}/{scenario_id}/{runtime} manifest_sha256",
-                    ),
+                    script_path=root_relative(script_path, root),
+                    script_hash=script_hash,
+                    manifest_path=root_relative(manifest_path, root),
+                    manifest_hash=manifest_hash,
                 )
             )
     return receipts, inventory, status

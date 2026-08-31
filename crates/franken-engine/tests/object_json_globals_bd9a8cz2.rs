@@ -40,6 +40,26 @@ fn object_keys_returns_own_property_names() {
 }
 
 #[test]
+fn object_keys_length_is_primitive() {
+    // `.length` on an OwnKeyArray must be summarized as a primitive so
+    // primitive-only method reads (like `.toString()`) stay operand-derived.
+    assert_eq!(
+        eval_value("Object.keys({a: 1, b: 2}).length.toString();"),
+        "2"
+    );
+}
+
+#[test]
+fn object_keys_finite_array_methods_stay_closed() {
+    // Engine-owned OwnKeyArray methods (sort + join) must stay on the finite
+    // OwnKeyArray shape instead of falling back to an unknown-callee TopSecret.
+    assert_eq!(
+        eval_value("Object.keys({b: 1, a: 2}).sort().join(',');"),
+        "a,b"
+    );
+}
+
+#[test]
 fn object_values_and_entries() {
     assert_eq!(eval_value("let o = {x: 10}; Object.values(o)[0];"), "10");
     assert_eq!(eval_value("let o = {x: 5}; Object.entries(o).length;"), "1");

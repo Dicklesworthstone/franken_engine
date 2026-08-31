@@ -26923,6 +26923,19 @@ fn simulate_ir2_flow_labels(
                     {
                         FlowValueShape::OwnKeyJoinMethod
                     }
+                    // bd-h7p1a: finite engine-owned array methods on an
+                    // authenticated Object.keys result produce another finite
+                    // own-key array; `.length` is a primitive numeric property.
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if matches!(key.as_str(), Some("sort" | "map" | "slice" | "filter")) =>
+                    {
+                        FlowValueShape::OwnKeyArray
+                    }
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if matches!(key.as_str(), Some("length" | "size")) =>
+                    {
+                        FlowValueShape::Primitive
+                    }
                     // receivers, mirroring the OwnKeyArray `.join` proof.
                     // `String.prototype.includes` on a primitive receiver and
                     // the authenticated Buffer's `toString`/`readUInt32LE`

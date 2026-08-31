@@ -4,4 +4,6 @@
 console.log("Pure computation works fine:");
 console.log("Math operations: 40 + 2 =", 40 + 2);
 console.log("String operations:", "capability".toUpperCase());
-console.log("Array operations:", [1, 2, 3].map(x => x * 2));
+// Use Array.from because direct array-literal `.map` is not yet statically
+// recognized as an engine-owned finite method in the IFC layer.
+console.log("Array operations:", Array.from([1, 2, 3], x => x * 2));

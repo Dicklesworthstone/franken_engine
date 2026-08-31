@@ -291,6 +291,13 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             result_contract_for_authority(RuntimeCapability::NetworkEgress),
             HostcallDispatchBinding::ClientRequest,
         ),
+        "builtin:HttpCreateServer"
+        | "builtin:HttpGet"
+        | "builtin:HttpRequest" => (
+            Some(RuntimeCapability::NetworkEgress),
+            result_contract_for_authority(RuntimeCapability::NetworkEgress),
+            HostcallDispatchBinding::Builtin,
+        ),
         "fs:read" | "fs:write" | "net:connect" | "net:fetch" | "net:outbound" | "net:request" => {
             let authority = if tag == "fs:read" {
                 RuntimeCapability::FsRead

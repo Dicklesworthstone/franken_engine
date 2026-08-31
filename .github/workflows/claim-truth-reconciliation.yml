@@ -6,11 +6,23 @@ on:
       - main
     paths:
       - .github/workflows/claim-truth-reconciliation.yml
+      - .github/workflows/red-team-repeated-trial-gate.yml
+      - .github/workflows/red-team-repeated-trial-measurement.yml
       - scripts/reconcile_fe_claim_011_truth.py
       - scripts/red_team_compromise_rate_metric.py
+      - scripts/red_team_trial_common.py
+      - scripts/red_team_trial_reader.py
+      - scripts/aggregate_red_team_trials.py
+      - scripts/run_bd_28otw_attacker_harness.sh
       - scripts/run_red_team_compromise_rate_metric_gate.sh
       - scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+      - scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+      - crates/franken-engine/src/bin/franken_red_team_harness_gate.rs
+      - crates/franken-engine/src/red_team_compromise_rate_metric_gate.rs
+      - crates/franken-engine/tests/red_team_harness_gate_cli.rs
       - README.md
+      - CHANGELOG.md
+      - docs/RED_TEAM_REPEATED_TRIAL_HARNESS.md
       - docs/claim_to_proof_matrix_v1.json
       - docs/CLAIM_TO_PROOF_MATRIX_V1.md
       - docs/evidence/FE-CLAIM-011/implementation_status_v1.json
@@ -18,11 +30,23 @@ on:
   pull_request:
     paths:
       - .github/workflows/claim-truth-reconciliation.yml
+      - .github/workflows/red-team-repeated-trial-gate.yml
+      - .github/workflows/red-team-repeated-trial-measurement.yml
       - scripts/reconcile_fe_claim_011_truth.py
       - scripts/red_team_compromise_rate_metric.py
+      - scripts/red_team_trial_common.py
+      - scripts/red_team_trial_reader.py
+      - scripts/aggregate_red_team_trials.py
+      - scripts/run_bd_28otw_attacker_harness.sh
       - scripts/run_red_team_compromise_rate_metric_gate.sh
       - scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+      - scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+      - crates/franken-engine/src/bin/franken_red_team_harness_gate.rs
+      - crates/franken-engine/src/red_team_compromise_rate_metric_gate.rs
+      - crates/franken-engine/tests/red_team_harness_gate_cli.rs
       - README.md
+      - CHANGELOG.md
+      - docs/RED_TEAM_REPEATED_TRIAL_HARNESS.md
       - docs/claim_to_proof_matrix_v1.json
       - docs/CLAIM_TO_PROOF_MATRIX_V1.md
       - docs/evidence/FE-CLAIM-011/implementation_status_v1.json
@@ -48,8 +72,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compile reconciler
-        run: python3 -m py_compile scripts/reconcile_fe_claim_011_truth.py
+      - name: Compile reconciliation and evidence tools
+        run: |
+          python3 -m py_compile \
+            scripts/reconcile_fe_claim_011_truth.py \
+            scripts/red_team_compromise_rate_metric.py \
+            scripts/red_team_trial_common.py \
+            scripts/red_team_trial_reader.py \
+            scripts/aggregate_red_team_trials.py
 
       - name: Reconcile bounded truth surfaces
         run: python3 scripts/reconcile_fe_claim_011_truth.py --fix
@@ -60,6 +90,7 @@ jobs:
           set -euo pipefail
           mapfile -t changed < <(git status --short | sed -E 's/^.. //' | sort)
           expected=(
+            CHANGELOG.md
             README.md
             crates/franken-engine/docs/claim_to_proof_matrix_v1.json
             docs/CLAIM_TO_PROOF_MATRIX_V1.md
@@ -83,12 +114,14 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -- \
+            CHANGELOG.md \
             README.md \
             crates/franken-engine/docs/claim_to_proof_matrix_v1.json \
             docs/CLAIM_TO_PROOF_MATRIX_V1.md \
             docs/claim_to_proof_matrix_v1.json \
             docs/evidence/FE-CLAIM-011/implementation_status_v1.json
-          git commit -m 'docs(evidence): reconcile FE-CLAIM-011 truth surfaces (bd-0lim8)'
+          git commit -m 'docs(evidence): reconcile repeated-trial FE-CLAIM-011 truth (bd-1vwza)'
+          git pull --rebase origin main
           git push origin HEAD:main
 
   check:
@@ -101,13 +134,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Compile reconciliation and comparator tools
+      - name: Compile reconciliation and evidence tools
         run: |
-          python3 -m py_compile scripts/reconcile_fe_claim_011_truth.py
-          python3 -m py_compile scripts/red_team_compromise_rate_metric.py
+          python3 -m py_compile \
+            scripts/reconcile_fe_claim_011_truth.py \
+            scripts/red_team_compromise_rate_metric.py \
+            scripts/red_team_trial_common.py \
+            scripts/red_team_trial_reader.py \
+            scripts/aggregate_red_team_trials.py
 
       - name: Verify canonical and mirrored claim truth
         run: python3 scripts/reconcile_fe_claim_011_truth.py --check
 
       - name: Exercise executed comparator and ambiguity blocker
         run: bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+
+      - name: Exercise repeated-trial replay and tamper blockers
+        run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh

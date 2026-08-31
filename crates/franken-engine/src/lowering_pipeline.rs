@@ -26932,6 +26932,24 @@ fn simulate_ir2_flow_labels(
                     {
                         FlowValueShape::OwnKeyJoinMethod
                     }
+<<<<<<< HEAD
+=======
+                    // bd-h7p1a follow-up: sort/map return a finite engine-vouched
+                    // array (no guest code, no side effects beyond the engine's
+                    // own array implementation); length is a numeric primitive.
+                    // Mirrors the String.prototype finite-method lane above
+                    // (bd-zco6t pattern) for arrays.
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if matches!(key.as_str(), Some("sort" | "map" | "slice" | "filter")) =>
+                    {
+                        FlowValueShape::OwnKeyArray
+                    }
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if key.as_str() == Some("length" | "size") =>
+                    {
+                        FlowValueShape::Primitive
+                    }
+>>>>>>> parent of c5b706838 (fix(ifc): fix matches! pattern for OwnKeyArray length and size properties)
                     // EngineParsedAggregate: the parse result is a finite
                     // null-prototype object whose values are engine-constructed
                     // data derived from the operand's primitives. Static

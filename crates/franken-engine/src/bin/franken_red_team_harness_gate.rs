@@ -15,7 +15,7 @@ use frankenengine_engine::red_team_compromise_rate_metric_gate::{
 use serde::Serialize;
 
 const OUTPUT_SCHEMA: &str = "franken-engine.red-team-harness-gate-output.v1";
-const USAGE: &str = "usage: franken-red-team-harness-gate --input PATH|- [--output PATH] [--markdown PATH]";
+const USAGE: &str = "usage: franken_red_team_harness_gate --input PATH|- [--output PATH] [--markdown PATH]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedArgs {
@@ -167,7 +167,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            eprintln!("franken-red-team-harness-gate: {error}");
+            eprintln!("franken_red_team_harness_gate: {error}");
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }

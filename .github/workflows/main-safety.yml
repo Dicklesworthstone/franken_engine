@@ -1,0 +1,28 @@
+name: Main Safety
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  receipt-bound-red-team-comparator:
+    name: receipt-bound red-team comparator
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile comparator
+        run: python3 -m py_compile scripts/red_team_compromise_rate_metric.py
+
+      - name: Execute comparator positive and ambiguity drills
+        run: bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh

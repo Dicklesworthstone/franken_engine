@@ -75,6 +75,14 @@ jobs:
       - name: evidence environment-drift precision (both-direction drill)
         run: bash scripts/e2e/evidence_environment_drift_precision_drill.sh
 
+      # bd-0lim8 / FE-CLAIM-011: prove that the compromise-rate gate reads executed
+      # Node/Bun dispositions instead of constants, hashes all three runtime receipts,
+      # and rejects an ambiguous FrankenEngine crash rather than calling it containment.
+      - name: executed red-team comparator receipts (positive + ambiguity drill)
+        run: |
+          python3 -m py_compile scripts/red_team_compromise_rate_metric.py
+          bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+
   standalone-release:
     name: standalone frankenctl release build (clean hosted runner)
     runs-on: ubuntu-latest

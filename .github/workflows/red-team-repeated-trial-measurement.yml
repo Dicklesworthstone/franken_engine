@@ -1,0 +1,171 @@
+name: Red-Team Repeated-Trial Measurement
+
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: Complete attempts per runtime and scenario; production minimum is 100
+        required: true
+        default: "100"
+        type: string
+      timeout_seconds:
+        description: Per-runtime probe timeout in seconds
+        required: true
+        default: "20"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: red-team-repeated-trial-measurement
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Execute receipt-bound Node/Bun/FrankenEngine campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 1
+      NODE_VERSION: 26.8.1
+      BUN_VERSION: 1.4.0
+      MEASUREMENT_ROOT: artifacts/red_team_repeated_trial_measurement
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: red-team-repeated-trial-measurement
+
+      - name: Setup pinned Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          check-latest: false
+
+      - name: Setup pinned Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Record comparator versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version --verbose
+          cargo --version
+          node --version
+          bun --version
+
+      - name: Build exact candidate and Rust evaluator
+        shell: bash
+        run: >-
+          cargo build --release --no-default-features -p frankenengine-engine
+          --bin frankenctl --bin franken_red_team_harness_gate
+
+      - name: Execute complete repeated-trial campaign
+        id: campaign
+        shell: bash
+        env:
+          FRANKENENGINE_BIN: ${{ github.workspace }}/target/release/frankenctl
+          NODE_BIN: ${{ github.workspace }}/.measurement-node
+          BUN_BIN: ${{ github.workspace }}/.measurement-bun
+          RED_TEAM_REPEATED_TRIAL_CODE_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          trials='${{ inputs.trials }}'
+          timeout_seconds='${{ inputs.timeout_seconds }}'
+          if [[ ! "$trials" =~ ^[1-9][0-9]*$ ]] || ((trials < 100)); then
+            echo 'trials must be an integer greater than or equal to 100' >&2
+            exit 2
+          fi
+          if [[ ! "$timeout_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            echo 'timeout_seconds must be a positive number' >&2
+            exit 2
+          fi
+          ln -s "$(command -v node)" "$NODE_BIN"
+          ln -s "$(command -v bun)" "$BUN_BIN"
+          run_id="github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output_dir="$MEASUREMENT_ROOT/$run_id"
+          mkdir -p "$output_dir"
+          printf '%s\n' "$GITHUB_SHA" >"$output_dir/source_revision.txt"
+          printf '%s\n' "$NODE_VERSION" >"$output_dir/node_version.txt"
+          printf '%s\n' "$BUN_VERSION" >"$output_dir/bun_version.txt"
+          set +e
+          ./scripts/run_bd_28otw_attacker_harness.sh \
+            --trials "$trials" \
+            --artifact-root "$MEASUREMENT_ROOT" \
+            --run-id "$run_id" \
+            --code-revision "$GITHUB_SHA" \
+            --timeout-seconds "$timeout_seconds" \
+            >"$output_dir/campaign.stdout.log" \
+            2>"$output_dir/campaign.stderr.log"
+          campaign_exit=$?
+          set -e
+          printf '%s\n' "$campaign_exit" >"$output_dir/campaign.exit_code"
+          printf 'run_id=%s\n' "$run_id" >>"$GITHUB_OUTPUT"
+          printf 'output_dir=%s\n' "$output_dir" >>"$GITHUB_OUTPUT"
+          printf 'harness_output=%s\n' "$output_dir/aggregate/harness_output.json" >>"$GITHUB_OUTPUT"
+          printf 'campaign_exit=%s\n' "$campaign_exit" >>"$GITHUB_OUTPUT"
+
+      - name: Evaluate aggregate with Rust gate
+        id: evaluate
+        if: always() && steps.campaign.outputs.output_dir != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir='${{ steps.campaign.outputs.output_dir }}'
+          harness_output='${{ steps.campaign.outputs.harness_output }}'
+          set +e
+          if [[ -f "$harness_output" ]]; then
+            ./target/release/franken_red_team_harness_gate \
+              --input "$harness_output" \
+              --output "$output_dir/rust_metric_report.json" \
+              --markdown "$output_dir/rust_metric_report.md" \
+              >"$output_dir/rust_gate.stdout.log" \
+              2>"$output_dir/rust_gate.stderr.log"
+            gate_exit=$?
+          else
+            printf '%s\n' 'harness output missing; Rust evaluation skipped fail-closed' \
+              >"$output_dir/rust_gate.stderr.log"
+            gate_exit=2
+          fi
+          set -e
+          printf '%s\n' "$gate_exit" >"$output_dir/rust_gate.exit_code"
+          printf 'gate_exit=%s\n' "$gate_exit" >>"$GITHUB_OUTPUT"
+
+      - name: Upload full evidence bundle
+        if: always() && steps.campaign.outputs.output_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: red-team-repeated-trial-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ steps.campaign.outputs.output_dir }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
+
+      - name: Enforce measured verdict after preservation
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          campaign_exit='${{ steps.campaign.outputs.campaign_exit }}'
+          gate_exit='${{ steps.evaluate.outputs.gate_exit }}'
+          campaign_exit="${campaign_exit:-2}"
+          gate_exit="${gate_exit:-2}"
+          if [[ "$campaign_exit" != "0" || "$gate_exit" != "0" ]]; then
+            printf 'measurement failed closed: campaign_exit=%s gate_exit=%s\n' \
+              "$campaign_exit" "$gate_exit" >&2
+            exit 1
+          fi
+          printf '%s\n' 'receipt-bound repeated-trial measurement passed'

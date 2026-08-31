@@ -25,9 +25,15 @@ jobs:
         run: |
           python3 -m py_compile scripts/agent_route.py
           python3 -m py_compile scripts/red_team_compromise_rate_metric.py
+          python3 -m py_compile scripts/red_team_trial_common.py
+          python3 -m py_compile scripts/red_team_trial_reader.py
+          python3 -m py_compile scripts/aggregate_red_team_trials.py
 
       - name: Validate architectural change routing
         run: bash scripts/e2e/agent_change_route_smoke.sh
 
       - name: Execute comparator positive and ambiguity drills
         run: bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+
+      - name: Execute repeated-trial aggregation and tamper drills
+        run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh

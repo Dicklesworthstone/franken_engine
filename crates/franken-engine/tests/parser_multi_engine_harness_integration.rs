@@ -259,7 +259,7 @@ fn harness_normalizes_equivalent_parse_errors_across_engines() {
             command: Some("sh".to_string()),
             args: vec![
                 "-c".to_string(),
-                "cat >/dev/null; printf '{\"error_code\":\"empty_source\"}\\n'".to_string(),
+                "cat >/dev/null; printf '{\"error_code\":\"empty_source\",\"parse\":\"syntax_error\"}\\n'".to_string(),
             ],
         },
     ];

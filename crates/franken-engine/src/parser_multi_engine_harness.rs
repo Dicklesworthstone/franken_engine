@@ -420,14 +420,6 @@ enum AstSpace {
     External,
 }
 
-impl AstSpace {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Internal => "internal",
-            Self::External => "external",
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EngineNormalizedArtifacts {
@@ -3774,7 +3766,6 @@ mod tests {
             duration_us: 1,
             normalized_ast: None,
             normalized_diagnostic: Some(NormalizedDiagnosticArtifact {
-            parse_verdict: None,
                 schema_version: "v1".to_string(),
                 taxonomy_version: "tv1".to_string(),
                 adapter: DiagnosticNormalizationAdapter::ParserDiagnosticsTaxonomyV1,
@@ -3784,6 +3775,7 @@ mod tests {
                 parse_error_code: None,
                 canonical_hash: "sha256:diag".to_string(),
             }),
+            parse_verdict: Some("syntax_error".to_string()),
         };
         assert!(run_outcome_shape_matches_kind(&run));
     }

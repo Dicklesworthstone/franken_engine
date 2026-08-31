@@ -85,19 +85,18 @@ fn write_fixture_catalog(path: &Path) -> String {
 
     expected_hash
 }
-
 fn write_runtime_specs(path: &Path, expected_hash: &str) {
-    let toml = runtime_specs_content(expected_hash, &["node", "bun"]);
+    let toml = runtime_specs_content(expected_hash, &["node", "bun"], "ok");
     write_runtime_specs_content(path, toml.as_str());
 }
 
 fn write_runtime_specs_with_expected_hash(path: &Path, hash: &str) {
-    let toml = runtime_specs_content(hash, &["node", "bun"]);
+    let toml = runtime_specs_content(hash, &["node", "bun"], "syntax_error");
     write_runtime_specs_content(path, toml.as_str());
 }
 
 fn write_runtime_specs_with_runtime_ids(path: &Path, expected_hash: &str, runtime_ids: &[&str]) {
-    let toml = runtime_specs_content(expected_hash, runtime_ids);
+    let toml = runtime_specs_content(expected_hash, runtime_ids, "ok");
     write_runtime_specs_content(path, toml.as_str());
 }
 
@@ -168,7 +167,7 @@ args = []
     write_runtime_specs_content(path, toml.as_str());
 }
 
-fn runtime_specs_content(expected_hash: &str, runtime_ids: &[&str]) -> String {
+fn runtime_specs_content(expected_hash: &str, runtime_ids: &[&str], adapter_parse_verdict: &str) -> String {
     let mut toml = String::from("schema_version = \"franken-engine.lockstep-runtimes.v1\"\n");
     for runtime_id in runtime_ids {
         toml.push_str(
@@ -179,7 +178,7 @@ runtime_id = \"{runtime_id}\"
 display_name = \"{runtime_id} test adapter\"
 version_pin = \"{runtime_id}@test\"
 command = \"sh\"
-args = ['-c', 'cat >/dev/null; echo \"{{\\\"hash\\\":\\\"{expected_hash}\\\",\\\"parse\\\":\\\"ok\\\"}}\"']
+args = ['-c', 'cat >/dev/null; echo \"{{\\\"hash\\\":\\\"{expected_hash}\\\",\\\"parse\\\":\\\"{adapter_parse_verdict}\\\"}}\"']
 "
             )
             .as_str(),
@@ -252,11 +251,13 @@ fi
 count=$((count + 1))
 printf "%s" "$count" > "$counter_file"
 if [ "$count" -eq 1 ]; then
+  parse="syntax_error"
   hash="{bad_hash}"
 else
+  parse="ok"
   hash="{expected_hash}"
 fi
-printf '{{"hash":"%s","parse":"ok"}}' "$hash"
+printf '{{"hash":"%s","parse":"%s"}}' "$hash" "$parse"
 "#,
         counter = counter_path
             .to_str()
@@ -269,7 +270,6 @@ printf '{{"hash":"%s","parse":"ok"}}' "$hash"
 }
 
 fn write_always_flaky_script(path: &Path, counter_path: &Path, expected_hash: &str) {
-    let bad_hash = format!("sha256:{:064x}", 1_u8);
     let script = format!(
         r#"#!/bin/sh
 set -eu
@@ -282,20 +282,17 @@ fi
 count=$((count + 1))
 printf "%s" "$count" > "$counter_file"
 if [ $((count % 2)) -eq 0 ]; then
-  hash="{expected_hash}"
+  parse="ok"
 else
-  hash="{bad_hash}"
+  parse="syntax_error"
 fi
-printf '{{"hash":"%s"}}' "$hash"
+printf '{{"hash":"{expected_hash}","parse":"%s"}}' "$parse"
 "#,
         counter = counter_path
             .to_str()
             .expect("counter path should be valid utf8")
             .replace('\'', "'\"'\"'"),
-        expected_hash = expected_hash,
-        bad_hash = bad_hash,
     );
-    write_script(path, script.as_str());
 }
 
 fn write_invalid_schema_runtime_specs(path: &Path) {
@@ -1372,7 +1369,7 @@ fn write_fixture_catalog_returns_sha256_prefixed_hash() {
 
 #[test]
 fn runtime_specs_content_includes_schema_version() {
-    let content = runtime_specs_content("sha256:test", &["node", "bun"]);
+    let content = runtime_specs_content("sha256:test", &["node", "bun"], "ok");
     assert!(content.contains("franken-engine.lockstep-runtimes.v1"));
     assert!(content.contains("node"));
     assert!(content.contains("bun"));
@@ -1448,7 +1445,7 @@ fn read_jsonl_on_single_line_returns_one_record() {
 
 #[test]
 fn runtime_specs_content_with_single_runtime_includes_one_block() {
-    let content = runtime_specs_content("sha256:abc", &["deno"]);
+    let content = runtime_specs_content("sha256:abc", &["deno"], "ok");
     assert!(content.contains("franken-engine.lockstep-runtimes.v1"));
     assert!(content.contains("deno"));
     let deno_count = content.matches("runtime_id").count();
@@ -1531,7 +1528,7 @@ fn engine_specs_entries_each_have_four_fields() {
 
 #[test]
 fn runtime_specs_content_with_empty_runtime_list_produces_only_header() {
-    let content = runtime_specs_content("sha256:test", &[]);
+    let content = runtime_specs_content("sha256:test", &[], "ok");
     assert!(content.contains("franken-engine.lockstep-runtimes.v1"));
     assert_eq!(
         content.matches("[[runtimes]]").count(),
@@ -1542,7 +1539,7 @@ fn runtime_specs_content_with_empty_runtime_list_produces_only_header() {
 
 #[test]
 fn runtime_specs_content_with_three_runtimes_produces_three_blocks() {
-    let content = runtime_specs_content("sha256:abc", &["node", "bun", "deno"]);
+    let content = runtime_specs_content("sha256:abc", &["node", "bun", "deno"], "ok");
     assert_eq!(
         content.matches("[[runtimes]]").count(),
         3,

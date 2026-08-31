@@ -179,7 +179,7 @@ runtime_id = \"{runtime_id}\"
 display_name = \"{runtime_id} test adapter\"
 version_pin = \"{runtime_id}@test\"
 command = \"sh\"
-args = ['-c', 'cat >/dev/null; echo \"{{\\\"hash\\\":\\\"{expected_hash}\\\"}}\"']
+args = ['-c', 'cat >/dev/null; echo \"{{\\\"hash\\\":\\\"{expected_hash}\\\",\\\"parse\\\":\\\"ok\\\"}}\"']
 "
             )
             .as_str(),
@@ -256,7 +256,7 @@ if [ "$count" -eq 1 ]; then
 else
   hash="{expected_hash}"
 fi
-printf '{{"hash":"%s"}}' "$hash"
+printf '{{"hash":"%s","parse":"ok"}}' "$hash"
 "#,
         counter = counter_path
             .to_str()

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
+import vm from "node:vm";
 
 async function readStdinUtf8() {
   const chunks = [];
@@ -25,6 +26,30 @@ function normalizeSource(source) {
   return source.replace(/\r\n/g, "\n");
 }
 
+// Compile-only syntax validation: `vm.Script`/`vm.SourceTextModule` parse the
+// source without executing it, so adversarial fixture code can never run
+// inside the adapter. A parse verdict is the observable bare runtimes can
+// honestly provide to the lockstep comparison; the source digest is only an
+// input fingerprint, never a substitute for a parse result.
+function syntaxVerdict(goal, source) {
+  try {
+    if (goal === "module") {
+      if (typeof vm.SourceTextModule !== "function") {
+        return { parse: "unsupported" };
+      }
+      new vm.SourceTextModule(source, { identifier: "lockstep-fixture" });
+    } else {
+      new vm.Script(source, { filename: "lockstep-fixture.js" });
+    }
+    return { parse: "ok" };
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return { parse: "syntax_error" };
+    }
+    return { parse: "error" };
+  }
+}
+
 async function main() {
   const stdinPayload = await readStdinUtf8();
   let request;
@@ -45,10 +70,10 @@ async function main() {
     return;
   }
 
-  const digest = createHash("sha256")
-    .update(normalizeSource(request.source), "utf8")
-    .digest("hex");
-  emit({ hash: `sha256:${digest}` });
+  const normalized = normalizeSource(request.source);
+  const digest = createHash("sha256").update(normalized, "utf8").digest("hex");
+  const { parse } = syntaxVerdict(String(request.goal ?? "script"), request.source);
+  emit({ hash: `sha256:${digest}`, parse });
 }
 
 main().catch((error) => {

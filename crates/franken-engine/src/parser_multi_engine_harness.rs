@@ -165,6 +165,10 @@ pub struct EngineRunOutcome {
     pub normalized_ast: Option<NormalizedAstArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normalized_diagnostic: Option<NormalizedDiagnosticArtifact>,
+    /// Syntax-validation verdict for the observable (`ok`, `syntax_error`,
+    /// `error`, `unsupported`, or `unspecified` from legacy adapters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_verdict: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -404,25 +408,48 @@ pub struct DriftGovernanceActionReport {
     pub actions: Vec<DriftGovernanceAction>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AstSpace {
+    /// Canonical AST digests produced by in-process engines (the canonical
+    /// parser and the fixture golden). Comparable only against other
+    /// internal digests.
+    Internal,
+    /// Source-fingerprint digests produced by external runtime adapters,
+    /// which cannot emit AST structure. Comparable only against other
+    /// external fingerprints.
+    External,
+}
+
+impl AstSpace {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::External => "external",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EngineNormalizedArtifacts {
     normalized_ast: Option<NormalizedAstArtifact>,
     normalized_diagnostic: Option<NormalizedDiagnosticArtifact>,
+    parse_verdict: Option<String>,
+    ast_space: AstSpace,
 }
 
 impl EngineNormalizedArtifacts {
-    fn signature(&self) -> String {
-        let ast = self
-            .normalized_ast
-            .as_ref()
-            .map(|artifact| artifact.canonical_hash.as_str())
-            .unwrap_or("none");
+    /// Cross-engine comparison key: the syntax-validation verdict plus the
+    /// normalized diagnostic digest. AST digests are deliberately excluded
+    /// here (external adapters fingerprint source text, not AST structure);
+    /// they are compared within their own [`AstSpace`] by the evaluator.
+    fn parse_verdict_signature(&self) -> String {
         let diagnostic = self
             .normalized_diagnostic
             .as_ref()
             .map(|artifact| artifact.canonical_hash.as_str())
             .unwrap_or("none");
-        format!("ast:{ast};diag:{diagnostic}")
+        let verdict = self.parse_verdict.as_deref().unwrap_or("unspecified");
+        format!("parse:{verdict};diag:{diagnostic}")
     }
 }
 
@@ -462,6 +489,10 @@ struct ExternalCommandRequest {
 struct ExternalCommandResponse {
     hash: Option<String>,
     error_code: Option<String>,
+    /// Real syntax-validation verdict from the adapter (`ok`,
+    /// `syntax_error`, `error`, or `unsupported` for goals the runtime
+    /// cannot compile in-process). Absent in legacy adapters.
+    parse: Option<String>,
 }
 
 #[derive(Debug)]
@@ -998,6 +1029,7 @@ fn evaluate_fixture(
 
     let mut engine_results = Vec::with_capacity(config.engines.len());
     let mut outcome_signatures = BTreeMap::<String, Vec<String>>::new();
+    let mut ast_digests_by_space = BTreeMap::<&'static str, BTreeSet<String>>::new();
     let mut nondeterministic_engine_count = 0_u64;
     let mut parser_telemetry_samples = Vec::<ParserTelemetrySample>::new();
 
@@ -1021,9 +1053,12 @@ fn evaluate_fixture(
             &source_stats,
         )?;
         let first_normalized =
-            normalize_engine_observation(engine.engine_id.as_str(), &first.observation)?;
-        let second_normalized =
-            normalize_engine_observation(engine.engine_id.as_str(), &second.observation)?;
+            normalize_engine_observation(engine, &first.observation, first.parse_verdict.clone())?;
+        let second_normalized = normalize_engine_observation(
+            engine,
+            &second.observation,
+            second.parse_verdict.clone(),
+        )?;
         let deterministic =
             first.observation == second.observation && first_normalized == second_normalized;
         if !deterministic {
@@ -1037,6 +1072,7 @@ fn evaluate_fixture(
             duration_us: first.duration_us,
             normalized_ast: first_normalized.normalized_ast.clone(),
             normalized_diagnostic: first_normalized.normalized_diagnostic.clone(),
+            parse_verdict: first_normalized.parse_verdict.clone(),
         };
         let second_run = EngineRunOutcome {
             kind: second.observation.kind(),
@@ -1045,12 +1081,27 @@ fn evaluate_fixture(
             duration_us: second.duration_us,
             normalized_ast: second_normalized.normalized_ast.clone(),
             normalized_diagnostic: second_normalized.normalized_diagnostic.clone(),
+            parse_verdict: second_normalized.parse_verdict.clone(),
         };
-
+        // AST digests are recorded per engine for forensics, but only the
+        // parse verdict and diagnostics drive cross-engine grouping; AST
+        // digests are compared within their own space below (golden vs
+        // canonical parser), because external adapters fingerprint source
+        // text rather than AST structure.
         outcome_signatures
-            .entry(first_normalized.signature())
+            .entry(first_normalized.parse_verdict_signature())
             .or_default()
             .push(engine.engine_id.clone());
+        let ast_space = match first_normalized.ast_space {
+            AstSpace::Internal => "internal",
+            AstSpace::External => "external",
+        };
+        if let Some(artifact) = first_normalized.normalized_ast.as_ref() {
+            ast_digests_by_space
+                .entry(ast_space)
+                .or_default()
+                .insert(artifact.canonical_hash.clone());
+        }
 
         if matches!(engine.kind, HarnessEngineKind::FrankenCanonical) {
             parser_telemetry_samples.push(ParserTelemetrySample {
@@ -1079,15 +1130,32 @@ fn evaluate_fixture(
         });
     }
 
-    let equivalent_across_engines =
-        outcome_signatures.len() == 1 && nondeterministic_engine_count == 0;
+    let ast_disagreements: Vec<String> = ast_digests_by_space
+        .iter()
+        .filter(|(_, digests)| digests.len() > 1)
+        .map(|(space, digests)| {
+            let mut sorted: Vec<String> = digests.iter().map(|digest| (*digest).clone()).collect();
+            sorted.sort();
+            format!("ast[{space}] digests disagree: {}", sorted.join(" vs "))
+        })
+        .collect();
+    let equivalent_across_engines = outcome_signatures.len() == 1
+        && nondeterministic_engine_count == 0
+        && ast_disagreements.is_empty();
     let divergence_reason = if equivalent_across_engines {
         None
     } else {
-        Some(format_divergence_reason(
-            &outcome_signatures,
-            nondeterministic_engine_count,
-        ))
+        let mut parts = Vec::new();
+        if outcome_signatures.len() > 1 {
+            parts.push(format_divergence_reason(
+                &outcome_signatures,
+                nondeterministic_engine_count,
+            ));
+        }
+        if !ast_disagreements.is_empty() {
+            parts.push(ast_disagreements.join("; "));
+        }
+        Some(parts.join("; "))
     };
     let drift_classification = if equivalent_across_engines {
         None
@@ -1474,6 +1542,7 @@ fn validate_config(config: &MultiEngineHarnessConfig) -> Result<(), MultiEngineH
 #[derive(Debug)]
 struct TimedObservation {
     observation: EngineObservation,
+    parse_verdict: Option<String>,
     duration_us: u64,
     source_bytes: u64,
     token_count: u64,
@@ -1491,30 +1560,36 @@ fn execute_engine(
 ) -> Result<TimedObservation, MultiEngineHarnessError> {
     let started = Instant::now();
     let mut allocation_estimate = 0_u64;
-    let observation = match engine.kind {
+    let (observation, parse_verdict) = match engine.kind {
         HarnessEngineKind::FrankenCanonical => {
             let parser = CanonicalEs2020Parser;
             match parser.parse(fixture.source.as_str(), goal) {
                 Ok(tree) => {
                     allocation_estimate = estimate_syntax_tree_allocation_count(&tree);
-                    EngineObservation::Hash(tree.canonical_hash())
+                    (EngineObservation::Hash(tree.canonical_hash()), Some("ok".to_string()))
                 }
                 Err(error) => {
                     allocation_estimate = 1;
-                    EngineObservation::Error(error.code.as_str().to_string())
+                    (
+                        EngineObservation::Error(error.code.as_str().to_string()),
+                        Some("syntax_error".to_string()),
+                    )
                 }
             }
         }
-        HarnessEngineKind::FixtureExpectedHash => {
-            EngineObservation::Hash(fixture.expected_hash.clone())
-        }
+        HarnessEngineKind::FixtureExpectedHash => (
+            EngineObservation::Hash(fixture.expected_hash.clone()),
+            Some("ok".to_string()),
+        ),
         HarnessEngineKind::ExternalCommand => {
-            run_external_engine(engine, fixture, goal, seed, config)?
+            let (observation, verdict) = run_external_engine(engine, fixture, goal, seed, config)?;
+            (observation, verdict)
         }
     };
 
     Ok(TimedObservation {
         observation,
+        parse_verdict,
         duration_us: started.elapsed().as_micros() as u64,
         source_bytes: source_stats.source_bytes,
         token_count: source_stats.token_count,
@@ -1529,7 +1604,7 @@ fn run_external_engine(
     goal: ParseGoal,
     seed: u64,
     config: &MultiEngineHarnessConfig,
-) -> Result<EngineObservation, MultiEngineHarnessError> {
+) -> Result<(EngineObservation, Option<String>), MultiEngineHarnessError> {
     let command =
         engine
             .command
@@ -1616,11 +1691,12 @@ fn run_external_engine(
             }
         })?;
 
+    let parse_verdict = response.parse.clone();
     if let Some(hash) = response.hash {
-        return Ok(EngineObservation::Hash(hash));
+        return Ok((EngineObservation::Hash(hash), parse_verdict));
     }
     if let Some(error_code) = response.error_code {
-        return Ok(EngineObservation::Error(error_code));
+        return Ok((EngineObservation::Error(error_code), parse_verdict));
     }
 
     Err(MultiEngineHarnessError::ExternalEngine {
@@ -1630,17 +1706,45 @@ fn run_external_engine(
 }
 
 fn normalize_engine_observation(
-    engine_id: &str,
+    engine: &HarnessEngineSpec,
     observation: &EngineObservation,
+    parse_verdict: Option<String>,
 ) -> Result<EngineNormalizedArtifacts, MultiEngineHarnessError> {
+    let ast_space = match engine.kind {
+        HarnessEngineKind::FrankenCanonical | HarnessEngineKind::FixtureExpectedHash => {
+            AstSpace::Internal
+        }
+        HarnessEngineKind::ExternalCommand => AstSpace::External,
+    };
+    let parse_verdict = match (engine.kind, parse_verdict) {
+        // The golden represents a fixture the catalog asserts parses.
+        (HarnessEngineKind::FixtureExpectedHash, _) => Some("ok".to_string()),
+        // In-process engines derive their verdict from the run itself.
+        (HarnessEngineKind::FrankenCanonical, verdict) => Some(
+            verdict.filter(|verdict| *verdict != "unspecified")
+                .unwrap_or_else(|| match observation {
+                    EngineObservation::Hash(_) => "ok".to_string(),
+                    EngineObservation::Error(_) => "syntax_error".to_string(),
+                }),
+        ),
+        // External adapters report their own verdict; legacy adapters that
+        // predate the field stay comparable as `unspecified`.
+        (HarnessEngineKind::ExternalCommand, verdict) => {
+            Some(verdict.unwrap_or_else(|| "unspecified".to_string()))
+        }
+    };
     match observation {
         EngineObservation::Hash(value) => Ok(EngineNormalizedArtifacts {
-            normalized_ast: Some(normalize_ast_hash(engine_id, value)?),
+            normalized_ast: Some(normalize_ast_hash(engine.engine_id.as_str(), value)?),
             normalized_diagnostic: None,
+            parse_verdict,
+            ast_space,
         }),
         EngineObservation::Error(value) => Ok(EngineNormalizedArtifacts {
             normalized_ast: None,
             normalized_diagnostic: Some(normalize_diagnostic_code(value)),
+            parse_verdict,
+            ast_space,
         }),
     }
 }
@@ -2223,6 +2327,7 @@ mod tests {
             duration_us: 42,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         // SAFETY: EngineRunOutcome derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
@@ -2239,6 +2344,7 @@ mod tests {
             duration_us: 10,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         let result = EngineFixtureResult {
             engine_id: "e1".to_string(),
@@ -2342,6 +2448,7 @@ mod tests {
             duration_us: 5,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         let result = FixtureComparisonResult {
             fixture_id: "f-1".to_string(),
@@ -2574,6 +2681,7 @@ mod tests {
             duration_us: 1,
             normalized_ast,
             normalized_diagnostic,
+            parse_verdict: None,
         };
         EngineFixtureResult {
             engine_id: engine_id.to_string(),
@@ -2708,20 +2816,38 @@ mod tests {
 
     #[test]
     fn normalize_engine_observation_attaches_ast_or_diagnostic_artifact() {
+        let engine_a = HarnessEngineSpec {
+            engine_id: "engine-a".to_string(),
+            display_name: "External Engine A".to_string(),
+            kind: HarnessEngineKind::ExternalCommand,
+            version_pin: "test@0".to_string(),
+            command: None,
+            args: Vec::new(),
+        };
         let ast = normalize_engine_observation(
-            "engine-a",
+            &engine_a,
             &EngineObservation::Hash(
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_string(),
             ),
+            Some("ok".to_string()),
         )
         .expect("ast normalization");
         assert!(ast.normalized_ast.is_some());
         assert!(ast.normalized_diagnostic.is_none());
 
+        let engine_b = HarnessEngineSpec {
+            engine_id: "engine-b".to_string(),
+            display_name: "External Engine B".to_string(),
+            kind: HarnessEngineKind::ExternalCommand,
+            version_pin: "test@0".to_string(),
+            command: None,
+            args: Vec::new(),
+        };
         let diagnostic = normalize_engine_observation(
-            "engine-b",
+            &engine_b,
             &EngineObservation::Error("EmptySource".to_string()),
+            Some("syntax_error".to_string()),
         )
         .expect("diagnostic normalization");
         assert!(diagnostic.normalized_ast.is_none());
@@ -2920,8 +3046,10 @@ mod tests {
         let artifacts = EngineNormalizedArtifacts {
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: Some("ok".to_string()),
+            ast_space: AstSpace::Internal,
         };
-        assert_eq!(artifacts.signature(), "ast:none;diag:none");
+        assert_eq!(artifacts.parse_verdict_signature(), "parse:ok;diag:none");
     }
 
     #[test]
@@ -2933,8 +3061,10 @@ mod tests {
                 canonical_hash: "sha256:abc".to_string(),
             }),
             normalized_diagnostic: None,
+            parse_verdict: Some("ok".to_string()),
+            ast_space: AstSpace::Internal,
         };
-        assert_eq!(artifacts.signature(), "ast:sha256:abc;diag:none");
+        assert_eq!(artifacts.parse_verdict_signature(), "parse:ok;diag:none");
     }
 
     // -- Enrichment: EngineObservation --
@@ -3384,6 +3514,7 @@ mod tests {
             duration_us: 1,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         let result = FixtureComparisonResult {
             fixture_id: "f1".to_string(),
@@ -3417,6 +3548,7 @@ mod tests {
             duration_us: 1,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         let result = FixtureComparisonResult {
             fixture_id: "f1".to_string(),
@@ -3466,8 +3598,13 @@ mod tests {
                 parse_error_code: None,
                 canonical_hash: "sha256:diag123".to_string(),
             }),
+            parse_verdict: Some("syntax_error".to_string()),
+            ast_space: AstSpace::Internal,
         };
-        assert_eq!(artifacts.signature(), "ast:none;diag:sha256:diag123");
+        assert_eq!(
+            artifacts.parse_verdict_signature(),
+            "parse:syntax_error;diag:sha256:diag123"
+        );
     }
 
     #[test]
@@ -3488,8 +3625,13 @@ mod tests {
                 parse_error_code: None,
                 canonical_hash: "sha256:diag1".to_string(),
             }),
+            parse_verdict: Some("ok".to_string()),
+            ast_space: AstSpace::Internal,
         };
-        assert_eq!(artifacts.signature(), "ast:sha256:ast1;diag:sha256:diag1");
+        assert_eq!(
+            artifacts.parse_verdict_signature(),
+            "parse:ok;diag:sha256:diag1"
+        );
     }
 
     // -- Enrichment: parse_error_code_alias --
@@ -3604,6 +3746,7 @@ mod tests {
                 canonical_hash: "sha256:abc".to_string(),
             }),
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         assert!(run_outcome_shape_matches_kind(&run));
     }
@@ -3617,6 +3760,7 @@ mod tests {
             duration_us: 1,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         assert!(!run_outcome_shape_matches_kind(&run));
     }
@@ -3630,6 +3774,7 @@ mod tests {
             duration_us: 1,
             normalized_ast: None,
             normalized_diagnostic: Some(NormalizedDiagnosticArtifact {
+            parse_verdict: None,
                 schema_version: "v1".to_string(),
                 taxonomy_version: "tv1".to_string(),
                 adapter: DiagnosticNormalizationAdapter::ParserDiagnosticsTaxonomyV1,
@@ -3652,6 +3797,7 @@ mod tests {
             duration_us: 1,
             normalized_ast: None,
             normalized_diagnostic: None,
+            parse_verdict: None,
         };
         assert!(!run_outcome_shape_matches_kind(&run));
     }

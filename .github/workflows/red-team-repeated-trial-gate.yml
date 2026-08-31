@@ -57,7 +57,7 @@ jobs:
       - name: Test binary unit contract
         run: >-
           cargo test --no-default-features -p frankenengine-engine
-          --bin franken-red-team-harness-gate
+          --bin franken_red_team_harness_gate
 
       - name: Test CLI integration contract
         run: >-

@@ -24909,9 +24909,18 @@ enum FlowValueShape {
     /// authenticated `OwnKeyArray`. Keeping this distinct from a generic
     /// callable lets CallMethod retain the primitive-string result contract.
     OwnKeyJoinMethod,
+    FreshAggregate,
     ClosedResult,
     BufferObject,
-    FreshAggregate,
+    /// Fresh engine-owned aggregate returned by a finite parsing hostcall
+    /// (currently `builtin:QuerystringParse`). Engine-vouched: the engine
+    /// constructs the object inside one hostcall with no guest code running
+    /// between construction and return, so no user accessor could have been
+    /// attached yet. Subsequent data-mutation via `Ir1Op::SetProperty`
+    /// demotes it back to `FreshAggregate`; accessors attached via
+    /// `Object.defineProperty` are not yet covered (known soundness gap,
+    /// tracked in bd-h7p1a follow-up).
+    EngineParsedAggregate,
     ConstantsObject,
 }
 
@@ -24922,10 +24931,10 @@ impl FlowValueShape {
             Self::Primitive
                 | Self::OwnKeyArray
                 | Self::ClosedResult
-                | Self::BufferObject
                 | Self::FreshAggregate
                 | Self::ConstantsObject
                 | Self::EventEmitterObject
+                | Self::EngineParsedAggregate
         )
     }
 }
@@ -26902,6 +26911,7 @@ fn simulate_ir2_flow_labels(
                             | FlowValueShape::OwnKeyArray
                             | FlowValueShape::BufferObject
                             | FlowValueShape::ClosedResult
+                            | FlowValueShape::EngineParsedAggregate
                             | FlowValueShape::Primitive
                     ) && matches!(key, Ir1PropertyKey::Static(_));
                 let shape = match (&object.shape, key) {
@@ -26921,6 +26931,17 @@ fn simulate_ir2_flow_labels(
                         if key.as_str() == Some("join") =>
                     {
                         FlowValueShape::OwnKeyJoinMethod
+                    }
+                    // EngineParsedAggregate: the parse result is a finite
+                    // null-prototype object whose values are engine-constructed
+                    // data derived from the operand's primitives. Static
+                    // reads therefore yield a finite, summarizable value
+                    // (typically a primitive string or an OwnKeyArray of
+                    // primitive strings for repeated query keys), modeled as
+                    // OwnKeyArray so subsequent `.join` falls into the
+                    // authenticated finite-method lane.
+                    (FlowValueShape::EngineParsedAggregate, Ir1PropertyKey::Static(_)) => {
+                        FlowValueShape::OwnKeyArray
                     }
                     // bd-zco6t: finite engine observations on closed
                     // receivers, mirroring the OwnKeyArray `.join` proof.
@@ -27043,6 +27064,16 @@ fn simulate_ir2_flow_labels(
                 let mut object = pop_flow_value(&mut value_stack)?;
                 if value_is_callable {
                     object.shape = FlowValueShape::CallableContainer;
+                } else if object.shape == FlowValueShape::EngineParsedAggregate {
+                    // bd-h7p1a: data-store on the engine-vouched parse brand
+                    // invalidates the brand. SetProperty stores a data
+                    // descriptor, so the resulting aggregate is a plain
+                    // FreshAggregate whose further reads must be admitted
+                    // through the normal FreshAggregate path (fail-high on
+                    // unknown callee). Accessor attachment via
+                    // Object.defineProperty is a separate IR op and is not
+                    // yet covered (documented gap in the shape doc).
+                    object.shape = FlowValueShape::FreshAggregate;
                 }
                 inputs.push(object);
                 let label = join_flow_values(&inputs);
@@ -27778,14 +27809,13 @@ fn simulate_ir2_flow_labels(
                 // truth, not a finiteness claim. The result LABEL still joins
                 // the input's provenance, and a non-operand-derived
                 // invocation keeps its fail-high exception contract and the
-                // global shape invalidation, so guest `toString` coercion is
+                if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
+                    result_shape = FlowValueShape::EngineParsedAggregate;
+                }
                 // not opened up — only the catch observation
                 // `String(error).includes(...)` gains a primitive receiver.
                 if capability == "builtin:String" {
                     result_shape = FlowValueShape::Primitive;
-                }
-                if hostcall_is_operand_derived && capability == "builtin:QuerystringParse" {
-                    result_shape = FlowValueShape::FreshAggregate;
                 }
                 if hostcall_is_operand_derived && capability == "builtin:QuerystringStringify" {
                     result_shape = FlowValueShape::Primitive;

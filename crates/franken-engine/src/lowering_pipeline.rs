@@ -25725,10 +25725,20 @@ struct FunctionCaptureOrigin {
 /// closure call frame: the encoded id selects the retained enclosing cell,
 /// while `free_var_ids` selects the body-local slot that receives that cell.
 /// Any ambiguity is unsound for a static summary and therefore has no mapping.
+// bd-h7p1a: gated diagnostic — emit the free_var / return-value pair on
+// None so the next agent can see the exact closure shape the capture
+// resolver is failing on, without building the full closure-cell
+// reconstruction. Activated by FRANKEN_CAPTURE_DEBUG=1.
 fn canonical_function_capture_origins(
     free_vars: &[String],
     free_var_ids: &[BindingId],
 ) -> Option<Vec<FunctionCaptureOrigin>> {
+    if std::env::var_os("FRANKEN_CAPTURE_DEBUG").is_some() {
+        eprintln!(
+            "[capture-debug] canonical_function_capture_origins free_vars={:?} body_ids={:?}",
+            free_vars, free_var_ids
+        );
+    }
     if free_vars.len() != free_var_ids.len() {
         return None;
     }
@@ -25739,8 +25749,19 @@ fn canonical_function_capture_origins(
         .iter()
         .zip(free_var_ids)
         .map(|(runtime_name, body_id)| {
-            let enclosing_id = parse_capture_cell_name(runtime_name)
-                .or_else(|| parse_class_expression_self_capture_name(runtime_name))
+            let parse_cell = parse_capture_cell_name(runtime_name);
+            let parse_self = parse_class_expression_self_capture_name(runtime_name);
+            if std::env::var_os("FRANKEN_CAPTURE_DEBUG").is_some()
+                && parse_cell.is_none()
+                && parse_self.is_none()
+            {
+                eprintln!(
+                    "[capture-debug] unparseable free_var name={:?}",
+                    runtime_name
+                );
+            }
+            let enclosing_id = parse_cell
+                .or_else(|| parse_self)
                 .map(|(origin_id, _)| origin_id)?;
             if !enclosing_ids.insert(enclosing_id) || !body_ids.insert(*body_id) {
                 return None;

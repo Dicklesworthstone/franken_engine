@@ -26976,7 +26976,7 @@ fn simulate_ir2_flow_labels(
                         FlowValueShape::OwnKeyArray
                     }
                     (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
-                        if key.as_str() == Some("length" | "size") =>
+                        if matches!(key.as_str(), Some("length" | "size")) =>
                     {
                         FlowValueShape::Primitive
                     }

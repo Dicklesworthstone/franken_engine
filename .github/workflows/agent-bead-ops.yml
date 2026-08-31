@@ -1,0 +1,90 @@
+name: Agent Bead Operations
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/agent/bead_ops_request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-bead-ops-main
+  cancel-in-progress: false
+
+jobs:
+  apply-request:
+    name: apply one pinned br request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned br v0.5.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/br-0.5.7-linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location \
+            https://github.com/Dicklesworthstone/beads_rust/releases/download/v0.5.7/br-0.5.7-linux_amd64.tar.gz \
+            --output "$archive"
+          printf '%s  %s\n' \
+            '634aaacd0aac256b2be7250af9fe1e863e8a0316875c20959a6a1c2da75bf843' \
+            "$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/br-dist" "$RUNNER_TEMP/bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/br-dist"
+          br_path="$(find "$RUNNER_TEMP/br-dist" -type f -name br -print -quit)"
+          test -n "$br_path"
+          install -m 0755 "$br_path" "$RUNNER_TEMP/bin/br"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/br" --version
+
+      - name: Apply request through real br
+        id: apply
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/agent_bead_ops.py \
+            --request docs/agent/bead_ops_request.json \
+            --result docs/agent/bead_ops_result.json \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --br "$RUNNER_TEMP/bin/br"
+          exit_code=$?
+          set -e
+          printf 'exit_code=%s\n' "$exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve operation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-bead-ops-result-${{ github.run_id }}
+          path: docs/agent/bead_ops_result.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit generated bead state
+        if: steps.apply.outputs.exit_code == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_id="$(python3 -c 'import json; print(json.load(open("docs/agent/bead_ops_request.json"))["request_id"])')"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .beads/issues.jsonl docs/agent/bead_ops_result.json
+          if git diff --cached --quiet; then
+            echo 'No generated bead-state changes to commit.'
+            exit 0
+          fi
+          git commit -m "chore(beads): apply ${request_id}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Fail closed after preserving diagnostics
+        if: steps.apply.outputs.exit_code != '0'
+        shell: bash
+        run: exit 1

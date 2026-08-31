@@ -7,7 +7,7 @@ cd "$repo_root"
 RCH_BIN="${RCH_BIN:-rch}"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-CARGO_TARGET_DIR="${QUARANTINE_MESH_DEMO_CARGO_TARGET_DIR:-}"
+CARGO_TARGET_DIR="${QUARANTINE_MESH_DEMO_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_quarantine_mesh_demo}"
 
 if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
   echo "Required rch binary not found: $RCH_BIN" >&2

@@ -26915,6 +26915,39 @@ fn simulate_ir2_flow_labels(
                             | FlowValueShape::Primitive
                     ) && matches!(key, Ir1PropertyKey::Static(_));
                 let shape = match (&object.shape, key) {
+                    // bd-h7p1a follow-up: ConstantsObject static methods (Array.isArray,
+                    // Object.keys, etc.) are engine-owned callables; surface them
+                    // as Callable BEFORE the unconditional Primitive fallthrough.
+                    (FlowValueShape::ConstantsObject, Ir1PropertyKey::Static(key))
+                        if matches!(
+                            key.as_str(),
+                            Some(
+                                "isArray"
+                                    | "of"
+                                    | "from"
+                                    | "keys"
+                                    | "values"
+                                    | "entries"
+                                    | "assign"
+                                    | "create"
+                                    | "defineProperty"
+                                    | "freeze"
+                                    | "getPrototypeOf"
+                                    | "setPrototypeOf"
+                                    | "toString"
+                                    | "toFixed"
+                                    | "toExponential"
+                                    | "toPrecision"
+                                    | "fromCharCode"
+                                    | "charAt"
+                                    | "charCodeAt"
+                                    | "fromCodePoint"
+                                    | "raw"
+                            )
+                        ) =>
+                    {
+                        FlowValueShape::Callable
+                    }
                     (FlowValueShape::ConstantsObject, _) => FlowValueShape::Primitive,
                     (FlowValueShape::CallableContainer, _) => FlowValueShape::Callable,
                     (FlowValueShape::EventEmitterObject, Ir1PropertyKey::Static(key))
@@ -26931,6 +26964,21 @@ fn simulate_ir2_flow_labels(
                         if key.as_str() == Some("join") =>
                     {
                         FlowValueShape::OwnKeyJoinMethod
+                    }
+                    // bd-h7p1a follow-up: sort/map return a finite engine-vouched
+                    // array (no guest code, no side effects beyond the engine's
+                    // own array implementation); length is a numeric primitive.
+                    // Mirrors the String.prototype finite-method lane above
+                    // (bd-zco6t pattern) for arrays.
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if matches!(key.as_str(), Some("sort" | "map" | "slice" | "filter")) =>
+                    {
+                        FlowValueShape::OwnKeyArray
+                    }
+                    (FlowValueShape::OwnKeyArray, Ir1PropertyKey::Static(key))
+                        if key.as_str() == Some("length" | "size") =>
+                    {
+                        FlowValueShape::Primitive
                     }
                     // EngineParsedAggregate: the parse result is a finite
                     // null-prototype object whose values are engine-constructed

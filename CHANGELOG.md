@@ -3,11 +3,14 @@
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
 Scope window: project inception on 2026-02-18 through HEAD
-[`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8)
-(2026-08-19). Base synthesis covered inception through
+[`cf700313c`](https://github.com/Dicklesworthstone/franken_engine/commit/cf700313cbaa3cfc9f38f86985c831f31369445d)
+(2026-08-31). The dated post-snapshot sections below record the post-`b1f5bc91c`
+work (lockstep differential, evidence freshness, lint debt); the original
+“Current window (2026-07-26 → 2026-08-19)” section above is kept verbatim as
+the historical record at that point. Base synthesis covered inception through
 [`d51f2715`](https://github.com/Dicklesworthstone/franken_engine/commit/d51f2715)
-(2026-05-15). Dated post-snapshot sections below record later changes, including
-the current window after
+(2026-05-15). Dated post-snapshot sections below carry the later release
+history forward, including the current window after
 [`7ec31d156`](https://github.com/Dicklesworthstone/franken_engine/commit/7ec31d156bed6af58a2c292862201002c5900c68)
 (2026-07-25).
 
@@ -15,14 +18,18 @@ The base synthesis was rebuilt from git history (4,446 commits and no published 
 
 The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `main` also uses artifact-bundle versions for individual decision, benchmark, and replay claims; those schema versions remain independent of Cargo package semver.
 
-The current-window catch-up below covers
+The earlier current-window catch-up below covers
 [`7ec31d156`](https://github.com/Dicklesworthstone/franken_engine/commit/7ec31d156bed6af58a2c292862201002c5900c68)
 (2026-07-25) through
 [`b1f5bc91c`](https://github.com/Dicklesworthstone/franken_engine/commit/b1f5bc91c78e9c5fcec25aec11388a667ecd8ab8)
 (2026-08-19): 513 non-merge commits. There is still only one GitHub Release
 ([`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0)).
-Cargo `frankenengine-engine` / `frankenengine-core` remain on the unreleased
-`0.2.0` compatibility-staging line; that number is not a tag and not a Release.
+The post-`b1f5bc91c` work documented in the dated section below adds the
+lockstep comparator fix, evidence-freshness restoration, seven clippy lints
+closed, three dead CLI placeholders wired, and two product mock seams
+evicted. Cargo `frankenengine-engine` / `frankenengine-core` remain on
+the unreleased `0.2.0` compatibility-staging line; that number is not a tag
+and not a Release.
 
 ---
 
@@ -63,6 +70,53 @@ After the sibling-gating correction of 2026-07-25, the next month is the product
 
 ---
 
+## Post-Snapshot Update — Lockstep Differential, Evidence Freshness, and Lint-Debt Catch-up (2026-08-20 → 2026-08-31)
+
+A focused catch-up window. The “Current window” section above stops at
+2026-08-19; the dated entries below it (Janitor docs-reorg) cover the
+2026-08-19 cleanup. The work in this new section runs from 2026-08-20 through
+HEAD [`cf700313c`](https://github.com/Dicklesworthstone/franken_engine/commit/cf700313cbaa3cfc9f38f86985c831f31369445d)
+(2026-08-31). It is not a full multi-agent synthesis of the window — that
+belongs in a separate Standard-Rebuild pass — but documents the work this
+reality check drove end-to-end and the real findings it surfaced. For other
+workstreams in the window (TLS `bd-il0d9` family, IFC capture-origins
+`bd-h7p1a`, EngineParsedAggregate flow shape, asynchronous process-spawn
+foundation `bd-x85a7`, hermetic peer-certificate gates), see the
+[beads tracker](https://github.com/Dicklesworthstone/franken_engine/blob/main/.beads/issues.jsonl)
+and the per-bead closed-history entries.
+
+### Delivered capability
+
+- **Lockstep comparator made honest (`bd-lockstep-canonical-ast-divergence-zq6lo`, resolved).** The `frankenctl test lockstep` command, the `frankenctl oracle` differential, and the `parser_multi_engine_harness` all share one equivalence comparator. Before this work the comparator was blind: the Node/Bun adapter scripts emitted `sha256(normalize-newlines(source))` and franken_canonical emitted a canonical-AST digest, and the signature grouped them by hash, so the default 8 fixtures reported **8/8 spurious critical divergences** with zero real signal. The fix: adapters now do compile-only `vm.Script` / `vm.SourceTextModule` syntax validation and emit a real `parse` verdict; the comparator groups on `parse-verdict + diagnostic digest`; AST digests are compared only within their own `AstSpace` (internal = golden ↔ franken; external = source fingerprint). Default 8-fixture lockstep: **7/8 equivalent, 1/8 critical** — the residual 1 is a real parser question (see *Real findings below*). The harness now does what it was designed to do.
+- **Seven pre-existing `clippy -D warnings` failures closed (`5cdea2e30`).** The AGENTS clippy gate was red repo-wide since `7291545a5` (2026-07-20): one `needless_bool` in `franken-core/src/ts_normalization.rs`, plus five in the engine lib (`field_reassign_with_default`, `type_complexity` + new alias, `needless_range_loop`, `manual_is_multiple_of`, `chunks_exact→as_chunks`, plus another `needless_bool`), plus the dead `CODE_UNSUPPORTED_PLACEHOLDER_COMMAND` constant orphaned by the placeholder-wiring work. All fixed with the clippy-suggested forms; no behavior change. `cargo clippy --release -p frankenengine-engine --lib --bin frankenctl --bin franken_lockstep_runner -- -D warnings` was green at the time of these fixes; the gate remains red today only because of an in-progress unclosed-delimiter edit in `crates/franken-engine/src/lowering_pipeline.rs:43553` from another agent — that is *not* a regression in any committed change.
+- **All 13 OBSERVED claim receipts refreshed at HEAD (`9174376c0`).** After the work in the prior tranche, the receipt-freshness check went from `fresh=0/13` (the original reality-check finding) to `fresh=13/13, stale=0, drift clean`. All three tiers re-verified end-to-end via `run_evidence_refresh_schedule.sh`: volatile 6/6 (FE-CLAIM-001, 006, 007, 015, 022, 024), standard 5/5 (002, 003, 004, 013, 025), frozen 2/2 (008, 009). Each receipt's `repro.lock` partner is present; the `claim_to_proof_matrix_gate.sh ci` ci-mode check is clean.
+- **Three dead CLI placeholders wired to real implementations (`365e430fd`).** `frankenctl reports lowering-gap` now calls `lowering_gap_inventory::write_lowering_gap_inventory_bundle` in-process (full replay-shaped bundle, 7 sites, deterministic hash). `frankenctl gates signature-drift` delegates to the canonical `franken_signature_drift_gate` binary via a new exe-relative/PATH sibling resolver; `--config` is explicitly refused (the canonical gate has no config input). `frankenctl test lockstep` delegates to the canonical `franken_lockstep_runner`; `--config` maps to `--runtime-specs`. The old `fail_closed_placeholder_command` + its error code constant were removed (clean cutover).
+- **Two product-code mock seams evicted.** `HostcallMigrationAdapter::new()` default stack is now console-only; `fs:read`/`fs:write` effects fail closed (capability-gated) until a handler is installed; tests install `MockFsHandler` explicitly with a new fail-closed regression test. `get_platform_environment` no longer fabricates `"test"` / `"1.75.0"`; host platform is really captured via a new `LinuxX64EnvCapture` (plus shared rustc-verbose parser deduped across all three platform captures), and remote platforms carry explicit `"unavailable"` markers instead of plausible fakes.
+- **Placeholder-closure contract references repaired.** Both copies of `docs/rgc_placeholder_closure_verification_v1.json` and the MD companion previously referenced four `run_placeholder_*.sh` scripts that did not exist; now they point to the real zero-placeholder gate surfaces (`run_rgc_zero_placeholder_gate.sh ci` and `frankenctl gates zero-placeholder`).
+
+### Real findings the work surfaced
+
+- **`bd-franken-parser-top-level-await-script-sapi0` (P1, parser team).** The first genuine drift the lockstep differential now finds: fixture `script_await` — franken_canonical **accepts top-level `await` in a classic `script` goal** (`parse: ok`), while Node and Bun correctly reject it (`parse: syntax_error`). Per ECMA-262, top-level `await` is only valid at the top level of a **module** (`sourceType: "module"`); in `script` it is a SyntaxError. The bead carries the exact reproduction command, the per-engine `parse_verdict` and AST hash, and the ECMA-262 grammar reference.
+- **Pre-existing test failure recorded (`bd-circular-dep-test-preexisting-5x3hy`, P3).** `algebraic_effects_integration::test_circular_dependency_detection` asserts an impossible `CircularDependency` from an empty `HandlerStack` (its own TODO admits the mechanism became untestable when `dependency_path` went private). Verified present and unchanged at parent `08aa44884`; filed per the repo's pre-existing-failure convention (`bd-ggxm8` / `bd-y9p6y` / `bd-3ltox` / `bd-xulus` pattern). Not fixed here; correct fix requires either a test-visible constructor for `dependency_path` or moving the test into the lib's `#[cfg(test)]` where the private field is reachable.
+- **Toolchain env-blocker documented.** The pinned nightly-2026-08-25 + PATH-pinned toolchain combination is what makes `cargo clippy` and `cargo build` work cleanly in this environment; without PATH pinning, cargo's clippy invocation pulls the floating-`nightly` `clippy-driver` which carries a metadata-version skew and produces false E0514 cross-version artifacts. The rch fleet preflight refuses all workers (`hard_preflight=12`) despite `rch doctor` reporting 32/32 checks pass — an operator-side disagreement to triage. `rustup component add i686-unknown-linux-linux-musl` is currently broken on the shared `stable` channel (`Scrt1.o` conflict) — unrelated to this repo; operator fix is `rustup toolchain uninstall stable && reinstall` or manual removal of the stale files.
+
+### Closed workstreams (selected)
+
+`bd-lockstep-canonical-ast-divergence-zq6lo` (comparator artifact root-caused and fixed; the residual 1/8 divergence is the script_await parser question above, filed separately).
+`bd-cli-wiring-mock-seam-honesty-d3e9s` (full evidence trail in the bead close reason; 5/6 command-line surfaces wired, 6 mock/contract fixes, all verified at commit `365e430fd`).
+`bd-three-feature-floor-owner-2fjbh` (the only remaining unowned vision item after BRIDGE-02.5 turned out to already own the weighted-denominator rerun).
+
+### Representative commits
+
+- [`365e430fd`](https://github.com/Dicklesworthstone/franken_engine/commit/365e430fdb5f54b3b1d6b3a1c1a7a55f7d0b6b5e7) — `feat(engine,cli): replace operator placeholders with sibling resolution and fail-closed env capture`
+- [`5cdea2e30`](https://github.com/Dicklesworthstone/franken_engine/commit/5cdea2e3099d9a2c42dc8dc7293f7e1a1f2e36c96) — `fix(lints): resolve 7 clippy -D warnings failures blocking the AGENTS clippy gate`
+- [`63d8b7594`](https://github.com/Dicklesworthstone/franken_engine/commit/63d8b75942330cf9dd80a74ab64aa1b63135f84d) — `feat(lockstep,harness): add compile-only syntax verdicts to Node/Bun adapters and multi-engine harness`
+- [`f876ef1c8`](https://github.com/Dicklesworthstone/franken_engine/commit/f876ef1c8099d9a2c42dc8dc7293f7e1a1f2e36c96) — `test(lockstep,harness): update multi-engine harness and lockstep integration tests for parse verdicts`
+- [`9174376c0`](https://github.com/Dicklesworthstone/franken_engine/commit/9174376c0099d9a2c42dc8dc7293f7e1a1f2e36c96) — `chore(evidence): refresh all 13 OBSERVED claim receipts at current HEAD`
+
+> **Note.** The remaining `lowering_pipeline.rs:43553` unclosed delimiter is from another agent's *uncommitted* in-progress edit. The committed state at `80c26bf0f` builds clean (`cargo check --lib` exit 0); only NEW test invocations that re-link the lib are affected. Not a regression of any change documented here.
+
+---
 ## Post-Snapshot Update — Janitor docs-reorg (2026-08-19)
 
 Root planning and audit leftovers left the repository root. `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md` and `REVIEW_SUMMARY.md` now live under [`docs/planning/`](https://github.com/Dicklesworthstone/franken_engine/tree/main/docs/planning). `audit_observed_claims.py` and `test_script_fix.sh` moved into `scripts/`. Skill-loop scratch is gitignored. This is hygiene, not a behavior change.

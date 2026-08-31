@@ -420,7 +420,6 @@ enum AstSpace {
     External,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EngineNormalizedArtifacts {
     normalized_ast: Option<NormalizedAstArtifact>,
@@ -1558,7 +1557,10 @@ fn execute_engine(
             match parser.parse(fixture.source.as_str(), goal) {
                 Ok(tree) => {
                     allocation_estimate = estimate_syntax_tree_allocation_count(&tree);
-                    (EngineObservation::Hash(tree.canonical_hash()), Some("ok".to_string()))
+                    (
+                        EngineObservation::Hash(tree.canonical_hash()),
+                        Some("ok".to_string()),
+                    )
                 }
                 Err(error) => {
                     allocation_estimate = 1;
@@ -1713,7 +1715,8 @@ fn normalize_engine_observation(
         (HarnessEngineKind::FixtureExpectedHash, _) => Some("ok".to_string()),
         // In-process engines derive their verdict from the run itself.
         (HarnessEngineKind::FrankenCanonical, verdict) => Some(
-            verdict.filter(|verdict| *verdict != "unspecified")
+            verdict
+                .filter(|verdict| *verdict != "unspecified")
                 .unwrap_or_else(|| match observation {
                     EngineObservation::Hash(_) => "ok".to_string(),
                     EngineObservation::Error(_) => "syntax_error".to_string(),

@@ -2324,8 +2324,8 @@ fn enrichment_to_ir3_linkage_many_proof_inputs() {
     let rec = make_record("link-many-proofs", 1, proofs);
     let spec = rec.to_ir3_linkage();
     assert_eq!(spec.proof_input_ids.len(), 10);
-    for i in 0..10 {
-        assert_eq!(spec.proof_input_ids[i], format!("proof-{i:03}"));
+    for (i, id) in spec.proof_input_ids.iter().enumerate().take(10) {
+        assert_eq!(id, &format!("proof-{i:03}"));
     }
 }
 

@@ -1053,7 +1053,7 @@ fn no_mock_native_os_process_executes_under_exact_cell_authority() {
         transcript
             .events
             .iter()
-            .filter(|event| !bound_to_run(*event))
+            .filter(|event| !bound_to_run(event))
             .collect::<Vec<_>>()
     );
     assert_eq!(

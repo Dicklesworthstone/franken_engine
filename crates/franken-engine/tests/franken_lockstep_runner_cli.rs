@@ -167,7 +167,11 @@ args = []
     write_runtime_specs_content(path, toml.as_str());
 }
 
-fn runtime_specs_content(expected_hash: &str, runtime_ids: &[&str], adapter_parse_verdict: &str) -> String {
+fn runtime_specs_content(
+    expected_hash: &str,
+    runtime_ids: &[&str],
+    adapter_parse_verdict: &str,
+) -> String {
     let mut toml = String::from("schema_version = \"franken-engine.lockstep-runtimes.v1\"\n");
     for runtime_id in runtime_ids {
         toml.push_str(
@@ -293,6 +297,7 @@ printf '{{"hash":"{expected_hash}","parse":"%s"}}' "$parse"
             .expect("counter path should be valid utf8")
             .replace('\'', "'\"'\"'"),
     );
+    write_script(path, script.as_str());
 }
 
 fn write_invalid_schema_runtime_specs(path: &Path) {

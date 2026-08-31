@@ -18,7 +18,7 @@
     "scope": "security",
     "state": "observed"
   },
-  "generated_at_utc": "2026-08-30T12:39:11.744166+00:00",
+  "generated_at_utc": "2026-08-31T11:01:24.121668+00:00",
   "inputs": {
     "dependencies": [
       "scripts/run_rgc_capability_typed_compile_time.sh",
@@ -37,14 +37,14 @@
   "outputs": {
     "decision_artifacts": "generated",
     "environment_fingerprint": {
-      "digest": "sha256:6d9624268fc80a1768dcf3eba30a0a790ec794ed46a4674d1ab0dec53e757d91",
+      "digest": "sha256:88c99d07abcc1b221aa46b2c2002a96bd1cbb7e278fca6baab86ce979e8df79c",
       "fields": {
         "architecture": "x86_64",
         "cargo_version": "cargo 1.100.0-nightly (e8cb624d5 2026-08-22)",
         "kernel_release": "7.0.0-30-generic",
         "platform": "linux",
         "rustc_host_triple": "x86_64-unknown-linux-gnu",
-        "rustc_version": "rustc 1.100.0-nightly (e7769602a 2026-08-24)"
+        "rustc_version": "rustc 1.100.0-nightly (908501772 2026-08-30)"
       },
       "material_digest": "sha256:a452b6cb06cba17409fb6dab125704955dc93575d644a10696c7a24fd7b056db",
       "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
@@ -53,7 +53,7 @@
     "exit_code": 0,
     "verification_command": "./scripts/run_rgc_capability_typed_compile_time.sh ci",
     "verification_result": "passed",
-    "verified_at_utc": "2026-08-30T12:39:11.744166+00:00"
+    "verified_at_utc": "2026-08-31T11:01:24.121668+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.3.5",
@@ -71,11 +71,11 @@
     "immutable": true,
     "policy": "permanent"
   },
-  "schema_hash": "sha256:ea1283cbc903edc55cf522dddee33a0f1f9e66420134321bc744f96b0f6efedb",
+  "schema_hash": "sha256:1fb93ca8e0d09c40f5adfc5efe956cb5e1c1f9f486c3a5875c8f47102787a29b",
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "5cdea2e30e917e5d5c49670e11f6f503c79f462a",
+    "commit": "3a373b3cce3ee3228823faeacb725dbcb88c03b0",
     "repository": "franken_engine",
     "worktree_dirty": false
   },

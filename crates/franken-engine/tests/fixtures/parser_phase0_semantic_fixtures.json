@@ -47,9 +47,9 @@
     {
       "id": "script_await",
       "family_id": "expression.await",
-      "goal": "script",
+      "goal": "module",
       "source": "await work",
-      "expected_hash": "sha256:7dd58521c7997a65ae7296c71b876fc27c224a139dc5f9a974b7555ff968ea39"
+      "expected_hash": "sha256:18b98ae9e25f333e9cb6015489a3d281fe3b52d18789c7c42c801a292dd08ec5"
     },
     {
       "id": "script_raw_binary",

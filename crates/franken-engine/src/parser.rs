@@ -76,10 +76,12 @@ pub enum ParseErrorCode {
     SourceTooLarge,
     BudgetExceeded,
     StrictModeWithStatement,
+    /// `await` expression used outside a module top-level or async function body.
+    AwaitOutsideAsync,
 }
 
 impl ParseErrorCode {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::EmptySource,
         Self::InvalidGoal,
         Self::UnsupportedSyntax,
@@ -88,6 +90,7 @@ impl ParseErrorCode {
         Self::SourceTooLarge,
         Self::BudgetExceeded,
         Self::StrictModeWithStatement,
+        Self::AwaitOutsideAsync,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -100,6 +103,7 @@ impl ParseErrorCode {
             Self::SourceTooLarge => "source_too_large",
             Self::BudgetExceeded => "budget_exceeded",
             Self::StrictModeWithStatement => "strict_mode_with_statement",
+            Self::AwaitOutsideAsync => "await_outside_async",
         }
     }
 
@@ -113,6 +117,7 @@ impl ParseErrorCode {
             Self::SourceTooLarge => "FE-PARSER-DIAG-SOURCE-TOO-LARGE-0001",
             Self::BudgetExceeded => "FE-PARSER-DIAG-BUDGET-EXCEEDED-0001",
             Self::StrictModeWithStatement => "FE-PARSER-DIAG-STRICT-MODE-WITH-STATEMENT-0001",
+            Self::AwaitOutsideAsync => "FE-PARSER-DIAG-AWAIT-OUTSIDE-ASYNC-0001",
         }
     }
 
@@ -120,7 +125,7 @@ impl ParseErrorCode {
         match self {
             Self::EmptySource => ParseDiagnosticCategory::Input,
             Self::InvalidGoal => ParseDiagnosticCategory::Goal,
-            Self::UnsupportedSyntax | Self::StrictModeWithStatement => {
+            Self::UnsupportedSyntax | Self::StrictModeWithStatement | Self::AwaitOutsideAsync => {
                 ParseDiagnosticCategory::Syntax
             }
             Self::IoReadFailed => ParseDiagnosticCategory::System,
@@ -138,7 +143,8 @@ impl ParseErrorCode {
             | Self::InvalidGoal
             | Self::UnsupportedSyntax
             | Self::InvalidUtf8
-            | Self::StrictModeWithStatement => ParseDiagnosticSeverity::Error,
+            | Self::StrictModeWithStatement
+            | Self::AwaitOutsideAsync => ParseDiagnosticSeverity::Error,
         }
     }
 
@@ -154,6 +160,9 @@ impl ParseErrorCode {
             Self::InvalidUtf8 => "parser input is not valid UTF-8",
             Self::SourceTooLarge => "source length/offset exceeds supported limits",
             Self::StrictModeWithStatement => "with statements are not allowed in strict mode",
+            Self::AwaitOutsideAsync => {
+                "await expressions require module top-level or an async function"
+            }
             Self::BudgetExceeded => match budget_kind {
                 Some(ParseBudgetKind::SourceBytes) => "source byte budget exceeded",
                 Some(ParseBudgetKind::TokenCount) => "token budget exceeded",
@@ -2095,6 +2104,10 @@ struct ParseExecutionContext<'a> {
     /// arrow). Bare `super` remains invalid; this admits only `super.x` and
     /// `super[x]` where the resulting closure receives a [[HomeObject]].
     super_property_allowed: bool,
+    /// Whether `await` is currently permitted as a unary expression. True at
+    /// module top-level and inside async function/arrow/method bodies; false at
+    /// script top-level and inside non-async functions.
+    await_context: bool,
 }
 
 impl<'a> ParseExecutionContext<'a> {
@@ -2871,6 +2884,7 @@ fn parse_source(
         pattern_depth: 0,
         strict_mode: goal == ParseGoal::Module,
         super_property_allowed: false,
+        await_context: goal == ParseGoal::Module,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -4615,11 +4629,23 @@ fn parse_primary_expression(
             context,
         ));
     }
-    if let Some(rest) = expression.strip_prefix("await")
-        && (rest.starts_with(' ') || rest.starts_with('('))
-    {
-        let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
-        return Ok(Expression::Await(Box::new(nested)));
+    if let Some(rest) = expression.strip_prefix("await") {
+        if rest.starts_with(' ') {
+            if !context.await_context {
+                return Err(ParseError::new(
+                    ParseErrorCode::AwaitOutsideAsync,
+                    "await expression is only valid inside an async function",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+            return Ok(Expression::Await(Box::new(nested)));
+        }
+        if rest.starts_with('(') && context.await_context {
+            let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+            return Ok(Expression::Await(Box::new(nested)));
+        }
     }
 
     // yield expression: `yield expr` or `yield* expr` (delegation)
@@ -4983,30 +5009,37 @@ fn parse_arrow_body(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    let body = if body_src.starts_with('{') {
-        if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
-            let stmts =
-                parse_function_body_statements(block_src, ParseGoal::Script, span, context, false)?;
-            ArrowBody::Block(BlockStatement {
-                body: stmts,
-                span: span.clone(),
-            })
+    with_await_context(is_async, context, |context| {
+        let body = if body_src.starts_with('{') {
+            if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
+                let stmts = parse_function_body_statements(
+                    block_src,
+                    ParseGoal::Script,
+                    span,
+                    context,
+                    false,
+                )?;
+                ArrowBody::Block(BlockStatement {
+                    body: stmts,
+                    span: span.clone(),
+                })
+            } else {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "arrow function block has unbalanced braces",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
         } else {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "arrow function block has unbalanced braces",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-    } else {
-        let expr = parse_expression(body_src, span, context, recursion_depth + 1)?;
-        ArrowBody::Expression(Box::new(expr))
-    };
-    Ok(Expression::ArrowFunction {
-        params,
-        body,
-        is_async,
+            let expr = parse_expression(body_src, span, context, recursion_depth + 1)?;
+            ArrowBody::Expression(Box::new(expr))
+        };
+        Ok(Expression::ArrowFunction {
+            params,
+            body,
+            is_async,
+        })
     })
 }
 
@@ -8917,6 +8950,18 @@ fn with_function_strict_mode<T>(
     result
 }
 
+fn with_await_context<T>(
+    await_context: bool,
+    context: &mut ParseExecutionContext<'_>,
+    operation: impl FnOnce(&mut ParseExecutionContext<'_>) -> ParseResult<T>,
+) -> ParseResult<T> {
+    let saved_await_context = context.await_context;
+    context.await_context = await_context;
+    let result = operation(context);
+    context.await_context = saved_await_context;
+    result
+}
+
 fn is_directive_whitespace(ch: char) -> bool {
     ch.is_whitespace() || ch == '\u{FEFF}'
 }
@@ -10080,10 +10125,12 @@ fn parse_function_expression_with_super(
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
-    let parsed = with_function_strict_mode(body_src, false, context, |context| {
-        let params = parse_arrow_params(params_src, span, context)?;
-        let body = parse_body_statements(body_src, goal, span, context)?;
-        Ok((params, body))
+    let parsed = with_await_context(false, context, |context| {
+        with_function_strict_mode(body_src, false, context, |context| {
+            let params = parse_arrow_params(params_src, span, context)?;
+            let body = parse_body_statements(body_src, goal, span, context)?;
+            Ok((params, body))
+        })
     });
     context.super_property_allowed = saved_super_property_allowed;
     let (params, body_stmts) = parsed?;
@@ -10459,10 +10506,12 @@ fn parse_function_declaration(
         )
     })?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
-    let (params, body_stmts) = with_function_strict_mode(body_src, false, context, |context| {
-        let params = parse_arrow_params(params_src, &span, context)?;
-        let body = parse_body_statements(body_src, goal, &span, context)?;
-        Ok((params, body))
+    let (params, body_stmts) = with_await_context(is_async, context, |context| {
+        with_function_strict_mode(body_src, false, context, |context| {
+            let params = parse_arrow_params(params_src, &span, context)?;
+            let body = parse_body_statements(body_src, goal, &span, context)?;
+            Ok((params, body))
+        })
     })?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
@@ -10619,7 +10668,7 @@ mod tests {
     #[test]
     fn canonical_ast_bytes_are_stable_for_identical_input() {
         let parser = CanonicalEs2020Parser;
-        let source = "await work";
+        let source = "typeof work";
         let left = parser.parse(source, ParseGoal::Script).expect("left parse");
         let right = parser
             .parse(source, ParseGoal::Script)
@@ -10632,10 +10681,10 @@ mod tests {
     fn equivalent_whitespace_keeps_expression_shape() {
         let parser = CanonicalEs2020Parser;
         let left = parser
-            .parse("await   work", ParseGoal::Script)
+            .parse("typeof   work", ParseGoal::Script)
             .expect("left parse");
         let right = parser
-            .parse("await work", ParseGoal::Script)
+            .parse("typeof work", ParseGoal::Script)
             .expect("right parse");
 
         let left_expr = match &left.body[0] {
@@ -11135,10 +11184,10 @@ mod tests {
     }
 
     #[test]
-    fn await_expression_parsed() {
+    fn await_expression_parsed_in_module_goal() {
         let parser = CanonicalEs2020Parser;
         let tree = parser
-            .parse("await fetch", ParseGoal::Script)
+            .parse("await fetch", ParseGoal::Module)
             .expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => match &expr.expression {
@@ -11149,6 +11198,53 @@ mod tests {
             },
             _ => panic!("expected expression statement"),
         }
+    }
+
+    #[test]
+    fn await_expression_parsed_inside_async_function() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "async function f() { return await fetch; }",
+                ParseGoal::Script,
+            )
+            .expect("parse");
+        match &tree.body[0] {
+            Statement::FunctionDeclaration(f) => {
+                assert!(f.is_async);
+                let body = &f.body.body;
+                assert_eq!(body.len(), 1);
+                let Statement::Return(ret) = &body[0] else {
+                    panic!("expected return statement");
+                };
+                let Some(argument) = ret.argument.as_ref() else {
+                    panic!("expected return argument");
+                };
+                let Expression::Await(inner) = argument else {
+                    panic!("expected await expression");
+                };
+                assert_eq!(**inner, Expression::Identifier("fetch".to_string()));
+            }
+            _ => panic!("expected function declaration"),
+        }
+    }
+
+    #[test]
+    fn top_level_await_rejected_in_script_goal() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("await fetch", ParseGoal::Script)
+            .expect_err("script goal must reject top-level await");
+        assert_eq!(err.code, ParseErrorCode::AwaitOutsideAsync);
+    }
+
+    #[test]
+    fn await_rejected_inside_non_async_function() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("function f() { return await fetch; }", ParseGoal::Script)
+            .expect_err("non-async function must reject await");
+        assert_eq!(err.code, ParseErrorCode::AwaitOutsideAsync);
     }
 
     #[test]
@@ -12685,12 +12781,14 @@ mod tests {
                 max_recursion_depth: 1,
             },
         };
+        // `await` is permitted at module top-level; two nested awaits exceed a
+        // max_recursion_depth of 1.
         let source = "await await work";
         let left = parser
-            .parse_with_options(source, ParseGoal::Script, &options)
+            .parse_with_options(source, ParseGoal::Module, &options)
             .expect_err("left parse should fail");
         let right = parser
-            .parse_with_options(source, ParseGoal::Script, &options)
+            .parse_with_options(source, ParseGoal::Module, &options)
             .expect_err("right parse should fail");
         assert_eq!(left.code, ParseErrorCode::BudgetExceeded);
         assert_eq!(left, right);
@@ -13274,7 +13372,7 @@ mod tests {
     #[test]
     fn parse_event_ir_hash_is_deterministic_for_identical_inputs() {
         let parser = CanonicalEs2020Parser;
-        let source = "await work";
+        let source = "typeof work";
         let left_tree = parser.parse(source, ParseGoal::Script).expect("left parse");
         let right_tree = parser
             .parse(source, ParseGoal::Script)
@@ -13538,7 +13636,7 @@ mod tests {
     #[test]
     fn materialized_ast_node_ids_are_deterministic_for_identical_inputs() {
         let parser = CanonicalEs2020Parser;
-        let source = "await work";
+        let source = "typeof work";
         let options = ParserOptions::default();
 
         let (left_result, left_ir) =
@@ -15033,6 +15131,7 @@ mod tests {
             pattern_depth: 0,
             strict_mode: false,
             super_property_allowed: false,
+            await_context: false,
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }

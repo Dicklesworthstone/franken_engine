@@ -534,8 +534,8 @@ mod tests {
 
         // Verify proper parent linkage
         assert!(fixture.rows[0].parent_event_ids.is_empty());
-        for i in 1..fixture.rows.len() {
-            assert!(!fixture.rows[i].parent_event_ids.is_empty());
+        for row in fixture.rows.iter().take(fixture.rows.len()).skip(1) {
+            assert!(!row.parent_event_ids.is_empty());
         }
 
         // Verify all events are in healthy state

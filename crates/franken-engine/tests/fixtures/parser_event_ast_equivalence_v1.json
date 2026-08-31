@@ -41,7 +41,7 @@
     },
     {
       "case_id": "script_await_parity",
-      "goal": "script",
+      "goal": "module",
       "source": "await work",
       "corpus_tier": "core",
       "tamper_kind": "none",

@@ -8012,9 +8012,7 @@ mod bundle_snapshot_race_drills {
             write_member(dir, "keep.json", b"{}");
             std::os::unix::fs::symlink(dir.join("real_target_outside"), dir.join("link.json"))
                 .expect("plant symlink");
-            let error = capture_bundle_snapshot(dir)
-                .err()
-                .expect("symlink must fail capture");
+            let error = capture_bundle_snapshot(dir).expect_err("symlink must fail capture");
             assert!(error.contains(ERROR_UNSAFE_PATH), "got: {error}");
             // And the link target's contents never leak into any member.
         }
@@ -8030,8 +8028,7 @@ mod bundle_snapshot_race_drills {
         let dir = root.path();
         write_member(dir, "big.bin", vec![0u8; 4096].as_slice());
         let error = capture_bundle_member(dir, "big.bin", 1024)
-            .err()
-            .expect("oversized member must be refused");
+            .expect_err("oversized member must be refused");
         assert!(error.contains(ERROR_BOUNDS), "got: {error}");
     }
 }

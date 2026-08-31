@@ -28952,7 +28952,7 @@ mod tests {
             ));
             assert!(!hostcall_exception_is_operand_derived(
                 capability,
-                &[unknown.clone()],
+                std::slice::from_ref(&unknown),
                 HostIoExceptionProvenance::Unknown,
             ));
         }

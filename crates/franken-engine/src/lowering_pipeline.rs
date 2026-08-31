@@ -26137,6 +26137,9 @@ fn hostcall_exception_is_operand_derived(
         | "builtin:NetConnect"
         | "builtin:NetCreateConnection"
         | "builtin:NetServerAddress"
+        | "builtin:HttpCreateServer"
+        | "builtin:HttpGet"
+        | "builtin:HttpRequest"
         | "builtin:TlsCreateServer"
         | "builtin:TlsConnect"
         | "builtin:TlsCreateSecureContext"
@@ -27720,6 +27723,9 @@ fn simulate_ir2_flow_labels(
                             | "builtin:NetConnect"
                             | "builtin:NetCreateConnection"
                             | "builtin:NetServerAddress"
+                            | "builtin:HttpCreateServer"
+                            | "builtin:HttpGet"
+                            | "builtin:HttpRequest"
                             | "builtin:TlsCreateServer"
                             | "builtin:TlsConnect"
                             | "builtin:TlsCreateSecureContext"
@@ -28900,6 +28906,43 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i, Ir3Instruction::EnterCatch { .. }))
         );
+    }
+
+    #[test]
+    fn hermetic_http_hostcalls_accept_only_closed_or_summarized_inputs() {
+        let mut next_identity = 0;
+        let closed_options = fresh_shaped_flow_value(
+            Label::Internal,
+            FlowValueShape::FreshAggregate,
+            &mut next_identity,
+        );
+        let callback = fresh_shaped_flow_value(
+            Label::Internal,
+            FlowValueShape::Callable,
+            &mut next_identity,
+        );
+        let unknown = fresh_shaped_flow_value(
+            Label::Internal,
+            FlowValueShape::Unknown,
+            &mut next_identity,
+        );
+
+        for capability in [
+            "builtin:HttpCreateServer",
+            "builtin:HttpGet",
+            "builtin:HttpRequest",
+        ] {
+            assert!(hostcall_exception_is_operand_derived(
+                capability,
+                &[closed_options.clone(), callback.clone()],
+                HostIoExceptionProvenance::Unknown,
+            ));
+            assert!(!hostcall_exception_is_operand_derived(
+                capability,
+                &[unknown.clone()],
+                HostIoExceptionProvenance::Unknown,
+            ));
+        }
     }
 
     #[test]

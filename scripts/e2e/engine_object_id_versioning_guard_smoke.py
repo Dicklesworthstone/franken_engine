@@ -25,134 +25,185 @@ def write_contract(path: Path, current_default: str) -> None:
                 "schema_version": "franken-engine.engine-object-id-derivation-contract.v2",
                 "current_default": current_default,
                 "target_default": "sha256_v2",
-            },
-            indent=2,
+            }
         )
         + "\n",
     )
 
 
-def library_source(default_variant: str, *, include_v2_api: bool = True) -> str:
-    api = (
-        """
-const SCHEMA_DOMAIN: &[u8] = b"FrankenEngine.SchemaId.sha256.v2";
-const OBJECT_DOMAIN: &[u8] = b"FrankenEngine.EngineObjectId.sha256.v2";
-pub fn derive_versioned_schema_id() {}
-pub fn derive_versioned_id() {}
-pub fn verify_versioned_id() {}
-"""
-        if include_v2_api
-        else ""
-    )
-    return f"""
+def wrapper() -> str:
+    return "mod versioned;\npub use versioned::*;\n"
+
+
+def versioned(default: str, extra: str = "") -> str:
+    return f'''
 pub struct SchemaId([u8; 32]);
 pub struct EngineObjectId([u8; 32]);
 pub enum ObjectIdDerivationVersion {{ LegacyV1, Sha256V2 }}
-pub const CURRENT_OBJECT_ID_DERIVATION_VERSION: ObjectIdDerivationVersion =
-    ObjectIdDerivationVersion::{default_variant};
-{api}
-"""
+pub const CURRENT_OBJECT_ID_DERIVATION_VERSION: ObjectIdDerivationVersion = ObjectIdDerivationVersion::{default};
+const A: &[u8] = b"FrankenEngine.SchemaId.sha256.v2";
+const B: &[u8] = b"FrankenEngine.EngineObjectId.sha256.v2";
+pub fn derive_versioned_schema_id() {{}}
+pub fn derive_versioned_id() {{}}
+pub fn verify_versioned_id() {{}}
+{extra}
+'''
 
 
 def build(root: Path) -> dict[str, object]:
-    contract = root / "docs/engine_object_id_derivation_contract_v2.json"
-    engine = root / "crates/franken-engine/src/engine_object_id.rs"
-    core = root / "crates/franken-core/src/engine_object_id.rs"
-    scan_roots = (
-        root / "crates/franken-engine/src",
-        root / "crates/franken-core/src",
-        root / "crates/franken-extension-host/src",
-    )
     return guard.build_report(
         root=root,
-        contract_path=contract,
-        scan_roots=scan_roots,
-        engine_source=engine,
-        core_source=core,
+        contract_path=root / "docs/engine_object_id_derivation_contract_v2.json",
+        scan_roots=(root / "crates/franken-engine/src", root / "crates/franken-core/src"),
+        engine_source=root / "crates/franken-engine/src/engine_object_id.rs",
+        core_source=root / "crates/franken-core/src/engine_object_id.rs",
     )
 
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="franken-engine-object-id-guard-") as temporary:
         root = Path(temporary)
-        contract = root / "docs/engine_object_id_derivation_contract_v2.json"
-        engine = root / "crates/franken-engine/src/engine_object_id.rs"
-        core = root / "crates/franken-core/src/engine_object_id.rs"
-        persisted = root / "crates/franken-engine/src/persisted_evidence.rs"
-        ephemeral = root / "crates/franken-engine/src/ephemeral_cache.rs"
+        write_contract(root / "docs/engine_object_id_derivation_contract_v2.json", "legacy_v1")
+        for crate in ("franken-engine", "franken-core"):
+            write(root / f"crates/{crate}/src/engine_object_id.rs", wrapper())
+            write(
+                root / f"crates/{crate}/src/engine_object_id/versioned.rs",
+                versioned("LegacyV1"),
+            )
 
-        write_contract(contract, "legacy_v1")
-        write(engine, library_source("LegacyV1"))
-        write(core, library_source("LegacyV1"))
         write(
-            persisted,
-            """
-use serde::{Deserialize, Serialize};
-use crate::engine_object_id::EngineObjectId;
+            root / "crates/franken-engine/src/comment_only.rs",
+            '''
+use serde::{Serialize, Deserialize};
+// same optimization as EngineObjectId
+const NOTE: &str = "SchemaId and EngineObjectId";
 #[derive(Serialize, Deserialize)]
-struct EvidenceRecord { object_id: EngineObjectId }
-""",
+struct Other { value: u64 }
+''',
         )
         write(
-            ephemeral,
-            """
+            root / "crates/franken-engine/src/ephemeral.rs",
+            '''
 use crate::engine_object_id::EngineObjectId;
 fn compare(left: EngineObjectId, right: EngineObjectId) -> bool { left == right }
-""",
+''',
+        )
+        write(
+            root / "crates/franken-engine/src/wire.rs",
+            '''
+use serde::{Serialize, Deserialize};
+use crate::engine_object_id::{EngineObjectId, ObjectIdDerivationVersion};
+#[derive(Serialize, Deserialize)]
+struct BadWire { object_id: EngineObjectId }
+#[derive(Serialize, Deserialize)]
+struct GoodWire {
+    derivation_version: ObjectIdDerivationVersion,
+    object_id: EngineObjectId,
+}
+''',
+        )
+        write(
+            root / "crates/franken-engine/src/signed.rs",
+            '''
+use crate::engine_object_id::{EngineObjectId, ObjectIdDerivationVersion};
+struct BadSigned { object_id: EngineObjectId }
+impl SignaturePreimage for BadSigned {
+    fn preimage_bytes(&self) -> Vec<u8> { vec![] }
+}
+struct MissingBinding {
+    derivation_version: ObjectIdDerivationVersion,
+    object_id: EngineObjectId,
+}
+impl SignaturePreimage for MissingBinding {
+    fn preimage_bytes(&self) -> Vec<u8> { self.object_id.0.to_vec() }
+}
+struct GoodSigned {
+    derivation_version: ObjectIdDerivationVersion,
+    object_id: EngineObjectId,
+}
+impl SignaturePreimage for GoodSigned {
+    fn preimage_bytes(&self) -> Vec<u8> {
+        format!("{:?}", self.derivation_version).into_bytes()
+    }
+}
+''',
+        )
+        write(
+            root / "crates/franken-engine/src/manual.rs",
+            '''
+use serde::{Serialize, Serializer};
+use crate::engine_object_id::SchemaId;
+struct Manual { schema_id: SchemaId }
+impl Serialize for Manual {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { todo!() }
+}
+''',
         )
 
         report = build(root)
-        assert report["decision"] == "allow_current_posture"
-        assert report["migration_state"] == "blocked_on_unversioned_persisted_consumers"
-        assert report["library_api_state"] == "sha256_v2_available_in_both_crates"
-        assert report["blocking_consumer_count"] == 1
-        assert report["default_flip_allowed"] is False
-        assert report["violations"] == []
-        assert report["blocking_consumers"][0]["path"].endswith("persisted_evidence.rs")
-
-        write_contract(contract, "sha256_v2")
-        write(engine, library_source("Sha256V2"))
-        write(core, library_source("Sha256V2"))
-        unsafe_flip = build(root)
-        assert unsafe_flip["decision"] == "fail_closed"
+        assert report["decision"] == "allow_current_posture", report
+        assert report["library_source_parity"] is True
+        blockers = {
+            (item["type_name"], tuple(item["blocking_reasons"]))
+            for item in report["blocking_consumers"]
+        }
+        assert ("BadWire", ("serialized_raw_id_without_derivation_version",)) in blockers
+        assert ("BadSigned", ("signed_raw_id_without_derivation_version",)) in blockers
         assert (
-            "sha256_v2_default_visible_with_unversioned_persisted_consumers"
-            in unsafe_flip["violations"]
+            "MissingBinding",
+            ("derivation_version_not_bound_into_signature_preimage",),
+        ) in blockers
+        assert ("Manual", ("serialized_raw_id_without_derivation_version",)) in blockers
+        assert not any(
+            item["path"].endswith("comment_only.rs")
+            for item in report["all_consumers"]
         )
-        assert unsafe_flip["default_flip_allowed"] is False
+        assert not any(
+            item["path"].endswith("ephemeral.rs") and item["blocks_default_flip"]
+            for item in report["all_consumers"]
+        )
+        consumers = {item["type_name"]: item for item in report["all_consumers"]}
+        assert consumers["GoodWire"]["classification"] == "version_declared"
+        assert consumers["GoodSigned"]["classification"] == "version_declared"
+        assert report["default_flip_allowed"] is False
 
         write(
-            persisted,
-            """
-use serde::{Deserialize, Serialize};
-use crate::engine_object_id::EngineObjectId;
+            root / "crates/franken-engine/src/wire.rs",
+            '''
+use serde::{Serialize, Deserialize};
+use crate::engine_object_id::{EngineObjectId, ObjectIdDerivationVersion};
 #[derive(Serialize, Deserialize)]
-struct EvidenceRecord {
-    derivation_version: String,
-    object_id: EngineObjectId,
+struct GoodWire { derivation_version: ObjectIdDerivationVersion, object_id: EngineObjectId }
+''',
+        )
+        write(
+            root / "crates/franken-engine/src/signed.rs",
+            '''
+use crate::engine_object_id::{EngineObjectId, ObjectIdDerivationVersion};
+struct GoodSigned { derivation_version: ObjectIdDerivationVersion, object_id: EngineObjectId }
+impl SignaturePreimage for GoodSigned {
+    fn preimage_bytes(&self) -> Vec<u8> {
+        format!("{:?}", self.derivation_version).into_bytes()
+    }
 }
-""",
+''',
+        )
+        write(
+            root / "crates/franken-engine/src/manual.rs",
+            '''
+use crate::engine_object_id::VersionedSchemaId;
+struct Manual { schema_id: VersionedSchemaId }
+''',
         )
         ready = build(root)
-        assert ready["decision"] == "allow_current_posture"
-        assert ready["migration_state"] == "ready_for_explicit_default_flip_review"
-        assert ready["blocking_consumer_count"] == 0
-        assert ready["default_flip_allowed"] is True
+        assert ready["blocking_consumer_type_count"] == 0, ready
+        assert ready["default_flip_allowed"] is True, ready
 
-        write_contract(contract, "legacy_v1")
-        stale_contract = build(root)
-        assert stale_contract["decision"] == "fail_closed"
-        assert (
-            "contract_declares_legacy_v1_but_library_default_drifted"
-            in stale_contract["violations"]
-        )
-
-        write(engine, library_source("LegacyV1"))
-        write(core, library_source("LegacyV1", include_v2_api=False))
-        partial_api = build(root)
-        assert partial_api["decision"] == "fail_closed"
-        assert partial_api["library_api_state"] == "sha256_v2_partial"
-        assert "sha256_v2_library_api_parity_incomplete" in partial_api["violations"]
+        core_versioned = root / "crates/franken-core/src/engine_object_id/versioned.rs"
+        write(core_versioned, versioned("LegacyV1", "const DRIFT: u8 = 1;"))
+        drift = build(root)
+        assert drift["decision"] == "fail_closed"
+        assert "sha256_v2_library_source_drift" in drift["violations"]
 
     print("engine-object-id derivation-versioning guard smoke: PASS")
     return 0

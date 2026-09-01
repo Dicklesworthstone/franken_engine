@@ -23,11 +23,12 @@ usage:
       [--scenario ID|all] [--runtime node|bun|franken_engine|all] [--trials N]
 
 Normal mode executes the ten-scenario receipt-bound Node/Bun/FrankenEngine
-comparator corpus N times, then emits and verifies a
-franken-engine.red-team-harness-output.v1 bundle. The repetitions establish
+comparator corpus N times, then emits and verifies a scoped
+franken-engine.red-team-harness-output.v1 input bundle. The repetitions establish
 outcome stability and replayability; they are not independent statistical
 samples. Production evidence requires at least 100 stability repetitions per
-runtime and distinct scenario.
+runtime and distinct scenario. Only franken_red_team_harness_gate emits the
+FE-CLAIM-011 claim verdict.
 EOF
 }
 
@@ -107,8 +108,7 @@ if [[ "$replay" == "true" ]]; then
     printf '%s\n' '--replay requires --harness-output' >&2
     exit 2
   fi
-  python3 scripts/annotate_red_team_harness_semantics.py "$harness_output" --check
-  exec python3 scripts/aggregate_red_team_trials.py verify \
+  exec python3 scripts/red_team_scenario_corpus_harness.py verify \
     --root "$root_dir" \
     --harness-output "$harness_output" \
     --scenario "$scenario" \
@@ -134,6 +134,7 @@ verification_command="./scripts/run_bd_28otw_attacker_harness.sh --trials $trial
 printf '%s\n' "$verification_command" >"$run_dir/commands.txt"
 printf '%s\n' 'red_team_corpus=red_team_security_critical_compromise_v2' >"$run_dir/corpus.txt"
 printf '%s\n' 'repetition_role=stability_and_replay_not_independent_sampling' >"$run_dir/repetition_semantics.txt"
+printf '%s\n' 'claim_verdict_producer=franken_red_team_harness_gate' >"$run_dir/claim_verdict_scope.txt"
 
 for ((trial = 1; trial <= trials; trial++)); do
   trial_id="$(printf 'trial-%04d' "$trial")"
@@ -174,7 +175,7 @@ PY
   fi
 done
 
-python3 scripts/aggregate_red_team_trials.py aggregate \
+python3 scripts/red_team_scenario_corpus_harness.py aggregate \
   --root "$root_dir" \
   --trial-root "$trial_root" \
   --output-dir "$aggregate_dir" \
@@ -183,8 +184,7 @@ python3 scripts/aggregate_red_team_trials.py aggregate \
   --minimum-trials "$trials"
 
 harness_output="$aggregate_dir/harness_output.json"
-python3 scripts/annotate_red_team_harness_semantics.py "$harness_output"
-python3 scripts/aggregate_red_team_trials.py verify \
+python3 scripts/red_team_scenario_corpus_harness.py verify \
   --root "$root_dir" \
   --harness-output "$harness_output" \
   --scenario all \
@@ -192,4 +192,5 @@ python3 scripts/aggregate_red_team_trials.py verify \
   --minimum-trials "$trials"
 
 printf 'red_team_repeated_trial_run_dir=%s\n' "$run_dir"
+printf 'red_team_scenario_corpus_run_dir=%s\n' "$run_dir"
 printf 'red_team_harness_output=%s\n' "$harness_output"

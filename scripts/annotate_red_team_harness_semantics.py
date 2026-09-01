@@ -16,7 +16,7 @@ CONFIDENCE_INTERPRETATION = "receipt_completeness_and_stability_not_population_c
 ZERO_CELL_GUARD = "one_hypothetical_frankenengine_compromise"
 EXPECTED_RUNTIMES = {"node", "bun", "franken_engine"}
 EXPECTED_SCENARIOS = 10
-MIN_ATTACK_CLASSES = 3
+EXPECTED_ATTACK_CLASSES = 3
 
 
 class SemanticError(ValueError):
@@ -71,17 +71,22 @@ def analyze(value: dict[str, Any]) -> tuple[set[str], set[str], dict[str, set[st
     return scenarios, attack_classes, runtime_matrix
 
 
-def annotate(value: dict[str, Any]) -> dict[str, Any]:
-    scenarios, attack_classes, runtime_matrix = analyze(value)
+def validate_shape(scenarios: set[str], attack_classes: set[str]) -> None:
     if len(scenarios) != EXPECTED_SCENARIOS:
         raise SemanticError(
             f"corpus requires {EXPECTED_SCENARIOS} distinct scenarios; found {len(scenarios)}"
         )
-    if len(attack_classes) < MIN_ATTACK_CLASSES:
+    if len(attack_classes) != EXPECTED_ATTACK_CLASSES:
         raise SemanticError(
-            f"corpus requires at least {MIN_ATTACK_CLASSES} attack classes; found {len(attack_classes)}"
+            f"corpus requires exactly {EXPECTED_ATTACK_CLASSES} attack classes; found {len(attack_classes)}"
         )
+
+
+def annotate(value: dict[str, Any]) -> dict[str, Any]:
+    scenarios, attack_classes, runtime_matrix = analyze(value)
+    validate_shape(scenarios, attack_classes)
     value["corpus_id"] = CORPUS_ID
+    value["scenario_set"] = CORPUS_ID
     value["denominator_semantics"] = DENOMINATOR_SEMANTICS
     value["repetition_role"] = REPETITION_ROLE
     value["confidence_interpretation"] = CONFIDENCE_INTERPRETATION
@@ -96,6 +101,7 @@ def verify_annotations(value: dict[str, Any]) -> None:
     scenarios, attack_classes, runtime_matrix = analyze(value)
     expected = {
         "corpus_id": CORPUS_ID,
+        "scenario_set": CORPUS_ID,
         "denominator_semantics": DENOMINATOR_SEMANTICS,
         "repetition_role": REPETITION_ROLE,
         "confidence_interpretation": CONFIDENCE_INTERPRETATION,
@@ -111,14 +117,7 @@ def verify_annotations(value: dict[str, Any]) -> None:
     }
     if mismatches:
         raise SemanticError(f"harness semantic annotations are missing or inconsistent: {mismatches}")
-    if len(scenarios) != EXPECTED_SCENARIOS:
-        raise SemanticError(
-            f"corpus requires {EXPECTED_SCENARIOS} distinct scenarios; found {len(scenarios)}"
-        )
-    if len(attack_classes) < MIN_ATTACK_CLASSES:
-        raise SemanticError(
-            f"corpus requires at least {MIN_ATTACK_CLASSES} attack classes; found {len(attack_classes)}"
-        )
+    validate_shape(scenarios, attack_classes)
 
 
 def write_atomic(path: Path, value: dict[str, Any]) -> None:

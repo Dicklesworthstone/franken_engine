@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.engine-object-id-derivation-contract.v2",
+  "owning_bead": "bd-2y7",
+  "current_default": "legacy_v1",
+  "target_default": "sha256_v2",
+  "migration_state": "v2_tooling_observed_default_flip_blocked_on_persisted_consumer_versioning",
+  "legacy_v1": {
+    "status": "legacy_compatibility_only",
+    "schema_id_algorithm": "de_novo_siphash_like_non_cryptographic",
+    "schema_id_preimage": "schema_definition",
+    "object_id_algorithm": "de_novo_siphash_like_non_cryptographic",
+    "object_id_preimage": "u32be(len(domain_tag)) || domain_tag || u32be(len(zone)) || zone || schema_id_32 || canonical_bytes",
+    "security_posture": "not collision-resistant enough for new security-critical identities",
+    "verification_policy": "allowed only when a persisted artifact explicitly declares legacy_v1"
+  },
+  "sha256_v2": {
+    "status": "implemented_in_migration_tool",
+    "schema_id_algorithm": "sha256",
+    "schema_id_domain": "FrankenEngine.SchemaId.sha256.v2",
+    "schema_id_preimage": "u32be(len(schema_domain)) || schema_domain || u32be(len(schema_definition)) || schema_definition",
+    "object_id_algorithm": "sha256",
+    "object_id_domain": "FrankenEngine.EngineObjectId.sha256.v2",
+    "object_id_preimage": "u32be(len(version_domain)) || version_domain || u32be(len(domain_tag)) || domain_tag || u32be(len(zone)) || zone || schema_id_32 || u32be(len(canonical_bytes)) || canonical_bytes",
+    "security_posture": "collision-resistant cryptographic content identity",
+    "verification_policy": "selected explicitly; never falls back to legacy_v1"
+  },
+  "migration_invariants": [
+    "Every persisted object that stores or verifies EngineObjectId or SchemaId must carry an explicit derivation_version before the default changes.",
+    "New and legacy verification are selected from persisted schema metadata, never by trying both algorithms.",
+    "A legacy ID that fails sha256_v2 verification is a version mismatch, not evidence corruption, only when the artifact explicitly declares legacy_v1.",
+    "The engine and franken-core implementations must share byte-identical cross-language golden vectors before the default flip.",
+    "Claim language must not call legacy_v1 cryptographically collision-resistant."
+  ],
+  "default_flip_requirements": [
+    "Complete a machine-generated inventory of persisted EngineObjectId and SchemaId consumers.",
+    "Add derivation_version to every persisted consumer schema or prove that the value is ephemeral.",
+    "Add explicit legacy_v1 migration/replay tests for retained artifacts.",
+    "Make derive_id and SchemaId::from_definition use sha256_v2 in both franken-engine and franken-core.",
+    "Make ordinary verification accept sha256_v2 only and expose legacy_v1 through an explicitly named API.",
+    "Regenerate affected golden vectors and evidence bundles at one exact revision.",
+    "Run the claim-to-proof gate and downgrade any stale collision-resistance wording until new evidence is linked."
+  ],
+  "operator_binary": "franken_engine_object_id_migration",
+  "response_schema": "franken-engine.engine-object-id-migration-response.v1"
+}

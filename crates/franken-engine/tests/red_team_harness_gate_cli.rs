@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::Value;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+const CORPUS_ID: &str = "red_team_security_critical_compromise_v2";
+const AGGREGATE_SCOPE: &str = "aggregate_stability_input_only_not_claim_verdict";
+const CLAIM_PRODUCER: &str = "franken_red_team_harness_gate";
 
 struct TestDir(PathBuf);
 
@@ -43,14 +47,46 @@ fn fixture() -> Value {
         .expect("valid harness fixture")
 }
 
+fn promoted_scenario_map() -> BTreeMap<&'static str, (&'static str, &'static str)> {
+    BTreeMap::from([
+        (
+            "environment_variable_exfiltration",
+            ("ambient_authority_via_globalthis", "ambient_authority_escape"),
+        ),
+        (
+            "process_privilege_surface_probe",
+            ("capability_shadowed_import", "ambient_authority_escape"),
+        ),
+        (
+            "prototype_pollution_capability_escape",
+            ("reflect_apply_authority_smuggling", "ambient_authority_escape"),
+        ),
+        (
+            "shell_command_injection_package_script",
+            ("typed_effect_laundering_downcast", "ambient_authority_escape"),
+        ),
+        (
+            "supply_chain_backdoor_execution",
+            ("smuggle_flow_via_unanalyzed_construct", "ambient_authority_escape"),
+        ),
+    ])
+}
+
 fn annotate_canonical_semantics(value: &mut Value) {
-    value["corpus_id"] = Value::from("red_team_security_critical_compromise_v2");
+    value["corpus_id"] = Value::from(CORPUS_ID);
+    value["scenario_set"] = Value::from(CORPUS_ID);
     value["denominator_semantics"] = Value::from("distinct_security_critical_scenarios");
     value["repetition_role"] =
         Value::from("stability_and_replay_not_independent_sampling");
     value["confidence_interpretation"] =
         Value::from("receipt_completeness_and_stability_not_population_confidence");
     value["zero_cell_guard"] = Value::from("one_hypothetical_frankenengine_compromise");
+    value["zero_cell_guard_count"] = Value::from(1);
+    value["required_stability_repetitions_per_runtime_scenario"] = Value::from(100);
+    value["verdict_scope"] = Value::from(AGGREGATE_SCOPE);
+    value["claim_verdict_eligible"] = Value::from(false);
+    value["claim_verdict_producer"] = Value::from(CLAIM_PRODUCER);
+    value["corpus_contract_path"] = Value::from("docs/red_team_scenario_corpus_v2.json");
     value["distinct_scenario_count"] = Value::from(10);
     value["attack_class_count"] = Value::from(3);
     value["runtime_scenario_pair_count"] = Value::from(30);
@@ -58,20 +94,20 @@ fn annotate_canonical_semantics(value: &mut Value) {
 
 fn ten_scenario_fixture() -> Value {
     let mut value = fixture();
+    let promoted = promoted_scenario_map();
     let additions = value["results"]
         .as_array()
         .expect("results array")
         .clone()
         .into_iter()
         .map(|mut result| {
-            let scenario_id = result["scenario_id"]
-                .as_str()
-                .expect("scenario id")
-                .to_string();
-            result["scenario_id"] = Value::from(format!("{scenario_id}_variant_b"));
+            let source_id = result["scenario_id"].as_str().expect("scenario id");
+            let (scenario_id, attack_class) = promoted[source_id];
+            result["scenario_id"] = Value::from(scenario_id);
+            result["attack_class"] = Value::from(attack_class);
             for field in ["witness_path", "transcript_path", "replay_command"] {
                 let original = result[field].as_str().expect("string field").to_string();
-                result[field] = Value::from(format!("{original}.variant-b"));
+                result[field] = Value::from(format!("{original}.{scenario_id}"));
             }
             result
         })
@@ -101,8 +137,19 @@ fn run_with_input(test_dir: &TestDir, value: &Value) -> std::process::Output {
         .expect("run harness gate")
 }
 
+fn assert_invalid(value: &Value, label: &str, expected_stderr: &str) {
+    let test_dir = TestDir::new(label);
+    let output = run_with_input(&test_dir, value);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(expected_stderr),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
-fn ten_distinct_scenarios_emit_passing_machine_and_markdown_reports() {
+fn exact_contract_corpus_emits_passing_machine_and_markdown_reports() {
     let test_dir = TestDir::new("pass");
     let input = test_dir.path().join("input.json");
     let output = test_dir.path().join("report.json");
@@ -133,6 +180,11 @@ fn ten_distinct_scenarios_emit_passing_machine_and_markdown_reports() {
         report["schema_version"],
         "franken-engine.red-team-harness-gate-output.v2"
     );
+    assert_eq!(report["report"]["corpus_id"], CORPUS_ID);
+    assert_eq!(
+        report["report"]["corpus_contract_path"],
+        "docs/red_team_scenario_corpus_v2.json"
+    );
     assert_eq!(report["report"]["scenario_count"], 10);
     assert_eq!(report["report"]["attack_class_count"], 3);
     assert_eq!(report["report"]["conservative_reduction_floor_x"], 10);
@@ -146,43 +198,86 @@ fn ten_distinct_scenarios_emit_passing_machine_and_markdown_reports() {
     );
     let markdown = fs::read_to_string(markdown).expect("read markdown");
     assert!(markdown.contains("Red-Team Scenario-Corpus Compromise-Rate Gate"));
-    assert!(markdown.contains("not treated as independent population samples"));
+    assert!(markdown.contains("not independent population samples"));
 }
 
 #[test]
 fn unannotated_legacy_five_scenario_bundle_is_invalid_input() {
-    let test_dir = TestDir::new("legacy-five-scenario");
-    let result = run_with_input(&test_dir, &fixture());
-    assert_eq!(result.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&result.stderr).contains("harness semantic field corpus_id mismatch"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
+    assert_invalid(
+        &fixture(),
+        "legacy-five-scenario",
+        "harness semantic field corpus_id mismatch",
     );
 }
 
 #[test]
-fn lying_annotation_counts_are_rejected_before_metric_evaluation() {
-    let test_dir = TestDir::new("lying-annotation");
+fn corpus_count_annotation_cannot_lie() {
     let mut value = ten_scenario_fixture();
     value["distinct_scenario_count"] = Value::from(11);
-    let result = run_with_input(&test_dir, &value);
-    assert_eq!(result.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&result.stderr).contains("annotation mismatch"));
+    assert_invalid(&value, "lying-count", "distinct_scenario_count mismatch");
 }
 
 #[test]
-fn below_minimum_harness_is_rejected_as_invalid_input() {
-    let test_dir = TestDir::new("minimum");
+fn exact_scenario_identity_is_required_even_when_counts_match() {
+    let mut value = ten_scenario_fixture();
+    let result = value["results"]
+        .as_array_mut()
+        .expect("results array")
+        .iter_mut()
+        .find(|result| result["scenario_id"] == "ambient_authority_via_globalthis")
+        .expect("promoted scenario");
+    result["scenario_id"] = Value::from("ten_row_lookalike_scenario");
+    assert_invalid(&value, "wrong-scenario", "corpus identity mismatch");
+}
+
+#[test]
+fn exact_attack_class_mapping_is_required() {
+    let mut value = ten_scenario_fixture();
+    for result in value["results"]
+        .as_array_mut()
+        .expect("results array")
+        .iter_mut()
+        .filter(|result| result["scenario_id"] == "reflect_apply_authority_smuggling")
+    {
+        result["attack_class"] = Value::from("prototype_pollution");
+    }
+    assert_invalid(&value, "wrong-class", "wrong_class");
+}
+
+#[test]
+fn typed_scenario_set_must_match_corpus_id() {
+    let mut value = ten_scenario_fixture();
+    value["scenario_set"] = Value::from("legacy-five-scenario-set");
+    assert_invalid(&value, "wrong-set", "scenario_set mismatch");
+}
+
+#[test]
+fn aggregate_input_must_be_explicitly_ineligible_as_claim_verdict() {
+    let mut value = ten_scenario_fixture();
+    value["claim_verdict_eligible"] = Value::from(true);
+    assert_invalid(
+        &value,
+        "eligible-input",
+        "claim_verdict_eligible=false",
+    );
+}
+
+#[test]
+fn aggregate_input_must_name_the_sole_claim_producer() {
+    let mut value = ten_scenario_fixture();
+    value["claim_verdict_producer"] = Value::from("generic_aggregator");
+    assert_invalid(
+        &value,
+        "wrong-producer",
+        "claim_verdict_producer mismatch",
+    );
+}
+
+#[test]
+fn below_contract_stability_floor_is_invalid_input() {
     let mut value = ten_scenario_fixture();
     value["min_trials_per_runtime"] = Value::from(99);
-    let result = run_with_input(&test_dir, &value);
-    assert_eq!(result.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&result.stderr).contains("below required 100"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    assert_invalid(&value, "minimum", "below required 100");
 }
 
 #[test]
@@ -240,8 +335,7 @@ fn two_compromised_candidate_scenarios_fail_guarded_ten_x_floor() {
 }
 
 #[test]
-fn unequal_runtime_attempt_denominators_are_invalid_input() {
-    let test_dir = TestDir::new("unequal-denominator");
+fn unequal_runtime_repetition_denominators_are_invalid_input() {
     let mut value = ten_scenario_fixture();
     let result = value["results"]
         .as_array_mut()
@@ -250,11 +344,10 @@ fn unequal_runtime_attempt_denominators_are_invalid_input() {
         .find(|result| result["runtime"] == "node")
         .expect("Node row");
     result["attempts_total"] = Value::from(101);
-
-    let output = run_with_input(&test_dir, &value);
-    assert_eq!(output.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unequal runtime attempt denominators")
+    assert_invalid(
+        &value,
+        "unequal-denominator",
+        "unequal runtime repetition denominators",
     );
 }
 

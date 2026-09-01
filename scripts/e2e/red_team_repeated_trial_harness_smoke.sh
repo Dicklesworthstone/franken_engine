@@ -5,6 +5,38 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/franken-red-team-repeated.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 
+python3 - "$root_dir" <<'PY'
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts"))
+import red_team_compromise_rate_corpus as corpus
+import red_team_compromise_rate_metric as comparator
+
+corpus.install_corpus()
+assert comparator.SCENARIOS == corpus.SCENARIOS
+assert len(corpus.SCENARIOS) == 10
+assert len({scenario.scenario_id for scenario in corpus.SCENARIOS}) == 10
+assert {scenario.attack_class for scenario in corpus.SCENARIOS} == {
+    "ambient_authority_escape",
+    "prototype_pollution",
+    "supply_chain_execution",
+}
+scenario_dir = root / "crates/franken-engine/tests/red_team_scenarios"
+for scenario in corpus.SCENARIOS:
+    script = scenario_dir / f"{scenario.scenario_id}.js"
+    manifest_path = scenario_dir / f"{scenario.scenario_id}.manifest.json"
+    assert script.is_file(), script
+    assert manifest_path.is_file(), manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["name"] == scenario.scenario_id
+    assert manifest["payload"]["program"] == script.name
+PY
+
 python3 - "$work_dir" <<'PY'
 from __future__ import annotations
 
@@ -20,6 +52,11 @@ scenarios = (
     ("prototype_pollution_capability_escape", "prototype_pollution"),
     ("shell_command_injection_package_script", "ambient_authority_escape"),
     ("supply_chain_backdoor_execution", "supply_chain_execution"),
+    ("ambient_authority_via_globalthis", "ambient_authority_escape"),
+    ("capability_shadowed_import", "ambient_authority_escape"),
+    ("reflect_apply_authority_smuggling", "ambient_authority_escape"),
+    ("typed_effect_laundering_downcast", "ambient_authority_escape"),
+    ("smuggle_flow_via_unanalyzed_construct", "ambient_authority_escape"),
 )
 runtimes = ("node", "bun", "frankenengine")
 
@@ -66,6 +103,7 @@ for trial_index in range(1, 101):
         "reason": "synthetic_receipt_fixture",
         "failure_count": 0,
         "exit_code": 0,
+        "verdict_scope": "single_repetition_receipt_only_not_claim_verdict",
     })
     dump(trial / "runtime_inventory.json", {
         "schema_version": "franken-engine.red-team-compromise-rate-runtime-inventory.v1",
@@ -165,6 +203,11 @@ python3 "$root_dir/scripts/aggregate_red_team_trials.py" aggregate \
   --code-revision rev-smoke \
   --verification-command './scripts/run_bd_28otw_attacker_harness.sh --replay --harness-output aggregate/harness_output.json'
 
+python3 "$root_dir/scripts/annotate_red_team_harness_semantics.py" \
+  "$work_dir/aggregate/harness_output.json"
+python3 "$root_dir/scripts/annotate_red_team_harness_semantics.py" \
+  "$work_dir/aggregate/harness_output.json" --check
+
 python3 "$root_dir/scripts/aggregate_red_team_trials.py" verify \
   --root "$work_dir" \
   --harness-output "$work_dir/aggregate/harness_output.json"
@@ -182,7 +225,15 @@ import sys
 value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert value["schema_version"] == "franken-engine.red-team-harness-output.v1"
 assert value["min_trials_per_runtime"] == 100
-assert len(value["results"]) == 15
+assert value["corpus_id"] == "red_team_security_critical_compromise_v2"
+assert value["denominator_semantics"] == "distinct_security_critical_scenarios"
+assert value["repetition_role"] == "stability_and_replay_not_independent_sampling"
+assert value["confidence_interpretation"] == "receipt_completeness_and_stability_not_population_confidence"
+assert value["zero_cell_guard"] == "one_hypothetical_frankenengine_compromise"
+assert value["distinct_scenario_count"] == 10
+assert value["attack_class_count"] == 3
+assert value["runtime_scenario_pair_count"] == 30
+assert len(value["results"]) == 30
 for row in value["results"]:
     assert row["attempts_total"] == 100
     expected = 0 if row["runtime"] == "franken_engine" else 100
@@ -190,6 +241,23 @@ for row in value["results"]:
 PY
 
 cp -a "$work_dir/aggregate" "$work_dir/aggregate-pristine"
+python3 - "$work_dir/aggregate/harness_output.json" <<'PY'
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value["distinct_scenario_count"] = 11
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+if python3 "$root_dir/scripts/annotate_red_team_harness_semantics.py" \
+  "$work_dir/aggregate/harness_output.json" --check >/dev/null 2>&1; then
+  echo 'semantic annotation tamper unexpectedly passed validation' >&2
+  exit 1
+fi
+rm -rf "$work_dir/aggregate"
+cp -a "$work_dir/aggregate-pristine" "$work_dir/aggregate"
+
 python3 - "$work_dir/aggregate/transcripts/environment_variable_exfiltration.node.json" <<'PY'
 import json
 import pathlib
@@ -229,7 +297,7 @@ if python3 "$root_dir/scripts/aggregate_red_team_trials.py" aggregate \
   --code-revision rev-smoke \
   --verification-command synthetic \
   --minimum-trials 101 >/dev/null 2>&1; then
-  echo 'insufficient-trial campaign unexpectedly aggregated' >&2
+  echo 'insufficient-repetition campaign unexpectedly aggregated' >&2
   exit 1
 fi
 python3 - "$work_dir/aggregate-too-small/aggregation_blocker.json" <<'PY'
@@ -242,4 +310,4 @@ assert value["reason"] == "insufficient_trials"
 assert value["placeholder_results_emitted"] is False
 PY
 
-printf '%s\n' 'red-team repeated-trial harness smoke: PASS'
+printf '%s\n' 'red-team scenario-corpus stability harness smoke: PASS'

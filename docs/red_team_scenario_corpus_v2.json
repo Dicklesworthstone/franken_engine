@@ -1,0 +1,62 @@
+{
+  "schema_version": "franken-engine.red-team-scenario-corpus.v2",
+  "corpus_id": "red_team_security_critical_compromise_v2",
+  "denominator_semantics": "distinct_security_critical_scenarios",
+  "repetition_role": "stability_and_replay_not_independent_sampling",
+  "confidence_interpretation": "receipt_completeness_and_stability_not_population_confidence",
+  "zero_cell_guard": "one_hypothetical_frankenengine_compromise",
+  "zero_cell_guard_count": 1,
+  "required_stability_repetitions_per_runtime_scenario": 100,
+  "repetition_verdict_scope": "single_repetition_receipt_only_not_claim_verdict",
+  "aggregate_verdict_scope": "aggregate_stability_input_only_not_claim_verdict",
+  "claim_verdict_producer": "franken_red_team_harness_gate",
+  "claim_id": "FE-CLAIM-011",
+  "owning_bead": "bd-1vwza",
+  "runtimes": [
+    "node",
+    "bun",
+    "franken_engine"
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "environment_variable_exfiltration",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "process_privilege_surface_probe",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "prototype_pollution_capability_escape",
+      "attack_class": "prototype_pollution"
+    },
+    {
+      "scenario_id": "shell_command_injection_package_script",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "supply_chain_backdoor_execution",
+      "attack_class": "supply_chain_execution"
+    },
+    {
+      "scenario_id": "ambient_authority_via_globalthis",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "capability_shadowed_import",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "reflect_apply_authority_smuggling",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "typed_effect_laundering_downcast",
+      "attack_class": "ambient_authority_escape"
+    },
+    {
+      "scenario_id": "smuggle_flow_via_unanalyzed_construct",
+      "attack_class": "ambient_authority_escape"
+    }
+  ]
+}

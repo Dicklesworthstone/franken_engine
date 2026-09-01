@@ -6,34 +6,20 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use frankenengine_engine::engine_object_id::{
+    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, EngineObjectId,
+    ObjectDomain, ObjectIdDerivationVersion, VersionedEngineObjectId, VersionedIdError,
+    VersionedSchemaId, OBJECT_ID_LEN,
+};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 
 const RESPONSE_SCHEMA: &str = "franken-engine.engine-object-id-migration-response.v1";
 const LEGACY_VERSION: &str = "legacy_v1";
 const V2_VERSION: &str = "sha256_v2";
-const SCHEMA_V2_DOMAIN: &[u8] = b"FrankenEngine.SchemaId.sha256.v2";
-const OBJECT_V2_DOMAIN: &[u8] = b"FrankenEngine.EngineObjectId.sha256.v2";
-const ID_LEN: usize = 32;
 const USAGE: &str =
     "usage: franken_engine_object_id_migration --input PATH|- [--output PATH]";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum DerivationVersion {
-    LegacyV1,
-    Sha256V2,
-}
-
-impl DerivationVersion {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::LegacyV1 => LEGACY_VERSION,
-            Self::Sha256V2 => V2_VERSION,
-        }
-    }
-}
+type DerivationVersion = ObjectIdDerivationVersion;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +36,7 @@ enum DomainName {
 }
 
 impl DomainName {
+    #[cfg(test)]
     const ALL: [Self; 9] = [
         Self::PolicyObject,
         Self::EvidenceRecord,
@@ -61,18 +48,20 @@ impl DomainName {
         Self::RecoveryArtifact,
         Self::KeyBundle,
     ];
+}
 
-    const fn tag(self) -> &'static [u8] {
-        match self {
-            Self::PolicyObject => b"FrankenEngine.PolicyObject.v1",
-            Self::EvidenceRecord => b"FrankenEngine.EvidenceRecord.v1",
-            Self::Revocation => b"FrankenEngine.Revocation.v1",
-            Self::SignedManifest => b"FrankenEngine.SignedManifest.v1",
-            Self::Attestation => b"FrankenEngine.Attestation.v1",
-            Self::CapabilityToken => b"FrankenEngine.CapabilityToken.v1",
-            Self::CheckpointArtifact => b"FrankenEngine.CheckpointArtifact.v1",
-            Self::RecoveryArtifact => b"FrankenEngine.RecoveryArtifact.v1",
-            Self::KeyBundle => b"FrankenEngine.KeyBundle.v1",
+impl From<DomainName> for ObjectDomain {
+    fn from(domain: DomainName) -> Self {
+        match domain {
+            DomainName::PolicyObject => Self::PolicyObject,
+            DomainName::EvidenceRecord => Self::EvidenceRecord,
+            DomainName::Revocation => Self::Revocation,
+            DomainName::SignedManifest => Self::SignedManifest,
+            DomainName::Attestation => Self::Attestation,
+            DomainName::CapabilityToken => Self::CapabilityToken,
+            DomainName::CheckpointArtifact => Self::CheckpointArtifact,
+            DomainName::RecoveryArtifact => Self::RecoveryArtifact,
+            DomainName::KeyBundle => Self::KeyBundle,
         }
     }
 }
@@ -142,7 +131,8 @@ enum MigrationError {
     InvalidJson(String),
     InvalidHex { field: &'static str, detail: String },
     EmptyCanonicalBytes,
-    LengthOverflow { field: &'static str, length: usize },
+    LengthOverflow { field: String, length: usize },
+    Derivation(String),
     Io(String),
 }
 
@@ -154,6 +144,7 @@ impl MigrationError {
             Self::InvalidHex { .. } => "invalid_hex",
             Self::EmptyCanonicalBytes => "empty_canonical_bytes",
             Self::LengthOverflow { .. } => "length_overflow",
+            Self::Derivation(_) => "derivation_error",
             Self::Io(_) => "io_error",
         }
     }
@@ -162,9 +153,10 @@ impl MigrationError {
 impl std::fmt::Display for MigrationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidArguments(detail) | Self::InvalidJson(detail) | Self::Io(detail) => {
-                formatter.write_str(detail)
-            }
+            Self::InvalidArguments(detail)
+            | Self::InvalidJson(detail)
+            | Self::Derivation(detail)
+            | Self::Io(detail) => formatter.write_str(detail),
             Self::InvalidHex { field, detail } => {
                 write!(formatter, "invalid {field}: {detail}")
             }
@@ -176,10 +168,19 @@ impl std::fmt::Display for MigrationError {
     }
 }
 
-fn parse_args() -> Result<(String, Option<PathBuf>), MigrationError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParsedArgs {
+    Run {
+        input: String,
+        output: Option<PathBuf>,
+    },
+    Help,
+}
+
+fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<ParsedArgs, MigrationError> {
     let mut input = None;
     let mut output = None;
-    let mut arguments = env::args().skip(1);
+    let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--input" => {
@@ -192,10 +193,7 @@ fn parse_args() -> Result<(String, Option<PathBuf>), MigrationError> {
                     MigrationError::InvalidArguments("--output requires a value".to_string())
                 })?));
             }
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                return Err(MigrationError::InvalidArguments("help_requested".to_string()));
-            }
+            "-h" | "--help" => return Ok(ParsedArgs::Help),
             _ => {
                 return Err(MigrationError::InvalidArguments(format!(
                     "unknown argument: {argument}"
@@ -203,12 +201,12 @@ fn parse_args() -> Result<(String, Option<PathBuf>), MigrationError> {
             }
         }
     }
-    Ok((
-        input.ok_or_else(|| {
+    Ok(ParsedArgs::Run {
+        input: input.ok_or_else(|| {
             MigrationError::InvalidArguments("--input is required".to_string())
         })?,
         output,
-    ))
+    })
 }
 
 fn read_input(input: &str) -> Result<Vec<u8>, MigrationError> {
@@ -269,141 +267,68 @@ fn decode_hex(field: &'static str, value: &str) -> Result<Vec<u8>, MigrationErro
     })
 }
 
-fn decode_id_hex(field: &'static str, value: &str) -> Result<[u8; ID_LEN], MigrationError> {
+fn decode_id_hex(field: &'static str, value: &str) -> Result<[u8; OBJECT_ID_LEN], MigrationError> {
     let bytes = decode_hex(field, value)?;
     let length = bytes.len();
     bytes.try_into().map_err(|_| MigrationError::InvalidHex {
         field,
-        detail: format!("expected {ID_LEN} bytes, got {length}"),
+        detail: format!("expected {OBJECT_ID_LEN} bytes, got {length}"),
     })
 }
 
-fn append_length_prefixed(
-    output: &mut Vec<u8>,
-    field: &'static str,
-    bytes: &[u8],
-) -> Result<(), MigrationError> {
-    let length = u32::try_from(bytes.len()).map_err(|_| MigrationError::LengthOverflow {
-        field,
-        length: bytes.len(),
-    })?;
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(bytes);
-    Ok(())
+fn map_versioned_error(error: VersionedIdError) -> MigrationError {
+    match error {
+        VersionedIdError::EmptyCanonicalBytes => MigrationError::EmptyCanonicalBytes,
+        VersionedIdError::LengthOverflow { field, length } => {
+            MigrationError::LengthOverflow { field, length }
+        }
+        other => MigrationError::Derivation(other.to_string()),
+    }
 }
 
-fn sha256(bytes: &[u8]) -> [u8; ID_LEN] {
-    Sha256::digest(bytes).into()
+const fn version_name(version: DerivationVersion) -> &'static str {
+    match version {
+        DerivationVersion::LegacyV1 => LEGACY_VERSION,
+        DerivationVersion::Sha256V2 => V2_VERSION,
+    }
 }
 
-fn schema_id_v2(definition: &[u8]) -> Result<[u8; ID_LEN], MigrationError> {
-    let mut preimage = Vec::with_capacity(8 + SCHEMA_V2_DOMAIN.len() + definition.len());
-    append_length_prefixed(&mut preimage, "schema_v2_domain", SCHEMA_V2_DOMAIN)?;
-    append_length_prefixed(&mut preimage, "schema_definition", definition)?;
-    Ok(sha256(&preimage))
-}
-
-fn object_id_v2(
+fn derive_parts(
+    version: DerivationVersion,
     domain: DomainName,
     zone: &str,
-    schema_id: &[u8; ID_LEN],
+    schema_definition: &[u8],
     canonical_bytes: &[u8],
-) -> Result<[u8; ID_LEN], MigrationError> {
-    if canonical_bytes.is_empty() {
-        return Err(MigrationError::EmptyCanonicalBytes);
-    }
-    let mut preimage = Vec::with_capacity(
-        16 + OBJECT_V2_DOMAIN.len() + domain.tag().len() + zone.len() + ID_LEN + canonical_bytes.len(),
-    );
-    append_length_prefixed(&mut preimage, "object_v2_domain", OBJECT_V2_DOMAIN)?;
-    append_length_prefixed(&mut preimage, "object_domain", domain.tag())?;
-    append_length_prefixed(&mut preimage, "zone", zone.as_bytes())?;
-    preimage.extend_from_slice(schema_id);
-    append_length_prefixed(&mut preimage, "canonical_bytes", canonical_bytes)?;
-    Ok(sha256(&preimage))
+) -> Result<(VersionedSchemaId, VersionedEngineObjectId), MigrationError> {
+    let schema = derive_versioned_schema_id(version, schema_definition)
+        .map_err(map_versioned_error)?;
+    let object = derive_versioned_id(domain.into(), zone, &schema, canonical_bytes)
+        .map_err(map_versioned_error)?;
+    Ok((schema, object))
 }
 
-fn legacy_schema_id(definition: &[u8]) -> [u8; ID_LEN] {
-    legacy_deterministic_hash(definition)
-}
-
-fn legacy_object_id(
-    domain: DomainName,
-    zone: &str,
-    schema_id: &[u8; ID_LEN],
-    canonical_bytes: &[u8],
-) -> Result<[u8; ID_LEN], MigrationError> {
-    if canonical_bytes.is_empty() {
-        return Err(MigrationError::EmptyCanonicalBytes);
+fn record_from_parts(
+    version: DerivationVersion,
+    schema: &VersionedSchemaId,
+    object: &VersionedEngineObjectId,
+) -> DerivationRecord {
+    let (algorithm, preimage_contract) = match version {
+        DerivationVersion::LegacyV1 => (
+            "de_novo_siphash_like_non_cryptographic",
+            "legacy: len(domain_tag)||domain_tag||len(zone)||zone||schema_id||canonical_bytes",
+        ),
+        DerivationVersion::Sha256V2 => (
+            "sha256",
+            "v2: len(version_domain)||version_domain||len(domain_tag)||domain_tag||len(zone)||zone||schema_id||len(canonical_bytes)||canonical_bytes",
+        ),
+    };
+    DerivationRecord {
+        version: version_name(version),
+        algorithm,
+        preimage_contract,
+        schema_id_hex: schema.schema_id.to_string(),
+        object_id_hex: object.to_hex(),
     }
-    let mut preimage = Vec::with_capacity(8 + domain.tag().len() + zone.len() + ID_LEN + canonical_bytes.len());
-    append_length_prefixed(&mut preimage, "object_domain", domain.tag())?;
-    append_length_prefixed(&mut preimage, "zone", zone.as_bytes())?;
-    preimage.extend_from_slice(schema_id);
-    preimage.extend_from_slice(canonical_bytes);
-    Ok(legacy_deterministic_hash(&preimage))
-}
-
-fn legacy_deterministic_hash(input: &[u8]) -> [u8; ID_LEN] {
-    let mut state = [
-        0x736f_6d65_7073_6575_u64,
-        0x646f_7261_6e64_6f6d_u64,
-        0x6c79_6765_6e65_7261_u64,
-        0x7465_6462_7974_6573_u64,
-    ];
-    state[0] ^= input.len() as u64;
-    for chunk in input.chunks(8) {
-        let mut block = [0_u8; 8];
-        block[..chunk.len()].copy_from_slice(chunk);
-        let word = u64::from_le_bytes(block);
-        state[3] ^= word;
-        sip_round(&mut state);
-        sip_round(&mut state);
-        state[0] ^= word;
-    }
-    state[2] ^= 0xff;
-    for _ in 0..4 {
-        sip_round(&mut state);
-    }
-    let hash1 = state[0] ^ state[1] ^ state[2] ^ state[3];
-    state[1] ^= 0xee;
-    for _ in 0..4 {
-        sip_round(&mut state);
-    }
-    let hash2 = state[0] ^ state[1] ^ state[2] ^ state[3];
-    state[0] ^= 0xdd;
-    for _ in 0..4 {
-        sip_round(&mut state);
-    }
-    let hash3 = state[0] ^ state[1] ^ state[2] ^ state[3];
-    state[3] ^= 0xcc;
-    for _ in 0..4 {
-        sip_round(&mut state);
-    }
-    let hash4 = state[0] ^ state[1] ^ state[2] ^ state[3];
-    let mut output = [0_u8; ID_LEN];
-    output[0..8].copy_from_slice(&hash1.to_le_bytes());
-    output[8..16].copy_from_slice(&hash2.to_le_bytes());
-    output[16..24].copy_from_slice(&hash3.to_le_bytes());
-    output[24..32].copy_from_slice(&hash4.to_le_bytes());
-    output
-}
-
-fn sip_round(state: &mut [u64; 4]) {
-    state[0] = state[0].wrapping_add(state[1]);
-    state[1] = state[1].rotate_left(13);
-    state[1] ^= state[0];
-    state[0] = state[0].rotate_left(32);
-    state[2] = state[2].wrapping_add(state[3]);
-    state[3] = state[3].rotate_left(16);
-    state[3] ^= state[2];
-    state[0] = state[0].wrapping_add(state[3]);
-    state[3] = state[3].rotate_left(21);
-    state[3] ^= state[0];
-    state[2] = state[2].wrapping_add(state[1]);
-    state[1] = state[1].rotate_left(17);
-    state[1] ^= state[2];
-    state[2] = state[2].rotate_left(32);
 }
 
 fn derive_record(
@@ -413,35 +338,14 @@ fn derive_record(
     schema_definition: &[u8],
     canonical_bytes: &[u8],
 ) -> Result<DerivationRecord, MigrationError> {
-    let (schema_id, object_id, algorithm, preimage_contract) = match version {
-        DerivationVersion::LegacyV1 => {
-            let schema_id = legacy_schema_id(schema_definition);
-            let object_id = legacy_object_id(domain, zone, &schema_id, canonical_bytes)?;
-            (
-                schema_id,
-                object_id,
-                "de_novo_siphash_like_non_cryptographic",
-                "legacy: len(domain_tag)||domain_tag||len(zone)||zone||schema_id||canonical_bytes",
-            )
-        }
-        DerivationVersion::Sha256V2 => {
-            let schema_id = schema_id_v2(schema_definition)?;
-            let object_id = object_id_v2(domain, zone, &schema_id, canonical_bytes)?;
-            (
-                schema_id,
-                object_id,
-                "sha256",
-                "v2: len(version_domain)||version_domain||len(domain_tag)||domain_tag||len(zone)||zone||schema_id||len(canonical_bytes)||canonical_bytes",
-            )
-        }
-    };
-    Ok(DerivationRecord {
-        version: version.as_str(),
-        algorithm,
-        preimage_contract,
-        schema_id_hex: hex::encode(schema_id),
-        object_id_hex: hex::encode(object_id),
-    })
+    let (schema, object) = derive_parts(
+        version,
+        domain,
+        zone,
+        schema_definition,
+        canonical_bytes,
+    )?;
+    Ok(record_from_parts(version, &schema, &object))
 }
 
 fn process(request: Request) -> Result<(Vec<u8>, bool), MigrationError> {
@@ -492,16 +396,34 @@ fn process(request: Request) -> Result<(Vec<u8>, bool), MigrationError> {
         } => {
             let schema_definition = decode_hex("schema_definition_hex", &schema_definition_hex)?;
             let canonical_bytes = decode_hex("canonical_bytes_hex", &canonical_bytes_hex)?;
-            let expected = decode_id_hex("expected_object_id_hex", &expected_object_id_hex)?;
-            let computed = derive_record(version, domain, &zone, &schema_definition, &canonical_bytes)?;
-            let computed_bytes = decode_id_hex("computed_object_id_hex", &computed.object_id_hex)?;
-            let verified: bool = expected.ct_eq(&computed_bytes).into();
+            let expected_bytes =
+                decode_id_hex("expected_object_id_hex", &expected_object_id_hex)?;
+            let (schema, computed_object) = derive_parts(
+                version,
+                domain,
+                &zone,
+                &schema_definition,
+                &canonical_bytes,
+            )?;
+            let expected = VersionedEngineObjectId::new(version, EngineObjectId(expected_bytes));
+            let verified = match verify_versioned_id(
+                &expected,
+                domain.into(),
+                &zone,
+                &schema,
+                &canonical_bytes,
+            ) {
+                Ok(()) => true,
+                Err(VersionedIdError::IdMismatch { .. }) => false,
+                Err(error) => return Err(map_versioned_error(error)),
+            };
+            let computed = record_from_parts(version, &schema, &computed_object);
             let response = VerifyResponse {
                 schema_version: RESPONSE_SCHEMA,
                 status: if verified { "verified" } else { "mismatch" },
                 operation: "verify",
-                version: version.as_str(),
-                expected_object_id_hex: hex::encode(expected),
+                version: version_name(version),
+                expected_object_id_hex: hex::encode(expected_bytes),
                 computed,
                 verified,
                 migration_rule: "verification never falls back to another derivation version",
@@ -515,10 +437,10 @@ fn process(request: Request) -> Result<(Vec<u8>, bool), MigrationError> {
 }
 
 fn run() -> Result<ExitCode, MigrationError> {
-    let (input, output) = parse_args()?;
-    if input == "help_requested" {
+    let ParsedArgs::Run { input, output } = parse_args(env::args().skip(1))? else {
+        println!("{USAGE}");
         return Ok(ExitCode::SUCCESS);
-    }
+    };
     let bytes = read_input(&input)?;
     let request: Request = serde_json::from_slice(&bytes)
         .map_err(|error| MigrationError::InvalidJson(error.to_string()))?;
@@ -534,9 +456,6 @@ fn run() -> Result<ExitCode, MigrationError> {
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
-        Err(MigrationError::InvalidArguments(detail)) if detail == "help_requested" => {
-            ExitCode::SUCCESS
-        }
         Err(error) => {
             let response = ErrorResponse {
                 schema_version: RESPONSE_SCHEMA,
@@ -562,7 +481,7 @@ mod tests {
     const CANONICAL: &[u8] = br#"{"allow":true}"#;
 
     #[test]
-    fn cross_language_vectors_are_stable() {
+    fn cross_crate_vectors_are_stable() {
         let legacy = derive_record(
             DerivationVersion::LegacyV1,
             DomainName::PolicyObject,
@@ -618,26 +537,28 @@ mod tests {
         };
         let (response, verified) = process(request).expect("verification response");
         assert!(!verified);
-        let value: serde_json::Value = serde_json::from_slice(&response).expect("JSON response");
+        let value: serde_json::Value =
+            serde_json::from_slice(&response).expect("JSON response");
         assert_eq!(value["status"], "mismatch");
         assert_eq!(value["version"], LEGACY_VERSION);
     }
 
     #[test]
     fn v2_length_prefixes_canonical_bytes() {
-        let left_schema = schema_id_v2(b"schema").expect("left schema");
-        let right_schema = schema_id_v2(b"schema").expect("right schema");
-        let left = object_id_v2(DomainName::PolicyObject, "ab", &left_schema, b"c")
+        let schema = derive_versioned_schema_id(DerivationVersion::Sha256V2, b"schema")
+            .expect("schema");
+        let left = derive_versioned_id(ObjectDomain::PolicyObject, "ab", &schema, b"c")
             .expect("left id");
-        let right = object_id_v2(DomainName::PolicyObject, "a", &right_schema, b"bc")
+        let right = derive_versioned_id(ObjectDomain::PolicyObject, "a", &schema, b"bc")
             .expect("right id");
         assert_ne!(left, right);
     }
 
     #[test]
-    fn all_domains_have_unique_tags() {
+    fn all_domains_map_to_unique_tags() {
         let tags = DomainName::ALL
             .into_iter()
+            .map(ObjectDomain::from)
             .map(|domain| domain.tag())
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(tags.len(), DomainName::ALL.len());
@@ -663,10 +584,19 @@ mod tests {
         };
         let (response, success) = process(request).expect("derive response");
         assert!(success);
-        let value: serde_json::Value = serde_json::from_slice(&response).expect("JSON response");
+        let value: serde_json::Value =
+            serde_json::from_slice(&response).expect("JSON response");
         assert_eq!(value["status"], "ok");
         assert_eq!(value["legacy_v1"]["version"], LEGACY_VERSION);
         assert_eq!(value["sha256_v2"]["version"], V2_VERSION);
         assert_eq!(value["ids_differ"], true);
+    }
+
+    #[test]
+    fn parser_help_is_a_distinct_success_path() {
+        assert_eq!(
+            parse_args(["--help".to_string()]).expect("help parse"),
+            ParsedArgs::Help
+        );
     }
 }

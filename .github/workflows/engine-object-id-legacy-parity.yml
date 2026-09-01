@@ -1,0 +1,90 @@
+name: EngineObjectId Legacy/V2 Parity
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - crates/franken-engine/src/engine_object_id.rs
+      - crates/franken-core/src/engine_object_id.rs
+      - crates/franken-engine/src/bin/franken_engine_object_id_migration.rs
+      - crates/franken-engine/tests/engine_object_id_migration_cli.rs
+      - crates/franken-engine/tests/engine_object_id_legacy_vector_parity.rs
+      - scripts/check_engine_object_id_derivation_versioning.py
+      - docs/engine_object_id_derivation_contract_v2.json
+      - .github/workflows/engine-object-id-legacy-parity.yml
+  pull_request:
+    paths:
+      - crates/franken-engine/src/engine_object_id.rs
+      - crates/franken-core/src/engine_object_id.rs
+      - crates/franken-engine/src/bin/franken_engine_object_id_migration.rs
+      - crates/franken-engine/tests/engine_object_id_migration_cli.rs
+      - crates/franken-engine/tests/engine_object_id_legacy_vector_parity.rs
+      - scripts/check_engine_object_id_derivation_versioning.py
+      - docs/engine_object_id_derivation_contract_v2.json
+      - .github/workflows/engine-object-id-legacy-parity.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-object-id-legacy-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    name: Runtime legacy vector and explicit migration parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-legacy-v2-parity
+
+      - name: Check focused formatting
+        run: |
+          rustfmt --check --edition 2024 \
+            crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+            crates/franken-engine/tests/engine_object_id_migration_cli.rs \
+            crates/franken-engine/tests/engine_object_id_legacy_vector_parity.rs
+
+      - name: Pin current runtime legacy vector
+        run: >-
+          cargo test --no-default-features -p frankenengine-engine
+          --test engine_object_id_legacy_vector_parity
+
+      - name: Pin migration implementation vectors
+        run: >-
+          cargo test --no-default-features -p frankenengine-engine
+          --bin franken_engine_object_id_migration
+
+      - name: Pin black-box no-fallback protocol
+        run: >-
+          cargo test --no-default-features -p frankenengine-engine
+          --test engine_object_id_migration_cli
+
+      - name: Confirm the default flip remains blocked
+        run: |
+          python3 scripts/check_engine_object_id_derivation_versioning.py \
+            --output /tmp/engine-object-id-versioning.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open('/tmp/engine-object-id-versioning.json'))
+          assert report['decision'] == 'allow_current_posture'
+          assert report['current_default'] == 'legacy_v1'
+          assert report['blocking_consumer_count'] > 0
+          assert report['default_flip_allowed'] is False
+          PY

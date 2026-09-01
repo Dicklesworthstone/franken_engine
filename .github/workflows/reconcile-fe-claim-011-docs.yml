@@ -1,0 +1,72 @@
+name: FE-CLAIM-011 Documentation Reconciliation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/maintenance/reconcile_fe_claim_011_docs.py
+      - .github/workflows/reconcile-fe-claim-011-docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fe-claim-011-docs-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile matrix, README, plan, changelog, and status truth
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout full main history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Reconcile and commit latest-main truth surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "franken-engine-docs-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 -m py_compile scripts/maintenance/reconcile_fe_claim_011_docs.py
+            python3 scripts/maintenance/reconcile_fe_claim_011_docs.py --write
+            python3 scripts/maintenance/reconcile_fe_claim_011_docs.py --check
+            python3 -m json.tool docs/claim_to_proof_matrix_v1.json >/dev/null
+            cmp docs/claim_to_proof_matrix_v1.json \
+              crates/franken-engine/docs/claim_to_proof_matrix_v1.json
+            ./scripts/run_claim_to_proof_matrix_gate.sh ci
+            git diff --check
+
+            if git diff --quiet; then
+              echo "FE-CLAIM-011 documentation was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              README.md \
+              CHANGELOG.md \
+              docs/CLAIM_TO_PROOF_MATRIX_V1.md \
+              docs/claim_to_proof_matrix_v1.json \
+              crates/franken-engine/docs/claim_to_proof_matrix_v1.json \
+              docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md
+            git commit -m "docs(evidence): reconcile FE-CLAIM-011 v2 target posture (bd-1vwza)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during reconciliation attempt ${attempt}; retrying from origin/main" >&2
+          done
+
+          echo "unable to publish FE-CLAIM-011 documentation after bounded fast-forward retries" >&2
+          exit 1

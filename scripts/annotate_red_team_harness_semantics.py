@@ -113,6 +113,7 @@ def annotate(value: dict[str, Any]) -> dict[str, Any]:
         CONTRACT.required_stability_repetitions_per_runtime_scenario
     )
     value["corpus_contract_path"] = "docs/red_team_scenario_corpus_v2.json"
+    value["corpus_contract_sha256"] = CONTRACT.source_sha256
     value["distinct_scenario_count"] = len(observed_scenarios)
     value["attack_class_count"] = len(set(observed_scenarios.values()))
     value["runtime_scenario_pair_count"] = sum(len(runtimes) for runtimes in runtime_matrix.values())
@@ -133,6 +134,7 @@ def verify_annotations(value: dict[str, Any]) -> None:
             CONTRACT.required_stability_repetitions_per_runtime_scenario
         ),
         "corpus_contract_path": "docs/red_team_scenario_corpus_v2.json",
+        "corpus_contract_sha256": CONTRACT.source_sha256,
         "distinct_scenario_count": len(observed_scenarios),
         "attack_class_count": len(set(observed_scenarios.values())),
         "runtime_scenario_pair_count": sum(len(runtimes) for runtimes in runtime_matrix.values()),

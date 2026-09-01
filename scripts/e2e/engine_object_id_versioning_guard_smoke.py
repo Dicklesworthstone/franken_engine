@@ -32,7 +32,7 @@ def write_contract(path: Path, current_default: str) -> None:
 
 
 def wrapper() -> str:
-    return "mod versioned;\npub use versioned::*;\n"
+    return "mod versioned;\nmod wire;\npub use versioned::*;\npub use wire::*;\n"
 
 
 def versioned(default: str, extra: str = "") -> str:
@@ -46,6 +46,18 @@ const B: &[u8] = b"FrankenEngine.EngineObjectId.sha256.v2";
 pub fn derive_versioned_schema_id() {{}}
 pub fn derive_versioned_id() {{}}
 pub fn verify_versioned_id() {{}}
+{extra}
+'''
+
+
+def wire(extra: str = "") -> str:
+    return f'''
+pub struct PersistedEngineObjectId;
+pub struct PersistedSchemaId;
+impl PersistedEngineObjectId {{
+    pub fn encode_binary(&self) {{}}
+    pub fn decode_binary() {{}}
+}}
 {extra}
 '''
 
@@ -66,10 +78,8 @@ def main() -> int:
         write_contract(root / "docs/engine_object_id_derivation_contract_v2.json", "legacy_v1")
         for crate in ("franken-engine", "franken-core"):
             write(root / f"crates/{crate}/src/engine_object_id.rs", wrapper())
-            write(
-                root / f"crates/{crate}/src/engine_object_id/versioned.rs",
-                versioned("LegacyV1"),
-            )
+            write(root / f"crates/{crate}/src/engine_object_id/versioned.rs", versioned("LegacyV1"))
+            write(root / f"crates/{crate}/src/engine_object_id/wire.rs", wire())
 
         write(
             root / "crates/franken-engine/src/comment_only.rs",
@@ -204,6 +214,18 @@ struct Manual { schema_id: VersionedSchemaId }
         drift = build(root)
         assert drift["decision"] == "fail_closed"
         assert "sha256_v2_library_source_drift" in drift["violations"]
+
+        write(core_versioned, versioned("LegacyV1"))
+        core_wire = root / "crates/franken-core/src/engine_object_id/wire.rs"
+        write(core_wire, wire("const DRIFT: u8 = 1;"))
+        wire_drift = build(root)
+        assert wire_drift["decision"] == "fail_closed"
+        assert "versioned_id_wire_source_drift" in wire_drift["violations"]
+
+        core_wire.unlink()
+        partial_wire = build(root)
+        assert partial_wire["decision"] == "fail_closed"
+        assert "versioned_id_wire_api_parity_incomplete" in partial_wire["violations"]
 
     print("engine-object-id derivation-versioning guard smoke: PASS")
     return 0

@@ -19,7 +19,7 @@ SCAN_ROOTS = (
     ROOT / "crates/franken-core/src",
     ROOT / "crates/franken-extension-host/src",
 )
-REPORT_SCHEMA = "franken-engine.engine-object-id-consumer-versioning-report.v3"
+REPORT_SCHEMA = "franken-engine.engine-object-id-consumer-versioning-report.v4"
 RAW_ID_PATTERN = re.compile(r"\b(?:EngineObjectId|SchemaId)\b")
 VERSION_FIELD_PATTERN = re.compile(
     r"\bderivation_version\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*ObjectIdDerivationVersion\b"
@@ -50,9 +50,11 @@ EXCLUDED_FILES = {
     "crates/franken-engine/src/engine_object_id.rs",
     "crates/franken-engine/src/engine_object_id/compat.rs",
     "crates/franken-engine/src/engine_object_id/versioned.rs",
+    "crates/franken-engine/src/engine_object_id/wire.rs",
     "crates/franken-core/src/engine_object_id.rs",
     "crates/franken-core/src/engine_object_id/compat.rs",
     "crates/franken-core/src/engine_object_id/versioned.rs",
+    "crates/franken-core/src/engine_object_id/wire.rs",
     "crates/franken-engine/src/bin/franken_engine_object_id_migration.rs",
 }
 
@@ -97,6 +99,9 @@ class SourceDefaultState:
     sha256_v2_object_api_visible: bool
     versioned_source_path: str
     versioned_source_sha256: str
+    wire_source_path: str
+    wire_source_sha256: str
+    wire_api_visible: bool
 
 
 def load_contract(path: Path = CONTRACT_PATH) -> dict[str, object]:
@@ -381,15 +386,19 @@ def classify_file(path: Path, root: Path = ROOT) -> list[ConsumerFinding]:
     return findings
 
 
-def versioned_source(path: Path) -> tuple[Path, str]:
-    sibling = path.parent / path.stem / "versioned.rs"
-    selected = sibling if sibling.is_file() else path
-    return selected, selected.read_text(encoding="utf-8")
+def companion_source(path: Path, module_name: str, *, fallback_to_parent: bool) -> tuple[Path, str]:
+    sibling = path.parent / path.stem / f"{module_name}.rs"
+    if sibling.is_file():
+        return sibling, sibling.read_text(encoding="utf-8")
+    if fallback_to_parent:
+        return path, path.read_text(encoding="utf-8")
+    return sibling, ""
 
 
 def source_default_state(path: Path, root: Path = ROOT) -> SourceDefaultState:
     top_level_text = path.read_text(encoding="utf-8")
-    versioned_path, versioned_text = versioned_source(path)
+    versioned_path, versioned_text = companion_source(path, "versioned", fallback_to_parent=True)
+    wire_path, wire_text = companion_source(path, "wire", fallback_to_parent=False)
     text = top_level_text + "\n" + versioned_text
     default_match = CURRENT_DEFAULT_PATTERN.search(text)
     selected_default = default_match.group(1) if default_match else None
@@ -419,6 +428,16 @@ def source_default_state(path: Path, root: Path = ROOT) -> SourceDefaultState:
         ),
         versioned_source_path=relative(versioned_path, root),
         versioned_source_sha256=hashlib.sha256(versioned_text.encode("utf-8")).hexdigest(),
+        wire_source_path=relative(wire_path, root),
+        wire_source_sha256=(
+            hashlib.sha256(wire_text.encode("utf-8")).hexdigest() if wire_text else ""
+        ),
+        wire_api_visible=(
+            "pub struct PersistedEngineObjectId" in wire_text
+            and "pub struct PersistedSchemaId" in wire_text
+            and "pub fn encode_binary" in wire_text
+            and "pub fn decode_binary" in wire_text
+        ),
     )
 
 
@@ -456,6 +475,14 @@ def build_report(
     v2_library_api_consistent = v2_api_count == len(defaults)
     v2_library_api_partial = 0 < v2_api_count < len(defaults)
     versioned_source_parity = len({state.versioned_source_sha256 for state in defaults}) == 1
+    wire_api_count = sum(state.wire_api_visible for state in defaults)
+    wire_api_consistent = wire_api_count == len(defaults)
+    wire_api_partial = 0 < wire_api_count < len(defaults)
+    wire_source_parity = (
+        wire_api_consistent
+        and len({state.wire_source_sha256 for state in defaults}) == 1
+    )
+    library_source_parity = versioned_source_parity and wire_source_parity
 
     migration_state = (
         "blocked_on_unversioned_persisted_consumers"
@@ -479,6 +506,14 @@ def build_report(
         )
     if not versioned_source_parity:
         violations.append("sha256_v2_library_source_drift")
+    if not wire_api_consistent:
+        violations.append(
+            "versioned_id_wire_api_parity_incomplete"
+            if wire_api_partial
+            else "versioned_id_wire_api_missing"
+        )
+    if wire_api_consistent and not wire_source_parity:
+        violations.append("versioned_id_wire_source_drift")
     if current_default not in {"legacy_v1", "sha256_v2"}:
         violations.append("unsupported_current_default")
     if target_default != "sha256_v2":
@@ -488,7 +523,8 @@ def build_report(
         not blockers
         and not violations
         and v2_library_api_consistent
-        and versioned_source_parity
+        and library_source_parity
+        and wire_api_consistent
     )
     return {
         "schema_version": REPORT_SCHEMA,
@@ -503,7 +539,16 @@ def build_report(
             if v2_library_api_partial
             else "sha256_v2_missing"
         ),
-        "library_source_parity": versioned_source_parity,
+        "versioned_source_parity": versioned_source_parity,
+        "wire_api_state": (
+            "legacy_compatible_versioned_wire_available_in_both_crates"
+            if wire_api_consistent
+            else "versioned_wire_partial"
+            if wire_api_partial
+            else "versioned_wire_missing"
+        ),
+        "wire_source_parity": wire_source_parity,
+        "library_source_parity": library_source_parity,
         "consumer_type_count": len(findings),
         "blocking_consumer_type_count": len(blockers),
         "version_declared_consumer_type_count": sum(
@@ -519,7 +564,7 @@ def build_report(
         "decision": "fail_closed" if violations else "allow_current_posture",
         "default_flip_allowed": default_flip_allowed,
         "remediation": (
-            "Keep engine/core SHA-256-v2 source byte-identical; add a typed derivation_version "
+            "Keep engine/core SHA-256-v2 and persisted-wire sources byte-identical; add a typed derivation_version "
             "field to each serialized or signed type that carries raw EngineObjectId/SchemaId, "
             "bind that field into every signature preimage, or replace raw IDs with versioned wrappers."
         ),

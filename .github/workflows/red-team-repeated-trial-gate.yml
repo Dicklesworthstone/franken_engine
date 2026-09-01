@@ -1,4 +1,4 @@
-name: Red-Team Repeated-Trial Gate
+name: Red-Team Scenario-Corpus Stability Gate
 
 on:
   push:
@@ -9,6 +9,13 @@ on:
       - crates/franken-engine/src/red_team_compromise_rate_metric_gate.rs
       - crates/franken-engine/tests/red_team_harness_gate_cli.rs
       - crates/franken-engine/tests/fixtures/red_team_harness_output_v1.json
+      - crates/franken-engine/tests/red_team_scenarios/**
+      - scripts/red_team_compromise_rate_metric.py
+      - scripts/red_team_compromise_rate_corpus.py
+      - scripts/aggregate_red_team_trials.py
+      - scripts/annotate_red_team_harness_semantics.py
+      - scripts/run_bd_28otw_attacker_harness.sh
+      - scripts/e2e/red_team_repeated_trial_harness_smoke.sh
       - .github/workflows/red-team-repeated-trial-gate.yml
   pull_request:
     paths:
@@ -16,18 +23,49 @@ on:
       - crates/franken-engine/src/red_team_compromise_rate_metric_gate.rs
       - crates/franken-engine/tests/red_team_harness_gate_cli.rs
       - crates/franken-engine/tests/fixtures/red_team_harness_output_v1.json
+      - crates/franken-engine/tests/red_team_scenarios/**
+      - scripts/red_team_compromise_rate_metric.py
+      - scripts/red_team_compromise_rate_corpus.py
+      - scripts/aggregate_red_team_trials.py
+      - scripts/annotate_red_team_harness_semantics.py
+      - scripts/run_bd_28otw_attacker_harness.sh
+      - scripts/e2e/red_team_repeated_trial_harness_smoke.sh
       - .github/workflows/red-team-repeated-trial-gate.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: red-team-repeated-trial-${{ github.ref }}
+  group: red-team-scenario-corpus-stability-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  producer-contract:
+    name: Corpus, receipt, and semantic producer contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile Python producers
+        run: |
+          python3 -m py_compile \
+            scripts/red_team_compromise_rate_metric.py \
+            scripts/red_team_compromise_rate_corpus.py \
+            scripts/aggregate_red_team_trials.py \
+            scripts/annotate_red_team_harness_semantics.py
+
+      - name: Parse shell runners
+        run: |
+          bash -n scripts/run_bd_28otw_attacker_harness.sh
+          bash -n scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+
+      - name: Execute hermetic 10-scenario stability and tamper drills
+        run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+
   rust-gate:
-    name: Rust harness conversion and decision gate
+    name: Rust scenario-corpus conversion and decision gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -46,7 +84,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: red-team-repeated-trial-gate
+          shared-key: red-team-scenario-corpus-stability-gate
 
       - name: Check focused formatting
         run: |

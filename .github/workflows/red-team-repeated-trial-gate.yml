@@ -5,12 +5,14 @@ on:
     branches:
       - main
     paths:
+      - docs/red_team_scenario_corpus_v2.json
       - crates/franken-engine/src/bin/franken_red_team_harness_gate.rs
       - crates/franken-engine/src/red_team_compromise_rate_metric_gate.rs
       - crates/franken-engine/tests/red_team_harness_gate_cli.rs
       - crates/franken-engine/tests/fixtures/red_team_harness_output_v1.json
       - crates/franken-engine/tests/red_team_scenarios/**
       - scripts/red_team_compromise_rate_metric.py
+      - scripts/red_team_scenario_corpus_contract.py
       - scripts/red_team_compromise_rate_corpus.py
       - scripts/red_team_trial_common.py
       - scripts/red_team_trial_reader.py
@@ -23,12 +25,14 @@ on:
       - .github/workflows/red-team-repeated-trial-gate.yml
   pull_request:
     paths:
+      - docs/red_team_scenario_corpus_v2.json
       - crates/franken-engine/src/bin/franken_red_team_harness_gate.rs
       - crates/franken-engine/src/red_team_compromise_rate_metric_gate.rs
       - crates/franken-engine/tests/red_team_harness_gate_cli.rs
       - crates/franken-engine/tests/fixtures/red_team_harness_output_v1.json
       - crates/franken-engine/tests/red_team_scenarios/**
       - scripts/red_team_compromise_rate_metric.py
+      - scripts/red_team_scenario_corpus_contract.py
       - scripts/red_team_compromise_rate_corpus.py
       - scripts/red_team_trial_common.py
       - scripts/red_team_trial_reader.py
@@ -60,6 +64,7 @@ jobs:
         run: |
           python3 -m py_compile \
             scripts/red_team_compromise_rate_metric.py \
+            scripts/red_team_scenario_corpus_contract.py \
             scripts/red_team_compromise_rate_corpus.py \
             scripts/red_team_trial_common.py \
             scripts/red_team_trial_reader.py \
@@ -67,6 +72,18 @@ jobs:
             scripts/annotate_red_team_harness_semantics.py \
             scripts/red_team_scenario_corpus_harness.py \
             scripts/e2e/red_team_scenario_corpus_scope_smoke.py
+
+      - name: Load authoritative corpus contract
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          from red_team_scenario_corpus_contract import CONTRACT
+          assert len(CONTRACT.scenarios) == 10
+          assert CONTRACT.runtime_scenario_pair_count == 30
+          assert CONTRACT.required_stability_repetitions_per_runtime_scenario == 100
+          print(f"corpus_contract={CONTRACT.corpus_id}")
+          PY
 
       - name: Parse shell runners
         run: |

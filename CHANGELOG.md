@@ -33,6 +33,56 @@ and not a Release.
 
 ---
 
+## Post-Snapshot Update — FE-CLAIM-011 Scenario-Corpus Truth Repair (2026-08-31)
+
+The red-team compromise-rate lane was rebuilt around an exact machine contract
+instead of allowing repeated deterministic executions to inflate the apparent
+denominator. `docs/red_team_scenario_corpus_v2.json` now fixes ten distinct
+security-critical scenarios, their attack classes, three runtime identities, a
+100-repetition stability/replay floor per runtime/scenario pair, a one-scenario
+zero-cell guard, and `franken_red_team_harness_gate` as the sole claim-verdict
+producer.
+
+### Delivered capability
+
+- **Real comparator execution with receipt-bound identity.** Node, Bun, and
+  FrankenEngine execute the same manifest-bound scenarios; executable, script,
+  manifest, transcript, and witness identities are hash-bound.
+- **Proof-class separation.** Each repetition is explicitly receipt-only, the
+  aggregate is explicitly input-only, and neither may self-promote
+  `FE-CLAIM-011`. Repetitions establish stability and replayability, not
+  independent population confidence.
+- **Conservative scenario-corpus metric.** The Rust verdict operates on ten
+  distinct scenarios and treats a zero FrankenEngine cell as one hypothetical
+  compromised scenario before checking the `>=10x` floor. A five-scenario
+  zero-cell result therefore cannot manufacture an infinite or passing ratio.
+- **Fail-closed scoped aggregation.** Exact scenario/class/runtime identity,
+  complete matrices, stable outcomes, scoped replay commands, and hash rebinding
+  are enforced; semantic finalization failure overwrites any lower-level stale
+  success with `fail_closed`.
+- **Focused and live workflows.** The focused gate exercises machine-contract,
+  proof-class, receipt, replay, tamper, formatting, and Rust CLI drills. The
+  live workflow pins Node/Bun, preserves the exact corpus contract and complete
+  evidence bundle even on failure, and emits JSON/Markdown from the sole Rust
+  verdict gate.
+
+`FE-CLAIM-011` remains **TARGETED**. The producer/verifier system is implemented,
+but no current non-fixture v2 campaign plus passing Rust verdict is yet preserved
+and linked from the authoritative claim matrix. `FE-CLAIM-014` therefore also
+remains TARGETED.
+
+### Key files
+
+- `docs/red_team_scenario_corpus_v2.json`
+- `scripts/red_team_scenario_corpus_contract.py`
+- `scripts/red_team_compromise_rate_corpus.py`
+- `scripts/red_team_scenario_corpus_harness.py`
+- `crates/franken-engine/src/bin/franken_red_team_harness_gate.rs`
+- `docs/RED_TEAM_REPEATED_TRIAL_HARNESS.md`
+- `docs/FE_CLAIM_011_IMPLEMENTATION_STATUS.md`
+
+---
+
 ## Post-Snapshot Update — Current window (2026-07-26 → 2026-08-19)
 
 After the sibling-gating correction of 2026-07-25, the next month is the product-authority and evidence-honesty wave: host effects stop being ambient, generated code gets its own realm, IFC labels survive the heap, and the engine finally consumes published sibling crates instead of `/dp` path deps. HEAD is

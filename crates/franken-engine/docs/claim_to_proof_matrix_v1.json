@@ -262,20 +262,20 @@
       "claim_id": "FE-CLAIM-011",
       "claim_scope": "security",
       "claim_text": ">= 10x reduction in successful red-team host compromise rate versus Node/Bun defaults.",
-      "decision": "stay_target_pending_real_comparator_bundle",
+      "decision": "stay_target_pending_current_v2_live_bundle",
       "downgrade_text": "Target: >= 10x host-compromise reduction versus declared Node/Bun baseline scenarios.",
       "freshness_days": 90,
       "freshness_tier": "standard",
-      "freshness_tier_rationale": "red-team compromise-rate comparison; the harness is stable but the adversarial corpus grows, so it should not sit at the frozen window",
+      "freshness_tier_rationale": "exact red-team scenario-corpus comparison; the producer and verifier are stable, but the adversarial corpus and pinned runtime identities may evolve, so the evidence must not sit at the frozen window",
       "owning_bead": "bd-1vwza",
-      "reason": "The gate now launches FrankenEngine, Node, and Bun for every declared scenario, requires an explicit per-runtime disposition, and emits hash-bound executable, transcript, script, manifest, and witness identities. Missing runtimes, crashes, timeouts, malformed output, and ambiguous dispositions produce a blocker rather than a favorable containment result. FE-CLAIM-011 remains target because no fresh non-fixture bundle from real installed runtimes with a statistically adequate repeated-trial denominator has been committed.",
+      "reason": "The exact v2 path now executes pinned FrankenEngine, Node, and Bun binaries over ten contract-declared security-critical scenarios, requires at least 100 receipt-bound stability/replay repetitions per runtime/scenario pair, rejects mixed outcomes and identity drift, and applies a one-scenario zero-cell guard before the sole Rust verdict gate computes the conservative corpus floor. The repetitions are stability evidence, not independent population samples. FE-CLAIM-011 remains target because no current non-fixture v2 campaign plus passing franken_red_team_harness_gate verdict is preserved and linked from this matrix.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 58,
         "must_contain": "`>= 10x` reduction",
         "start_line": 58
       },
-      "verification_command": "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
+      "verification_command": "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl --bin franken_red_team_harness_gate && FRANKENENGINE_BIN=$PWD/target/release/frankenctl ./scripts/run_bd_28otw_attacker_harness.sh --trials 100 --artifact-root artifacts/red_team_scenario_corpus_measurement --run-id <run-id> --code-revision $(git rev-parse HEAD) --timeout-seconds 20 && ./target/release/franken_red_team_harness_gate --input artifacts/red_team_scenario_corpus_measurement/<run-id>/aggregate/harness_output.json --output artifacts/red_team_scenario_corpus_measurement/<run-id>/claim_verdict.json --markdown artifacts/red_team_scenario_corpus_measurement/<run-id>/claim_verdict.md"
     },
     {
       "actual_wording_state": "target",
@@ -327,12 +327,12 @@
       "claim_scope": "capability",
       "claim_text": "At least three production features that are impossible by default in standard Node/Bun deployments: signed IFC declassification receipts (FE-CLAIM-015), deterministic replay coverage (FE-CLAIM-013), and red-team compromise-rate reduction (FE-CLAIM-011).",
       "decision": "stay_target_third_feature_unproved",
-      "downgrade_text": "TARGETED: two independently observed features ship, but the three-feature floor is not met because FE-CLAIM-011 still lacks a fresh non-fixture observed Node/Bun/FrankenEngine comparator bundle.",
+      "downgrade_text": "TARGETED: two independently observed features ship, but the three-feature floor is not met because FE-CLAIM-011 still lacks a current non-fixture v2 scenario-corpus campaign and passing linked Rust claim verdict.",
       "freshness_days": 180,
       "freshness_tier": "frozen",
       "freshness_tier_rationale": "the three-feature production catalog; a named, sha256-pinned catalog that only changes when a feature is added or removed",
       "owning_bead": "bd-cixqu.6.6",
-      "reason": "The catalog gate validates three bundle schemas and hashes, but the third named item is still a target metric outcome. Execution-capable Node, Bun, and FrankenEngine comparators now exist, yet no qualifying non-fixture FE-CLAIM-011 bundle demonstrates the >=10x reduction on real installed runtimes with a statistically adequate repeated-trial denominator. Two independently observed features do not meet the three-feature floor.",
+      "reason": "The catalog gate validates three bundle schemas and hashes, but the third named item is still a target metric outcome. The exact v2 Node/Bun/FrankenEngine producer, scoped replay verifier, ten-scenario contract, 100-repetition stability floor, one-scenario zero-cell guard, and sole Rust verdict gate now exist; however, no current non-fixture FE-CLAIM-011 campaign plus passing franken_red_team_harness_gate verdict is preserved and linked. Two independently observed features do not meet the three-feature floor.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 61,

@@ -56,6 +56,7 @@ def scope_fields() -> dict[str, Any]:
         "zero_cell_guard": CONTRACT.zero_cell_guard,
         "zero_cell_guard_count": CONTRACT.zero_cell_guard_count,
         "corpus_contract_path": "docs/red_team_scenario_corpus_v2.json",
+        "corpus_contract_sha256": CONTRACT.source_sha256,
         "verdict_scope": CONTRACT.repetition_verdict_scope,
         "claim_verdict_eligible": False,
         "claim_verdict_producer": CONTRACT.claim_verdict_producer,

@@ -17,11 +17,19 @@ use frankenengine_engine::red_team_compromise_rate_metric_gate::{
     RedTeamHarnessRuntimeResult, rate_millionths, reduction_factor_x, summarize_harness_output,
 };
 use serde::Serialize;
+use serde_json::Value;
 
 const OUTPUT_SCHEMA: &str = "franken-engine.red-team-harness-gate-output.v2";
 const REPORT_SCHEMA: &str = "franken-engine.red-team-scenario-corpus-gate.v1";
+const CORPUS_ID: &str = "red_team_security_critical_compromise_v2";
+const DENOMINATOR_SEMANTICS: &str = "distinct_security_critical_scenarios";
+const REPETITION_ROLE: &str = "stability_and_replay_not_independent_sampling";
+const CONFIDENCE_INTERPRETATION: &str =
+    "receipt_completeness_and_stability_not_population_confidence";
+const ZERO_CELL_GUARD: &str = "one_hypothetical_frankenengine_compromise";
 const MIN_DISTINCT_SCENARIOS: u64 = 10;
 const MIN_ATTACK_CLASSES: u64 = 3;
+const EXPECTED_RUNTIME_SCENARIO_PAIRS: u64 = MIN_DISTINCT_SCENARIOS * 3;
 const ZERO_CELL_GUARD_COUNT: u64 = 1;
 const USAGE: &str =
     "usage: franken_red_team_harness_gate --input PATH|- [--output PATH] [--markdown PATH]";
@@ -206,6 +214,92 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         )
     })
+}
+
+fn raw_string<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> Option<&'a str> {
+    object.get(field).and_then(Value::as_str)
+}
+
+fn validate_semantic_annotations(value: &Value) -> Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "harness output must be a JSON object".to_string())?;
+    for (field, expected) in [
+        ("corpus_id", CORPUS_ID),
+        ("denominator_semantics", DENOMINATOR_SEMANTICS),
+        ("repetition_role", REPETITION_ROLE),
+        ("confidence_interpretation", CONFIDENCE_INTERPRETATION),
+        ("zero_cell_guard", ZERO_CELL_GUARD),
+    ] {
+        let actual = raw_string(object, field).unwrap_or("<missing>");
+        if actual != expected {
+            return Err(format!(
+                "harness semantic field {field} mismatch: expected {expected:?}, got {actual:?}"
+            ));
+        }
+    }
+
+    let results = object
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "harness output must contain a results array".to_string())?;
+    let mut scenarios = BTreeSet::new();
+    let mut attack_classes = BTreeSet::new();
+    let mut runtime_pairs = BTreeSet::new();
+    for (index, row) in results.iter().enumerate() {
+        let row = row
+            .as_object()
+            .ok_or_else(|| format!("results[{index}] must be an object"))?;
+        let scenario_id = raw_string(row, "scenario_id")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("results[{index}].scenario_id must be non-empty"))?;
+        let attack_class = raw_string(row, "attack_class")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("results[{index}].attack_class must be non-empty"))?;
+        let runtime = raw_string(row, "runtime")
+            .filter(|value| matches!(*value, "node" | "bun" | "franken_engine"))
+            .ok_or_else(|| format!("results[{index}].runtime is invalid"))?;
+        scenarios.insert(scenario_id.to_string());
+        attack_classes.insert(attack_class.to_string());
+        if !runtime_pairs.insert((scenario_id.to_string(), runtime.to_string())) {
+            return Err(format!("duplicate runtime row for {scenario_id}/{runtime}"));
+        }
+    }
+
+    let scenario_count = scenarios.len() as u64;
+    let attack_class_count = attack_classes.len() as u64;
+    let runtime_pair_count = runtime_pairs.len() as u64;
+    let declared_scenarios = object
+        .get("distinct_scenario_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let declared_attack_classes = object
+        .get("attack_class_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let declared_runtime_pairs = object
+        .get("runtime_scenario_pair_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    if scenario_count != MIN_DISTINCT_SCENARIOS
+        || declared_scenarios != scenario_count
+        || attack_class_count < MIN_ATTACK_CLASSES
+        || declared_attack_classes != attack_class_count
+        || runtime_pair_count != EXPECTED_RUNTIME_SCENARIO_PAIRS
+        || declared_runtime_pairs != runtime_pair_count
+    {
+        return Err(format!(
+            "harness corpus annotation mismatch: scenarios={scenario_count}/{declared_scenarios}, attack_classes={attack_class_count}/{declared_attack_classes}, runtime_pairs={runtime_pair_count}/{declared_runtime_pairs}"
+        ));
+    }
+    for scenario_id in scenarios {
+        for runtime in ["node", "bun", "franken_engine"] {
+            if !runtime_pairs.contains(&(scenario_id.clone(), runtime.to_string())) {
+                return Err(format!("missing runtime row for {scenario_id}/{runtime}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn result_for<'a>(
@@ -459,8 +553,11 @@ fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport
 
 fn evaluate_args(args: &Args) -> Result<GateOutput, String> {
     let bytes = read_input(&args.input)?;
-    let harness: RedTeamHarnessOutput = serde_json::from_slice(&bytes)
+    let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid RedTeamHarnessOutput JSON: {error}"))?;
+    validate_semantic_annotations(&value)?;
+    let harness: RedTeamHarnessOutput = serde_json::from_value(value)
+        .map_err(|error| format!("invalid RedTeamHarnessOutput schema: {error}"))?;
     let summary = summarize_harness_output(&harness)
         .map_err(|error| format!("invalid repeated-trial harness output: {error}"))?;
     let report = evaluate(&harness)?;

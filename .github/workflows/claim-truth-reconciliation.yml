@@ -55,6 +55,9 @@ on:
 permissions:
   contents: write
 
+# GitHub keeps at most one pending member of a concurrency group. Bootstrap
+# commits therefore must be the last FE-CLAIM-011-triggering write until their
+# atomic generated-doc commit lands.
 concurrency:
   group: fe-claim-011-truth-${{ github.ref }}
   cancel-in-progress: false

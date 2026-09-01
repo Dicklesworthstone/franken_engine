@@ -1,0 +1,74 @@
+name: EngineObjectId Persisted-Consumer Versioning Guard
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/engine_object_id_derivation_contract_v2.json
+      - crates/franken-engine/src/**
+      - crates/franken-core/src/**
+      - crates/franken-extension-host/src/**
+      - scripts/check_engine_object_id_derivation_versioning.py
+      - scripts/e2e/engine_object_id_versioning_guard_smoke.py
+      - .github/workflows/engine-object-id-versioning-guard.yml
+  pull_request:
+    paths:
+      - docs/engine_object_id_derivation_contract_v2.json
+      - crates/franken-engine/src/**
+      - crates/franken-core/src/**
+      - crates/franken-extension-host/src/**
+      - scripts/check_engine_object_id_derivation_versioning.py
+      - scripts/e2e/engine_object_id_versioning_guard_smoke.py
+      - .github/workflows/engine-object-id-versioning-guard.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-object-id-versioning-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Refuse unversioned persisted-consumer default flips
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile guard and drill
+        run: |
+          python3 -m py_compile \
+            scripts/check_engine_object_id_derivation_versioning.py \
+            scripts/e2e/engine_object_id_versioning_guard_smoke.py
+
+      - name: Prove guard catches both unsafe and ready states
+        run: python3 scripts/e2e/engine_object_id_versioning_guard_smoke.py
+
+      - name: Evaluate current repository posture
+        run: |
+          python3 scripts/check_engine_object_id_derivation_versioning.py \
+            --output /tmp/engine-object-id-consumer-report.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open('/tmp/engine-object-id-consumer-report.json'))
+          assert report['decision'] == 'allow_current_posture'
+          assert report['current_default'] == 'legacy_v1'
+          assert report['default_flip_allowed'] is False
+          assert report['blocking_consumer_count'] > 0
+          assert report['violations'] == []
+          print(
+              'engine_object_id_versioning_guard=pass '
+              f"blocking_consumers={report['blocking_consumer_count']}"
+          )
+          PY
+
+      - name: Upload deterministic consumer inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-object-id-consumer-inventory-${{ github.sha }}
+          path: /tmp/engine-object-id-consumer-report.json
+          if-no-files-found: error
+          retention-days: 30

@@ -18,10 +18,15 @@ SCAN_ROOTS = (
     ROOT / "crates/franken-core/src",
     ROOT / "crates/franken-extension-host/src",
 )
-REPORT_SCHEMA = "franken-engine.engine-object-id-consumer-versioning-report.v1"
+REPORT_SCHEMA = "franken-engine.engine-object-id-consumer-versioning-report.v2"
 SYMBOL_PATTERN = re.compile(r"\b(?:EngineObjectId|SchemaId)\b")
 DERIVATION_VERSION_PATTERN = re.compile(r"\bderivation_version\b", re.IGNORECASE)
 SERDE_PATTERN = re.compile(r"\b(?:Serialize|Deserialize)\b")
+CURRENT_DEFAULT_PATTERN = re.compile(
+    r"CURRENT_OBJECT_ID_DERIVATION_VERSION\s*:\s*ObjectIdDerivationVersion\s*=\s*"
+    r"ObjectIdDerivationVersion::(LegacyV1|Sha256V2)",
+    re.MULTILINE,
+)
 PERSISTENCE_HINTS = (
     "attest",
     "checkpoint",
@@ -39,7 +44,11 @@ PERSISTENCE_HINTS = (
 )
 EXCLUDED_FILES = {
     "crates/franken-engine/src/engine_object_id.rs",
+    "crates/franken-engine/src/engine_object_id/compat.rs",
+    "crates/franken-engine/src/engine_object_id/versioned.rs",
     "crates/franken-core/src/engine_object_id.rs",
+    "crates/franken-core/src/engine_object_id/compat.rs",
+    "crates/franken-core/src/engine_object_id/versioned.rs",
     "crates/franken-engine/src/bin/franken_engine_object_id_migration.rs",
 }
 
@@ -63,9 +72,12 @@ class ConsumerFinding:
 @dataclass(frozen=True)
 class SourceDefaultState:
     path: str
+    selected_default: str | None
     legacy_schema_default_visible: bool
     legacy_object_default_visible: bool
     sha256_v2_default_visible: bool
+    sha256_v2_schema_api_visible: bool
+    sha256_v2_object_api_visible: bool
 
 
 def load_contract(path: Path = CONTRACT_PATH) -> dict[str, object]:
@@ -127,13 +139,37 @@ def classify_consumer(path: Path, root: Path = ROOT) -> ConsumerFinding | None:
 
 def source_default_state(path: Path, root: Path = ROOT) -> SourceDefaultState:
     text = path.read_text(encoding="utf-8")
+    versioned_path = path.parent / path.stem / "versioned.rs"
+    if versioned_path.is_file():
+        text += "\n" + versioned_path.read_text(encoding="utf-8")
+
+    default_match = CURRENT_DEFAULT_PATTERN.search(text)
+    selected_default = default_match.group(1) if default_match else None
+
+    legacy_marker_visible = selected_default == "LegacyV1"
+    historical_schema_default = "Self(deterministic_hash(definition))" in text
+    historical_object_default = "Ok(EngineObjectId(deterministic_hash(&preimage)))" in text
+
     return SourceDefaultState(
         path=relative(path, root),
-        legacy_schema_default_visible="Self(deterministic_hash(definition))" in text,
-        legacy_object_default_visible="Ok(EngineObjectId(deterministic_hash(&preimage)))" in text,
-        sha256_v2_default_visible=(
-            "FrankenEngine.SchemaId.sha256.v2" in text
-            or "FrankenEngine.EngineObjectId.sha256.v2" in text
+        selected_default=(
+            "legacy_v1"
+            if selected_default == "LegacyV1"
+            else "sha256_v2"
+            if selected_default == "Sha256V2"
+            else None
+        ),
+        legacy_schema_default_visible=legacy_marker_visible or historical_schema_default,
+        legacy_object_default_visible=legacy_marker_visible or historical_object_default,
+        sha256_v2_default_visible=selected_default == "Sha256V2",
+        sha256_v2_schema_api_visible=(
+            "pub fn derive_versioned_schema_id" in text
+            and "FrankenEngine.SchemaId.sha256.v2" in text
+        ),
+        sha256_v2_object_api_visible=(
+            "pub fn derive_versioned_id" in text
+            and "pub fn verify_versioned_id" in text
+            and "FrankenEngine.EngineObjectId.sha256.v2" in text
         ),
     )
 
@@ -164,26 +200,51 @@ def build_report(
         and not state.sha256_v2_default_visible
         for state in defaults
     )
-    v2_default_visible = any(state.sha256_v2_default_visible for state in defaults)
+    v2_default_consistent = all(state.sha256_v2_default_visible for state in defaults)
+    v2_api_count = sum(
+        state.sha256_v2_schema_api_visible and state.sha256_v2_object_api_visible
+        for state in defaults
+    )
+    v2_library_api_consistent = v2_api_count == len(defaults)
+    v2_library_api_partial = 0 < v2_api_count < len(defaults)
+
     if blockers:
         migration_state = "blocked_on_unversioned_persisted_consumers"
     else:
         migration_state = "ready_for_explicit_default_flip_review"
+
     violations: list[str] = []
     if current_default == "legacy_v1" and not legacy_default_consistent:
         violations.append("contract_declares_legacy_v1_but_library_default_drifted")
-    if blockers and (current_default == "sha256_v2" or v2_default_visible):
+    if current_default == "sha256_v2" and not v2_default_consistent:
+        violations.append("contract_declares_sha256_v2_but_library_default_drifted")
+    if blockers and (current_default == "sha256_v2" or any(state.sha256_v2_default_visible for state in defaults)):
         violations.append("sha256_v2_default_visible_with_unversioned_persisted_consumers")
+    if not v2_library_api_consistent:
+        violations.append(
+            "sha256_v2_library_api_parity_incomplete"
+            if v2_library_api_partial
+            else "sha256_v2_library_api_missing"
+        )
     if current_default not in {"legacy_v1", "sha256_v2"}:
         violations.append("unsupported_current_default")
     if target_default != "sha256_v2":
         violations.append("unexpected_target_default")
+
+    default_flip_allowed = not blockers and not violations and v2_library_api_consistent
     return {
         "schema_version": REPORT_SCHEMA,
         "contract_path": relative(contract_path, root),
         "current_default": current_default,
         "target_default": target_default,
         "migration_state": migration_state,
+        "library_api_state": (
+            "sha256_v2_available_in_both_crates"
+            if v2_library_api_consistent
+            else "sha256_v2_partial"
+            if v2_library_api_partial
+            else "sha256_v2_missing"
+        ),
         "consumer_count": len(findings),
         "blocking_consumer_count": len(blockers),
         "version_declared_consumer_count": sum(
@@ -197,9 +258,10 @@ def build_report(
         "all_consumers": [asdict(finding) for finding in findings],
         "violations": violations,
         "decision": "fail_closed" if violations else "allow_current_posture",
-        "default_flip_allowed": not blockers and not violations,
+        "default_flip_allowed": default_flip_allowed,
         "remediation": (
-            "Add an explicit derivation_version field to every persisted or signed consumer, "
+            "Keep the SHA-256-v2 APIs byte-identical in franken-engine and franken-core; "
+            "add an explicit derivation_version field to every persisted or signed consumer, "
             "or prove and document that the value is ephemeral, before changing the default."
         ),
     }

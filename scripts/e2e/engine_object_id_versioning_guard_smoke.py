@@ -32,23 +32,25 @@ def write_contract(path: Path, current_default: str) -> None:
     )
 
 
-def legacy_source() -> str:
-    return """
-pub struct SchemaId([u8; 32]);
-pub struct EngineObjectId([u8; 32]);
-fn schema(definition: &[u8]) -> SchemaId { Self(deterministic_hash(definition)) }
-fn object(preimage: Vec<u8>) -> Result<EngineObjectId, ()> {
-    Ok(EngineObjectId(deterministic_hash(&preimage)))
-}
-"""
-
-
-def v2_source() -> str:
-    return """
-pub struct SchemaId([u8; 32]);
-pub struct EngineObjectId([u8; 32]);
+def library_source(default_variant: str, *, include_v2_api: bool = True) -> str:
+    api = (
+        """
 const SCHEMA_DOMAIN: &[u8] = b"FrankenEngine.SchemaId.sha256.v2";
 const OBJECT_DOMAIN: &[u8] = b"FrankenEngine.EngineObjectId.sha256.v2";
+pub fn derive_versioned_schema_id() {}
+pub fn derive_versioned_id() {}
+pub fn verify_versioned_id() {}
+"""
+        if include_v2_api
+        else ""
+    )
+    return f"""
+pub struct SchemaId([u8; 32]);
+pub struct EngineObjectId([u8; 32]);
+pub enum ObjectIdDerivationVersion {{ LegacyV1, Sha256V2 }}
+pub const CURRENT_OBJECT_ID_DERIVATION_VERSION: ObjectIdDerivationVersion =
+    ObjectIdDerivationVersion::{default_variant};
+{api}
 """
 
 
@@ -80,8 +82,8 @@ def main() -> int:
         ephemeral = root / "crates/franken-engine/src/ephemeral_cache.rs"
 
         write_contract(contract, "legacy_v1")
-        write(engine, legacy_source())
-        write(core, legacy_source())
+        write(engine, library_source("LegacyV1"))
+        write(core, library_source("LegacyV1"))
         write(
             persisted,
             """
@@ -102,14 +104,15 @@ fn compare(left: EngineObjectId, right: EngineObjectId) -> bool { left == right 
         report = build(root)
         assert report["decision"] == "allow_current_posture"
         assert report["migration_state"] == "blocked_on_unversioned_persisted_consumers"
+        assert report["library_api_state"] == "sha256_v2_available_in_both_crates"
         assert report["blocking_consumer_count"] == 1
         assert report["default_flip_allowed"] is False
         assert report["violations"] == []
         assert report["blocking_consumers"][0]["path"].endswith("persisted_evidence.rs")
 
         write_contract(contract, "sha256_v2")
-        write(engine, v2_source())
-        write(core, v2_source())
+        write(engine, library_source("Sha256V2"))
+        write(core, library_source("Sha256V2"))
         unsafe_flip = build(root)
         assert unsafe_flip["decision"] == "fail_closed"
         assert (
@@ -143,6 +146,13 @@ struct EvidenceRecord {
             "contract_declares_legacy_v1_but_library_default_drifted"
             in stale_contract["violations"]
         )
+
+        write(engine, library_source("LegacyV1"))
+        write(core, library_source("LegacyV1", include_v2_api=False))
+        partial_api = build(root)
+        assert partial_api["decision"] == "fail_closed"
+        assert partial_api["library_api_state"] == "sha256_v2_partial"
+        assert "sha256_v2_library_api_parity_incomplete" in partial_api["violations"]
 
     print("engine-object-id derivation-versioning guard smoke: PASS")
     return 0

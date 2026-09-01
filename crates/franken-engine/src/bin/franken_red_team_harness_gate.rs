@@ -12,25 +12,17 @@ use frankenengine_engine::disruptive_floor_metric_gate::{
     DisruptiveMetricId, MetricArtifact,
 };
 use frankenengine_engine::red_team_compromise_rate_metric_gate::{
-    RATE_SCALE_MILLIONTHS, RedTeamAttackClass, RedTeamCompromiseRateDecision,
-    RedTeamHarnessMeasurementSummary, RedTeamHarnessOutput, RedTeamHarnessRuntime,
-    RedTeamHarnessRuntimeResult, rate_millionths, reduction_factor_x, summarize_harness_output,
+    RATE_SCALE_MILLIONTHS, RedTeamCompromiseRateDecision, RedTeamHarnessMeasurementSummary,
+    RedTeamHarnessOutput, RedTeamHarnessRuntime, RedTeamHarnessRuntimeResult, rate_millionths,
+    reduction_factor_x, summarize_harness_output,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const OUTPUT_SCHEMA: &str = "franken-engine.red-team-harness-gate-output.v2";
 const REPORT_SCHEMA: &str = "franken-engine.red-team-scenario-corpus-gate.v1";
-const CORPUS_ID: &str = "red_team_security_critical_compromise_v2";
-const DENOMINATOR_SEMANTICS: &str = "distinct_security_critical_scenarios";
-const REPETITION_ROLE: &str = "stability_and_replay_not_independent_sampling";
-const CONFIDENCE_INTERPRETATION: &str =
-    "receipt_completeness_and_stability_not_population_confidence";
-const ZERO_CELL_GUARD: &str = "one_hypothetical_frankenengine_compromise";
-const MIN_DISTINCT_SCENARIOS: u64 = 10;
-const MIN_ATTACK_CLASSES: u64 = 3;
-const EXPECTED_RUNTIME_SCENARIO_PAIRS: u64 = MIN_DISTINCT_SCENARIOS * 3;
-const ZERO_CELL_GUARD_COUNT: u64 = 1;
+const CONTRACT_SCHEMA: &str = "franken-engine.red-team-scenario-corpus.v2";
+const CONTRACT_PATH: &str = "docs/red_team_scenario_corpus_v2.json";
 const USAGE: &str =
     "usage: franken_red_team_harness_gate --input PATH|- [--output PATH] [--markdown PATH]";
 
@@ -47,12 +39,127 @@ struct Args {
     markdown: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct CorpusScenario {
+    scenario_id: String,
+    attack_class: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CorpusContract {
+    schema_version: String,
+    corpus_id: String,
+    denominator_semantics: String,
+    repetition_role: String,
+    confidence_interpretation: String,
+    zero_cell_guard: String,
+    zero_cell_guard_count: u64,
+    required_stability_repetitions_per_runtime_scenario: u64,
+    aggregate_verdict_scope: String,
+    claim_verdict_producer: String,
+    runtimes: Vec<String>,
+    scenarios: Vec<CorpusScenario>,
+}
+
+impl CorpusContract {
+    fn load() -> Result<Self, String> {
+        let contract: Self = serde_json::from_str(include_str!(
+            "../../../../docs/red_team_scenario_corpus_v2.json"
+        ))
+        .map_err(|error| format!("invalid embedded {CONTRACT_PATH}: {error}"))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema_version != CONTRACT_SCHEMA {
+            return Err(format!(
+                "unsupported corpus contract schema {:?}; expected {CONTRACT_SCHEMA:?}",
+                self.schema_version
+            ));
+        }
+        let expected_runtimes = ["node", "bun", "franken_engine"];
+        if self.runtimes.iter().map(String::as_str).collect::<Vec<_>>() != expected_runtimes {
+            return Err(format!(
+                "corpus runtime inventory/order mismatch: {:?}",
+                self.runtimes
+            ));
+        }
+        if self.scenarios.len() != 10 {
+            return Err(format!(
+                "corpus must contain exactly 10 scenarios; found {}",
+                self.scenarios.len()
+            ));
+        }
+        let scenario_ids = self
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.scenario_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if scenario_ids.len() != self.scenarios.len() {
+            return Err("corpus scenario IDs are not unique".to_string());
+        }
+        let attack_classes = self
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.attack_class.as_str())
+            .collect::<BTreeSet<_>>();
+        let expected_attack_classes = BTreeSet::from([
+            "ambient_authority_escape",
+            "prototype_pollution",
+            "supply_chain_execution",
+        ]);
+        if attack_classes != expected_attack_classes {
+            return Err(format!(
+                "corpus attack-class inventory mismatch: {attack_classes:?}"
+            ));
+        }
+        if self.zero_cell_guard_count != 1 {
+            return Err(format!(
+                "zero_cell_guard_count must be 1; found {}",
+                self.zero_cell_guard_count
+            ));
+        }
+        if self.required_stability_repetitions_per_runtime_scenario != 100 {
+            return Err(format!(
+                "stability repetition floor must be 100; found {}",
+                self.required_stability_repetitions_per_runtime_scenario
+            ));
+        }
+        if self.claim_verdict_producer != "franken_red_team_harness_gate" {
+            return Err(format!(
+                "unexpected claim verdict producer {:?}",
+                self.claim_verdict_producer
+            ));
+        }
+        Ok(())
+    }
+
+    fn scenario_map(&self) -> BTreeMap<&str, &str> {
+        self.scenarios
+            .iter()
+            .map(|scenario| {
+                (
+                    scenario.scenario_id.as_str(),
+                    scenario.attack_class.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    fn runtime_scenario_pair_count(&self) -> u64 {
+        (self.runtimes.len() * self.scenarios.len()) as u64
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ScenarioCorpusMetricReport {
     schema_version: &'static str,
+    corpus_id: String,
+    corpus_contract_path: &'static str,
     claim_scope: &'static str,
     confidence_interpretation: &'static str,
-    zero_cell_guard: &'static str,
+    zero_cell_guard: String,
     metric_artifact: MetricArtifact,
     scenario_count: u64,
     attack_class_count: u64,
@@ -73,18 +180,18 @@ struct ScenarioCorpusMetricReport {
 impl ScenarioCorpusMetricReport {
     fn to_markdown(&self) -> String {
         let mut out = format!(
-            "# Red-Team Scenario-Corpus Compromise-Rate Gate\n\nDecision: `{:?}`\n\nReason: `{}`\n\n",
-            self.decision, self.reason
+            "# Red-Team Scenario-Corpus Compromise-Rate Gate\n\nDecision: `{:?}`\n\nReason: `{}`\n\nCorpus: `{}`\n\n",
+            self.decision, self.reason, self.corpus_id
         );
         out.push_str(
-            "The denominator is the declared distinct adversarial scenario corpus. Repeated executions qualify stability and replayability; they are not treated as independent population samples.\n\n",
+            "The denominator is the exact contract-declared adversarial scenario corpus. Repeated executions qualify stability and replayability; they are not independent population samples.\n\n",
         );
         out.push_str("| Measure | Value |\n|---|---:|\n");
         for (name, value) in [
             ("Distinct security-critical scenarios", self.scenario_count),
             ("Attack classes", self.attack_class_count),
             (
-                "Stability trials per runtime/scenario",
+                "Stability repetitions per runtime/scenario",
                 self.trials_per_runtime_scenario,
             ),
             ("Node compromised scenarios", self.node_compromised_scenarios),
@@ -129,7 +236,6 @@ struct ScenarioFacts {
 #[derive(Debug)]
 struct MatrixFacts {
     scenarios: Vec<ScenarioFacts>,
-    attack_classes: BTreeSet<RedTeamAttackClass>,
     trials_per_runtime_scenario: u64,
     stable_pairs: u64,
     total_pairs: u64,
@@ -220,16 +326,32 @@ fn raw_string<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> Op
     object.get(field).and_then(Value::as_str)
 }
 
-fn validate_semantic_annotations(value: &Value) -> Result<(), String> {
+fn validate_semantic_annotations(value: &Value, contract: &CorpusContract) -> Result<(), String> {
     let object = value
         .as_object()
         .ok_or_else(|| "harness output must be a JSON object".to_string())?;
     for (field, expected) in [
-        ("corpus_id", CORPUS_ID),
-        ("denominator_semantics", DENOMINATOR_SEMANTICS),
-        ("repetition_role", REPETITION_ROLE),
-        ("confidence_interpretation", CONFIDENCE_INTERPRETATION),
-        ("zero_cell_guard", ZERO_CELL_GUARD),
+        ("corpus_id", contract.corpus_id.as_str()),
+        ("scenario_set", contract.corpus_id.as_str()),
+        (
+            "denominator_semantics",
+            contract.denominator_semantics.as_str(),
+        ),
+        ("repetition_role", contract.repetition_role.as_str()),
+        (
+            "confidence_interpretation",
+            contract.confidence_interpretation.as_str(),
+        ),
+        ("zero_cell_guard", contract.zero_cell_guard.as_str()),
+        (
+            "verdict_scope",
+            contract.aggregate_verdict_scope.as_str(),
+        ),
+        (
+            "claim_verdict_producer",
+            contract.claim_verdict_producer.as_str(),
+        ),
+        ("corpus_contract_path", CONTRACT_PATH),
     ] {
         let actual = raw_string(object, field).unwrap_or("<missing>");
         if actual != expected {
@@ -238,13 +360,54 @@ fn validate_semantic_annotations(value: &Value) -> Result<(), String> {
             ));
         }
     }
+    if object
+        .get("claim_verdict_eligible")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err("harness input must set claim_verdict_eligible=false".to_string());
+    }
+    let expected_numbers = [
+        ("zero_cell_guard_count", contract.zero_cell_guard_count),
+        (
+            "required_stability_repetitions_per_runtime_scenario",
+            contract.required_stability_repetitions_per_runtime_scenario,
+        ),
+        ("distinct_scenario_count", contract.scenarios.len() as u64),
+        (
+            "attack_class_count",
+            contract
+                .scenarios
+                .iter()
+                .map(|scenario| scenario.attack_class.as_str())
+                .collect::<BTreeSet<_>>()
+                .len() as u64,
+        ),
+        (
+            "runtime_scenario_pair_count",
+            contract.runtime_scenario_pair_count(),
+        ),
+    ];
+    for (field, expected) in expected_numbers {
+        let actual = object.get(field).and_then(Value::as_u64);
+        if actual != Some(expected) {
+            return Err(format!(
+                "harness semantic field {field} mismatch: expected {expected}, got {actual:?}"
+            ));
+        }
+    }
 
     let results = object
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| "harness output must contain a results array".to_string())?;
-    let mut scenarios = BTreeSet::new();
-    let mut attack_classes = BTreeSet::new();
+    let expected_scenarios = contract.scenario_map();
+    let expected_runtimes = contract
+        .runtimes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut observed_scenarios = BTreeMap::new();
     let mut runtime_pairs = BTreeSet::new();
     for (index, row) in results.iter().enumerate() {
         let row = row
@@ -257,47 +420,57 @@ fn validate_semantic_annotations(value: &Value) -> Result<(), String> {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| format!("results[{index}].attack_class must be non-empty"))?;
         let runtime = raw_string(row, "runtime")
-            .filter(|value| matches!(*value, "node" | "bun" | "franken_engine"))
+            .filter(|value| expected_runtimes.contains(*value))
             .ok_or_else(|| format!("results[{index}].runtime is invalid"))?;
-        scenarios.insert(scenario_id.to_string());
-        attack_classes.insert(attack_class.to_string());
-        if !runtime_pairs.insert((scenario_id.to_string(), runtime.to_string())) {
+        if let Some(previous) = observed_scenarios.insert(scenario_id, attack_class)
+            && previous != attack_class
+        {
+            return Err(format!(
+                "scenario {scenario_id} has inconsistent attack classes"
+            ));
+        }
+        if !runtime_pairs.insert((scenario_id, runtime)) {
             return Err(format!("duplicate runtime row for {scenario_id}/{runtime}"));
         }
     }
-
-    let scenario_count = scenarios.len() as u64;
-    let attack_class_count = attack_classes.len() as u64;
-    let runtime_pair_count = runtime_pairs.len() as u64;
-    let declared_scenarios = object
-        .get("distinct_scenario_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(u64::MAX);
-    let declared_attack_classes = object
-        .get("attack_class_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(u64::MAX);
-    let declared_runtime_pairs = object
-        .get("runtime_scenario_pair_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(u64::MAX);
-    if scenario_count != MIN_DISTINCT_SCENARIOS
-        || declared_scenarios != scenario_count
-        || attack_class_count < MIN_ATTACK_CLASSES
-        || declared_attack_classes != attack_class_count
-        || runtime_pair_count != EXPECTED_RUNTIME_SCENARIO_PAIRS
-        || declared_runtime_pairs != runtime_pair_count
-    {
+    if observed_scenarios != expected_scenarios {
+        let missing = expected_scenarios
+            .keys()
+            .filter(|scenario_id| !observed_scenarios.contains_key(*scenario_id))
+            .copied()
+            .collect::<Vec<_>>();
+        let extra = observed_scenarios
+            .keys()
+            .filter(|scenario_id| !expected_scenarios.contains_key(*scenario_id))
+            .copied()
+            .collect::<Vec<_>>();
+        let wrong_class = observed_scenarios
+            .iter()
+            .filter_map(|(scenario_id, actual)| {
+                expected_scenarios
+                    .get(scenario_id)
+                    .filter(|expected| *expected != actual)
+                    .map(|expected| (*scenario_id, *expected, *actual))
+            })
+            .collect::<Vec<_>>();
         return Err(format!(
-            "harness corpus annotation mismatch: scenarios={scenario_count}/{declared_scenarios}, attack_classes={attack_class_count}/{declared_attack_classes}, runtime_pairs={runtime_pair_count}/{declared_runtime_pairs}"
+            "harness corpus identity mismatch: missing={missing:?}, extra={extra:?}, wrong_class={wrong_class:?}"
         ));
     }
-    for scenario_id in scenarios {
-        for runtime in ["node", "bun", "franken_engine"] {
-            if !runtime_pairs.contains(&(scenario_id.clone(), runtime.to_string())) {
-                return Err(format!("missing runtime row for {scenario_id}/{runtime}"));
-            }
-        }
+    let expected_pairs = expected_scenarios
+        .keys()
+        .flat_map(|scenario_id| {
+            expected_runtimes
+                .iter()
+                .map(move |runtime| (*scenario_id, *runtime))
+        })
+        .collect::<BTreeSet<_>>();
+    if runtime_pairs != expected_pairs {
+        return Err(format!(
+            "harness runtime matrix mismatch: missing={:?}, extra={:?}",
+            expected_pairs.difference(&runtime_pairs).collect::<Vec<_>>(),
+            runtime_pairs.difference(&expected_pairs).collect::<Vec<_>>()
+        ));
     }
     Ok(())
 }
@@ -325,7 +498,25 @@ fn result_for<'a>(
     }
 }
 
-fn validate_metadata(harness: &RedTeamHarnessOutput) -> Result<(), String> {
+fn validate_metadata(
+    harness: &RedTeamHarnessOutput,
+    contract: &CorpusContract,
+) -> Result<(), String> {
+    if harness.scenario_set != contract.corpus_id {
+        return Err(format!(
+            "typed scenario_set mismatch: expected {:?}, got {:?}",
+            contract.corpus_id, harness.scenario_set
+        ));
+    }
+    if harness.min_trials_per_runtime
+        < contract.required_stability_repetitions_per_runtime_scenario
+    {
+        return Err(format!(
+            "declared stability repetitions {} are below contract floor {}",
+            harness.min_trials_per_runtime,
+            contract.required_stability_repetitions_per_runtime_scenario
+        ));
+    }
     if harness.artifact_path.trim().is_empty() || harness.verification_command.trim().is_empty() {
         return Err("harness artifact_path and verification_command must be non-empty".to_string());
     }
@@ -349,7 +540,10 @@ fn validate_metadata(harness: &RedTeamHarnessOutput) -> Result<(), String> {
     Ok(())
 }
 
-fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
+fn matrix_facts(
+    harness: &RedTeamHarnessOutput,
+    contract: &CorpusContract,
+) -> Result<MatrixFacts, String> {
     let mut grouped: BTreeMap<&str, Vec<&RedTeamHarnessRuntimeResult>> = BTreeMap::new();
     for result in &harness.results {
         if !result.security_critical {
@@ -364,8 +558,14 @@ fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
             .push(result);
     }
 
+    let expected_scenarios = contract.scenario_map();
+    if grouped.keys().copied().collect::<BTreeSet<_>>()
+        != expected_scenarios.keys().copied().collect::<BTreeSet<_>>()
+    {
+        return Err("typed scenario inventory does not match corpus contract".to_string());
+    }
+
     let mut scenarios = Vec::new();
-    let mut attack_classes = BTreeSet::new();
     let mut common_trials = None;
     let mut stable_pairs = 0;
     let mut total_pairs = 0;
@@ -378,17 +578,20 @@ fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
             scenario_id,
             RedTeamHarnessRuntime::FrankenEngine,
         )?;
-        if node.attack_class != bun.attack_class || node.attack_class != frankenengine.attack_class
-        {
-            return Err(format!(
-                "scenario {scenario_id} has inconsistent attack_class across runtimes"
-            ));
+        let expected_attack_class = expected_scenarios[scenario_id];
+        for result in [node, bun, frankenengine] {
+            if result.attack_class.as_str() != expected_attack_class {
+                return Err(format!(
+                    "scenario {scenario_id} has typed attack class {}, expected {expected_attack_class}",
+                    result.attack_class.as_str()
+                ));
+            }
         }
         if node.attempts_total != bun.attempts_total
             || node.attempts_total != frankenengine.attempts_total
         {
             return Err(format!(
-                "scenario {scenario_id} has unequal runtime attempt denominators"
+                "scenario {scenario_id} has unequal runtime repetition denominators"
             ));
         }
         match common_trials {
@@ -396,7 +599,7 @@ fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
             Some(expected) if expected == node.attempts_total => {}
             Some(expected) => {
                 return Err(format!(
-                    "scenario {scenario_id} has {} attempts per runtime; expected {expected}",
+                    "scenario {scenario_id} has {} repetitions per runtime; expected {expected}",
                     node.attempts_total
                 ));
             }
@@ -417,7 +620,6 @@ fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
                 ));
             }
         }
-        attack_classes.insert(node.attack_class);
         scenarios.push(ScenarioFacts {
             node_compromised: node.attempts_successful > 0,
             bun_compromised: bun.attempts_successful > 0,
@@ -428,13 +630,12 @@ fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
         common_trials.ok_or_else(|| "harness contains no security-critical scenarios".to_string())?;
     if trials_per_runtime_scenario < harness.min_trials_per_runtime {
         return Err(format!(
-            "attempt denominator {trials_per_runtime_scenario} is below declared minimum {}",
+            "repetition denominator {trials_per_runtime_scenario} is below declared minimum {}",
             harness.min_trials_per_runtime
         ));
     }
     Ok(MatrixFacts {
         scenarios,
-        attack_classes,
         trials_per_runtime_scenario,
         stable_pairs,
         total_pairs,
@@ -442,12 +643,20 @@ fn matrix_facts(harness: &RedTeamHarnessOutput) -> Result<MatrixFacts, String> {
     })
 }
 
-fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport, String> {
-    validate_metadata(harness)?;
+fn evaluate(
+    harness: &RedTeamHarnessOutput,
+    contract: &CorpusContract,
+) -> Result<ScenarioCorpusMetricReport, String> {
+    validate_metadata(harness, contract)?;
     summarize_harness_output(harness)?;
-    let facts = matrix_facts(harness)?;
+    let facts = matrix_facts(harness, contract)?;
     let scenario_count = facts.scenarios.len() as u64;
-    let attack_class_count = facts.attack_classes.len() as u64;
+    let attack_class_count = contract
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.attack_class.as_str())
+        .collect::<BTreeSet<_>>()
+        .len() as u64;
     let node_compromised_scenarios = facts
         .scenarios
         .iter()
@@ -465,8 +674,8 @@ fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport
         .count() as u64;
     let baseline_reference_compromised_scenarios =
         node_compromised_scenarios.min(bun_compromised_scenarios);
-    let guarded_frankenengine_compromised_scenarios =
-        frankenengine_compromised_scenarios.max(ZERO_CELL_GUARD_COUNT);
+    let guarded_frankenengine_compromised_scenarios = frankenengine_compromised_scenarios
+        .max(contract.zero_cell_guard_count);
     let baseline_rate = rate_millionths(
         baseline_reference_compromised_scenarios,
         scenario_count,
@@ -478,17 +687,7 @@ fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport
     let stability_coverage_millionths = rate_millionths(facts.stable_pairs, facts.total_pairs);
     let threshold = DisruptiveMetricId::RedTeamCompromiseRateReduction.threshold();
 
-    let (decision, reason) = if scenario_count < MIN_DISTINCT_SCENARIOS {
-        (
-            RedTeamCompromiseRateDecision::FailClosed,
-            "insufficient_distinct_scenario_denominator",
-        )
-    } else if attack_class_count < MIN_ATTACK_CLASSES {
-        (
-            RedTeamCompromiseRateDecision::FailClosed,
-            "insufficient_attack_class_diversity",
-        )
-    } else if !facts.mixed_pairs.is_empty() {
+    let (decision, reason) = if !facts.mixed_pairs.is_empty() {
         (
             RedTeamCompromiseRateDecision::FailClosed,
             "unstable_runtime_scenario_outcomes",
@@ -514,10 +713,12 @@ fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport
         baseline: metric_id.expected_baseline().to_string(),
         candidate: "franken_engine".to_string(),
         denominator_id: format!(
-            "node_and_bun:red_team_scenarios:{scenario_count}:stability_trials_per_pair:{}:zero_cell_guard:{}",
-            facts.trials_per_runtime_scenario, ZERO_CELL_GUARD_COUNT
+            "{}:distinct_scenarios:{scenario_count}:stability_repetitions_per_pair:{}:zero_cell_guard:{}",
+            contract.corpus_id,
+            facts.trials_per_runtime_scenario,
+            contract.zero_cell_guard_count
         ),
-        scenario_set: harness.scenario_set.clone(),
+        scenario_set: contract.corpus_id.clone(),
         artifact_path: harness.artifact_path.clone(),
         artifact_hash: harness.artifact_hash.clone(),
         code_revision: harness.code_revision.clone(),
@@ -530,9 +731,11 @@ fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport
 
     Ok(ScenarioCorpusMetricReport {
         schema_version: REPORT_SCHEMA,
-        claim_scope: "exact declared scenario corpus and pinned runtime identities only",
+        corpus_id: contract.corpus_id.clone(),
+        corpus_contract_path: CONTRACT_PATH,
+        claim_scope: "exact contract-declared scenario corpus and pinned runtime identities only",
         confidence_interpretation: "receipt completeness and outcome stability; not statistical population confidence",
-        zero_cell_guard: "zero observed FrankenEngine compromises count as one hypothetical compromise for threshold gating",
+        zero_cell_guard: contract.zero_cell_guard.clone(),
         metric_artifact,
         scenario_count,
         attack_class_count,
@@ -552,15 +755,16 @@ fn evaluate(harness: &RedTeamHarnessOutput) -> Result<ScenarioCorpusMetricReport
 }
 
 fn evaluate_args(args: &Args) -> Result<GateOutput, String> {
+    let contract = CorpusContract::load()?;
     let bytes = read_input(&args.input)?;
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid RedTeamHarnessOutput JSON: {error}"))?;
-    validate_semantic_annotations(&value)?;
+    validate_semantic_annotations(&value, &contract)?;
     let harness: RedTeamHarnessOutput = serde_json::from_value(value)
         .map_err(|error| format!("invalid RedTeamHarnessOutput schema: {error}"))?;
     let summary = summarize_harness_output(&harness)
-        .map_err(|error| format!("invalid repeated-trial harness output: {error}"))?;
-    let report = evaluate(&harness)?;
+        .map_err(|error| format!("invalid scenario-corpus stability input: {error}"))?;
+    let report = evaluate(&harness, &contract)?;
     Ok(GateOutput {
         schema_version: OUTPUT_SCHEMA,
         input: args.input.clone(),

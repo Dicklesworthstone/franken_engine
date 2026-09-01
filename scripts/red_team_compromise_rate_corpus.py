@@ -7,40 +7,24 @@ from pathlib import Path
 from typing import Any
 
 import red_team_compromise_rate_metric as comparator
-from annotate_red_team_harness_semantics import (
-    CONFIDENCE_INTERPRETATION,
-    CORPUS_ID,
-    DENOMINATOR_SEMANTICS,
-    REPETITION_ROLE,
-)
+from red_team_scenario_corpus_contract import CONTRACT
 
-CORPUS_SEMANTICS = DENOMINATOR_SEMANTICS
-VERDICT_SCOPE = "single_repetition_receipt_only_not_claim_verdict"
-SCENARIOS = (
-    comparator.ScenarioSpec("environment_variable_exfiltration", "ambient_authority_escape"),
-    comparator.ScenarioSpec("process_privilege_surface_probe", "ambient_authority_escape"),
-    comparator.ScenarioSpec("prototype_pollution_capability_escape", "prototype_pollution"),
-    comparator.ScenarioSpec("shell_command_injection_package_script", "ambient_authority_escape"),
-    comparator.ScenarioSpec("supply_chain_backdoor_execution", "supply_chain_execution"),
-    comparator.ScenarioSpec("ambient_authority_via_globalthis", "ambient_authority_escape"),
-    comparator.ScenarioSpec("capability_shadowed_import", "ambient_authority_escape"),
-    comparator.ScenarioSpec("reflect_apply_authority_smuggling", "ambient_authority_escape"),
-    comparator.ScenarioSpec("typed_effect_laundering_downcast", "ambient_authority_escape"),
-    comparator.ScenarioSpec("smuggle_flow_via_unanalyzed_construct", "ambient_authority_escape"),
+CORPUS_ID = CONTRACT.corpus_id
+CORPUS_SEMANTICS = CONTRACT.denominator_semantics
+VERDICT_SCOPE = CONTRACT.repetition_verdict_scope
+SCENARIOS = tuple(
+    comparator.ScenarioSpec(scenario.scenario_id, scenario.attack_class)
+    for scenario in CONTRACT.scenarios
 )
 
 
 def install_corpus() -> None:
-    scenario_ids = [scenario.scenario_id for scenario in SCENARIOS]
-    if len(scenario_ids) != 10 or len(set(scenario_ids)) != len(scenario_ids):
-        raise RuntimeError("the FE-CLAIM-011 comparator corpus must contain ten distinct scenarios")
-    attack_classes = {scenario.attack_class for scenario in SCENARIOS}
-    if attack_classes != {
-        "ambient_authority_escape",
-        "prototype_pollution",
-        "supply_chain_execution",
-    }:
-        raise RuntimeError(f"unexpected FE-CLAIM-011 attack-class inventory: {sorted(attack_classes)}")
+    expected = tuple(
+        (scenario.scenario_id, scenario.attack_class) for scenario in CONTRACT.scenarios
+    )
+    actual = tuple((scenario.scenario_id, scenario.attack_class) for scenario in SCENARIOS)
+    if actual != expected:
+        raise RuntimeError(f"FE-CLAIM-011 comparator corpus drift: {actual!r} != {expected!r}")
     comparator.SCENARIOS = SCENARIOS
 
 
@@ -64,12 +48,15 @@ def load_object(path: Path) -> dict[str, Any]:
 
 def scope_fields() -> dict[str, Any]:
     return {
-        "corpus_id": CORPUS_ID,
-        "denominator_semantics": DENOMINATOR_SEMANTICS,
-        "repetition_role": REPETITION_ROLE,
-        "confidence_interpretation": CONFIDENCE_INTERPRETATION,
-        "verdict_scope": VERDICT_SCOPE,
+        "corpus_id": CONTRACT.corpus_id,
+        "scenario_set": CONTRACT.corpus_id,
+        "denominator_semantics": CONTRACT.denominator_semantics,
+        "repetition_role": CONTRACT.repetition_role,
+        "confidence_interpretation": CONTRACT.confidence_interpretation,
+        "zero_cell_guard": CONTRACT.zero_cell_guard,
+        "verdict_scope": CONTRACT.repetition_verdict_scope,
         "claim_verdict_eligible": False,
+        "claim_verdict_producer": CONTRACT.claim_verdict_producer,
     }
 
 
@@ -95,9 +82,13 @@ def scope_repetition_bundle(bundle_dir: Path) -> None:
         {
             "schema_version": "franken-engine.red-team-repetition-scope.v1",
             **fields,
-            "distinct_scenario_count": len(SCENARIOS),
-            "attack_class_count": len({scenario.attack_class for scenario in SCENARIOS}),
-            "claim_verdict_producer": "franken_red_team_harness_gate",
+            "corpus_contract_path": "docs/red_team_scenario_corpus_v2.json",
+            "distinct_scenario_count": len(CONTRACT.scenarios),
+            "attack_class_count": len(CONTRACT.attack_classes),
+            "runtime_scenario_pair_count": CONTRACT.runtime_scenario_pair_count,
+            "required_stability_repetitions_per_runtime_scenario": (
+                CONTRACT.required_stability_repetitions_per_runtime_scenario
+            ),
         },
     )
 

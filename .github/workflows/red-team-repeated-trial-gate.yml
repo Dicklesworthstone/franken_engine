@@ -12,10 +12,14 @@ on:
       - crates/franken-engine/tests/red_team_scenarios/**
       - scripts/red_team_compromise_rate_metric.py
       - scripts/red_team_compromise_rate_corpus.py
+      - scripts/red_team_trial_common.py
+      - scripts/red_team_trial_reader.py
       - scripts/aggregate_red_team_trials.py
       - scripts/annotate_red_team_harness_semantics.py
+      - scripts/red_team_scenario_corpus_harness.py
       - scripts/run_bd_28otw_attacker_harness.sh
       - scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+      - scripts/e2e/red_team_scenario_corpus_scope_smoke.py
       - .github/workflows/red-team-repeated-trial-gate.yml
   pull_request:
     paths:
@@ -26,10 +30,14 @@ on:
       - crates/franken-engine/tests/red_team_scenarios/**
       - scripts/red_team_compromise_rate_metric.py
       - scripts/red_team_compromise_rate_corpus.py
+      - scripts/red_team_trial_common.py
+      - scripts/red_team_trial_reader.py
       - scripts/aggregate_red_team_trials.py
       - scripts/annotate_red_team_harness_semantics.py
+      - scripts/red_team_scenario_corpus_harness.py
       - scripts/run_bd_28otw_attacker_harness.sh
       - scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+      - scripts/e2e/red_team_scenario_corpus_scope_smoke.py
       - .github/workflows/red-team-repeated-trial-gate.yml
 
 permissions:
@@ -48,20 +56,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Compile Python producers
+      - name: Compile Python producers and drills
         run: |
           python3 -m py_compile \
             scripts/red_team_compromise_rate_metric.py \
             scripts/red_team_compromise_rate_corpus.py \
+            scripts/red_team_trial_common.py \
+            scripts/red_team_trial_reader.py \
             scripts/aggregate_red_team_trials.py \
-            scripts/annotate_red_team_harness_semantics.py
+            scripts/annotate_red_team_harness_semantics.py \
+            scripts/red_team_scenario_corpus_harness.py \
+            scripts/e2e/red_team_scenario_corpus_scope_smoke.py
 
       - name: Parse shell runners
         run: |
           bash -n scripts/run_bd_28otw_attacker_harness.sh
           bash -n scripts/e2e/red_team_repeated_trial_harness_smoke.sh
 
-      - name: Execute hermetic 10-scenario stability and tamper drills
+      - name: Execute proof-class and scope drills
+        run: python3 scripts/e2e/red_team_scenario_corpus_scope_smoke.py
+
+      - name: Execute hermetic receipt, replay, and tamper drills
         run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
 
   rust-gate:

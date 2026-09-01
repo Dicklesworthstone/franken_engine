@@ -107,6 +107,7 @@ if [[ "$replay" == "true" ]]; then
     printf '%s\n' '--replay requires --harness-output' >&2
     exit 2
   fi
+  python3 scripts/annotate_red_team_harness_semantics.py "$harness_output" --check
   exec python3 scripts/aggregate_red_team_trials.py verify \
     --root "$root_dir" \
     --harness-output "$harness_output" \
@@ -182,6 +183,7 @@ python3 scripts/aggregate_red_team_trials.py aggregate \
   --minimum-trials "$trials"
 
 harness_output="$aggregate_dir/harness_output.json"
+python3 scripts/annotate_red_team_harness_semantics.py "$harness_output"
 python3 scripts/aggregate_red_team_trials.py verify \
   --root "$root_dir" \
   --harness-output "$harness_output" \

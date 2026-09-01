@@ -1,69 +1,141 @@
-# Receipt-Bound Red-Team Repeated-Trial Harness
+# Receipt-Bound Red-Team Scenario-Corpus Stability Harness
 
 **Owning bead:** `bd-1vwza`  
 **Claim:** `FE-CLAIM-011`  
-**Current claim state:** **TARGETED**
+**Current claim state:** **TARGETED**  
+**Machine contract:** [`red_team_scenario_corpus_v2.json`](red_team_scenario_corpus_v2.json)
 
-This document defines the operator and contributor contract for measuring the
-successful host-compromise rate of the same declared adversarial scenarios under
-Node, Bun, and FrankenEngine. The producer emits the existing
-`franken-engine.red-team-harness-output.v1` schema consumed by the Rust
-`red_team_compromise_rate_metric_gate` module.
+This document defines the operator and contributor contract for comparing the
+successful host-compromise disposition of the same exact security-critical
+scenario corpus under Node, Bun, and FrankenEngine.
 
-The existence of this harness does not promote `FE-CLAIM-011`. Promotion still
-requires a current, exact-revision, non-fixture campaign with at least 100
-receipt-bound attempts per runtime and scenario, preservation of the complete
-bundle, and a linked verification command.
+The implementation path is now complete enough to execute and preserve a
+contract-bound campaign, but that fact does **not** promote `FE-CLAIM-011`.
+Promotion still requires a current, exact-revision, non-fixture live campaign,
+a preserved complete bundle, a passing Rust claim verdict, and an authoritative
+claim-matrix update linking that evidence.
+
+## Critical Statistical Boundary
+
+The denominator is the set of **distinct contract-declared adversarial
+scenarios**. Repeating one deterministic scenario 100 times does not create 100
+independent attack samples.
+
+The 100 repetitions per runtime/scenario pair establish:
+
+- disposition stability;
+- receipt completeness;
+- executable and scenario identity stability;
+- deterministic replayability; and
+- absence of one-off transient outcomes.
+
+They do **not** establish population confidence, attack-distribution coverage,
+or an empirical 1/100 compromise probability. Every artifact carries
+`repetition_role: stability_and_replay_not_independent_sampling` and
+`confidence_interpretation: receipt_completeness_and_stability_not_population_confidence`.
+
+The Rust claim evaluator applies the metric to the distinct scenario corpus. A
+zero observed FrankenEngine cell is guarded as one hypothetical compromised
+scenario before threshold comparison. Therefore:
+
+```text
+conservative_reduction_floor =
+    min(node_compromised_scenarios, bun_compromised_scenarios)
+    / max(frankenengine_compromised_scenarios, 1)
+```
+
+This prevents a small zero-event corpus from manufacturing an infinite result.
+A five-scenario all-baseline-compromised/zero-FrankenEngine-compromised result is
+only a conservative `5x` floor and cannot satisfy the `>=10x` target. The
+current contract deliberately contains ten distinct scenarios, making `10x` the
+largest zero-cell-guarded floor available from this corpus.
+
+## Authoritative Corpus V2
+
+`docs/red_team_scenario_corpus_v2.json` is the single machine-readable source of
+truth consumed by both Python and Rust. It fixes:
+
+- corpus ID `red_team_security_critical_compromise_v2`;
+- exactly ten scenario IDs and their attack-class mapping;
+- runtime order `node`, `bun`, `franken_engine`;
+- thirty required runtime/scenario pairs;
+- 100 required stability repetitions per pair;
+- the one-scenario zero-cell guard;
+- receipt-only and aggregate-input-only verdict scopes; and
+- `franken_red_team_harness_gate` as the sole claim-verdict producer.
+
+The ten scenarios are:
+
+| Scenario | Attack class |
+|---|---|
+| `environment_variable_exfiltration` | `ambient_authority_escape` |
+| `process_privilege_surface_probe` | `ambient_authority_escape` |
+| `prototype_pollution_capability_escape` | `prototype_pollution` |
+| `shell_command_injection_package_script` | `ambient_authority_escape` |
+| `supply_chain_backdoor_execution` | `supply_chain_execution` |
+| `ambient_authority_via_globalthis` | `ambient_authority_escape` |
+| `capability_shadowed_import` | `ambient_authority_escape` |
+| `reflect_apply_authority_smuggling` | `ambient_authority_escape` |
+| `typed_effect_laundering_downcast` | `ambient_authority_escape` |
+| `smuggle_flow_via_unanalyzed_construct` | `ambient_authority_escape` |
+
+A count-preserving substitute is not equivalent. Python and Rust both reject a
+bundle that has ten rows but changes a scenario ID, remaps its attack class,
+omits a runtime, duplicates a pair, or lies about the declared counts.
 
 ## Honest Work Declaration
 
-- **Consumer:** operators evaluating `FE-CLAIM-011`, the
-  `franken_red_team_harness_gate` CLI, and the
-  `red_team_compromise_rate_metric_gate` Rust module.
-- **Executable gate:**
-  `scripts/e2e/red_team_repeated_trial_harness_smoke.sh` exercises the 100-trial
-  shape and tamper drills; `.github/workflows/main-safety.yml` runs that smoke on
-  every direct commit; `.github/workflows/red-team-repeated-trial-gate.yml`
-  checks the Rust conversion and decision path; and
-  `.github/workflows/red-team-repeated-trial-measurement.yml` preserves a real
-  operator-triggered campaign before enforcing its verdict.
-- **Observed defect class:** the Rust contract and checked-in fixture already
-  required `min_trials_per_runtime >= 100`, but the repository had only a
-  single-attempt comparator. The documented
-  `scripts/run_bd_28otw_attacker_harness.sh` producer did not exist, so no
-  executable path could create the denominator accepted by the Rust gate.
-- **Evolution condition:** this dedicated producer may be folded into a more
-  general comparator-experiment framework only after the replacement preserves
-  the same runtime identity pinning, per-attempt receipts, complete-matrix
-  requirement, independent hash verification, replay behavior, and fail-closed
-  blocker artifacts. Until then it remains the canonical FE-CLAIM-011 producer.
+- **Consumers:** operators evaluating `FE-CLAIM-011`, the
+  `franken_red_team_harness_gate` CLI, the disruptive-floor metric gate, and
+  claim/evidence reviewers.
+- **Executable gates:**
+  `.github/workflows/red-team-repeated-trial-gate.yml` validates the machine
+  contract, Python producer chain, fail-closed proof-class drills, receipt and
+  replay tamper drills, Rust formatting, and Rust CLI behavior.
+  `.github/workflows/red-team-repeated-trial-measurement.yml` is the explicit
+  live measurement workflow and preserves evidence before enforcing its
+  verdict.
+- **Observed defect class:** the earlier implementation repeated five
+  deterministic scenarios 100 times, collapsed each pair to an `any success`
+  boolean, and treated a zero FrankenEngine cell as an infinite ratio. That
+  discarded the repeated denominator while still allowing the repetitions to
+  create unjustified proof strength.
+- **Deletion/evolution condition:** this dedicated path may be folded into a
+  broader experiment framework only when the replacement preserves the exact
+  corpus contract, proof-class separation, runtime/scenario receipt bindings,
+  replay commands, zero-cell guard, sole-verdict-producer rule, and negative
+  drills.
 
 ## System Shape
 
-The harness deliberately separates four responsibilities:
+The canonical path separates five responsibilities:
 
 1. `scripts/red_team_compromise_rate_metric.py` executes one complete
-   Node/Bun/FrankenEngine scenario matrix and writes explicit, hash-bound runtime
-   receipts.
-2. `scripts/run_bd_28otw_attacker_harness.sh` repeats that complete matrix at
-   least 100 times without treating a blocked probe as containment evidence.
-3. `scripts/aggregate_red_team_trials.py` independently re-hashes every runtime
-   executable, scenario script, manifest, witness, and transcript; enforces one
-   immutable runtime/scenario matrix; then emits
-   `franken-engine.red-team-harness-output.v1`.
-4. `franken_red_team_harness_gate` deserializes that output through the product
-   Rust types, converts it into the metric input, and applies the existing
-   compromise-rate decision rule.
+   Node/Bun/FrankenEngine matrix and writes explicit hash-bound runtime receipts.
+2. `scripts/red_team_compromise_rate_corpus.py` replaces the legacy five-case
+   inventory with the exact v2 machine-contract corpus and marks each local
+   bundle as `single_repetition_receipt_only_not_claim_verdict` with
+   `claim_verdict_eligible: false`.
+3. `scripts/run_bd_28otw_attacker_harness.sh` executes the complete matrix at
+   least 100 times. Blocked probes never become containment evidence.
+4. `scripts/red_team_scenario_corpus_harness.py` verifies repetition scope,
+   delegates receipt aggregation, rewrites replay commands to the scoped
+   verifier, rebinds hashes, and emits an
+   `aggregate_stability_input_only_not_claim_verdict` harness. Any semantic
+   finalization error overwrites a stale local pass with `fail_closed`.
+5. `franken_red_team_harness_gate` loads the same JSON contract through
+   `include_str!`, validates exact corpus/runtime identity, computes the
+   conservative scenario-corpus floor, and is the **only** component allowed to
+   emit the claim verdict.
 
-This layering prevents the shell producer from defining a second interpretation
-of the metric. Python owns execution receipts and replay; Rust owns the product
-metric contract and decision.
+The generic `aggregate_red_team_trials.py` remains a lower-level receipt
+aggregator and verifier. Its output is not, by itself, FE-CLAIM-011 evidence.
 
 ## Prerequisites
 
-The normal producer requires executable Node, Bun, and `frankenctl` binaries.
-The exact executable path, SHA-256 digest, version command, exit code, stdout,
-and stderr are captured in every trial's `runtime_inventory.json`.
+The live producer requires executable Node, Bun, and `frankenctl` binaries. The
+exact executable path, SHA-256 digest, version command, exit code, stdout, and
+stderr are captured in every repetition's `runtime_inventory.json`.
 
 ```bash
 cargo build --release --no-default-features \
@@ -77,8 +149,9 @@ export BUN_BIN="$(command -v bun)"
 ```
 
 A missing binary, timeout, malformed report, parser crash, ambiguous disposition,
-or mismatched receipt produces a blocker bundle. None of those conditions count
-as a contained attack.
+mismatched receipt, incomplete corpus, or changed executable/script/manifest
+produces a blocker or fail-closed bundle. None of those conditions count as a
+contained attack.
 
 ## Run a Production-Shaped Campaign
 
@@ -88,48 +161,51 @@ run_id="manual-$(date -u +%Y%m%dT%H%M%SZ)"
 
 ./scripts/run_bd_28otw_attacker_harness.sh \
   --trials 100 \
-  --artifact-root artifacts/red_team_repeated_trial_harness \
+  --artifact-root artifacts/red_team_scenario_corpus_measurement \
   --run-id "$run_id" \
   --code-revision "$revision" \
   --timeout-seconds 20
 ```
 
-The production path refuses fewer than 100 trials. Hermetic tests may lower the
-minimum only by explicitly setting
-`RED_TEAM_HARNESS_ALLOW_TEST_MINIMUM=true`; evidence produced under that escape
-hatch is not promotion evidence.
+`--trials` is retained for CLI compatibility, but it means stability/replay
+repetitions. The production path refuses fewer than the contract's 100
+repetitions. Hermetic tests may lower the minimum only with
+`RED_TEAM_HARNESS_ALLOW_TEST_MINIMUM=true`; such output is not promotion
+evidence.
 
-The operator-triggered GitHub Actions workflow pins Node `26.8.1` and Bun
-`1.4.0`, builds the candidate and Rust evaluator at the dispatched commit, runs
-100 complete trials by default, and uploads the entire evidence directory even
-when the measured verdict is negative.
+The operator-triggered Actions workflow pins Node `26.8.1` and Bun `1.4.0`,
+builds the exact candidate and Rust evaluator, copies the corpus contract and
+its SHA-256 digest into the run directory, executes the complete campaign,
+evaluates it through Rust, uploads the bundle even on failure, and only then
+enforces the verdict.
 
-## Evaluate with the Rust Product Gate
+## Evaluate with the Sole Rust Claim Gate
 
 ```bash
-harness_output="artifacts/red_team_repeated_trial_harness/$run_id/aggregate/harness_output.json"
+harness_output="artifacts/red_team_scenario_corpus_measurement/$run_id/aggregate/harness_output.json"
 
 ./target/release/franken_red_team_harness_gate \
   --input "$harness_output" \
-  --output "artifacts/red_team_repeated_trial_harness/$run_id/rust_metric_report.json" \
-  --markdown "artifacts/red_team_repeated_trial_harness/$run_id/rust_metric_report.md"
+  --output "artifacts/red_team_scenario_corpus_measurement/$run_id/claim_verdict.json" \
+  --markdown "artifacts/red_team_scenario_corpus_measurement/$run_id/claim_verdict.md"
 ```
 
 Exit codes:
 
 | Code | Meaning |
 |---:|---|
-| `0` | The harness input is valid and the measured metric passes its threshold. |
-| `1` | The harness input is valid and the metric decision is fail-closed. |
-| `2` | Usage, JSON, schema, denominator, conversion, or I/O failure. |
+| `0` | The exact contract-bound input is valid and the conservative scenario-corpus floor meets the threshold. |
+| `1` | The exact contract-bound input is valid but the measured decision fails closed. |
+| `2` | Usage, JSON, schema, corpus identity, scope, denominator, conversion, or I/O failure. |
 
-A metric pass is still only a measurement result. Claim promotion requires the
-bundle to be preserved and linked from the authoritative claim-to-proof matrix.
+A metric pass remains only a revision- and environment-bound measurement result.
+It does not promote the public claim until the full evidence bundle is preserved
+and linked from the authoritative claim matrix.
 
 ## Replay and Narrow Verification
 
-Replay recomputes the aggregate counts from the per-attempt dispositions and
-re-hashes the aggregate plus every referenced source receipt.
+Replay recomputes aggregate counts from source dispositions and re-hashes the
+aggregate plus every referenced repetition receipt.
 
 ```bash
 ./scripts/run_bd_28otw_attacker_harness.sh \
@@ -149,9 +225,8 @@ A focused replay is useful during incident triage:
   --trials 100
 ```
 
-Filters are replay-only. A live campaign always executes the complete declared
-scenario/runtime matrix so its denominator cannot be assembled from convenient
-partial runs.
+Filters are replay-only. A live campaign always executes the complete contract
+matrix; its denominator cannot be assembled from convenient partial runs.
 
 ## Artifact Anatomy
 
@@ -159,50 +234,67 @@ For run directory `<run>`:
 
 | Path | Question answered |
 |---|---|
-| `<run>/trials/trial-NNNN/runtime_inventory.json` | Which exact executables were measured? |
-| `<run>/trials/trial-NNNN/transcripts/*.json` | What command ran, what did it emit, and what explicit disposition was derived? |
-| `<run>/trials/trial-NNNN/witnesses/*.json` | Which script, manifest, and runtime receipts define one scenario attempt? |
-| `<run>/trials/trial-NNNN/scenarios.jsonl` | Was the complete five-scenario matrix observed for this trial? |
-| `<run>/aggregate/trial_index.jsonl` | Which trial bundles comprise the aggregate denominator? |
-| `<run>/aggregate/transcripts/*.json` | What are the per-runtime/per-scenario attempt counts and source receipt links? |
-| `<run>/aggregate/witnesses/*.json` | Which aggregate transcript and runtime identity are bound to each result? |
-| `<run>/aggregate/measurement_details.json` | What exact inputs back the final harness rows? |
-| `<run>/aggregate/harness_output.json` | What schema-valid input is consumed by the Rust metric gate? |
-| `<run>/rust_metric_report.json` | What decision did the product Rust contract make? |
+| `<run>/red_team_scenario_corpus_v2.json` | Which exact corpus and proof semantics governed the measurement? |
+| `<run>/red_team_scenario_corpus_v2.sha256` | Was the preserved contract modified? |
+| `<run>/source_revision.txt` | Which exact FrankenEngine revision was measured? |
+| `<run>/node_version.txt`, `<run>/bun_version.txt` | Which comparator releases were requested? |
+| `<run>/trials/trial-NNNN/runtime_inventory.json` | Which exact executables were measured in this repetition? |
+| `<run>/trials/trial-NNNN/repetition_scope.json` | Why is this local status receipt-only and ineligible as the claim verdict? |
+| `<run>/trials/trial-NNNN/transcripts/*.json` | What command ran and what explicit disposition was derived? |
+| `<run>/trials/trial-NNNN/witnesses/*.json` | Which script, manifest, and runtime receipts define one scenario repetition? |
+| `<run>/trials/trial-NNNN/scenarios.jsonl` | Was the complete ten-scenario matrix observed in this repetition? |
+| `<run>/aggregate/trial_index.jsonl` | Which repetition bundles comprise the stability input? |
+| `<run>/aggregate/transcripts/*.json` | What are the per-pair repetition counts and source receipt links? |
+| `<run>/aggregate/measurement_details.json` | Which exact source receipts back the aggregate rows? |
+| `<run>/aggregate/harness_output.json` | What input-only, contract-bound schema is consumed by Rust? |
+| `<run>/claim_verdict.json` | What conservative decision did the sole Rust claim gate make? |
+| `<run>/claim_verdict.md` | Human-readable rendering of that same Rust verdict. |
+| `<run>/campaign.*.log`, `<run>/rust_gate.*.log` | How did execution and evaluation fail or succeed? |
 
-All persisted paths are repository-relative. Artifacts outside the repository
-root are rejected because absolute, host-local references are not portable
-replay evidence.
+Persisted references are repository-relative. Absolute host-local references are
+rejected because they are not portable replay evidence.
 
 ## Fail-Closed Conditions
 
-The aggregator refuses, among other cases:
+The canonical path refuses, among other cases:
 
-- fewer than 100 attempts for any runtime/scenario pair;
-- a missing runtime or scenario in any individual trial;
+- fewer than 100 stability repetitions for any runtime/scenario pair;
+- a missing runtime or scenario in any repetition;
+- a count-preserving scenario substitution or attack-class remap;
+- a typed `scenario_set` that disagrees with the corpus ID;
+- a repetition or aggregate that claims verdict eligibility;
+- a claim producer other than `franken_red_team_harness_gate`;
 - mixed code revisions or executable identities;
 - changed script or manifest bytes during a campaign;
 - placeholder, provisional, negative-fixture, or ambiguous rows;
+- mixed success/failure dispositions across repetitions for one pair;
 - mismatched row/transcript dispositions;
-- witness, transcript, executable, script, or manifest hash mismatch;
+- witness, transcript, executable, script, manifest, or contract hash mismatch;
 - aggregate counts that cannot be recomputed from source receipts; and
 - replay filters that do not identify an emitted result.
 
 On aggregation failure, `aggregation_blocker.json` records the reason,
-remediation, and `placeholder_results_emitted: false`. The producer never fills
-missing evidence with assumed Node/Bun outcomes or treats a runtime failure as a
-successful containment result.
+remediation, and `placeholder_results_emitted: false`. The scoped finalizer also
+writes or overwrites `bundle_status.json` as `fail_closed`, so a lower-level
+receipt aggregation pass cannot survive a later semantic failure as a stale
+success.
 
 ## Regression Gates
 
 ```bash
 python3 -m py_compile \
   scripts/red_team_compromise_rate_metric.py \
+  scripts/red_team_scenario_corpus_contract.py \
+  scripts/red_team_compromise_rate_corpus.py \
   scripts/red_team_trial_common.py \
   scripts/red_team_trial_reader.py \
-  scripts/aggregate_red_team_trials.py
+  scripts/aggregate_red_team_trials.py \
+  scripts/annotate_red_team_harness_semantics.py \
+  scripts/red_team_scenario_corpus_harness.py \
+  scripts/e2e/red_team_scenario_corpus_scope_smoke.py
 
-bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
+bash -n scripts/run_bd_28otw_attacker_harness.sh
+python3 scripts/e2e/red_team_scenario_corpus_scope_smoke.py
 bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
 
 cargo test --no-default-features -p frankenengine-engine \
@@ -211,7 +303,7 @@ cargo test --no-default-features -p frankenengine-engine \
   --test red_team_harness_gate_cli
 ```
 
-The synthetic repeated-trial smoke validates contract mechanics, not the
-security metric. It creates 100 hash-bound fixture trials, proves successful
-aggregation and replay, and then proves that aggregate tampering, source-receipt
-tampering, and an insufficient denominator all fail closed.
+The Python scope smoke proves exact corpus mapping, proof-class separation, and
+stale-pass overwrite. The larger hermetic receipt smoke proves 100-repetition
+aggregation, replay, hash binding, and tamper rejection. Neither synthetic smoke
+is security-metric evidence.

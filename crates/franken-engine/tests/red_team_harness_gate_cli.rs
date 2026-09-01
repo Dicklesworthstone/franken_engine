@@ -43,6 +43,19 @@ fn fixture() -> Value {
         .expect("valid harness fixture")
 }
 
+fn annotate_canonical_semantics(value: &mut Value) {
+    value["corpus_id"] = Value::from("red_team_security_critical_compromise_v2");
+    value["denominator_semantics"] = Value::from("distinct_security_critical_scenarios");
+    value["repetition_role"] =
+        Value::from("stability_and_replay_not_independent_sampling");
+    value["confidence_interpretation"] =
+        Value::from("receipt_completeness_and_stability_not_population_confidence");
+    value["zero_cell_guard"] = Value::from("one_hypothetical_frankenengine_compromise");
+    value["distinct_scenario_count"] = Value::from(10);
+    value["attack_class_count"] = Value::from(3);
+    value["runtime_scenario_pair_count"] = Value::from(30);
+}
+
 fn ten_scenario_fixture() -> Value {
     let mut value = fixture();
     let additions = value["results"]
@@ -67,6 +80,7 @@ fn ten_scenario_fixture() -> Value {
         .as_array_mut()
         .expect("results array")
         .extend(additions);
+    annotate_canonical_semantics(&mut value);
     value
 }
 
@@ -136,18 +150,25 @@ fn ten_distinct_scenarios_emit_passing_machine_and_markdown_reports() {
 }
 
 #[test]
-fn five_scenarios_cannot_turn_zero_candidate_events_into_infinite_claim() {
-    let test_dir = TestDir::new("five-scenario-guard");
+fn unannotated_legacy_five_scenario_bundle_is_invalid_input() {
+    let test_dir = TestDir::new("legacy-five-scenario");
     let result = run_with_input(&test_dir, &fixture());
-    assert_eq!(result.status.code(), Some(1));
-    assert!(result.stderr.is_empty());
-    let report: Value = serde_json::from_slice(&result.stdout).expect("parse gate output");
-    assert_eq!(report["report"]["scenario_count"], 5);
-    assert_eq!(report["report"]["conservative_reduction_floor_x"], 5);
-    assert_eq!(
-        report["report"]["reason"],
-        "insufficient_distinct_scenario_denominator"
+    assert_eq!(result.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("harness semantic field corpus_id mismatch"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
     );
+}
+
+#[test]
+fn lying_annotation_counts_are_rejected_before_metric_evaluation() {
+    let test_dir = TestDir::new("lying-annotation");
+    let mut value = ten_scenario_fixture();
+    value["distinct_scenario_count"] = Value::from(11);
+    let result = run_with_input(&test_dir, &value);
+    assert_eq!(result.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("annotation mismatch"));
 }
 
 #[test]
@@ -203,7 +224,8 @@ fn two_compromised_candidate_scenarios_fail_guarded_ten_x_floor() {
         .filter(|result| result["runtime"] == "franken_engine")
         .take(2)
     {
-        result["attempts_successful"] = result["attempts_total"].clone();
+        let attempts_total = result["attempts_total"].clone();
+        result["attempts_successful"] = attempts_total;
     }
 
     let output = run_with_input(&test_dir, &value);

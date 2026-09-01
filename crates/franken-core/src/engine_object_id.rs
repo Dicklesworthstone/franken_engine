@@ -5,6 +5,7 @@
 //! version-tagged APIs re-exported from `versioned` and `wire`.
 
 mod compat;
+mod display;
 mod versioned;
 mod wire;
 

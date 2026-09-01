@@ -54,6 +54,8 @@ def scope_fields() -> dict[str, Any]:
         "repetition_role": CONTRACT.repetition_role,
         "confidence_interpretation": CONTRACT.confidence_interpretation,
         "zero_cell_guard": CONTRACT.zero_cell_guard,
+        "zero_cell_guard_count": CONTRACT.zero_cell_guard_count,
+        "corpus_contract_path": "docs/red_team_scenario_corpus_v2.json",
         "verdict_scope": CONTRACT.repetition_verdict_scope,
         "claim_verdict_eligible": False,
         "claim_verdict_producer": CONTRACT.claim_verdict_producer,
@@ -82,7 +84,6 @@ def scope_repetition_bundle(bundle_dir: Path) -> None:
         {
             "schema_version": "franken-engine.red-team-repetition-scope.v1",
             **fields,
-            "corpus_contract_path": "docs/red_team_scenario_corpus_v2.json",
             "distinct_scenario_count": len(CONTRACT.scenarios),
             "attack_class_count": len(CONTRACT.attack_classes),
             "runtime_scenario_pair_count": CONTRACT.runtime_scenario_pair_count,

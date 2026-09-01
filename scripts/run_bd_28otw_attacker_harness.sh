@@ -22,10 +22,12 @@ usage:
   run_bd_28otw_attacker_harness.sh --replay --harness-output PATH
       [--scenario ID|all] [--runtime node|bun|franken_engine|all] [--trials N]
 
-Normal mode executes the receipt-bound Node/Bun/FrankenEngine comparator N times
-for every declared security-critical scenario, then emits and verifies a
-franken-engine.red-team-harness-output.v1 bundle. Production evidence requires
-at least 100 trials per runtime and scenario.
+Normal mode executes the ten-scenario receipt-bound Node/Bun/FrankenEngine
+comparator corpus N times, then emits and verifies a
+franken-engine.red-team-harness-output.v1 bundle. The repetitions establish
+outcome stability and replayability; they are not independent statistical
+samples. Production evidence requires at least 100 stability repetitions per
+runtime and distinct scenario.
 EOF
 }
 
@@ -96,7 +98,7 @@ if [[ ! "$run_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
   exit 2
 fi
 if [[ "$trials" -lt 100 && "${RED_TEAM_HARNESS_ALLOW_TEST_MINIMUM:-false}" != "true" ]]; then
-  printf 'production repeated-trial evidence requires at least 100 trials; got %s\n' "$trials" >&2
+  printf 'production stability evidence requires at least 100 repetitions; got %s\n' "$trials" >&2
   exit 2
 fi
 
@@ -129,13 +131,15 @@ mkdir -p "$trial_root" "$aggregate_dir"
 
 verification_command="./scripts/run_bd_28otw_attacker_harness.sh --trials $trials --artifact-root ${artifact_root#"$root_dir"/} --run-id $run_id --code-revision $code_revision --timeout-seconds $timeout_seconds"
 printf '%s\n' "$verification_command" >"$run_dir/commands.txt"
+printf '%s\n' 'red_team_corpus=red_team_security_critical_compromise_v2' >"$run_dir/corpus.txt"
+printf '%s\n' 'repetition_role=stability_and_replay_not_independent_sampling' >"$run_dir/repetition_semantics.txt"
 
 for ((trial = 1; trial <= trials; trial++)); do
   trial_id="$(printf 'trial-%04d' "$trial")"
   trial_dir="$trial_root/$trial_id"
   rm -rf "$trial_dir"
   set +e
-  python3 scripts/red_team_compromise_rate_metric.py \
+  python3 scripts/red_team_compromise_rate_corpus.py \
     --root "$root_dir" \
     --bundle-dir "$trial_dir" \
     --scenario-dir "$scenario_dir" \
@@ -159,12 +163,13 @@ else:
 PY
 )"
   if [[ "$status" != "pass" && "$status" != "fail" ]]; then
-    printf 'trial %s did not produce measurement evidence (status=%s, exit=%s)\n' \
+    printf 'repetition %s did not produce measurement evidence (status=%s, exit=%s)\n' \
       "$trial_id" "$status" "$comparator_exit" >&2
     exit 1
   fi
   if ((trial == 1 || trial == trials || trial % 10 == 0)); then
-    printf 'completed %s/%s receipt-bound trials (status=%s)\n' "$trial" "$trials" "$status"
+    printf 'completed %s/%s receipt-bound stability repetitions (status=%s)\n' \
+      "$trial" "$trials" "$status"
   fi
 done
 

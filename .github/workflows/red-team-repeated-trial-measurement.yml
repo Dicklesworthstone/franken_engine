@@ -1,10 +1,10 @@
-name: Red-Team Repeated-Trial Measurement
+name: Red-Team Scenario-Corpus Stability Measurement
 
 on:
   workflow_dispatch:
     inputs:
-      trials:
-        description: Complete attempts per runtime and scenario; production minimum is 100
+      stability_repetitions:
+        description: Complete stability/replay repetitions per runtime and distinct scenario; contract floor is 100
         required: true
         default: "100"
         type: string
@@ -18,12 +18,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: red-team-repeated-trial-measurement
+  group: red-team-scenario-corpus-stability-measurement
   cancel-in-progress: false
 
 jobs:
   measure:
-    name: Execute receipt-bound Node/Bun/FrankenEngine campaign
+    name: Execute exact receipt-bound Node/Bun/FrankenEngine corpus
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -32,7 +32,7 @@ jobs:
       CARGO_BUILD_JOBS: 1
       NODE_VERSION: 26.8.1
       BUN_VERSION: 1.4.0
-      MEASUREMENT_ROOT: artifacts/red_team_repeated_trial_measurement
+      MEASUREMENT_ROOT: artifacts/red_team_scenario_corpus_measurement
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: red-team-repeated-trial-measurement
+          shared-key: red-team-scenario-corpus-stability-measurement
 
       - name: Setup pinned Node
         uses: actions/setup-node@v4
@@ -58,22 +58,32 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Record comparator versions
+      - name: Validate corpus contract and record comparator versions
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m py_compile scripts/red_team_scenario_corpus_contract.py
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          from red_team_scenario_corpus_contract import CONTRACT
+          assert len(CONTRACT.scenarios) == 10
+          assert CONTRACT.runtime_scenario_pair_count == 30
+          assert CONTRACT.required_stability_repetitions_per_runtime_scenario == 100
+          print(f"corpus_id={CONTRACT.corpus_id}")
+          PY
           rustc --version --verbose
           cargo --version
           node --version
           bun --version
 
-      - name: Build exact candidate and Rust evaluator
+      - name: Build exact candidate and sole claim evaluator
         shell: bash
         run: >-
           cargo build --release --no-default-features -p frankenengine-engine
           --bin frankenctl --bin franken_red_team_harness_gate
 
-      - name: Execute complete repeated-trial campaign
+      - name: Execute complete scenario-corpus stability campaign
         id: campaign
         shell: bash
         env:
@@ -83,10 +93,17 @@ jobs:
           RED_TEAM_REPEATED_TRIAL_CODE_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          trials='${{ inputs.trials }}'
+          repetitions='${{ inputs.stability_repetitions }}'
           timeout_seconds='${{ inputs.timeout_seconds }}'
-          if [[ ! "$trials" =~ ^[1-9][0-9]*$ ]] || ((trials < 100)); then
-            echo 'trials must be an integer greater than or equal to 100' >&2
+          contract_floor="$(python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          from red_team_scenario_corpus_contract import CONTRACT
+          print(CONTRACT.required_stability_repetitions_per_runtime_scenario)
+          PY
+          )"
+          if [[ ! "$repetitions" =~ ^[1-9][0-9]*$ ]] || ((repetitions < contract_floor)); then
+            printf 'stability_repetitions must be an integer >= contract floor %s\n' "$contract_floor" >&2
             exit 2
           fi
           if [[ ! "$timeout_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -101,9 +118,13 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" >"$output_dir/source_revision.txt"
           printf '%s\n' "$NODE_VERSION" >"$output_dir/node_version.txt"
           printf '%s\n' "$BUN_VERSION" >"$output_dir/bun_version.txt"
+          printf '%s\n' "$repetitions" >"$output_dir/stability_repetitions.txt"
+          cp docs/red_team_scenario_corpus_v2.json "$output_dir/red_team_scenario_corpus_v2.json"
+          sha256sum "$output_dir/red_team_scenario_corpus_v2.json" \
+            >"$output_dir/red_team_scenario_corpus_v2.sha256"
           set +e
           ./scripts/run_bd_28otw_attacker_harness.sh \
-            --trials "$trials" \
+            --trials "$repetitions" \
             --artifact-root "$MEASUREMENT_ROOT" \
             --run-id "$run_id" \
             --code-revision "$GITHUB_SHA" \
@@ -118,7 +139,7 @@ jobs:
           printf 'harness_output=%s\n' "$output_dir/aggregate/harness_output.json" >>"$GITHUB_OUTPUT"
           printf 'campaign_exit=%s\n' "$campaign_exit" >>"$GITHUB_OUTPUT"
 
-      - name: Evaluate aggregate with Rust gate
+      - name: Evaluate aggregate input with sole Rust claim gate
         id: evaluate
         if: always() && steps.campaign.outputs.output_dir != ''
         shell: bash
@@ -130,13 +151,13 @@ jobs:
           if [[ -f "$harness_output" ]]; then
             ./target/release/franken_red_team_harness_gate \
               --input "$harness_output" \
-              --output "$output_dir/rust_metric_report.json" \
-              --markdown "$output_dir/rust_metric_report.md" \
+              --output "$output_dir/claim_verdict.json" \
+              --markdown "$output_dir/claim_verdict.md" \
               >"$output_dir/rust_gate.stdout.log" \
               2>"$output_dir/rust_gate.stderr.log"
             gate_exit=$?
           else
-            printf '%s\n' 'harness output missing; Rust evaluation skipped fail-closed' \
+            printf '%s\n' 'harness output missing; Rust claim evaluation skipped fail-closed' \
               >"$output_dir/rust_gate.stderr.log"
             gate_exit=2
           fi
@@ -144,11 +165,11 @@ jobs:
           printf '%s\n' "$gate_exit" >"$output_dir/rust_gate.exit_code"
           printf 'gate_exit=%s\n' "$gate_exit" >>"$GITHUB_OUTPUT"
 
-      - name: Upload full evidence bundle
+      - name: Upload full input and verdict evidence bundle
         if: always() && steps.campaign.outputs.output_dir != ''
         uses: actions/upload-artifact@v4
         with:
-          name: red-team-repeated-trial-${{ github.sha }}-${{ github.run_id }}
+          name: red-team-scenario-corpus-${{ github.sha }}-${{ github.run_id }}
           path: ${{ steps.campaign.outputs.output_dir }}
           if-no-files-found: error
           retention-days: 90
@@ -168,4 +189,4 @@ jobs:
               "$campaign_exit" "$gate_exit" >&2
             exit 1
           fi
-          printf '%s\n' 'receipt-bound repeated-trial measurement passed'
+          printf '%s\n' 'receipt-bound scenario-corpus stability measurement and claim verdict passed'

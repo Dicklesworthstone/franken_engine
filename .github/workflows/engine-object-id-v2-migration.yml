@@ -1,0 +1,129 @@
+name: EngineObjectId V2 Migration Gate
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/engine_object_id_derivation_contract_v2.json
+      - docs/ENGINE_OBJECT_ID_V2_MIGRATION.md
+      - crates/franken-engine/src/engine_object_id.rs
+      - crates/franken-core/src/engine_object_id.rs
+      - crates/franken-engine/src/bin/franken_engine_object_id_migration.rs
+      - crates/franken-engine/tests/engine_object_id_migration_cli.rs
+      - .github/workflows/engine-object-id-v2-migration.yml
+  pull_request:
+    paths:
+      - docs/engine_object_id_derivation_contract_v2.json
+      - docs/ENGINE_OBJECT_ID_V2_MIGRATION.md
+      - crates/franken-engine/src/engine_object_id.rs
+      - crates/franken-core/src/engine_object_id.rs
+      - crates/franken-engine/src/bin/franken_engine_object_id_migration.rs
+      - crates/franken-engine/tests/engine_object_id_migration_cli.rs
+      - .github/workflows/engine-object-id-v2-migration.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-object-id-v2-migration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Versioned derivation contract and vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate machine contract and independent vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import struct
+
+          contract = json.loads(pathlib.Path("docs/engine_object_id_derivation_contract_v2.json").read_text())
+          assert contract["schema_version"] == "franken-engine.engine-object-id-derivation-contract.v2"
+          assert contract["current_default"] == "legacy_v1"
+          assert contract["target_default"] == "sha256_v2"
+          assert contract["migration_state"] == "v2_tooling_observed_default_flip_blocked_on_persisted_consumer_versioning"
+          assert contract["legacy_v1"]["security_posture"] == "not collision-resistant enough for new security-critical identities"
+          assert contract["sha256_v2"]["object_id_algorithm"] == "sha256"
+          assert contract["operator_binary"] == "franken_engine_object_id_migration"
+
+          def lp(value: bytes) -> bytes:
+              return struct.pack(">I", len(value)) + value
+
+          definition = b'{"type":"Policy"}'
+          canonical = b'{"allow":true}'
+          schema = hashlib.sha256(
+              lp(b"FrankenEngine.SchemaId.sha256.v2") + lp(definition)
+          ).digest()
+          object_id = hashlib.sha256(
+              lp(b"FrankenEngine.EngineObjectId.sha256.v2")
+              + lp(b"FrankenEngine.PolicyObject.v1")
+              + lp(b"zone-a")
+              + schema
+              + lp(canonical)
+          ).hexdigest()
+          assert schema.hex() == "95dd1a7336da89398ea01216baed44a5170dd518af89379402227a3b12d1922a"
+          assert object_id == "cdc31ac7ad5b4d68d7cbdae29179b3230608bd13afdfc641f2e1a4273913b545"
+          print("engine_object_id_v2_contract=pass")
+          PY
+
+      - name: Prove current default has not silently flipped
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'Self(deterministic_hash(definition))' crates/franken-engine/src/engine_object_id.rs
+          grep -q 'Self(deterministic_hash(definition))' crates/franken-core/src/engine_object_id.rs
+          grep -q 'current_default.*legacy_v1' docs/engine_object_id_derivation_contract_v2.json
+
+  rust:
+    name: Migration binary and black-box protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt,clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-v2-migration
+
+      - name: Check formatting
+        run: |
+          rustfmt --check --edition 2024 \
+            crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+            crates/franken-engine/tests/engine_object_id_migration_cli.rs
+
+      - name: Test derivation implementation
+        run: >-
+          cargo test --no-default-features -p frankenengine-engine
+          --bin franken_engine_object_id_migration
+
+      - name: Test black-box protocol
+        run: >-
+          cargo test --no-default-features -p frankenengine-engine
+          --test engine_object_id_migration_cli
+
+      - name: Deny warnings in migration binary
+        run: >-
+          cargo clippy --no-default-features -p frankenengine-engine
+          --bin franken_engine_object_id_migration -- -D warnings

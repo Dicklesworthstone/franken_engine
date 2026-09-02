@@ -36340,13 +36340,22 @@ impl InterpreterCore {
     }
 
     fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
-        self.register_module_export_exact(JsString::from(name), value)
+        self.register_module_export_exact_labeled(JsString::from(name), value, Label::Public)
     }
 
     fn register_module_export_exact(
         &mut self,
         name: JsString,
         value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.register_module_export_exact_labeled(name, value, Label::Public)
+    }
+
+    fn register_module_export_exact_labeled(
+        &mut self,
+        name: JsString,
+        value: Value,
+        label: Label,
     ) -> Result<(), InterpreterError> {
         let diagnostic_name = name.to_string();
         let Some(specifier) = self.current_module_specifier.clone() else {
@@ -36366,7 +36375,58 @@ impl InterpreterCore {
             .map(|previous| Self::estimate_js_string_map_entry_bytes(&name, previous))
             .unwrap_or(0);
         let next_export_bytes = Self::estimate_js_string_map_entry_bytes(&name, &value);
-        self.apply_memory_component_delta(previous_export_bytes, next_export_bytes)?;
+        let pending_cells = record
+            .pending_import_bindings
+            .get(&name)
+            .into_iter()
+            .flatten()
+            .filter_map(Weak::upgrade)
+            .fold(Vec::new(), |mut cells, cell| {
+                if !cells.iter().any(|seen| Rc::ptr_eq(seen, &cell)) {
+                    cells.push(cell);
+                }
+                cells
+            });
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let mut previous_cell_states = Vec::with_capacity(pending_cells.len());
+        for cell in &pending_cells {
+            let old_state = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "cyclic module import binding is already mutably borrowed".to_string(),
+                })?
+                .clone();
+            previous_cell_states.push((Rc::clone(cell), old_state));
+            let mut state = cell
+                .try_borrow_mut()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "cyclic module import binding is already borrowed".to_string(),
+                })?;
+            state.value = value.clone();
+            state.label = label.clone();
+            state.initialized = true;
+        }
+        if let Err(error) = self.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        ) {
+            for (cell, previous) in &previous_cell_states {
+                *cell.borrow_mut() = previous.clone();
+            }
+            return Err(error);
+        }
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_export_bytes, next_export_bytes)
+        {
+            for (cell, previous) in &previous_cell_states {
+                *cell.borrow_mut() = previous.clone();
+            }
+            self.sync_estimated_memory_bytes()?;
+            return Err(error);
+        }
         let previous_export = {
             let record = self
                 .module_state
@@ -36380,7 +36440,15 @@ impl InterpreterCore {
             RuntimePropertyKey::String(name.clone()),
             value,
         ) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.module_state
+                    .modules
+                    .get_mut(&specifier)
+                    .expect("module export record existed after namespace update")
+                    .pending_import_bindings
+                    .remove(&name);
+                Ok(())
+            }
             Err(error) => {
                 let record = self
                     .module_state
@@ -36399,9 +36467,36 @@ impl InterpreterCore {
                     .estimated_memory_bytes
                     .saturating_sub(next_export_bytes)
                     .saturating_add(previous_export_bytes);
+                for (cell, previous) in &previous_cell_states {
+                    *cell.borrow_mut() = previous.clone();
+                }
+                self.sync_estimated_memory_bytes()?;
                 Err(error)
             }
         }
+    }
+
+    fn cyclic_module_import_target(
+        &self,
+        namespace_object: ObjectId,
+        property_key: &RuntimePropertyKey,
+        value: &Value,
+    ) -> Option<(String, JsString)> {
+        if !matches!(value, Value::Undefined) {
+            return None;
+        }
+        let RuntimePropertyKey::String(export_name) = property_key else {
+            return None;
+        };
+        self.module_state
+            .modules
+            .iter()
+            .find(|(_, record)| {
+                record.namespace_object == namespace_object
+                    && matches!(record.status, ModuleRuntimeStatus::Evaluating)
+                    && !record.exports.contains_key(export_name)
+            })
+            .map(|(specifier, _)| (specifier.clone(), export_name.clone()))
     }
 
     fn complete_return(
@@ -41561,7 +41656,12 @@ impl InterpreterCore {
                         .map(ToString::to_string)
                         .unwrap_or_else(|| format!("__export_{name_pool_index}"));
                     let value = self.read_reg(src)?;
-                    self.register_module_export(&name, value)?;
+                    let label = self.get_register_label(src)?.clone();
+                    self.register_module_export_exact_labeled(
+                        JsString::from(name),
+                        value,
+                        label,
+                    )?;
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -41814,10 +41914,21 @@ impl InterpreterCore {
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
                     }
+                    let pending_cyclic_import = object_id.and_then(|namespace_object| {
+                        self.cyclic_module_import_target(namespace_object, &property_key, &prop)
+                    });
                     let prior_dst_label = self.get_register_label(dst)?;
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
                     self.write_reg_with_label(dst, prop, result_label)?;
+                    self.pending_cyclic_import_binding = pending_cyclic_import.map(
+                        |(module_specifier, export_name)| PendingCyclicImportBinding {
+                            source_register: dst,
+                            expected_init_ip: self.ip.saturating_add(1),
+                            module_specifier,
+                            export_name,
+                        },
+                    );
                     self.ip += 1;
                 }
                 Ir3Instruction::SetProperty { obj, key, val } => {
@@ -43731,6 +43842,26 @@ impl InterpreterCore {
                             }
                         }
                         return Err(err);
+                    }
+                    if let Some(pending) = self.pending_cyclic_import_binding.take()
+                        && pending.source_register == src
+                        && pending.expected_init_ip == self.ip
+                        && let Some((binding, _)) = previous.as_ref()
+                        && let Some(record) = self
+                            .module_state
+                            .modules
+                            .get_mut(&pending.module_specifier)
+                    {
+                        let watchers = record
+                            .pending_import_bindings
+                            .entry(pending.export_name)
+                            .or_default();
+                        if !watchers
+                            .iter()
+                            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(&binding.state))
+                        {
+                            watchers.push(Rc::downgrade(&binding.state));
+                        }
                     }
                     self.ip += 1;
                 }

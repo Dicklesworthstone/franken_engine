@@ -39,7 +39,7 @@ jobs:
         run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
 
   runtime-source-snapshot:
-    if: github.event.head_commit.message == 'chore(runtime): obtain exact source snapshot for Promise repairs'
+    if: contains(github.event.head_commit.message, 'source snapshot')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

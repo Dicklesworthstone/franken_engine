@@ -37,3 +37,27 @@ jobs:
 
       - name: Execute repeated-trial aggregation and tamper drills
         run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+
+  runtime-source-snapshot:
+    if: github.event.head_commit.message == 'chore(runtime): obtain exact source snapshot for Promise repairs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve exact runtime sources for targeted repair
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > "$RUNNER_TEMP/source-revision.txt"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/runtime-source.tar.gz" HEAD \
+            AGENTS.md README.md CHANGELOG.md Cargo.toml Cargo.lock .cargo .beads \
+            crates/franken-core crates/franken-engine/Cargo.toml \
+            crates/franken-engine/src crates/franken-engine/tests \
+            .github/workflows docs scripts/agent_bead_ops.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-source-snapshot
+          path: |
+            ${{ runner.temp }}/source-revision.txt
+            ${{ runner.temp }}/runtime-source.tar.gz
+          retention-days: 3
+          if-no-files-found: error

@@ -51,17 +51,19 @@ jobs:
         run: |
           python3 scripts/check_engine_object_id_derivation_versioning.py \
             --output /tmp/engine-object-id-consumer-report.json
-          python3 - <<'PY'
+          python3 - /tmp/engine-object-id-consumer-report.json <<'PY'
           import json
-          report = json.load(open('/tmp/engine-object-id-consumer-report.json'))
+          import sys
+          with open(sys.argv[1], encoding='utf-8') as source:
+              report = json.load(source)
           assert report['decision'] == 'allow_current_posture'
           assert report['current_default'] == 'legacy_v1'
           assert report['default_flip_allowed'] is False
-          assert report['blocking_consumer_count'] > 0
+          assert report['blocking_consumer_type_count'] > 0
           assert report['violations'] == []
           print(
               'engine_object_id_versioning_guard=pass '
-              f"blocking_consumers={report['blocking_consumer_count']}"
+              f"blocking_consumers={report['blocking_consumer_type_count']}"
           )
           PY
 

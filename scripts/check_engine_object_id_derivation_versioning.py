@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -123,10 +125,37 @@ def relative(path: Path, root: Path = ROOT) -> str:
 
 
 def iter_rust_files(scan_roots: Iterable[Path]) -> Iterable[Path]:
-    for scan_root in scan_roots:
+    roots = tuple(scan_roots)
+    if not roots:
+        raise GuardError("cannot inventory persisted consumers: no source roots")
+
+    def traversal_failed(error: OSError) -> None:
+        raise GuardError(f"cannot enumerate Rust source tree: {error}") from error
+
+    files: set[Path] = set()
+    for scan_root in roots:
+        scan_root = scan_root.resolve()
         if not scan_root.is_dir():
-            continue
-        yield from sorted(path for path in scan_root.rglob("*.rs") if path.is_file())
+            raise GuardError(f"required source root is not a directory: {scan_root}")
+        root_files: list[Path] = []
+        for directory, subdirectories, names in os.walk(
+            scan_root, onerror=traversal_failed, followlinks=False
+        ):
+            for name in subdirectories:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise GuardError(f"cannot silently skip symlinked source directory: {path}")
+            for name in names:
+                if not name.endswith(".rs"):
+                    continue
+                path = Path(directory) / name
+                if not stat.S_ISREG(path.stat().st_mode):
+                    raise GuardError(f"Rust source is not a regular file: {path}")
+                root_files.append(path)
+        if not root_files:
+            raise GuardError(f"required source root contains no Rust source files: {scan_root}")
+        files.update(root_files)
+    yield from sorted(files)
 
 
 def mask_rust_noncode(text: str) -> str:
@@ -449,9 +478,11 @@ def build_report(
     core_source: Path = CORE_SOURCE,
 ) -> dict[str, object]:
     contract = load_contract(contract_path)
+    scan_roots = tuple(scan_roots)
+    source_files = tuple(iter_rust_files(scan_roots))
     findings = [
         finding
-        for path in iter_rust_files(scan_roots)
+        for path in source_files
         for finding in classify_file(path, root)
     ]
     blockers = [finding for finding in findings if finding.blocks_default_flip]
@@ -529,6 +560,8 @@ def build_report(
     return {
         "schema_version": REPORT_SCHEMA,
         "contract_path": relative(contract_path, root),
+        "scan_roots": sorted({relative(path, root) for path in scan_roots}),
+        "scanned_source_file_count": len(source_files),
         "current_default": current_default,
         "target_default": target_default,
         "migration_state": migration_state,

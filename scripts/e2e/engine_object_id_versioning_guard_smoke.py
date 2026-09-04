@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
+from typing import Iterable
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -62,14 +67,52 @@ impl PersistedEngineObjectId {{
 '''
 
 
-def build(root: Path) -> dict[str, object]:
+def build(root: Path, scan_roots: Iterable[Path] | None = None) -> dict[str, object]:
     return guard.build_report(
         root=root,
         contract_path=root / "docs/engine_object_id_derivation_contract_v2.json",
-        scan_roots=(root / "crates/franken-engine/src", root / "crates/franken-core/src"),
+        scan_roots=(
+            (root / "crates/franken-engine/src", root / "crates/franken-core/src")
+            if scan_roots is None else scan_roots
+        ),
         engine_source=root / "crates/franken-engine/src/engine_object_id.rs",
         core_source=root / "crates/franken-core/src/engine_object_id.rs",
     )
+
+
+def assert_workflow_reader(root: Path, report: dict[str, object], accepted: bool) -> None:
+    workflow = ROOT / ".github/workflows/engine-object-id-versioning-guard.yml"
+    match = re.search(
+        r"^          python3 - [^\n]+ <<'PY'\n(.*?)^          PY$",
+        workflow.read_text(encoding="utf-8"),
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, "workflow report reader was not found"
+    report_path = root / "workflow-report.json"
+    guard.write_report(report_path, report)
+    completed = subprocess.run(
+        [sys.executable, "-", str(report_path)],
+        input=textwrap.dedent(match.group(1)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert (completed.returncode == 0) is accepted, (
+        completed.returncode, completed.stdout, completed.stderr
+    )
+    if accepted:
+        assert f"blocking_consumers={report['blocking_consumer_type_count']}" in completed.stdout
+    else:
+        assert "engine_object_id_versioning_guard=pass" not in completed.stdout
+
+
+def assert_scan_refused(root: Path, scan_roots: Iterable[Path], reason: str) -> None:
+    try:
+        build(root, scan_roots)
+    except guard.GuardError as error:
+        assert reason in str(error), error
+    else:
+        raise AssertionError(f"incomplete source scan was accepted: {reason}")
 
 
 def main() -> int:
@@ -80,6 +123,24 @@ def main() -> int:
             write(root / f"crates/{crate}/src/engine_object_id.rs", wrapper())
             write(root / f"crates/{crate}/src/engine_object_id/versioned.rs", versioned("LegacyV1"))
             write(root / f"crates/{crate}/src/engine_object_id/wire.rs", wire())
+
+        engine_root = root / "crates/franken-engine/src"
+        core_root = root / "crates/franken-core/src"
+        missing_root = root / "crates/franken-extension-host/src"
+        empty_root = root / "empty-source-tree"
+        empty_root.mkdir()
+        assert_scan_refused(root, (), "no source roots")
+        assert_scan_refused(root, (missing_root,), "not a directory")
+        assert_scan_refused(root, (engine_root, core_root, missing_root), "not a directory")
+        assert_scan_refused(root, (engine_root / "engine_object_id.rs",), "not a directory")
+        assert_scan_refused(root, (engine_root, core_root, empty_root), "no Rust source files")
+        with patch.object(guard.os, "scandir", side_effect=PermissionError("denied source tree")):
+            assert_scan_refused(root, (engine_root,), "cannot enumerate Rust source tree")
+
+        symbolic_root = root / "symlink-source-tree"
+        symbolic_root.mkdir()
+        (symbolic_root / "linked").symlink_to(engine_root, target_is_directory=True)
+        assert_scan_refused(root, (symbolic_root,), "symlinked source directory")
 
         write(
             root / "crates/franken-engine/src/comment_only.rs",
@@ -176,6 +237,14 @@ impl Serialize for Manual {
         assert consumers["GoodWire"]["classification"] == "version_declared"
         assert consumers["GoodSigned"]["classification"] == "version_declared"
         assert report["default_flip_allowed"] is False
+        assert report["blocking_consumer_type_count"] == len(blockers)
+        assert report["scanned_source_file_count"] == 11
+        assert report["scan_roots"] == [
+            "crates/franken-core/src", "crates/franken-engine/src"
+        ]
+        assert report == build(root, (path for path in (core_root, engine_root)))
+        assert report == build(root, (engine_root, core_root, engine_root))
+        assert_workflow_reader(root, report, accepted=True)
 
         write(
             root / "crates/franken-engine/src/wire.rs",
@@ -208,6 +277,7 @@ struct Manual { schema_id: VersionedSchemaId }
         ready = build(root)
         assert ready["blocking_consumer_type_count"] == 0, ready
         assert ready["default_flip_allowed"] is True, ready
+        assert_workflow_reader(root, ready, accepted=False)
 
         core_versioned = root / "crates/franken-core/src/engine_object_id/versioned.rs"
         write(core_versioned, versioned("LegacyV1", "const DRIFT: u8 = 1;"))

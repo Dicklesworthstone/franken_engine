@@ -515,32 +515,48 @@ mod tests {
         ];
         let checkpoint = checkpoint();
         let freshness = freshness();
-        let context = VersionedDelegationVerificationContext::with_authorized_root(
+        let mut context = VersionedDelegationVerificationContext::with_authorized_root(
             root.verification_key(),
         )
         .with_checkpoint_id(checkpoint.checkpoint_id)
-        .with_revocation_head_hash(freshness.revocation_head_hash);
-        (
-            VersionedDelegationChain::new(links),
-            root,
-            leaf_delegate,
-            context,
-        )
-    }
-
-    #[test]
-    fn valid_v2_chain_verifies_end_to_end() {
-        let (chain, _, leaf_delegate, context) = fixture();
-        let proof = chain
+        .with_revocation_head_hash(freshness.revocation_head_hash)
+        .with_required_zone("zone-a");
+        context.current_tick = 500;
+        context.verifier_checkpoint_seq = checkpoint.min_checkpoint_seq;
+        context.verifier_revocation_seq = freshness.min_revocation_seq;
+        let chain = VersionedDelegationChain::new(links);
+        chain
             .verify(
                 RuntimeCapability::VmDispatch,
                 &leaf_delegate,
                 &context,
                 &NoVersionedRevocationOracle,
             )
-            .expect("chain verification");
-        assert_eq!(proof.chain_summary.len(), 3);
-        assert_eq!(proof.verified_epoch, SecurityEpoch::GENESIS);
+            .expect("fixture must authorize before testing an isolated rejection");
+        (chain, root, leaf_delegate, context)
+    }
+
+    #[test]
+    fn valid_v2_chain_verifies_end_to_end() {
+        let (chain, _, leaf_delegate, mut context) = fixture();
+        for tick in [100, 500, 1_000] {
+            context.current_tick = tick;
+            let proof = chain
+                .verify(
+                    RuntimeCapability::VmDispatch,
+                    &leaf_delegate,
+                    &context,
+                    &NoVersionedRevocationOracle,
+                )
+                .expect("chain verification at both inclusive time boundaries and inside");
+            assert_eq!(proof.chain_summary.len(), 3);
+            assert_eq!(proof.verified_epoch, SecurityEpoch::GENESIS);
+            assert_eq!(proof.verified_at_tick, tick);
+            assert_eq!(proof.leaf_delegate, leaf_delegate);
+            for (summary, token) in proof.chain_summary.iter().zip(&chain.links) {
+                assert_eq!(summary.token_id, token.jti);
+            }
+        }
     }
 
     #[test]
@@ -552,14 +568,15 @@ mod tests {
             .expect("checkpoint")
             .checkpoint_id
             .derivation_version = ObjectIdDerivationVersion::LegacyV1;
-        assert!(chain
-            .verify(
+        assert!(matches!(
+            chain.verify(
                 RuntimeCapability::VmDispatch,
                 &leaf_delegate,
                 &context,
                 &NoVersionedRevocationOracle,
-            )
-            .is_err());
+            ),
+            Err(VersionedChainError::TokenIdentityFailed { index: 0, .. })
+        ));
     }
 
     #[test]
@@ -589,17 +606,28 @@ mod tests {
     #[test]
     fn attenuation_amplification_is_rejected() {
         let (mut chain, _, leaf_delegate, context) = fixture();
+        chain.links[2] = token(
+            &key(3),
+            leaf_delegate.clone(),
+            &[RuntimeCapability::VmDispatch, RuntimeCapability::NetworkEgress],
+        );
         chain.links[2]
-            .capabilities
-            .insert(RuntimeCapability::NetworkEgress);
-        assert!(chain
-            .verify(
+            .verify_signature()
+            .expect("amplifying child has a valid identity and issuer signature");
+        assert_eq!(
+            chain.verify(
                 RuntimeCapability::VmDispatch,
                 &leaf_delegate,
                 &context,
                 &NoVersionedRevocationOracle,
-            )
-            .is_err());
+            ),
+            Err(VersionedChainError::AttenuationViolation {
+                index: 2,
+                parent_capability_count: 1,
+                child_capability_count: 2,
+                amplified_capabilities: BTreeSet::from([RuntimeCapability::NetworkEgress]),
+            })
+        );
     }
 
     #[test]
@@ -622,6 +650,122 @@ mod tests {
             ),
             Err(VersionedChainError::TokenIdentityFailed { index: 0, .. })
         ));
+    }
+
+    #[test]
+    fn time_and_freshness_failures_keep_their_exact_causes() {
+        let (chain, _, leaf_delegate, mut context) = fixture();
+        let cases = [
+            (
+                99,
+                5,
+                3,
+                VersionedTokenError::NotYetValid {
+                    current_tick: 99,
+                    not_before: 100,
+                },
+            ),
+            (
+                1_001,
+                5,
+                3,
+                VersionedTokenError::Expired {
+                    current_tick: 1_001,
+                    expiry: 1_000,
+                },
+            ),
+            (
+                500,
+                4,
+                3,
+                VersionedTokenError::CheckpointBindingFailed {
+                    required_seq: 5,
+                    verifier_seq: 4,
+                },
+            ),
+            (
+                500,
+                5,
+                2,
+                VersionedTokenError::RevocationFreshnessStale {
+                    required_seq: 3,
+                    verifier_seq: 2,
+                },
+            ),
+        ];
+        for (tick, checkpoint_seq, revocation_seq, error) in cases {
+            context.current_tick = tick;
+            context.verifier_checkpoint_seq = checkpoint_seq;
+            context.verifier_revocation_seq = revocation_seq;
+            assert_eq!(
+                chain.verify(
+                    RuntimeCapability::VmDispatch,
+                    &leaf_delegate,
+                    &context,
+                    &NoVersionedRevocationOracle,
+                ),
+                Err(VersionedChainError::TokenVerificationFailed { index: 0, error })
+            );
+        }
+    }
+
+    #[test]
+    fn accepted_checkpoint_cannot_change_only_its_algorithm_tag() {
+        let (chain, _, leaf_delegate, mut context) = fixture();
+        let checkpoint_id = checkpoint().checkpoint_id;
+        let mut wrong_algorithm = checkpoint_id.clone();
+        wrong_algorithm.derivation_version = ObjectIdDerivationVersion::LegacyV1;
+        context.accepted_checkpoint_ids = BTreeSet::from([wrong_algorithm]);
+        assert_eq!(
+            chain.verify(
+                RuntimeCapability::VmDispatch,
+                &leaf_delegate,
+                &context,
+                &NoVersionedRevocationOracle,
+            ),
+            Err(VersionedChainError::TokenVerificationFailed {
+                index: 0,
+                error: VersionedTokenError::CheckpointIdentityMismatch { checkpoint_id },
+            })
+        );
+    }
+
+    #[test]
+    fn leaf_cannot_recover_an_attenuated_capability() {
+        let (chain, _, leaf_delegate, context) = fixture();
+        assert_eq!(
+            chain.verify(
+                RuntimeCapability::NetworkEgress,
+                &leaf_delegate,
+                &context,
+                &NoVersionedRevocationOracle,
+            ),
+            Err(VersionedChainError::MissingCapabilityAtLeaf {
+                required: RuntimeCapability::NetworkEgress,
+                leaf_capabilities: BTreeSet::from([RuntimeCapability::VmDispatch]),
+            })
+        );
+    }
+
+    #[test]
+    fn leaf_presenter_must_match_the_signed_audience() {
+        let (chain, _, _, context) = fixture();
+        let wrong_presenter = principal(100);
+        assert_eq!(
+            chain.verify(
+                RuntimeCapability::VmDispatch,
+                &wrong_presenter,
+                &context,
+                &NoVersionedRevocationOracle,
+            ),
+            Err(VersionedChainError::TokenVerificationFailed {
+                index: 2,
+                error: VersionedTokenError::AudienceRejected {
+                    presenter: wrong_presenter,
+                    audience_size: 1,
+                },
+            })
+        );
     }
 
     #[test]

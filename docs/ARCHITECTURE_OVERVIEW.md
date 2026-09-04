@@ -201,3 +201,78 @@ executed path, semantic parity, countermetrics, and reproducible measurement.
 For implementation details, follow the live call graph and bind conclusions to
 the exact revision. For product truth, use the claim matrix and execution truth
 ledger rather than architecture prose alone.
+
+## Agent-Driven Implementation Plan
+
+Treat one work item as a change to an observable behavior, not as a new module,
+report, or gate. Its existing bead should identify the public entrypoint, the
+smallest reproducer, the responsible implementation seam, the required
+capability/IFC/replay invariants, and the verification command. Keep this context
+in the existing bead and route manifest rather than a second task database.
+
+```text
+revision + live bead state
+        -> change route + public behavior
+        -> dependency/ownership admission
+        -> implementation at the responsible seam
+        -> revision-bound execution and invariant checks
+        -> evidence-preserving bead/claim transition
+```
+
+This is an implementation strategy, not a claim that an autonomous scheduler or
+new runtime tier has shipped. Use the existing change router before searching
+hundreds of unrelated modules:
+
+```bash
+python3 scripts/agent_route.py --check
+python3 scripts/agent_route.py --path crates/franken-engine/src/lowering_pipeline.rs --format json --strict
+br ready --json
+git log -10 --oneline
+```
+
+The route output identifies anchor files, governing documents, focused checks,
+claim boundaries, and downstream artifacts. It is a navigation aid, not proof
+that those paths executed. Verify each selected command against the current
+source and obey the heavy-Cargo execution policy in `AGENTS.md`.
+
+### Dependency-First Recovery Order
+
+1. Establish a buildable, revision-pinned baseline for the affected target.
+   Resolve blocking correctness and security work before optimizations. When a
+   bead says implementation already landed, inspect that diff and obtain the
+   missing evidence instead of creating a duplicate implementation. Never force
+   past tracker blockers or replace another agent's ownership to manufacture
+   ready work.
+2. Close one executable language or integration gap at a time. Use the existing
+   differential oracle and conformance frontier to find candidates, then verify
+   actual assertions and the intended entrypoint. Execution coverage is not a
+   conformance pass-rate. Direct evaluation, orchestrated execution, and the
+   extracted core must not borrow one another's evidence without a tested bridge.
+3. Optimize only after semantic and policy invariants pass. Separate parsing,
+   lowering, setup, execution, and evidence costs; compare equivalent lifecycles
+   and retained outputs. A fast path that drops labels, authority checks, or
+   required replay records is not a valid performance improvement.
+4. Promote integration or deployment claims only when their real producer,
+   consumer, and verification path execute together. A new record type or an
+   offline validator cannot substitute for a missing runtime connection.
+
+### Agent State Is Part of the Evidence Boundary
+
+An observed precondition is not a reservation; an issued command is not a
+verified postcondition; a successful update is not a completed export. The bead
+operation adapter must preserve those distinctions through failure, just as the
+runtime distinguishes execution, evidence production, and publication.
+
+Use the existing `br` claim guard rather than unconditional reassignment. Keep
+request identity, source revision, before/after observations, command outcomes,
+and partial-failure state in the existing operation receipt. The receipt
+contract and recovery boundaries are documented in [agent/README.md](agent/README.md).
+These receipts do not establish distributed ownership across independent Git
+checkouts, replace Agent Mail reservations, or satisfy engine correctness gates.
+
+After a scoped implementation and its regression pass, commit only the intended
+paths. Close the owning bead only after its actual acceptance criteria and any
+required independent verification are met; export that transition through `br`.
+Retain failures alongside successful reruns. Extend the existing route or
+frontier entry when knowledge is reusable instead of adding another registry or
+an unexercised layer of planning code.

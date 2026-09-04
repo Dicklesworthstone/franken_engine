@@ -26,8 +26,9 @@ The migration therefore uses an explicit two-version contract:
 
 - `legacy_v1` exists only for artifacts whose persisted schema declares that
   version;
-- `sha256_v2` is the cryptographic derivation for new identities once every
-  persisted consumer can carry the version; and
+- `sha256_v2` is available through explicitly versioned APIs for consumers
+  whose persisted schemas and verification paths carry the version; the
+  unversioned library default remains blocked on the remaining consumers; and
 - verification never falls back from one version to the other.
 
 ## Executable migration tool
@@ -146,20 +147,79 @@ The repository contains many serialized consumers of `EngineObjectId` and
 question without inference: **which derivation version produced this raw
 32-byte value?**
 
-Before changing the library default:
+Work in dependency order rather than treating new modules as migration completion:
 
-1. Generate a complete source/persistence inventory in both `franken-engine`
-   and `franken-core`.
-2. Classify each use as ephemeral, persisted, signed, hash-preimage-bearing, or
-   replay-visible.
-3. Add `derivation_version` to every persisted consumer, or document why the
-   value cannot outlive a process.
-4. Add explicit legacy replay/migration tests for retained evidence and
-   checkpoints.
-5. Implement the same v2 functions in both library copies and prove parity.
-6. Change ordinary derivation and verification to v2 only.
-7. Expose legacy verification through explicitly named APIs, never a fallback.
-8. Regenerate golden vectors and evidence at one exact revision.
+1. Preserve and test the existing v2 derivation and persisted-wire APIs in
+   `engine_object_id/versioned.rs` and `engine_object_id/wire.rs` in both
+   library copies. Source parity is necessary, not a substitute for execution.
+2. Run the existing consumer guard across `franken-engine`, `franken-core`,
+   and `franken-extension-host`. Investigate serialized, signed,
+   hash-preimage-bearing, and replay-visible uses, including aliases and
+   wrappers that a lexical scan may miss.
+3. Migrate one persisted consumer and its real read/write call sites at a time.
+   Carry the algorithm tag in the schema and bind it into signed or hashed
+   preimages. Keep legacy provenance explicit; never guess an algorithm.
+4. Verify token authority and delegation using trusted verifier context, then
+   test the consuming execution/replay path. A v2 adapter existing in a module
+   does not prove that a runtime caller uses it.
+5. Replay retained legacy evidence and checkpoints through explicit legacy
+   APIs. Preserve historical vectors; add independently derived v2 vectors.
+   Do not regenerate expected outputs merely to make a test pass.
+6. Only after consumer coverage, parity, positive/negative execution tests,
+   and an explicit default-flip review succeed, change the ordinary default
+   and its machine contract together. Record the exact revision and commands.
+
+### Linked verification boundaries
+
+| Boundary | Existing source of truth | What must be established before proceeding |
+|---|---|---|
+| Identity bytes | Derivation contract and `engine_object_id/versioned.rs` | Domain, zone, schema, canonical bytes, and algorithm agree. |
+| Persisted identity | `engine_object_id/wire.rs` | The algorithm tag survives serialization; legacy reads are explicit. |
+| Signed authority | `capability_token/versioned.rs` | Identity and signature verify; audience, time, epoch, checkpoint, and revocation constraints hold. |
+| Delegated authority | `delegation_chain/versioned.rs` | The root is authorized, each link verifies, capabilities only attenuate, and the leaf has the requested capability. |
+| Runtime adoption | Actual consumer call sites and execution/replay tests | The verified authority is used by the intended runtime path, not merely demonstrated by a disconnected adapter test. |
+
+**Identity is not authority, and a serialized proof is not automatically a fresh
+verification result.** In `VersionedDelegationVerificationContext`, provide the
+current tick and epoch, checkpoint and revocation sequence frontiers, accepted
+tagged checkpoint IDs and revocation heads, authorized roots, depth limit, and
+required zone from trusted verifier state. The root/checkpoint builder methods
+do not advance the clock or sequence frontiers. Never copy a presented token's
+minimum frontier into production verifier state to make it pass.
+
+Every rejection test should begin with a successfully verified positive control,
+change one relevant condition, and assert the exact rejection category and link
+index. Capability amplification tests must use a correctly signed child so that
+an identity or signature failure cannot masquerade as attenuation enforcement.
+
+### Machine-readable migration decision
+
+Use the existing report rather than a hand-maintained consumer count:
+
+```bash
+python3 scripts/e2e/engine_object_id_versioning_guard_smoke.py
+python3 scripts/check_engine_object_id_derivation_versioning.py \
+  --output /tmp/engine-object-id-consumer-report.json
+```
+
+Read `decision`, `violations`, `scan_roots`, `scanned_source_file_count`,
+`blocking_consumer_type_count`, and `blocking_consumers` together. Findings
+include source paths, type names, line locations, and blocking reasons. Missing,
+empty, unreadable, or skipped source trees are inspection failures, not evidence
+of zero consumers. The guard rejects them rather than emitting a readiness
+report. Do not reuse an older report after a command fails; retain the command's
+exit status and associate successful output with the checkout revision.
+
+| Result | Meaning and next action |
+|---|---|
+| `allow_current_posture`, `default_flip_allowed: false` | The existing posture is allowed; migration is still blocked. Work on the reported consumers. |
+| `fail_closed`, or exit `2` without a new report | Inspection, contract, or parity failed. Fix that cause before inferring migration readiness. |
+| `default_flip_allowed: true` | The guard found no modeled blockers. This is a prerequisite for explicit review, not authorization to flip the default automatically. |
+
+`--require-ready` intentionally returns exit `1` when a valid scan still reports
+blocked readiness; that is distinct from an inspection failure. The scanner is
+a conservative source inventory, not a Rust type checker or a proof that every
+transitive persisted consumer has been migrated.
 
 Until those steps land, documentation must not describe the current
 `EngineObjectId` default as cryptographically collision-resistant. The v2 tool
@@ -169,6 +229,19 @@ already migrated.
 ## Verification
 
 ```bash
+set -euo pipefail
+
+python3 scripts/e2e/engine_object_id_versioning_guard_smoke.py
+python3 scripts/check_engine_object_id_derivation_versioning.py \
+  --output /tmp/engine-object-id-consumer-report.json
+
+for module in engine_object_id capability_token delegation_chain; do
+  cargo test --no-default-features -p frankenengine-engine \
+    --lib "${module}::"
+done
+cargo test --no-default-features -p frankenengine-core \
+  --lib 'engine_object_id::'
+
 rustfmt --check --edition 2024 \
   crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
   crates/franken-engine/tests/engine_object_id_migration_cli.rs
@@ -183,5 +256,20 @@ cargo clippy --no-default-features -p frankenengine-engine \
   --bin franken_engine_object_id_migration -- -D warnings
 ```
 
-The next implementation slice is the machine-generated persisted-consumer
-inventory and version-field migration, not the default flip itself.
+The existing `engine-object-id-v2-migration.yml` workflow runs the focused
+library and CLI checks on relevant direct-to-`main` pushes as well as pull
+requests. Its library checks include the nested identity, token, and delegation
+modules; its contract job uses the shared guard instead of assuming that legacy
+implementations remain inline in the top-level Rust files. These focused checks
+do not replace the repository-wide formatting, check, Clippy, and test gates in
+`AGENTS.md`.
+
+Record test status as executed/pass, executed/fail, or not executed, together
+with the revision and command. A queued CI run is not a pass. For remote bead
+operations, match the result's `request_id`, `bead_id`, and source revision to
+the requested operation before changing the reported task status; a successful
+result for a previous request is not confirmation of the current request.
+
+The next implementation slice is a real persisted-consumer migration selected
+from a fresh inventory and the live bead dependency graph, with its runtime
+caller and replay coverage, not the default flip itself.

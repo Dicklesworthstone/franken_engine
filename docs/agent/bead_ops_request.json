@@ -1,8 +1,8 @@
 {
   "schema_version": "franken-engine.agent-bead-ops-request.v1",
-  "request_id": "fe-claim-011-inspect-20260831-2355",
+  "request_id": "identity-inspect-20260904-bd-2y7",
   "operation": "show",
-  "bead_id": "bd-1vwza",
+  "bead_id": "bd-2y7",
   "assignee": null,
   "reason": null,
   "expected_before_status": null

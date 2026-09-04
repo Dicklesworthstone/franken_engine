@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 REQUEST_SCHEMA = "franken-engine.agent-bead-ops-request.v1"
-RESULT_SCHEMA = "franken-engine.agent-bead-ops-result.v1"
+RESULT_SCHEMA = "franken-engine.agent-bead-ops-result.v2"
 BEAD_ID_RE = re.compile(r"^bd-[a-z0-9]+(?:\.[a-z0-9]+)*$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 ALLOWED_KEYS = {
@@ -56,7 +56,7 @@ def validate_request(raw: Any) -> dict[str, Any]:
     if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
         raise BeadOpsError("request_id must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}")
     operation = raw.get("operation")
-    if operation not in {"show", "claim", "close"}:
+    if not isinstance(operation, str) or operation not in {"show", "claim", "close"}:
         raise BeadOpsError("operation must be one of: show, claim, close")
     bead_id = raw.get("bead_id")
     if not isinstance(bead_id, str) or not BEAD_ID_RE.fullmatch(bead_id):
@@ -68,10 +68,12 @@ def validate_request(raw: Any) -> dict[str, Any]:
     if reason is not None and (not isinstance(reason, str) or not reason.strip()):
         raise BeadOpsError("reason must be a non-empty string when present")
     expected = raw.get("expected_before_status")
-    if expected is not None and expected not in {"open", "in_progress", "blocked", "closed"}:
+    if expected is not None and (
+        not isinstance(expected, str) or expected not in {"open", "in_progress", "blocked", "closed"}
+    ):
         raise BeadOpsError("expected_before_status is not recognized")
-    if operation == "claim" and assignee is None:
-        raise BeadOpsError("claim requires assignee")
+    if operation == "claim" and (assignee is None or assignee.strip() == "unassigned"):
+        raise BeadOpsError("claim requires a named assignee, not the unassigned sentinel")
     if operation == "close" and reason is None:
         raise BeadOpsError("close requires reason")
     return dict(raw)
@@ -113,20 +115,22 @@ def parse_json_stdout(completed: subprocess.CompletedProcess[str], label: str) -
         raise BeadOpsError(f"{label} did not emit valid JSON: {exc}") from exc
 
 
-def issue_from_payload(payload: Any) -> dict[str, Any]:
+def issue_from_payload(payload: Any, expected_id: str | None = None) -> dict[str, Any]:
     candidate = payload
-    if isinstance(candidate, dict) and isinstance(candidate.get("issue"), dict):
+    if isinstance(candidate, dict) and "issue" in candidate:
         candidate = candidate["issue"]
-    if isinstance(candidate, dict) and isinstance(candidate.get("issues"), list):
-        issues = candidate["issues"]
-        if len(issues) == 1 and isinstance(issues[0], dict):
-            candidate = issues[0]
+    elif isinstance(candidate, dict) and "issues" in candidate:
+        candidate = candidate["issues"]
     if isinstance(candidate, list):
         if len(candidate) != 1 or not isinstance(candidate[0], dict):
             raise BeadOpsError("br show returned an unexpected issue list")
         candidate = candidate[0]
     if not isinstance(candidate, dict):
         raise BeadOpsError("br show returned an unexpected JSON shape")
+    if expected_id is not None and candidate.get("id") != expected_id:
+        raise BeadOpsError(f"br show did not return requested bead {expected_id}")
+    if not isinstance(candidate.get("status"), str) or not candidate["status"].strip():
+        raise BeadOpsError("br show returned a missing or invalid status")
     return candidate
 
 
@@ -137,15 +141,19 @@ def issue_status(issue: dict[str, Any]) -> str | None:
 
 def issue_assignees(issue: dict[str, Any]) -> set[str]:
     values: set[str] = set()
-    for key in ("assignee", "assigned_to"):
+    for key in ("assignee", "assigned_to", "assignees"):
         value = issue.get(key)
-        if isinstance(value, str) and value:
-            values.add(value)
-        elif isinstance(value, list):
-            values.update(item for item in value if isinstance(item, str) and item)
-    value = issue.get("assignees")
-    if isinstance(value, list):
-        values.update(item for item in value if isinstance(item, str) and item)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            candidates = value
+        else:
+            raise BeadOpsError(f"br show returned invalid {key}")
+        values.update(
+            item.strip() for item in candidates if item.strip() and item.strip() != "unassigned"
+        )
     return values
 
 
@@ -159,16 +167,53 @@ def br_json(br: str, args: list[str], repo_root: Path, commands: list[dict[str, 
     return parse_json_stdout(completed, f"br {' '.join(args)}")
 
 
+def new_result(request: Any, commands: list[dict[str, Any]]) -> dict[str, Any]:
+    result = {
+        "schema_version": RESULT_SCHEMA,
+        "request_id": None,
+        "request_sha256": None,
+        "generated_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+        "source_revision": None,
+        "operation": None,
+        "bead_id": None,
+        "mutation_applied": False,
+        "mutation_state": "not_attempted",
+        "flush_completed": False,
+        "before_payload": None,
+        "before": None,
+        "operation_result": None,
+        "after_payload": None,
+        "after": None,
+        "commands": commands,
+        "stage": "request",
+        "status": "fail_closed",
+        "error": None,
+    }
+    if isinstance(request, dict):
+        for key in ("request_id", "operation", "bead_id"):
+            result[key] = request.get(key)
+        result["request_sha256"] = hashlib.sha256(canonical_json_bytes(request)).hexdigest()
+    return result
+
+
 def execute(
-    request: dict[str, Any], repo_root: Path, br: str, commands: list[dict[str, Any]]
+    request: dict[str, Any], repo_root: Path, br: str, commands: list[dict[str, Any]],
+    *, evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    source_revision = git_revision(repo_root, commands)
+    result = new_result(request, commands) if evidence is None else evidence
+    result["stage"] = "source_revision"
+    result["source_revision"] = git_revision(repo_root, commands)
+    result["stage"] = "version"
     run([br, "--version"], cwd=repo_root, commands=commands)
+    result["stage"] = "import"
     run([br, "sync", "--import-only"], cwd=repo_root, commands=commands)
 
     bead_id = request["bead_id"]
-    before_payload = br_json(br, ["show", bead_id], repo_root, commands)
-    before = issue_from_payload(before_payload)
+    result["stage"] = "observe_before"
+    result["before_payload"] = br_json(br, ["show", bead_id], repo_root, commands)
+    result["stage"] = "validate_before"
+    before = issue_from_payload(result["before_payload"], bead_id)
+    result["before"] = before
     before_status = issue_status(before)
     expected = request.get("expected_before_status")
     if expected is not None and before_status != expected:
@@ -177,59 +222,55 @@ def execute(
         )
 
     operation = request["operation"]
-    operation_result: Any = None
-    mutation_applied = False
-    if operation == "show":
-        pass
-    elif operation == "claim":
+    mutation_args: list[str] | None = None
+    if operation == "claim":
         assignee = request["assignee"].strip()
-        if before_status == "closed":
-            raise BeadOpsError(f"cannot claim closed bead {bead_id}")
-        if before_status != "in_progress" or assignee not in issue_assignees(before):
-            operation_result = br_json(
-                br,
-                ["update", bead_id, "--status", "in_progress", "--assignee", assignee],
-                repo_root,
-                commands,
-            )
-            mutation_applied = True
+        owners = issue_assignees(before)
+        if before_status not in {"open", "in_progress"}:
+            raise BeadOpsError(f"cannot claim bead {bead_id} with status {before_status!r}")
+        if owners - {assignee}:
+            raise BeadOpsError(f"cannot claim bead {bead_id} owned by another agent")
+        if before_status == "in_progress" and owners != {assignee}:
+            raise BeadOpsError(f"cannot adopt ownerless in-progress bead {bead_id}")
+        if before_status != "in_progress":
+            mutation_args = ["update", bead_id, "--claim", f"--actor={assignee}"]
     elif operation == "close":
+        assignee = request.get("assignee")
+        if assignee is not None and issue_assignees(before) - {assignee.strip()}:
+            raise BeadOpsError(f"cannot close bead {bead_id} owned by another agent")
         if before_status != "closed":
-            operation_result = br_json(
-                br,
-                ["close", bead_id, "--reason", request["reason"].strip()],
-                repo_root,
-                commands,
-            )
-            mutation_applied = True
+            mutation_args = ["close", bead_id, "--reason", request["reason"].strip()]
+    elif operation != "show":
+        raise BeadOpsError(f"unsupported operation {operation!r}")
 
-    if mutation_applied:
+    if mutation_args is not None:
+        result["stage"] = "mutate"
+        result["mutation_state"] = "attempted_unknown"
+        result["mutation_applied"] = None
+        completed = run([br, *mutation_args, "--json"], cwd=repo_root, commands=commands)
+        result["mutation_state"] = "command_succeeded"
+        result["mutation_applied"] = True
+        result["stage"] = "mutation_output"
+        result["operation_result"] = parse_json_stdout(completed, f"br {' '.join(mutation_args)}")
+        result["stage"] = "flush"
         run([br, "sync", "--flush-only"], cwd=repo_root, commands=commands)
+        result["flush_completed"] = True
 
-    after_payload = br_json(br, ["show", bead_id], repo_root, commands)
-    after = issue_from_payload(after_payload)
+    result["stage"] = "observe_after"
+    result["after_payload"] = br_json(br, ["show", bead_id], repo_root, commands)
+    result["stage"] = "verify_after"
+    after = issue_from_payload(result["after_payload"], bead_id)
+    result["after"] = after
     after_status = issue_status(after)
-    if operation == "claim" and after_status != "in_progress":
-        raise BeadOpsError(f"claim did not leave bead {bead_id} in_progress")
+    if operation == "claim" and (
+        after_status != "in_progress" or issue_assignees(after) != {request["assignee"].strip()}
+    ):
+        raise BeadOpsError(f"claim did not leave bead {bead_id} in_progress with the requested owner")
     if operation == "close" and after_status != "closed":
         raise BeadOpsError(f"close did not leave bead {bead_id} closed")
-
-    return {
-        "schema_version": RESULT_SCHEMA,
-        "request_id": request["request_id"],
-        "request_sha256": hashlib.sha256(canonical_json_bytes(request)).hexdigest(),
-        "generated_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
-        "source_revision": source_revision,
-        "operation": operation,
-        "bead_id": bead_id,
-        "mutation_applied": mutation_applied,
-        "before": before,
-        "operation_result": operation_result,
-        "after": after,
-        "commands": commands,
-        "status": "pass",
-        "error": None,
-    }
+    result["stage"] = "complete"
+    result["status"] = "pass"
+    return result
 
 
 def write_result(path: Path, result: dict[str, Any]) -> None:
@@ -244,41 +285,49 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--br", default="br")
     args = parser.parse_args()
-    repo_root = args.repo_root.resolve()
-    commands: list[dict[str, Any]] = []
     try:
-        request = validate_request(load_json(args.request.resolve()))
-        result = execute(request, repo_root, args.br, commands)
-        write_result(args.result.resolve(), result)
-        return 0
-    except Exception as exc:
-        failure = {
-            "schema_version": RESULT_SCHEMA,
-            "request_id": None,
-            "generated_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
-            "source_revision": None,
-            "operation": None,
-            "bead_id": None,
-            "mutation_applied": False,
-            "before": None,
-            "operation_result": None,
-            "after": None,
-            "commands": commands,
-            "status": "fail_closed",
-            "error": str(exc),
-        }
-        try:
-            raw = load_json(args.request.resolve())
-            if isinstance(raw, dict):
-                failure["request_id"] = raw.get("request_id")
-                failure["operation"] = raw.get("operation")
-                failure["bead_id"] = raw.get("bead_id")
-                failure["request_sha256"] = hashlib.sha256(canonical_json_bytes(raw)).hexdigest()
-        except Exception:
-            pass
-        write_result(args.result.resolve(), failure)
-        print(f"agent bead operation failed closed: {exc}", file=sys.stderr)
+        request_path = args.request.resolve()
+        result_path = args.result.resolve()
+        if result_path == request_path or (
+            result_path.exists() and request_path.exists() and result_path.samefile(request_path)
+        ):
+            raise BeadOpsError("result path must not overwrite the request")
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        if result_path.is_dir():
+            raise BeadOpsError("result path must not be a directory")
+    except (OSError, RuntimeError) as exc:
+        print(f"cannot prepare bead operation result: {redact(str(exc))}", file=sys.stderr)
         return 1
+
+    commands: list[dict[str, Any]] = []
+    result = new_result(None, commands)
+    try:
+        raw = load_json(request_path)
+        result = new_result(raw, commands)
+        request = validate_request(raw)
+        execute(request, args.repo_root.resolve(), args.br, commands, evidence=result)
+    except Exception as exc:
+        result["status"] = {
+            "not_attempted": "fail_closed",
+            "attempted_unknown": "mutation_unconfirmed",
+            "command_succeeded": "partial_failure",
+        }[result["mutation_state"]]
+        result["error"] = redact(str(exc))
+
+    try:
+        write_result(result_path, result)
+    except Exception as exc:
+        print(
+            f"cannot preserve bead operation result: {redact(str(exc))}; "
+            f"mutation_state={result['mutation_state']}, stage={result['stage']}, "
+            f"flush_completed={result['flush_completed']}",
+            file=sys.stderr,
+        )
+        return 1
+    if result["status"] != "pass":
+        print(f"agent bead operation {result['status']}: {result['error']}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

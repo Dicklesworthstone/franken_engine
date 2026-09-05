@@ -141,8 +141,12 @@ impl Label {
     }
 
     /// Join (least upper bound) of two labels.
+    ///
+    /// Use the same level-first total order as the engine copy. Distinct
+    /// built-in/custom labels can share a level, so comparing only levels
+    /// makes the surviving label depend on operand order.
     pub fn join(&self, other: &Self) -> Self {
-        if self.level() >= other.level() {
+        if self >= other {
             self.clone()
         } else {
             other.clone()
@@ -150,8 +154,10 @@ impl Label {
     }
 
     /// Meet (greatest lower bound) of two labels.
+    ///
+    /// Preserve the deterministic same-level tiebreak used by [`Self::join`].
     pub fn meet(&self, other: &Self) -> Self {
-        if self.level() <= other.level() {
+        if self <= other {
             self.clone()
         } else {
             other.clone()
@@ -561,8 +567,11 @@ impl FlowEnvelope {
         })
     }
 
-    /// Assess a flow against the legacy envelope predicate plus the currently
-    /// enforced SealedSink authorization rules.
+    /// Assess a flow against the envelope predicate and SealedSink rules.
+    ///
+    /// Sensitivity is determined by level, not the label variant. A custom
+    /// label at Secret or above must not bypass declassification. Existing
+    /// built-in route references do not authorize an unrelated custom label.
     pub fn assess_flow_authorization(
         &self,
         source: &Label,
@@ -570,26 +579,39 @@ impl FlowEnvelope {
     ) -> FlowAuthorizationAssessment {
         let flow_in_scope = self.producible_labels.contains(source)
             && self.accessible_clearances.contains(sink_clearance);
-        let mut envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
-        let advisories = Vec::new();
+        let envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
+        let mut advisories = Vec::new();
         let mut declassification_obligation = None;
+        let requires_sealed_sink_declassification =
+            *sink_clearance == ClearanceClass::SealedSink && source.level() >= Label::Secret.level();
 
-        // Enforced authorization for Secret/TopSecret -> SealedSink flows
-        if flow_in_scope
-            && *sink_clearance == ClearanceClass::SealedSink
-            && matches!(source, Label::Secret | Label::TopSecret)
-        {
+        if flow_in_scope && requires_sealed_sink_declassification {
             declassification_obligation =
                 self.materialize_declassification_obligation(source, sink_clearance);
 
-            // Enforce explicit authorization requirement - fail completely without it
             if declassification_obligation.is_none() {
-                envelope_authorized = false; // Hard failure without explicit authorization
+                if envelope_authorized {
+                    advisories.push(FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                        source_label: source.clone(),
+                        sink_clearance: *sink_clearance,
+                    });
+                } else {
+                    advisories.push(
+                        FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                            source_label: source.clone(),
+                            sink_clearance: *sink_clearance,
+                        },
+                    );
+                }
             }
         }
 
-        let flow_authorized =
-            advisories.is_empty() && declassification_obligation.is_none() && envelope_authorized;
+        // Envelope membership is not permission to skip declassification.
+        // A concrete obligation still needs the receipt-enforcement step.
+        let flow_authorized = envelope_authorized
+            && !requires_sealed_sink_declassification
+            && declassification_obligation.is_none()
+            && advisories.is_empty();
 
         FlowAuthorizationAssessment {
             envelope_authorized,
@@ -2474,12 +2496,18 @@ mod tests {
         };
 
         let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
-        // Enforced authorization: hard failure without explicit authorization
-        assert!(!assessment.envelope_authorized);
+        // Nominal clearance is sufficient, but permission remains blocked.
+        assert!(assessment.envelope_authorized);
         assert!(!assessment.flow_authorized);
-        assert!(!assessment.requires_declassification());
-        assert!(!assessment.has_advisories());
-        assert!(assessment.advisories.is_empty());
+        assert!(assessment.requires_declassification());
+        assert!(assessment.has_advisories());
+        assert_eq!(
+            assessment.advisories,
+            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                source_label: Label::Secret,
+                sink_clearance: ClearanceClass::SealedSink,
+            }]
+        );
         assert!(assessment.declassification_obligation.is_none());
     }
 
@@ -2555,11 +2583,17 @@ mod tests {
 
         let assessment =
             env.assess_flow_authorization(&Label::TopSecret, &ClearanceClass::SealedSink);
-        // TopSecret -> SealedSink fails both on clearance level (4 > 3) and missing authorization
+        // Both the clearance ceiling and the missing route still block this flow.
         assert!(!assessment.envelope_authorized);
         assert!(!assessment.flow_authorized);
-        assert!(!assessment.requires_declassification());
-        assert!(assessment.advisories.is_empty());
+        assert!(assessment.requires_declassification());
+        assert_eq!(
+            assessment.advisories,
+            vec![FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                source_label: Label::TopSecret,
+                sink_clearance: ClearanceClass::SealedSink,
+            }]
+        );
         assert!(assessment.declassification_obligation.is_none());
     }
 
@@ -2617,8 +2651,14 @@ mod tests {
         let assessment = env.assess_flow_authorization(&header_label, &ClearanceClass::SealedSink);
         assert!(ClearanceClass::SealedSink.can_receive(&header_label));
         assert!(!assessment.flow_authorized);
-        assert!(!assessment.requires_declassification());
-        assert!(assessment.advisories.is_empty());
+        assert!(assessment.requires_declassification());
+        assert_eq!(
+            assessment.advisories,
+            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                source_label: Label::Secret,
+                sink_clearance: ClearanceClass::SealedSink,
+            }]
+        );
         assert!(assessment.declassification_obligation.is_none());
     }
 

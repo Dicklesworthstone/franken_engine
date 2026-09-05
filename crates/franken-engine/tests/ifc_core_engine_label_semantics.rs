@@ -153,3 +153,219 @@ label_contract!(
     frankenengine_engine,
     enforcement_mode: frankenengine_engine::ifc_artifacts::FlowPolicyEnforcement::AllowlistOnly,
 );
+
+macro_rules! envelope_contract {
+    ($module:ident, $runtime:ident) => {
+        mod $module {
+            use $runtime::ifc_artifacts::{
+                ClearanceClass, FlowAuthorizationAdvisory, FlowEnvelope, IfcSchemaVersion, Label,
+            };
+
+            fn envelope(source: &Label, sink: ClearanceClass, grants: &[&str]) -> FlowEnvelope {
+                FlowEnvelope {
+                    envelope_id: "envelope".into(),
+                    extension_id: "extension".into(),
+                    producible_labels: [source.clone()].into(),
+                    accessible_clearances: [sink].into(),
+                    authorized_declassifications: grants.iter().map(|grant| (*grant).into()).collect(),
+                    policy_ref: "policy".into(),
+                    epoch_id: 7,
+                    schema_version: IfcSchemaVersion::CURRENT,
+                }
+            }
+
+            #[test]
+            fn sealed_sink_gate_uses_sensitivity_not_variant() {
+                let sink = ClearanceClass::SealedSink;
+                for level in [0, 1, 2, 3, 4, u32::MAX] {
+                    let source = Label::Custom {
+                        name: "source".into(),
+                        level,
+                    };
+                    let env = envelope(&source, sink, &[]);
+                    let assessment = env.assess_flow_authorization(&source, &sink);
+                    assert_eq!(assessment.envelope_authorized, level <= 3);
+                    assert_eq!(assessment.flow_authorized, level < 3);
+                    assert_eq!(env.is_flow_authorized(&source, &sink), level < 3);
+                    assert_eq!(assessment.requires_declassification(), level >= 3);
+                    assert!(assessment.declassification_obligation.is_none());
+                    match level {
+                        0..=2 => assert!(assessment.advisories.is_empty()),
+                        3 => assert_eq!(
+                            assessment.advisories,
+                            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                                source_label: source,
+                                sink_clearance: sink,
+                            }]
+                        ),
+                        _ => assert_eq!(
+                            assessment.advisories,
+                            vec![FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                                source_label: source,
+                                sink_clearance: sink,
+                            }]
+                        ),
+                    }
+                }
+            }
+
+            #[test]
+            fn built_in_grants_do_not_alias_custom_label_names() {
+                let sink = ClearanceClass::SealedSink;
+                for name in ["secret", "top_secret", "secret:obligation", "\u{03b1}", ""] {
+                    let source = Label::Custom {
+                        name: name.into(),
+                        level: 3,
+                    };
+                    let env = envelope(
+                        &source,
+                        sink,
+                        &[
+                            "sealed_sink:secret:grant-secret",
+                            "sealed_sink:top_secret:grant-top-secret",
+                        ],
+                    );
+                    let assessment = env.assess_flow_authorization(&source, &sink);
+                    assert!(!assessment.flow_authorized);
+                    assert!(assessment.requires_declassification());
+                    assert!(assessment.declassification_obligation.is_none());
+                }
+            }
+
+            #[test]
+            fn concrete_built_in_obligation_is_not_immediate_permission() {
+                let sink = ClearanceClass::SealedSink;
+                for (source, grant) in [
+                    (Label::Secret, "sealed_sink:secret:approval"),
+                    (Label::TopSecret, "sealed_sink:top_secret:approval"),
+                ] {
+                    let env = envelope(&source, sink, &[grant]);
+                    let assessment = env.assess_flow_authorization(&source, &sink);
+                    assert!(!assessment.flow_authorized);
+                    assert!(!env.is_flow_authorized(&source, &sink));
+                    assert!(assessment.requires_declassification());
+                    assert!(assessment.advisories.is_empty());
+                    let obligation = assessment.declassification_obligation.unwrap();
+                    assert_eq!(obligation.obligation_id, "approval");
+                    assert_eq!(obligation.source_label, source);
+                    assert_eq!(obligation.target_clearance, sink);
+                    assert_eq!(obligation.approval_authority, "policy");
+                    assert_eq!(obligation.expiry_epoch, Some(7));
+                }
+            }
+
+            #[test]
+            fn missing_built_in_authorization_remains_explicitly_pending() {
+                let sink = ClearanceClass::SealedSink;
+                for source in [Label::Secret, Label::TopSecret] {
+                    let env = envelope(&source, sink, &[]);
+                    let assessment = env.assess_flow_authorization(&source, &sink);
+                    assert_eq!(assessment.envelope_authorized, source == Label::Secret);
+                    assert!(!assessment.flow_authorized);
+                    assert!(assessment.requires_declassification());
+                    assert_eq!(assessment.advisories.len(), 1);
+                }
+            }
+
+            #[test]
+            fn other_sinks_preserve_existing_clearance_permissions() {
+                for sink in [
+                    ClearanceClass::OpenSink,
+                    ClearanceClass::RestrictedSink,
+                    ClearanceClass::AuditedSink,
+                    ClearanceClass::NeverSink,
+                ] {
+                    for level in [0, 1, 2, 3, 4, u32::MAX] {
+                        let source = Label::Custom {
+                            name: "source".into(),
+                            level,
+                        };
+                        let env = envelope(&source, sink, &[]);
+                        let assessment = env.assess_flow_authorization(&source, &sink);
+                        assert_eq!(assessment.flow_authorized, sink.can_receive(&source));
+                        assert!(assessment.advisories.is_empty());
+                        assert!(assessment.declassification_obligation.is_none());
+                    }
+                }
+            }
+
+            #[test]
+            fn grants_never_bypass_source_or_sink_membership() {
+                let sink = ClearanceClass::SealedSink;
+                for source in [
+                    Label::Secret,
+                    Label::Custom {
+                        name: "secret".into(),
+                        level: 3,
+                    },
+                ] {
+                    for remove_source in [false, true] {
+                        let mut env = envelope(&source, sink, &["sealed_sink:secret:approval"]);
+                        if remove_source {
+                            env.producible_labels.clear();
+                        } else {
+                            env.accessible_clearances.clear();
+                        }
+                        let assessment = env.assess_flow_authorization(&source, &sink);
+                        assert!(!assessment.envelope_authorized);
+                        assert!(!assessment.flow_authorized);
+                        assert!(assessment.declassification_obligation.is_none());
+                    }
+                }
+            }
+        }
+    };
+}
+
+envelope_contract!(core_envelopes, frankenengine_core);
+envelope_contract!(engine_envelopes, frankenengine_engine);
+
+#[test]
+fn core_and_engine_serialize_identical_authorization_assessments() {
+    use frankenengine_engine::ifc_artifacts::{ClearanceClass, FlowEnvelope, IfcSchemaVersion, Label};
+    let mut sources = Label::all_builtin().to_vec();
+    for level in [0, 1, 2, 3, 4, u32::MAX] {
+        sources.push(Label::Custom {
+            name: "exact-label".into(),
+            level,
+        });
+    }
+    for source in sources {
+        for with_grants in [false, true] {
+            let engine_env = FlowEnvelope {
+                envelope_id: "envelope".into(),
+                extension_id: "extension".into(),
+                producible_labels: [source.clone()].into(),
+                accessible_clearances: [ClearanceClass::SealedSink].into(),
+                authorized_declassifications: if with_grants {
+                    vec![
+                        "sealed_sink:secret:approval".into(),
+                        "sealed_sink:top_secret:approval".into(),
+                    ]
+                } else {
+                    vec![]
+                },
+                policy_ref: "policy".into(),
+                epoch_id: 7,
+                schema_version: IfcSchemaVersion::CURRENT,
+            };
+            let core_env: frankenengine_core::ifc_artifacts::FlowEnvelope =
+                serde_json::from_value(serde_json::to_value(&engine_env).unwrap()).unwrap();
+            let core_source: frankenengine_core::ifc_artifacts::Label =
+                serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+            let engine = engine_env.assess_flow_authorization(&source, &ClearanceClass::SealedSink);
+            let core = core_env.assess_flow_authorization(
+                &core_source,
+                &frankenengine_core::ifc_artifacts::ClearanceClass::SealedSink,
+            );
+            assert_eq!(
+                serde_json::to_value(engine).unwrap(),
+                serde_json::to_value(core).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_vec(&engine_env).unwrap(),
+                serde_json::to_vec(&core_env).unwrap()
+            );
+        }
+    }
+}

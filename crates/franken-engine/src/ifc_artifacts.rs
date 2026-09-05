@@ -567,8 +567,11 @@ impl FlowEnvelope {
         })
     }
 
-    /// Assess a flow against the legacy envelope predicate plus the currently
-    /// enforced SealedSink authorization rules.
+    /// Assess a flow against the envelope predicate and SealedSink rules.
+    ///
+    /// Sensitivity is determined by level, not the label variant. A custom
+    /// label at Secret or above must not bypass declassification. Existing
+    /// built-in route references do not authorize an unrelated custom label.
     pub fn assess_flow_authorization(
         &self,
         source: &Label,
@@ -579,12 +582,10 @@ impl FlowEnvelope {
         let envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
         let mut advisories = Vec::new();
         let mut declassification_obligation = None;
+        let requires_sealed_sink_declassification =
+            *sink_clearance == ClearanceClass::SealedSink && source.level() >= Label::Secret.level();
 
-        // Enforced authorization for Secret/TopSecret -> SealedSink flows
-        if flow_in_scope
-            && *sink_clearance == ClearanceClass::SealedSink
-            && matches!(source, Label::Secret | Label::TopSecret)
-        {
+        if flow_in_scope && requires_sealed_sink_declassification {
             declassification_obligation =
                 self.materialize_declassification_obligation(source, sink_clearance);
 
@@ -605,14 +606,8 @@ impl FlowEnvelope {
             }
         }
 
-        let requires_sealed_sink_declassification = matches!(
-            (*sink_clearance, source),
-            (ClearanceClass::SealedSink, Label::Secret | Label::TopSecret)
-        );
-
-        // Flow is immediately authorized only when the envelope allows it and
-        // no declassification handling remains. A materialized obligation is
-        // evidence for the next enforcement step, not permission to skip it.
+        // Envelope membership is not permission to skip declassification.
+        // A concrete obligation still needs the receipt-enforcement step.
         let flow_authorized = envelope_authorized
             && !requires_sealed_sink_declassification
             && declassification_obligation.is_none()
@@ -3257,6 +3252,7 @@ mod tests {
         assert!(assessment.flow_authorized);
         assert!(!assessment.requires_declassification());
         assert!(!assessment.has_advisories());
+        assert!(assessment.advisories.is_empty());
         assert!(assessment.declassification_obligation.is_none());
     }
 

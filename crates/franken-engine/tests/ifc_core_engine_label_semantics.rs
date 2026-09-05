@@ -2,7 +2,7 @@
 
 // Each contract is instantiated against both actual runtime crates.
 macro_rules! label_contract {
-    ($module:ident, $runtime:ident) => {
+    ($module:ident, $runtime:ident $(, $field:ident: $value:expr)* $(,)?) => {
         mod $module {
             use $runtime::ifc_artifacts::{
                 FlowCheckResult, FlowPolicy, FlowRule, IfcSchemaVersion, Ir2LabelSource, Label,
@@ -116,6 +116,7 @@ macro_rules! label_contract {
                         sink_clearance: Label::Public,
                     }],
                     declassification_routes: vec![],
+                    $($field: $value,)*
                     epoch_id: 1,
                     schema_version: IfcSchemaVersion::CURRENT,
                     signature: Signature::from_bytes(SIGNATURE_SENTINEL),
@@ -147,4 +148,8 @@ macro_rules! label_contract {
 }
 
 label_contract!(core_labels, frankenengine_core);
-label_contract!(engine_labels, frankenengine_engine);
+label_contract!(
+    engine_labels,
+    frankenengine_engine,
+    enforcement_mode: frankenengine_engine::ifc_artifacts::FlowPolicyEnforcement::AllowlistOnly,
+);

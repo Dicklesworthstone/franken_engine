@@ -2,6 +2,61 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
+## Post-Snapshot Update — Native IFC Label and Sealed-Sink Repairs (2026-09-04)
+
+The native IFC repairs were committed directly to `main`, preserving the newer
+promise-reaction conformance work already present at `93c278f8`. This is a
+source implementation update, not a release or a new claim-matrix promotion.
+
+- **Deterministic computed core labels.** `franken-core` now uses the existing
+  level-first `Label::Ord` for `join` and `meet`, matching the engine. Distinct
+  same-level built-in/custom labels no longer select a surviving identity based
+  on operand order. `Ir2LabelSource::Computed`, serialization, and subsequent
+  exact-label policy lookups therefore receive an order-independent result.
+  Numeric flow permission remains level-based; this is not provenance-set
+  union or preservation of every contributing origin's policy.
+- **Custom-label sealed-sink bypass fixed in both crates.**
+  `FlowEnvelope::assess_flow_authorization` requires declassification for every
+  `SealedSink` source at Secret sensitivity or higher, rather than matching only
+  the `Secret | TopSecret` enum variants. A custom level-3 label can no longer
+  obtain immediate permission without that requirement. Existing built-in
+  grant strings cannot alias a custom label by name or level, and grants cannot
+  bypass exact source/sink membership. Custom grant syntax is not introduced.
+- **Pending authorization remains explicit.** Core assessment results now
+  distinguish nominal envelope eligibility from actual permission and expose
+  missing authorization through the existing blocking advisories. Three core
+  tests retain their denial assertions and require the exact pending advisory.
+  A materialized obligation is still not immediate permission.
+- **Native regression source.**
+  `crates/franken-engine/tests/ifc_core_engine_label_semantics.rs` declares 21
+  instances across the actual core and engine APIs: label algebra, computed
+  taint, exact-policy outcomes, sensitivity boundaries, grant aliasing,
+  membership, unaffected sinks, and assessment serialization parity. The
+  engine-specific policy fixture explicitly selects `AllowlistOnly`; the
+  extracted core's older policy interface is not mistaken for the engine API.
+
+Implementation status and the corrected distinction between sensitivity order,
+exact label order, engine policy modes, and flow-envelope admission are recorded
+in [`docs/FORMAL_RUNTIME_SECURITY_MODEL_V1.md`](docs/FORMAL_RUNTIME_SECURITY_MODEL_V1.md).
+Existing label/envelope wire shapes are unchanged, but previously order-dependent
+computed core identities and some assessment fields intentionally change.
+Historical trace/hash/signature evidence remains bound to its original revision.
+
+**Verification at publication:** complete original source and resulting commit
+diffs were reviewed, and the published test Git-blob hash was independently
+matched to the prepared suite plus the engine-mode fixture correction. The
+publication environment had no Rust toolchain: Cargo compilation, native test
+execution, rustfmt, clippy, broader replay, and independent verification remain
+pending. The 21 instances are not reported as passing tests. No bead was closed,
+no package version or release tag changed, and no security claim was promoted.
+
+Commits: [`069dabee`](https://github.com/Dicklesworthstone/franken_engine/commit/069dabee231bb4e5d7b0bae210c01cbff8a59b49)
+(core repair), [`0ba18c83`](https://github.com/Dicklesworthstone/franken_engine/commit/0ba18c83a8a2cff7817173a904a6fc2f02efe54c)
+(engine fixture correction), and [`714a83d6`](https://github.com/Dicklesworthstone/franken_engine/commit/714a83d638ea9b721f67552e1bbada982e8cce28)
+(engine counterpart and complete regression source).
+
+---
+
 Scope window: project inception on 2026-02-18 through HEAD
 [`cf700313c`](https://github.com/Dicklesworthstone/franken_engine/commit/cf700313cbaa3cfc9f38f86985c831f31369445d)
 (2026-08-31). The dated post-snapshot sections below record the post-`b1f5bc91c`

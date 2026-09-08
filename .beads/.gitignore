@@ -16,6 +16,8 @@ last-touched
 # .beads.db.schema-migration-<ts>-<pid>-0.vacuum-fsqlite-ns-{gate,use}.
 *-fsqlite-ns-gate
 *-fsqlite-ns-use
+*.fsqlite-migration-state
+*.fsqlite-migration-state*
 
 # Merge artifacts (temporary files from 3-way merge)
 beads.base.jsonl

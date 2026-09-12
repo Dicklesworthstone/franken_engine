@@ -334,9 +334,9 @@ uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
 clap = { version = "4.5", features = ["derive"] }
-sqlmodel = { version = "0.3.1", optional = true }
-sqlmodel-core = { version = "0.3.1", optional = true }
-sqlmodel-frankensqlite = { version = "0.3.1", optional = true }
+sqlmodel = { version = "0.5.0", optional = true }
+sqlmodel-core = { version = "0.5.0", optional = true }
+sqlmodel-frankensqlite = { version = "0.5.0", optional = true }
 franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
 franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }
 franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
@@ -349,10 +349,11 @@ frankenengine-extension-host = { path = "../franken-extension-host" }
 franken-native-capsule-worker = { git = "https://github.com/Dicklesworthstone/franken_native_capsule", rev = "7af57e2c43d42e77eff569b133b263c4e2a858f9", optional = true }
 frankenengine-native-capsule = { git = "https://github.com/Dicklesworthstone/franken_native_capsule", rev = "7af57e2c43d42e77eff569b133b263c4e2a858f9", default-features = false, optional = true }
 frankenengine-native-capsule-api = { git = "https://github.com/Dicklesworthstone/franken_native_capsule", rev = "7af57e2c43d42e77eff569b133b263c4e2a858f9", optional = true }
-fastapi-core = { version = "0.3.1", optional = true }
-franken-kernel = { version = "0.3.4", optional = true }
-franken-decision = { version = "0.3.4", optional = true }
-franken-evidence = { version = "0.3.4", optional = true }
+# Immutable upstream revision carrying the Asupersync 0.5 migration.
+fastapi-core = { version = "0.4.4", git = "https://github.com/Dicklesworthstone/fastapi_rust", rev = "fb15fa5025cfdc23ab99344db5e2a4939dbcf38e", optional = true }
+franken-kernel = { version = "0.5.0", optional = true }
+franken-decision = { version = "0.5.0", optional = true }
+franken-evidence = { version = "0.5.0", optional = true }
 fp-io = { version = "0.2.0", default-features = false, optional = true }
 fp-frame = { version = "0.2.0", optional = true }
 fp-columnar = { version = "0.2.0", optional = true }

@@ -46,7 +46,7 @@ use std::fmt;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -5613,6 +5613,7 @@ struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
     exports: BTreeMap<JsString, Value>,
+    pending_import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
     /// module is evaluated. Imported closures carry only an index into this
@@ -5624,6 +5625,14 @@ struct ModuleRuntimeRecord {
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.
     async_execution: Option<ModuleExecutionSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingCyclicImportBinding {
+    module_specifier: String,
+    export_name: JsString,
+    source_register: u32,
+    expected_init_ip: usize,
 }
 
 /// Realm-persistent dynamic-code artifacts owned by one immutable module
@@ -10322,6 +10331,8 @@ pub struct InterpreterCore {
     /// available but the importer must park behind this dependency's module
     /// evaluation Promise before executing its next instruction (bd-yn3lv).
     pending_async_module_import: Option<(String, crate::promise_model::PromiseHandle)>,
+    /// One-instruction handoff from a cyclic namespace read to InitBinding.
+    pending_cyclic_import_binding: Option<PendingCyclicImportBinding>,
     /// Active CommonJS module context, if currently evaluating a CJS module.
     active_cjs_context: Option<CjsModuleContext>,
     /// Current module specifier (used to resolve relative imports).
@@ -10993,6 +11004,7 @@ impl InterpreterCore {
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
             pending_async_module_import: None,
+            pending_cyclic_import_binding: None,
             active_cjs_context: None,
             current_module_specifier: None,
             active_generated_function_artifact: None,
@@ -30163,6 +30175,7 @@ impl InterpreterCore {
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;
         self.pending_async_module_import = None;
+        self.pending_cyclic_import_binding = None;
         self.active_cjs_context = None;
 
         // The clears above released many independently-charged memory
@@ -31675,6 +31688,7 @@ impl InterpreterCore {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
                 exports: BTreeMap::new(),
+                pending_import_bindings: BTreeMap::new(),
                 cjs_module_object: None,
                 compiled_module,
                 evaluation_promise: None,
@@ -36842,6 +36856,7 @@ impl InterpreterCore {
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut previous_cell_states = Vec::with_capacity(pending_cells.len());
+        let mut next_cell_labels = Vec::with_capacity(pending_cells.len());
         for cell in &pending_cells {
             let old_state = cell
                 .try_borrow()
@@ -36849,16 +36864,28 @@ impl InterpreterCore {
                     details: "cyclic module import binding is already mutably borrowed".to_string(),
                 })?
                 .clone();
+            next_cell_labels.push(
+                self.join_owned_label_with_temporary_budget(old_state.label.clone(), &label)?,
+            );
             previous_cell_states.push((Rc::clone(cell), old_state));
-            let mut state = cell
-                .try_borrow_mut()
-                .map_err(|_| InterpreterError::InternalError {
-                    details: "cyclic module import binding is already borrowed".to_string(),
-                })?;
+        }
+        // Acquire every cell before publishing any value. A borrowed later
+        // cell must not leave earlier imports partially initialized.
+        let mut states = pending_cells
+            .iter()
+            .map(|cell| {
+                cell.try_borrow_mut()
+                    .map_err(|_| InterpreterError::InternalError {
+                        details: "cyclic module import binding is already borrowed".to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (state, next_label) in states.iter_mut().zip(next_cell_labels) {
             state.value = value.clone();
-            state.label = label.clone();
+            state.label = next_label;
             state.initialized = true;
         }
+        drop(states);
         if let Err(error) = self.apply_scope_closure_call_stack_memory_delta(
             previous_scope_bytes,
             previous_closure_bytes,
@@ -40364,6 +40391,9 @@ impl InterpreterCore {
         };
 
         loop {
+            // Retire the handoff even on EOF, implicit return, or budget refusal.
+            // Only this iteration's adjacent InitBinding may consume it.
+            let pending_cyclic_import_binding = self.pending_cyclic_import_binding.take();
             // Time-travel debugger state capture at the instruction boundary
             // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
             self.check_state_capture_boundary();
@@ -44300,26 +44330,6 @@ impl InterpreterCore {
                         }
                         return Err(err);
                     }
-                    if let Some(pending) = self.pending_cyclic_import_binding.take()
-                        && pending.source_register == src
-                        && pending.expected_init_ip == self.ip
-                        && let Some((binding, _)) = previous.as_ref()
-                        && let Some(record) = self
-                            .module_state
-                            .modules
-                            .get_mut(&pending.module_specifier)
-                    {
-                        let watchers = record
-                            .pending_import_bindings
-                            .entry(pending.export_name)
-                            .or_default();
-                        if !watchers
-                            .iter()
-                            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(&binding.state))
-                        {
-                            watchers.push(Rc::downgrade(&binding.state));
-                        }
-                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadScoped {
@@ -44471,6 +44481,26 @@ impl InterpreterCore {
                             binding.restore_state(old_state)?;
                         }
                         return Err(err);
+                    }
+                    if let Some(pending) = pending_cyclic_import_binding
+                        && pending.source_register == src
+                        && pending.expected_init_ip == self.ip
+                        && let Some((binding, _)) = previous.as_ref()
+                        && let Some(record) = self
+                            .module_state
+                            .modules
+                            .get_mut(&pending.module_specifier)
+                    {
+                        let watchers = record
+                            .pending_import_bindings
+                            .entry(pending.export_name)
+                            .or_default();
+                        if !watchers
+                            .iter()
+                            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(&binding.state))
+                        {
+                            watchers.push(Rc::downgrade(&binding.state));
+                        }
                     }
                     self.ip += 1;
                 }
@@ -86886,6 +86916,123 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn cyclic_module_import_publication_preserves_taint_and_is_atomic() {
+        let mut core = test_interpreter();
+        let module = lower_module_graph_entry_bd_yn3lv(Path::new("cycle.mjs"), "export const x = 1;");
+        core.ensure_module_record(&module, "cycle.mjs")
+            .expect("create cycle record");
+        core.current_module_specifier = Some("cycle.mjs".to_string());
+        let first = ScopeBinding::with_labeled_state(
+            BindingKind::Const,
+            Value::Undefined,
+            Label::Secret,
+            false,
+        );
+        let second = ScopeBinding::new(BindingKind::Const);
+        let first_before = first.snapshot_state().expect("first import snapshot");
+        let second_before = second.snapshot_state().expect("second import snapshot");
+        core.scope_chain
+            .current_mut()
+            .expect("scope")
+            .bindings
+            .extend([
+                ("first".to_string(), first.clone()),
+                ("second".to_string(), second.clone()),
+            ]);
+        core.module_state
+            .modules
+            .get_mut("cycle.mjs")
+            .expect("cycle record")
+            .pending_import_bindings
+            .insert(
+                JsString::from("x"),
+                vec![Rc::downgrade(&first.state), Rc::downgrade(&second.state)],
+            );
+        core.sync_estimated_memory_bytes().expect("fixture budget");
+        let before_bytes = core.estimated_memory_bytes();
+
+        let held = second.state.borrow();
+        assert!(matches!(
+            core.register_module_export_exact_labeled(
+                JsString::from("x"),
+                Value::Int(42),
+                Label::Public,
+            ),
+            Err(InterpreterError::InternalError { .. })
+        ));
+        assert_eq!(first.snapshot_state().unwrap(), first_before);
+        assert_eq!(*held, second_before);
+        assert!(core.module_state.modules["cycle.mjs"].exports.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), before_bytes);
+        drop(held);
+
+        core.register_module_export_exact_labeled(
+            JsString::from("x"),
+            Value::Int(42),
+            Label::Public,
+        )
+        .expect("publish after releasing the borrowed import");
+        assert_eq!(first.state().unwrap().label, Label::Secret);
+        assert_eq!(second.state().unwrap().label, Label::Public);
+        for binding in [&first, &second] {
+            let state = binding.state().unwrap();
+            assert_eq!(state.value, Value::Int(42));
+            assert!(state.initialized);
+        }
+        assert!(
+            core.module_state.modules["cycle.mjs"]
+                .pending_import_bindings
+                .is_empty()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn cyclic_module_import_initializes_the_importers_shared_binding() {
+        // Retain the generated module graph for diagnosis without deleting files.
+        let root = tempfile::tempdir().expect("cyclic module graph root").keep();
+        let entry = root.join("entry.mjs");
+        let left = root.join("left.mjs");
+        let right = root.join("right.mjs");
+        let entry_source = "import { result } from './left.mjs'; console.log(result());";
+        std::fs::write(&entry, entry_source).expect("write cycle entry");
+        std::fs::write(
+            &left,
+            "import { base } from './right.mjs'; export function result() { return base() + 2; } export function seed() { return 40; }",
+        )
+        .expect("write cycle left");
+        std::fs::write(
+            &right,
+            "import { seed } from './left.mjs'; export function base() { return seed(); }",
+        )
+        .expect("write cycle right");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(&root);
+        let result = core.execute(&module).expect("cyclic imports should settle");
+        let messages: Vec<&str> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["42"]);
+        assert!(core.pending_cyclic_import_binding.is_none());
+        assert!(
+            core.module_state
+                .modules
+                .values()
+                .all(|record| record.pending_import_bindings.is_empty())
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn imported_tla_resumes_transitive_parents_with_owned_programs_bd_yn3lv() {
         let temp = tempfile::tempdir().expect("async module-graph root");
         let entry = temp.path().join("entry.mjs");
@@ -93790,6 +93937,7 @@ mod async_runtime_tests_current {
                     status: ModuleRuntimeStatus::Evaluating,
                     namespace_object: namespace,
                     exports: BTreeMap::new(),
+                    pending_import_bindings: BTreeMap::new(),
                     cjs_module_object: None,
                     compiled_module: None,
                     evaluation_promise: None,
@@ -130304,6 +130452,7 @@ mod tests {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
                 exports: BTreeMap::new(),
+                pending_import_bindings: BTreeMap::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,
                 evaluation_promise: None,

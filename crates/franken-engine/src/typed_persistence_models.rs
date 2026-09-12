@@ -1401,6 +1401,8 @@ pub fn typed_sqlmodel_session_config() -> SessionConfig {
         auto_flush: false,
         // Keep committed audit rows inspectable; callers may opt into expiration explicitly.
         expire_on_commit: false,
+        // Preserve the existing plain BEGIN behavior when constructing a 0.5 session.
+        transaction_mode: sqlmodel::TransactionMode::Default,
     }
 }
 

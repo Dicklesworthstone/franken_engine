@@ -42,23 +42,150 @@ jobs:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
 
-  read-runtime-slice:
-    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'a6ec4fa7cfa9a8cacd5404062608efb6a6742e46'
+  prepare-exception-boundary:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '8cfcab2cb1513a6dead6c30445cfe8fdddccf319'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      files: ${{ steps.patch.outputs.files }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           clean: false
-      - name: Export pinned runtime sources and planning inputs
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - name: Apply exact source patch and publish immutable blobs
+        id: patch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git archive --format=zip --output="$RUNNER_TEMP/runtime-slice.zip" HEAD AGENTS.md README.md Cargo.toml Cargo.lock .beads/issues.jsonl docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md crates/franken-engine/src crates/franken-engine/tests crates/franken-engine/Cargo.toml crates/franken-core/src crates/franken-core/Cargo.toml
-          git rev-parse HEAD
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re, subprocess
+          import urllib.request
+          root = 'crates/franken-engine/'
+          paths = [root+'src/baseline_interpreter.rs', root+'tests/exception_cross_boundary_bd_8enww_4_7.rs']
+          def blob_hash(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def api(path, body=None):
+              req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine'+path, data=None if body is None else json.dumps(body).encode(), headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=90) as response:
+                  return json.load(response)
+          def git(*args, data=None):
+              return subprocess.run(['git', *args], input=data, stdout=subprocess.PIPE, check=True).stdout.decode()
+          assert not git('status', '--porcelain')
+          assert blob_hash(pathlib.Path(paths[0]).read_bytes()) == 'bc8d7d94af40fb95b7a72dbb172bcaedc05dea04'
+          sha = '7ba2f8c70375843fe32dfb61dda447211d875789'
+          patch = base64.b64decode(api('/git/blobs/'+sha)['content'])
+          assert blob_hash(patch) == sha
+          git('apply', '--check', '--index', '--whitespace=error-all', data=patch)
+          git('apply', '--index', '--whitespace=error-all', data=patch)
+          assert set(git('diff', '--cached', '--name-only').splitlines()) == set(paths)
+          for path in paths:
+              ranges = []
+              for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', git('diff', '--cached', '--unified=0', '--', path), re.M):
+                  start, count = int(match[1]), int(match[2] or 1)
+                  ranges.append({'file': path, 'range': [max(1, start-1), start+max(count,1)]})
+              subprocess.run(['rustfmt', '--unstable-features', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
+          git('add', '--', *paths)
+          git('diff', '--cached', '--check')
+          files = []
+          for path in paths:
+              data = pathlib.Path(path).read_bytes()
+              result = api('/git/blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              assert result['sha'] == blob_hash(data)
+              files.append({'path': path, 'sha': result['sha'], 'bytes': len(data)})
+          encoded = json.dumps(files, separators=(',', ':'))
+          print('PREPARED_FILES='+encoded, flush=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('files='+encoded+'\n')
+          pathlib.Path(os.environ['RUNNER_TEMP']+'/exception-files.json').write_text(encoded)
+          print(git('diff', '--cached', '--stat'))
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: runtime-slice
-          path: ${{ runner.temp }}/runtime-slice.zip
+          name: exception-files
+          path: ${{ runner.temp }}/exception-files.json
+          retention-days: 2
+
+  verify-exception-boundary:
+    needs: prepare-exception-boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: native-iteration-validation
+          cache-on-failure: true
+      - name: Read exact prepared bytes
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES: ${{ needs.prepare-exception-boundary.outputs.files }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          for item in json.loads(os.environ['FILES']):
+              req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'], headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=90) as response:
+                  data = base64.b64decode(json.load(response)['content'])
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() == item['sha']
+              pathlib.Path(item['path']).write_bytes(data)
+          PY
+      - name: Execute native exception regression suites
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo test --locked -p frankenengine-engine --no-fail-fast --test exception_cross_boundary_bd_8enww_4_7 --test array_callback_catchability_bd_8enww_4_10 --test array_callback_throw_value_fidelity_bd_8enww_4_8 --test destructuring_default_branch_regression --test destructuring_nested_rest_regression > "$RUNNER_TEMP/exception-tests.log" 2>&1
+          status=$?
+          tail -n 100 "$RUNNER_TEMP/exception-tests.log"
+          exit "$status"
+      - name: Check all targets
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo check --locked --all-targets > "$RUNNER_TEMP/exception-check.log" 2>&1
+          status=$?
+          tail -n 60 "$RUNNER_TEMP/exception-check.log"
+          exit "$status"
+      - name: Clippy all targets
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/exception-clippy.log" 2>&1
+          status=$?
+          tail -n 60 "$RUNNER_TEMP/exception-clippy.log"
+          exit "$status"
+      - name: Check formatting
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo fmt --check > "$RUNNER_TEMP/exception-fmt.log" 2>&1
+          status=$?
+          tail -n 40 "$RUNNER_TEMP/exception-fmt.log"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: exception-validation
+          path: ${{ runner.temp }}/exception-*.log
           retention-days: 2

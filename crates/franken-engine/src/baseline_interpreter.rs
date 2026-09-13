@@ -42967,20 +42967,36 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
-                    // Spread source object properties into target
+                    let input_label = self.binary_operation_label(target, source)?;
                     let target_val = self.read_reg(target)?;
                     let source_val = self.read_reg(source)?;
-                    if let (Value::Object(target_id), Value::Object(source_id)) =
-                        (target_val, source_val)
-                    {
-                        self.copy_own_runtime_properties(
-                            Some(module),
-                            target_id,
-                            source_id,
-                            false,
-                        )?;
+                    let Value::Object(target_id) = target_val else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object spread target".to_string(),
+                            got: target_val.type_name().to_string(),
+                        });
+                    };
+                    self.clear_pending_hostcall_result_label();
+                    self.join_object_mutation_label(target_id, &input_label)?;
+                    let result = self.copy_data_properties(
+                        Some(module), target_id, source_val, &BTreeSet::new(), false,
+                    );
+                    let callback_label = self.pending_hostcall_result_label
+                        .clone().unwrap_or(Label::Public);
+                    self.clear_pending_hostcall_result_label();
+                    match result {
+                        Ok(()) => {
+                            let label = input_label.join(&callback_label);
+                            self.join_object_mutation_label(target_id, &label)?;
+                            self.write_reg_with_label(target, Value::Object(target_id), label)?;
+                            self.ip += 1;
+                        }
+                        Err(error) => {
+                            if let Some(error) = self.route_iterator_close_failure(module, error)? {
+                                return Err(error);
+                            }
+                        }
                     }
-                    self.ip += 1;
                 }
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -48765,10 +48781,13 @@ impl InterpreterCore {
 
     fn proxy_trap_value(
         &mut self,
+        module: Option<&Ir3Module>,
         handler_id: ObjectId,
         trap_name: &str,
     ) -> Result<Option<Value>, InterpreterError> {
-        match self.prototype_chain_get(handler_id, trap_name)? {
+        match self.prototype_chain_get_with_receiver(
+            module, handler_id, trap_name, Value::Object(handler_id),
+        )? {
             Value::Undefined | Value::Null => Ok(None),
             trap @ (Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)) => {
                 Ok(Some(trap))
@@ -48787,19 +48806,27 @@ impl InterpreterCore {
         trap_name: &str,
         arguments: Vec<Value>,
     ) -> Result<Option<Value>, InterpreterError> {
-        let Some(trap) = self.proxy_trap_value(handler_id, trap_name)? else {
+        let Some(trap) = self.proxy_trap_value(module, handler_id, trap_name)? else {
             return Ok(None);
         };
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: format!("module-backed Proxy.{trap_name} trap dispatch"),
             got: "missing module context".to_string(),
         })?;
-        Ok(Some(self.invoke_inline_method_call(
+        let (value, label) = self.invoke_inline_method_call_with_argument_label(
             Some(module),
             trap,
             Value::Object(handler_id),
             arguments,
-        )?))
+            None,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(Some(value))
     }
 
     fn proxy_aware_get_property(
@@ -49218,39 +49245,227 @@ impl InterpreterCore {
         source_id: ObjectId,
         use_target_set: bool,
     ) -> Result<(), InterpreterError> {
-        let keys = self
-            .proxy_aware_own_property_keys(module, source_id, 0)?
-            .into_iter()
-            .map(|key| self.executable_property_key_from_value(&key))
-            .collect::<Vec<_>>();
+        self.copy_data_properties(
+            module,
+            target_id,
+            Value::Object(source_id),
+            &BTreeSet::new(),
+            use_target_set,
+        )
+    }
 
-        for key in keys {
-            let value = self.proxy_aware_get_runtime_property(
-                module,
-                source_id,
-                &key,
-                Value::Object(source_id),
-                0,
-            )?;
-            if use_target_set {
-                if !self.proxy_aware_set_runtime_property(
+    /// CopyDataProperties excludes keys *before* consulting a descriptor or
+    /// invoking a getter. Copying everything and deleting excluded properties
+    /// afterwards duplicates observable reads and is not object-rest semantics.
+    fn copy_data_properties(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target_id: ObjectId,
+        source: Value,
+        excluded: &BTreeSet<RuntimePropertyKey>,
+        use_target_set: bool,
+    ) -> Result<(), InterpreterError> {
+        if let Value::Str(text) = &source {
+            // String own properties are UTF-16 code units, unlike string
+            // iteration, which combines surrogate pairs into code points.
+            for (index, unit) in text.encode_utf16().enumerate() {
+                self.charge_property_copy_work()?;
+                let key = RuntimePropertyKey::String(index.to_string().into());
+                if !excluded.contains(&key) {
+                    self.copy_data_property_write(
+                        module,
+                        target_id,
+                        key,
+                        Value::Str(JsString::from_code_units(&[unit])),
+                        use_target_set,
+                        Label::Public,
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+        if !source.is_object_like() {
+            // Null/undefined are ignored by spread. Object-rest callers perform
+            // RequireObjectCoercible before entering this shared operation.
+            return Ok(());
+        }
+        let Some(source_id) = self.iterator_carrier_backing_id(&source, "object copy source")?
+        else {
+            return Ok(());
+        };
+        let source_object = self
+            .heap
+            .get(source_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: source_id.0 })?;
+        self.check_temporary_memory_budget(Self::estimate_ordered_property_map_bytes_nonalloc(
+            &source_object.properties,
+        ))?;
+        let keys = self.proxy_aware_own_property_keys(module, source_id, 0)?;
+        // Retain the key snapshot under the shared memory budget throughout
+        // nested getters/traps, not just during the initial allocation check.
+        let key_bytes = Self::estimate_value_vec_bytes(&keys);
+        self.apply_memory_component_delta(0, key_bytes)?;
+        let result = (|| {
+            for key_value in &keys {
+                self.charge_property_copy_work()?;
+                let key = self.executable_property_key_from_value(key_value);
+                if excluded.contains(&key)
+                    || !self.copy_own_key_is_enumerable(module, source_id, &key, 0)?
+                {
+                    continue;
+                }
+                if let Some(module) = module {
+                    self.run_pre_runtime_property_access_hook(module, source_id, &key)?;
+                }
+                let label = self
+                    .runtime_property_label(source_id, &key)
+                    .join(&self.process_dynamic_value_label(&source, &mut BTreeSet::new()))
+                    .join(&self.stream_state_label(source_id));
+                let value = self.proxy_aware_get_runtime_property(
+                    module,
+                    source_id,
+                    &key,
+                    source.clone(),
+                    0,
+                )?;
+                self.copy_data_property_write(
                     module,
                     target_id,
-                    &key,
+                    key,
                     value,
-                    Value::Object(target_id),
-                    0,
-                )? {
-                    return Err(InterpreterError::TypeError {
-                        expected: "successful Object.assign property write".to_string(),
-                        got: key.diagnostic(),
-                    });
-                }
-            } else {
-                self.set_object_runtime_property(target_id, key, value)?;
+                    use_target_set,
+                    label,
+                )?;
             }
+            Ok(())
+        })();
+        drop(keys);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(key_bytes);
+        result
+    }
+
+    fn charge_property_copy_work(&mut self) -> Result<(), InterpreterError> {
+        let next = self.instructions_executed.checked_add(1);
+        if next.is_none_or(|next| next > self.config.instruction_budget) {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        self.instructions_executed = next.expect("instruction budget checked above");
+        Ok(())
+    }
+
+    fn copy_own_key_is_enumerable(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded object-copy descriptor recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        if let Some((target, handler)) = self.active_proxy_record(object_id)? {
+            return match self.invoke_proxy_trap(
+                module,
+                handler,
+                "getOwnPropertyDescriptor",
+                vec![Value::Object(target), key.value()],
+            )? {
+                None => self.copy_own_key_is_enumerable(module, target, key, depth + 1),
+                Some(Value::Undefined) => Ok(false),
+                Some(value) if value.is_object_like() => {
+                    let Some(descriptor_id) = self
+                        .iterator_carrier_backing_id(&value, "Proxy property descriptor object")?
+                    else {
+                        return Ok(false);
+                    };
+                    let enumerable = self.proxy_aware_get_property(
+                        module,
+                        descriptor_id,
+                        "enumerable",
+                        value,
+                        0,
+                    )?;
+                    Ok(enumerable.is_truthy())
+                }
+                Some(other) => Err(InterpreterError::TypeError {
+                    expected: "object or undefined from Proxy.getOwnPropertyDescriptor".to_string(),
+                    got: other.type_name().to_string(),
+                }),
+            };
+        }
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        // Recheck existence per key: an earlier getter may delete a later
+        // property, even though that key remains in the ownKeys snapshot.
+        Ok(object.contains_own_runtime_property(key)
+            && match key {
+                RuntimePropertyKey::String(name) => {
+                    self.writable_own_runtime_property_visible(object_id, name)
+                        && !(object.is_array && name.as_str() == Some("length"))
+                }
+                RuntimePropertyKey::Symbol(_) => true,
+            })
+    }
+
+    fn copy_data_property_write(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target_id: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+        use_target_set: bool,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let label = label
+            .join(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+            )
+            .join(
+                self.object_mutation_labels
+                    .get(&target_id)
+                    .unwrap_or(&Label::Public),
+            )
+            .join(&self.clone_active_execution_context_label()?);
+        self.join_object_mutation_label(target_id, &label)?;
+        self.set_own_runtime_property_label(target_id, &key, &label)?;
+        if use_target_set {
+            if !self.proxy_aware_set_runtime_property(
+                module,
+                target_id,
+                &key,
+                value,
+                Value::Object(target_id),
+                0,
+            )? {
+                return Err(InterpreterError::TypeError {
+                    expected: "successful Object.assign property write".to_string(),
+                    got: key.diagnostic(),
+                });
+            }
+        } else {
+            self.set_object_runtime_property(target_id, key, value)?;
         }
         Ok(())
+    }
+
+    fn require_object_coercible(value: Value) -> Result<Value, InterpreterError> {
+        if matches!(value, Value::Null | Value::Undefined) {
+            return Err(InterpreterError::TypeError {
+                expected: "non-nullish object destructuring source".to_string(),
+                got: value.type_name().to_string(),
+            });
+        }
+        Ok(value)
     }
 
     // -- Promise hostcall dispatch ------------------------------------------
@@ -58270,7 +58485,13 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         match value {
             Value::Accessor { get: Some(get), .. } => {
-                self.invoke_inline_method_call(module, get.as_ref().clone(), receiver, Vec::new())
+                let (value, label) = self.invoke_inline_method_call_with_argument_label(
+                    module, get.as_ref().clone(), receiver, Vec::new(), None,
+                )?;
+                let label = self.pending_hostcall_result_label.as_ref()
+                    .unwrap_or(&Label::Public).join(&label);
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                Ok(value)
             }
             Value::Accessor { get: None, .. } => Ok(Value::Undefined),
             other => Ok(other),
@@ -65081,6 +65302,66 @@ impl InterpreterCore {
         }
 
         match cap {
+            "builtin:RequireObjectCoercible" => {
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one RequireObjectCoercible argument".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                Self::require_object_coercible(self.read_reg(args.start)?)
+            }
+            "builtin:ObjectRest" => {
+                if args.count == 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object rest source argument".to_string(),
+                        got: "no arguments".to_string(),
+                    });
+                }
+                let source = Self::require_object_coercible(self.read_reg(args.start)?)?;
+                let label = self.join_arg_range_with_object_mutation_label(args)?;
+                let mut exclusion_bytes = 0u64;
+                for offset in 1..args.count {
+                    let register = args.start.checked_add(offset)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start, max: self.config.max_registers,
+                        })?;
+                    exclusion_bytes = exclusion_bytes
+                        .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                        .saturating_add(Self::estimate_value_bytes(&self.read_reg(register)?));
+                }
+                self.check_temporary_memory_budget(exclusion_bytes)?;
+                let mut excluded = BTreeSet::new();
+                for offset in 1..args.count {
+                    let register = args.start.checked_add(offset)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start, max: self.config.max_registers,
+                        })?;
+                    let value = self.read_reg(register)?;
+                    if !matches!(value, Value::Str(_) | Value::Symbol(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "canonical object-rest property key".to_string(),
+                            got: value.type_name().to_string(),
+                        });
+                    }
+                    let key = self.executable_property_key_from_value(&value);
+                    self.validate_executable_property_key(&key)?;
+                    excluded.insert(key);
+                }
+                self.apply_memory_component_delta(0, exclusion_bytes)?;
+                let result = (|| {
+                    let target = self.alloc_object_with_prototype(None)?;
+                    self.join_object_mutation_label(target, &label)?;
+                    self.copy_data_properties(module, target, source, &excluded, false)?;
+                    let label = label.join(self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public));
+                    self.join_object_mutation_label(target, &label)?;
+                    self.replace_pending_hostcall_result_label(Some(label))?;
+                    Ok(Value::Object(target))
+                })();
+                drop(excluded);
+                self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(exclusion_bytes);
+                result
+            }
             "builtin:String" => {
                 // ECMA ToString conversion for the callable `String` global.
                 // With no argument it returns the empty string; additional
@@ -134143,5 +134424,81 @@ mod memory_accounting_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod object_copy_runtime_regression {
+    use super::*;
+
+    #[test]
+    fn copy_preserves_stored_property_labels() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "copy-property-label");
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let key = RuntimePropertyKey::String("secret".into());
+        core.set_object_runtime_property(source, key.clone(), Value::Int(7))
+            .unwrap();
+        core.set_own_runtime_property_label(source, &key, &Label::Secret)
+            .unwrap();
+        core.copy_data_properties(None, target, Value::Object(source), &BTreeSet::new(), false)
+            .unwrap();
+        assert_eq!(
+            core.own_stored_runtime_property_label(target, &key),
+            Label::Secret
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].own_runtime_property_value(&key),
+            Some(Value::Int(7))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn excluded_property_is_not_copied_or_read() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "copy-excluded-accessor");
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let key = RuntimePropertyKey::String("excluded".into());
+        // Without exclusion this needs a real module-backed invocation and
+        // fails; no fabricated accessor result is installed in the test.
+        core.set_object_runtime_property(
+            source,
+            key.clone(),
+            Value::Accessor {
+                get: Some(Arc::new(Value::Function(u32::MAX))),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.copy_data_properties(
+            None,
+            target,
+            Value::Object(source),
+            &BTreeSet::from([key.clone()]),
+            false,
+        )
+        .unwrap();
+        assert!(!core.heap[target.0 as usize].contains_own_runtime_property(&key));
+    }
+
+    #[test]
+    fn native_copy_charges_work_and_stops_at_budget() {
+        let mut config = InterpreterConfig::default();
+        config.instruction_budget = 1;
+        let mut core = InterpreterCore::new(config, "copy-instruction-budget");
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let result =
+            core.copy_data_properties(None, target, Value::str("abc"), &BTreeSet::new(), false);
+        assert!(matches!(
+            result,
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.instructions_executed, 1);
+        assert!(core.heap[target.0 as usize].properties.contains_key("0"));
+        assert!(!core.heap[target.0 as usize].properties.contains_key("1"));
     }
 }

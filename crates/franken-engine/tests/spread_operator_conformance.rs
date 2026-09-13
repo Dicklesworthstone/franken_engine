@@ -480,3 +480,174 @@ fn throwing_rest_suffix_getter_reaches_guest_catch() {
         "tail",
     );
 }
+
+// BRIDGE-14.5: object rest must exclude before descriptor/value observation.
+fn assert_object_copy(source: &str, expected: &str) {
+    let mut engine = frankenengine_engine::HybridRouter::default();
+    let outcome = engine
+        .eval(source)
+        .unwrap_or_else(|error| panic!("{error}\n{source}"));
+    assert_eq!(outcome.value, expected, "source: {source}");
+}
+
+#[test]
+fn object_rest_does_not_read_excluded_getter_twice() {
+    assert_object_copy(
+        r#"let reads = 0; let {a, ...rest} = {get a() { reads += 1; return 3; }, b: 4}; a + ':' + rest.b + ':' + reads + ':' + ('a' in rest);"#,
+        "3:4:1:false",
+    );
+}
+
+#[test]
+fn object_rest_reads_remaining_getters_in_source_order() {
+    assert_object_copy(
+        r#"let trace = ''; let {a, ...rest} = {get a() { trace += 'a'; return 1; }, get b() { trace += 'b'; return 2; }, get c() { trace += 'c'; return 3; }}; trace + ':' + rest.b + ':' + rest.c;"#,
+        "abc:2:3",
+    );
+}
+
+#[test]
+fn empty_object_binding_rejects_null() {
+    assert_object_copy(
+        r#"let result = ''; try { let {} = null; result = 'bad'; } catch (e) { result = e.name; } result;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn empty_object_binding_rejects_undefined() {
+    assert_object_copy(
+        r#"let result = ''; try { let {} = void 0; result = 'bad'; } catch (e) { result = e.name; } result;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn rest_only_binding_rejects_null() {
+    assert_object_copy(
+        r#"let result = ''; try { let {...rest} = null; result = 'bad'; } catch (e) { result = e.name; } result;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn empty_nested_object_binding_still_reads_and_checks_source() {
+    assert_object_copy(
+        r#"let reads = 0, result = ''; try { let {a: {}} = {get a() { reads += 1; return null; }}; } catch (e) { result = e.name; } reads + ':' + result;"#,
+        "1:TypeError",
+    );
+}
+
+#[test]
+fn object_rest_copies_string_code_units() {
+    assert_object_copy(
+        r#"let {0: first, ...rest} = 'abc'; first + ':' + rest[1] + ':' + rest[2] + ':' + ('0' in rest) + ':' + ('length' in rest);"#,
+        "a:b:c:false:false",
+    );
+}
+
+#[test]
+fn object_spread_preserves_surrogate_code_units() {
+    assert_object_copy(
+        r#"let result = {...'\uD83D\uDE00'}; result[0].charCodeAt(0) + ':' + result[1].charCodeAt(0) + ':' + ('length' in result);"#,
+        "55357:56832:false",
+    );
+}
+
+#[test]
+fn object_spread_nullish_sources_remain_noops() {
+    assert_object_copy(r#"let value = {...null, ...void 0, a: 3}; value.a;"#, "3");
+}
+
+#[test]
+fn object_rest_preserves_symbol_keys() {
+    assert_object_copy(
+        r#"let key = Symbol('key'); let source = {a: 1, [key]: 7}; let {a, ...rest} = source; a + ':' + rest[key] + ':' + ('a' in rest);"#,
+        "1:7:false",
+    );
+}
+
+#[test]
+fn object_copy_skips_properties_deleted_by_prior_getter() {
+    assert_object_copy(
+        r#"let source = {get a() { delete source.b; return 1; }, b: 2}; let copied = {...source}; copied.a + ':' + ('b' in copied);"#,
+        "1:false",
+    );
+}
+
+#[test]
+fn object_copy_snapshots_keys_before_getters_add_properties() {
+    assert_object_copy(
+        r#"let source = {get a() { source.b = 2; return 1; }}; let copied = {...source}; copied.a + ':' + ('b' in copied) + ':' + source.b;"#,
+        "1:false:2",
+    );
+}
+
+#[test]
+fn object_spread_throw_reaches_surrounding_catch() {
+    assert_object_copy(
+        r#"let trace = ''; try { let copied = {...{get a() { trace += 'a'; throw 7; }, get b() { trace += 'b'; return 2; }}}; } catch (e) { trace += ':' + e; } finally { trace += ':finally'; } trace;"#,
+        "a:7:finally",
+    );
+}
+
+#[test]
+fn object_rest_throw_prevents_later_pattern_binding() {
+    assert_object_copy(
+        r#"let trace = ''; try { let [{...rest}, later = (trace += 'later')] = [{get a() { trace += 'a'; throw 9; }}]; } catch (e) { trace += ':' + e; } trace;"#,
+        "a:9",
+    );
+}
+
+#[test]
+fn object_copy_does_not_copy_array_length() {
+    assert_object_copy(
+        r#"let copied = {...[4, 5]}; copied[0] + ':' + copied[1] + ':' + ('length' in copied);"#,
+        "4:5:false",
+    );
+}
+
+#[test]
+fn object_copy_observes_proxy_descriptor_before_value() {
+    assert_object_copy(
+        r#"let trace = ''; let source = new Proxy({}, {ownKeys() { trace += 'keys;'; return ['skip', 'keep']; }, getOwnPropertyDescriptor(target, key) { trace += 'desc:' + key + ';'; return {enumerable: key === 'keep', configurable: true}; }, get(target, key) { trace += 'get:' + key + ';'; return 7; }}); let copied = {...source}; trace + copied.keep + ':' + ('skip' in copied);"#,
+        "keys;desc:skip;desc:keep;get:keep;7:false",
+    );
+}
+
+#[test]
+fn object_rest_excludes_before_proxy_descriptor_trap() {
+    assert_object_copy(
+        r#"let trace = ''; let source = new Proxy({}, {ownKeys() { trace += 'keys;'; return ['a', 'b']; }, getOwnPropertyDescriptor(target, key) { trace += 'desc:' + key + ';'; return {enumerable: true, configurable: true}; }, get(target, key) { trace += 'get:' + key + ';'; return 5; }}); let {a, ...rest} = source; trace + a + ':' + rest.b;"#,
+        "get:a;keys;desc:b;get:b;5:5",
+    );
+}
+
+#[test]
+fn object_spread_rejects_invalid_proxy_descriptor_result() {
+    assert_object_copy(
+        r#"let result = ''; let source = new Proxy({}, {ownKeys() { return ['a']; }, getOwnPropertyDescriptor() { return null; }}); try { let copied = {...source}; result = 'bad'; } catch (e) { result = e.name; } result;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn object_copy_resolves_accessor_backed_proxy_traps() {
+    assert_object_copy(
+        r#"let trace = ''; let source = new Proxy({a: 7}, {get ownKeys() { trace += 'resolve;'; return function() { trace += 'keys;'; return ['a']; }; }}); let copied = {...source}; trace + copied.a;"#,
+        "resolve;keys;7",
+    );
+}
+
+#[test]
+fn destructuring_intrinsics_do_not_require_extra_authority() {
+    use frankenengine_engine::capability::{
+        HostcallDispatchBinding, HostcallResultContract, hostcall_registry_row,
+    };
+    for name in ["builtin:RequireObjectCoercible", "builtin:ObjectRest"] {
+        let row = hostcall_registry_row(name).expect("native syntax intrinsic must be registered");
+        assert_eq!(row.authority, None);
+        assert_eq!(row.dispatch, HostcallDispatchBinding::Builtin);
+        assert_eq!(row.result_contract, HostcallResultContract::JoinInputs);
+    }
+}

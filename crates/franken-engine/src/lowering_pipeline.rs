@@ -2919,6 +2919,16 @@ fn lower_destructuring_to_ir1(
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
+            // Even an empty pattern performs RequireObjectCoercible before
+            // evaluating a property name, default, or assignment reference.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: source_bid,
+            });
+            ops.push(Ir1Op::HostCall {
+                capability: "builtin:RequireObjectCoercible".to_string(),
+                arg_count: 1,
+            });
+            ops.push(Ir1Op::Discard);
             let mut rest_excluded_keys: Vec<JsString> = Vec::new();
             for prop in props {
                 if let BindingPattern::Rest(inner) = &prop.value {
@@ -2950,25 +2960,27 @@ fn lower_destructuring_to_ir1(
                         "destructure_rest",
                     )?;
 
-                    ops.push(Ir1Op::NewObject { count: 0 });
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: source_bid,
                     });
-                    ops.push(Ir1Op::SpreadIntoObject);
+                    for key in &rest_excluded_keys {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(key.clone()),
+                        });
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ObjectRest".to_string(),
+                        arg_count: u32::try_from(rest_excluded_keys.len())
+                            .ok()
+                            .and_then(|count| count.checked_add(1))
+                            .ok_or(LoweringPipelineError::InvariantViolation {
+                                detail: "object rest exclusion count exceeds IR argument range",
+                            })?,
+                    });
                     ops.push(Ir1Op::StoreBinding {
                         binding_id: rest_bid,
                     });
-                    ops.push(Ir1Op::Pop);
-
-                    for key in &rest_excluded_keys {
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: rest_bid,
-                        });
-                        ops.push(Ir1Op::DeleteProperty {
-                            key: Ir1PropertyKey::Static(key.clone()),
-                        });
-                        ops.push(Ir1Op::Pop);
-                    }
+                    ops.push(Ir1Op::Discard);
 
                     if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
                         ops.push(Ir1Op::LoadBinding {
@@ -3005,18 +3017,14 @@ fn lower_destructuring_to_ir1(
                 let excluded_key = object_pattern_static_key(prop, target_names.first().copied())?;
                 rest_excluded_keys.push(excluded_key.clone());
 
-                let target_name = match target_names.first() {
-                    Some(n) => *n,
-                    None => continue,
-                };
                 let property_status = match &prop.value {
-                    BindingPattern::Identifier(_) => prepare_destructuring_target_status(
+                    BindingPattern::Identifier(name) => prepare_destructuring_target_status(
                         ops,
                         bindings,
                         binding_lookup,
                         binding_index,
                         scope_id,
-                        target_name,
+                        name,
                         target_store,
                     )?,
                     BindingPattern::AssignmentPattern { left, .. }
@@ -3028,7 +3036,7 @@ fn lower_destructuring_to_ir1(
                             binding_lookup,
                             binding_index,
                             scope_id,
-                            target_name,
+                            left.as_identifier().expect("identifier pattern checked above"),
                             target_store,
                         )?
                     }
@@ -3046,11 +3054,11 @@ fn lower_destructuring_to_ir1(
                 });
 
                 match &prop.value {
-                    BindingPattern::Identifier(_) => {
+                    BindingPattern::Identifier(name) => {
                         push_destructuring_target_store(
                             ops,
                             binding_lookup,
-                            target_name,
+                            name,
                             target_store,
                             property_status,
                         )?;

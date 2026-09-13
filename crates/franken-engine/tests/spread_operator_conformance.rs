@@ -344,3 +344,139 @@ fn runtime_spread_string_uses_code_points() {
         "3:A:😀:B",
     );
 }
+
+fn assert_lazy_array_iterator(source: &str, expected: &str) {
+    let mut engine = frankenengine_engine::HybridRouter::default();
+    let outcome = engine
+        .eval(source)
+        .unwrap_or_else(|error| panic!("{error}\n{source}"));
+    assert_eq!(outcome.value, expected, "source: {source}");
+}
+
+#[test]
+fn lazy_values_observe_mutations_after_iterator_creation() {
+    assert_lazy_array_iterator(
+        r#"let a = [1, 2]; let it = a.values(); a[0] = 8; let x = it.next().value; a[1] = 9; x + ':' + it.next().value;"#,
+        "8:9",
+    );
+}
+
+#[test]
+fn lazy_values_observe_appends_before_exhaustion() {
+    assert_lazy_array_iterator(
+        r#"let a = [1]; let it = a.values(); let x = it.next().value; a.push(2); x + ':' + it.next().value + ':' + it.next().done;"#,
+        "1:2:true",
+    );
+}
+
+#[test]
+fn exhausted_array_iterators_stay_done_after_appends() {
+    assert_lazy_array_iterator(
+        r#"let a = []; let it = a.values(); let done = it.next().done; a.push(7); done + ':' + it.next().done;"#,
+        "true:true",
+    );
+}
+
+#[test]
+fn lazy_iterators_observe_length_truncation() {
+    assert_lazy_array_iterator(
+        r#"let a = [1, 2, 3]; let it = a.values(); let x = it.next().value; a.length = 1; x + ':' + it.next().done;"#,
+        "1:true",
+    );
+}
+
+#[test]
+fn lazy_values_defer_getters_until_next() {
+    assert_lazy_array_iterator(
+        r#"let calls = 0, a = [1]; Object.defineProperty(a, '0', {get() { calls += 1; return 7; }}); let it = a.values(); let before = calls; let x = it.next().value; before + ':' + calls + ':' + x;"#,
+        "0:1:7",
+    );
+}
+
+#[test]
+fn lazy_keys_never_read_indexed_getters() {
+    assert_lazy_array_iterator(
+        r#"let calls = 0, a = [1]; Object.defineProperty(a, '0', {get() { calls += 1; throw 7; }}); let it = a.keys(); it.next().value + ':' + it.next().done + ':' + calls;"#,
+        "0:true:0",
+    );
+}
+
+#[test]
+fn lazy_entries_get_current_values_and_allocate_independent_pairs() {
+    assert_lazy_array_iterator(
+        r#"let a = [1, 2]; let it = a.entries(); let first = it.next().value; a[1] = 9; let second = it.next().value; first.join(':') + ':' + second.join(':') + ':' + (first === second);"#,
+        "0:1:1:9:false",
+    );
+}
+
+#[test]
+fn throwing_array_getter_advances_iterator_before_next_retry() {
+    assert_lazy_array_iterator(
+        r#"let a = [1, 2]; Object.defineProperty(a, '0', {get() { throw 'stop'; }}); let it = a.values(); let error = ''; try { it.next(); } catch (e) { error = e; } error + ':' + it.next().value + ':' + it.next().done;"#,
+        "stop:2:true",
+    );
+}
+
+#[test]
+fn lazy_array_iterators_get_inherited_values_for_holes() {
+    assert_lazy_array_iterator(
+        r#"let a = [1, , 3]; Object.setPrototypeOf(a, {1: 8}); let it = [].values.call(a); it.next().value + ':' + it.next().value + ':' + it.next().value;"#,
+        "1:8:3",
+    );
+}
+
+#[test]
+fn lazy_generic_array_iterator_reads_length_each_time() {
+    assert_lazy_array_iterator(
+        r#"let reads = 0; let a = {0: 'a', 1: 'b', get length() { reads += 1; return 2; }}; let it = [].values.call(a); let before = reads; let first = it.next().value; let second = it.next().value; let done = it.next().done; before + ':' + reads + ':' + first + second + ':' + done;"#,
+        "0:3:ab:true",
+    );
+}
+
+#[test]
+fn lazy_generic_array_iterator_truncates_fractional_lengths() {
+    assert_lazy_array_iterator(
+        r#"let it = [].values.call({0: 7, 1: 8, length: 1.8}); it.next().value + ':' + it.next().done;"#,
+        "7:true",
+    );
+}
+
+#[test]
+fn lazy_generic_array_iterator_rejects_bigint_length_on_next() {
+    assert_lazy_array_iterator(
+        r#"let it = [].values.call({length: 1n}); let error = ''; try { it.next(); } catch (e) { error = e.name; } error;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn spread_consumes_lazy_iterator_from_current_position() {
+    assert_lazy_array_iterator(
+        r#"let a = [1, 2], it = a.values(); it.next(); a.push(3); [...it].join(':');"#,
+        "2:3",
+    );
+}
+
+#[test]
+fn array_iterator_creation_does_not_expand_sparse_length() {
+    assert_lazy_array_iterator(
+        r#"let a = []; a.length = 4294967295; let it = a.keys(); it.next().value + ':' + it.next().value;"#,
+        "0:1",
+    );
+}
+
+#[test]
+fn rest_suffix_observes_getters_without_reading_skipped_prefix() {
+    assert_lazy_array_iterator(
+        r#"let trace = ''; let a = [1, 2, 3]; Object.defineProperty(a, '0', {get() { trace += 'a'; return 1; }}); Object.defineProperty(a, '1', {get() { trace += 'b'; return 7; }}); let [head, ...tail] = a; trace + ':' + head + ':' + tail.join(':');"#,
+        "ab:1:7:3",
+    );
+}
+
+#[test]
+fn throwing_rest_suffix_getter_reaches_guest_catch() {
+    assert_lazy_array_iterator(
+        r#"let a = [1]; Object.defineProperty(a, '0', {get() { throw 'tail'; }}); let error = ''; try { let [...tail] = a; } catch (e) { error = e; } error;"#,
+        "tail",
+    );
+}

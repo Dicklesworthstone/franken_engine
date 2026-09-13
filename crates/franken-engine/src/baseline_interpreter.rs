@@ -5500,6 +5500,9 @@ struct RuntimeForInState {
 struct RuntimeForOfState {
     values: Vec<Value>,
     next_index: usize,
+    /// Array iterators retain the source, not an eager copy of its elements.
+    /// Each next observes the current length and performs the indexed Get.
+    array: Option<RuntimeArrayIterator>,
     /// Typed-array iterators are lazy. Eagerly materializing one `Value` per
     /// byte amplified a bounded Buffer into an unmetered host allocation.
     typed_array: Option<RuntimeTypedArrayIterator>,
@@ -5519,6 +5522,7 @@ struct RuntimeForOfState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForOfInit {
     values: Vec<Value>,
+    array: Option<RuntimeArrayIterator>,
     typed_array: Option<RuntimeTypedArrayIterator>,
     iterator_object: Option<ObjectId>,
     next_method: Option<Value>,
@@ -5530,6 +5534,7 @@ impl RuntimeForOfInit {
     fn from_values(values: Vec<Value>) -> Self {
         Self {
             values,
+            array: None,
             typed_array: None,
             iterator_object: None,
             next_method: None,
@@ -5541,6 +5546,7 @@ impl RuntimeForOfInit {
     fn from_custom(iterator_object: ObjectId, next_method: Value) -> Self {
         Self {
             values: Vec::new(),
+            array: None,
             typed_array: None,
             iterator_object: Some(iterator_object),
             next_method: Some(next_method),
@@ -5552,6 +5558,7 @@ impl RuntimeForOfInit {
     fn from_existing(handle: u32) -> Self {
         Self {
             values: Vec::new(),
+            array: None,
             typed_array: None,
             iterator_object: None,
             next_method: None,
@@ -5564,6 +5571,7 @@ impl RuntimeForOfInit {
     fn from_timers_interval(delay_ms: u64, value: Value) -> Self {
         Self {
             values: Vec::new(),
+            array: None,
             typed_array: None,
             iterator_object: None,
             next_method: None,
@@ -5583,6 +5591,13 @@ enum RuntimeTypedArrayIteratorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeTypedArrayIterator {
     view: TypedArrayView,
+    kind: RuntimeTypedArrayIteratorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeArrayIterator {
+    object_id: ObjectId,
+    // Arrays and typed arrays expose the same keys/values/entries projections.
     kind: RuntimeTypedArrayIteratorKind,
 }
 
@@ -29225,7 +29240,9 @@ impl InterpreterCore {
                             })??;
                             self.append_spread_array_element(array_id, &mut next_index, value)?;
                         }
-                    } else if matches!(intrinsic_kind, Some(BuiltinFunctionKind::ArrayValues)) {
+                    } else if matches!(intrinsic_kind, Some(BuiltinFunctionKind::ArrayValues))
+                        && self.heap.get(iterable_id.0 as usize).is_some_and(|object| object.is_array)
+                    {
                         // Stream the intrinsic instead of allocating an eager
                         // snapshot of every element. The live length and Get
                         // operations preserve holes, inherited properties,
@@ -42920,80 +42937,19 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ArraySlice { array, start, dst } => {
                     let result_label = self.binary_operation_label(array, start)?;
-                    let arr_val = self.read_reg(array)?;
-                    let start_val = self.read_reg(start)?;
-                    let Value::Object(arr_id) = arr_val else {
-                        return Err(InterpreterError::TypeError {
-                            expected: "array object".to_string(),
-                            got: arr_val.type_name().to_string(),
-                        });
-                    };
-
-                    let elements: Vec<Value> = {
-                        let obj = self
-                            .heap
-                            .get(arr_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: arr_id.0 })?;
-                        let length = obj
-                            .properties
-                            .get("length")
-                            .and_then(|value| match value {
-                                Value::Int(n) if *n > 0 => usize::try_from(*n).ok(),
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| {
-                                obj.properties
-                                    .keys()
-                                    .filter_map(|key| key.parse::<usize>().ok())
-                                    .max()
-                                    .map_or(0, |index| index.saturating_add(1))
-                            });
-                        (0..length)
-                            .map(|index| {
-                                obj.properties
-                                    .get(&index.to_string())
-                                    .cloned()
-                                    .unwrap_or(Value::Undefined)
-                            })
-                            .collect()
-                    };
-
-                    let length = elements.len();
-                    let start_idx = match start_val {
-                        Value::Undefined | Value::Null => 0,
-                        Value::Bool(false) => 0,
-                        Value::Bool(true) => 1usize.min(length),
-                        Value::Int(n) if n < 0 => {
-                            usize::try_from((length as i64).saturating_add(n).max(0)).unwrap_or(0)
+                    let array_value = self.read_reg(array)?;
+                    let start_value = self.read_reg(start)?;
+                    match self.slice_array_suffix(Some(module), array_value, start_value) {
+                        Ok(result) => {
+                            self.write_reg_with_label(dst, result, result_label)?;
+                            self.ip += 1;
                         }
-                        Value::Int(n) => usize::try_from(n).unwrap_or(usize::MAX).min(length),
-                        Value::Float(f) => {
-                            let value = f.inner();
-                            if !value.is_finite() {
-                                0
-                            } else if value < 0.0 {
-                                ((length as f64) + value).max(0.0) as usize
-                            } else {
-                                (value as usize).min(length)
+                        Err(error) => {
+                            if let Some(error) = self.route_iterator_close_failure(module, error)? {
+                                return Err(error);
                             }
                         }
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "integer-compatible array slice start".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    };
-
-                    let result_values: Vec<Value> = elements.into_iter().skip(start_idx).collect();
-                    let result_id = self.alloc_array_from_values(&result_values)?;
-                    // IFC: the sliced array derives its contents from `array`
-                    // and its length from `start`, so join both source labels
-                    // onto dst (mirrors GetProperty joining the container
-                    // label). Without this, `secretArr.slice(0)` would read as
-                    // Public.
-                    self.write_reg_with_label(dst, Value::Object(result_id), result_label)?;
-                    self.ip += 1;
+                    }
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
                     match self.spread_into_array_transaction(module, array, iterable) {
@@ -46031,6 +45987,7 @@ impl InterpreterCore {
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: init.values,
             next_index: 0,
+            array: init.array,
             typed_array: init.typed_array,
             iterator_object: init.iterator_object,
             next_method: init.next_method,
@@ -46048,9 +46005,12 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
-        enum ForOfStep {
-            Done,
+        enum ForOfStep {            Done,
             Value(Value),
+            Array {
+                iterator: RuntimeArrayIterator,
+                index: usize,
+            },
             TypedArray {
                 iterator: RuntimeTypedArrayIterator,
                 index: usize,
@@ -46093,6 +46053,11 @@ impl InterpreterCore {
                             next_method,
                         },
                     )
+                } else if let Some(iterator) = state.array.clone() {
+                    (
+                        state.trace_index,
+                        ForOfStep::Array { iterator, index: state.next_index },
+                    )
                 } else if let Some(iterator) = state.typed_array.clone() {
                     if state.next_index >= iterator.view.length {
                         state.done = true;
@@ -46124,6 +46089,56 @@ impl InterpreterCore {
                 return Ok(None);
             }
             ForOfStep::Value(value) => {
+                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                return Ok(Some(value));
+            }
+            ForOfStep::Array { iterator, index } => {
+                let receiver = Value::Object(iterator.object_id);
+                let length = self.proxy_aware_get_property(
+                    module, iterator.object_id, "length", receiver.clone(), 0,
+                )?;
+                if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "number-compatible array-like length".to_string(),
+                        got: length.type_name().to_string(),
+                    });
+                }
+                let length = Self::coerce_to_float(&length).unwrap_or(f64::NAN);
+                let length = if length.is_nan() || length <= 0.0 {
+                    0
+                } else {
+                    length.floor().min(9_007_199_254_740_991.0) as usize
+                };
+                if index >= length {
+                    if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                        state.done = true;
+                    }
+                    self.record_iteration_next_result(trace_index, None);
+                    return Ok(None);
+                }
+                // Advance before the indexed Get, as ArrayIterator.next does.
+                // A throwing getter must not make a later next retry that key.
+                if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                    state.next_index = index.checked_add(1).ok_or_else(|| InterpreterError::RangeError {
+                        message: "array iterator index exceeds the platform range".to_string(),
+                    })?;
+                }
+                let index_value = Value::Int(i64::try_from(index).map_err(|_| InterpreterError::RangeError {
+                    message: "array iterator index exceeds the integer range".to_string(),
+                })?);
+                let value = match iterator.kind {
+                    RuntimeTypedArrayIteratorKind::Keys => index_value,
+                    RuntimeTypedArrayIteratorKind::Values | RuntimeTypedArrayIteratorKind::Entries => {
+                        let element = self.proxy_aware_get_property(
+                            module, iterator.object_id, &index.to_string(), receiver, 0,
+                        )?;
+                        if iterator.kind == RuntimeTypedArrayIteratorKind::Entries {
+                            Value::Object(self.alloc_array_from_values(&[index_value, element])?)
+                        } else {
+                            element
+                        }
+                    }
+                };
                 self.record_iteration_next_result(trace_index, Some(value.clone()));
                 return Ok(Some(value));
             }
@@ -52988,6 +53003,7 @@ impl InterpreterCore {
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: Vec::new(),
             next_index: 0,
+            array: None,
             typed_array: Some(RuntimeTypedArrayIterator { view, kind }),
             iterator_object: None,
             next_method: None,
@@ -56045,6 +56061,66 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(carrier_bytes);
     }
 
+    /// Collect an IR rest/slice suffix without first materializing the whole
+    /// source. Every indexed Get observes accessors/prototypes, and every
+    /// append goes through the same bounded allocation path as spread.
+    fn slice_array_suffix(
+        &mut self,
+        module: Option<&Ir3Module>,
+        array: Value,
+        start: Value,
+    ) -> Result<Value, InterpreterError> {
+        let Value::Object(array_id) = array else {
+            return Err(InterpreterError::TypeError {
+                expected: "array object".to_string(),
+                got: array.type_name().to_string(),
+            });
+        };
+        let length = self.array_like_length(array_id)?;
+        let start = match start {
+            Value::Undefined | Value::Null | Value::Bool(false) => 0,
+            Value::Bool(true) => 1usize.min(length),
+            Value::Int(index) if index < 0 => {
+                usize::try_from((length as i64).saturating_add(index).max(0)).unwrap_or(0)
+            }
+            Value::Int(index) => usize::try_from(index).unwrap_or(usize::MAX).min(length),
+            Value::Float(value) => {
+                let index = value.inner().trunc();
+                if index.is_nan() {
+                    0
+                } else if index < 0.0 {
+                    ((length as f64) + index).max(0.0) as usize
+                } else {
+                    (index as usize).min(length)
+                }
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "integer-compatible array slice start".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let result = self.alloc_array_from_values(&[])?;
+        let mut next_index = 0;
+        for index in start..length {
+            let value = self.proxy_aware_get_property(
+                module,
+                array_id,
+                &index.to_string(),
+                Value::Object(array_id),
+                0,
+            )?;
+            self.append_spread_array_element(result, &mut next_index, value)?;
+        }
+        self.set_object_property(
+            result,
+            "length".to_string(),
+            Value::Int(i64::from(next_index)),
+        )?;
+        Ok(Value::Object(result))
+    }
+
     fn array_prototype_iterator(
         &mut self,
         args: RegRange,
@@ -56067,40 +56143,17 @@ impl InterpreterCore {
             Value::Object(object_id) => Some(object_id),
             _ => None,
         };
-        let mut values = Vec::new();
-
-        if let Some(array_id) = array_id {
-            let length = self.array_like_length(array_id)?;
-            values.reserve(length);
-            for element_index in 0..length {
-                let index_value =
-                    i64::try_from(element_index).map_err(|_| InterpreterError::TypeError {
-                        expected: "array iterator index within i64".to_string(),
-                        got: element_index.to_string(),
-                    })?;
-                match kind {
-                    "entries" => {
-                        let element = self
-                            .array_index_value(array_id, element_index)?
-                            .unwrap_or(Value::Undefined);
-                        let entry_id =
-                            self.alloc_array_from_values(&[Value::Int(index_value), element])?;
-                        values.push(Value::Object(entry_id));
-                    }
-                    "keys" => values.push(Value::Int(index_value)),
-                    "values" => values.push(
-                        self.array_index_value(array_id, element_index)?
-                            .unwrap_or(Value::Undefined),
-                    ),
-                    _ => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "array iterator kind".to_string(),
-                            got: kind.to_string(),
-                        });
-                    }
-                }
+        let projection = match kind {
+            "entries" => RuntimeTypedArrayIteratorKind::Entries,
+            "keys" => RuntimeTypedArrayIteratorKind::Keys,
+            "values" => RuntimeTypedArrayIteratorKind::Values,
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "array iterator kind".to_string(),
+                    got: kind.to_string(),
+                });
             }
-        }
+        };
 
         let trace_index = self.start_iteration_trace(
             IterationKind::ForOf,
@@ -56125,8 +56178,9 @@ impl InterpreterCore {
             )
         });
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
-            values,
+            values: Vec::new(),
             next_index: 0,
+            array: array_id.map(|object_id| RuntimeArrayIterator { object_id, kind: projection }),
             typed_array: None,
             iterator_object: None,
             next_method: None,
@@ -76128,6 +76182,9 @@ impl InterpreterCore {
                 MEMORY_ESTIMATE_ITERATOR_BASE_BYTES
                     .saturating_add(value_slots)
                     .saturating_add(values)
+                    .saturating_add(state.array.as_ref().map_or(0, |_| {
+                        std::mem::size_of::<RuntimeArrayIterator>() as u64
+                    }))
                     .saturating_add(next_method)
                     .saturating_add(timers_interval)
             }
@@ -83615,6 +83672,7 @@ mod active_builtin_regressions {
             .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                 values: vec![Value::Int(1)],
                 next_index: 0,
+                array: None,
                 typed_array: None,
                 iterator_object: Some(iterator_object),
                 next_method: None,
@@ -83912,6 +83970,7 @@ mod active_builtin_regressions {
             .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                 values: vec![Value::Int(1)],
                 next_index: 0,
+                array: None,
                 typed_array: None,
                 iterator_object: Some(iterator_object),
                 next_method: None,
@@ -93348,6 +93407,7 @@ mod async_runtime_tests_current {
         let iterator = RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: Vec::new(),
             next_index: 0,
+            array: None,
             typed_array: None,
             iterator_object: None,
             next_method: None,
@@ -104567,6 +104627,126 @@ mod async_runtime_tests_current {
     /// source's elements but never propagated the source label, so
     /// `secretArr.slice(0)` laundered to a Public dst. `GetProperty` joins the
     /// container label for exactly this reason; the slice is analogous.
+    #[test]
+    fn lazy_array_iterator_state_does_not_expand_sparse_length() {
+        let mut core = test_interpreter();
+        let array = core.alloc_array_from_values(&[]).expect("array");
+        core.set_object_property(array, "length".to_string(), Value::Int(i64::from(u32::MAX)))
+            .expect("sparse length");
+        let objects = core.heap.len();
+        let iterator = core
+            .array_prototype_iterator_for_receiver(Value::Object(array), "keys")
+            .expect("lazy keys");
+        let Value::Iterator(handle) = iterator else {
+            panic!("iterator handle")
+        };
+        let RuntimeIteratorState::ForOf(state) = core.iterator_state_mut(handle).expect("state")
+        else {
+            panic!("for-of state")
+        };
+        assert!(state.values.is_empty(), "no eager element snapshot");
+        assert!(state.array.is_some());
+        assert_eq!(core.heap.len(), objects);
+        assert_eq!(
+            core.advance_for_of_iterator(None, Value::Iterator(handle))
+                .expect("first"),
+            Some(Value::Int(0))
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(None, Value::Iterator(handle))
+                .expect("second"),
+            Some(Value::Int(1))
+        );
+        assert_eq!(core.heap.len(), objects);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn lazy_array_entries_allocate_only_when_advanced() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(7)])
+            .expect("array");
+        let objects = core.heap.len();
+        let iterator = core
+            .array_prototype_iterator_for_receiver(Value::Object(array), "entries")
+            .expect("entries");
+        assert_eq!(
+            core.heap.len(),
+            objects,
+            "creation does not allocate entry pairs"
+        );
+        let Some(Value::Object(pair)) = core.advance_for_of_iterator(None, iterator).expect("next")
+        else {
+            panic!("entry pair")
+        };
+        assert_eq!(core.heap.len(), objects + 1);
+        assert_eq!(
+            core.heap[pair.0 as usize].properties.get("0"),
+            Some(&Value::Int(0))
+        );
+        assert_eq!(
+            core.heap[pair.0 as usize].properties.get("1"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn array_suffix_does_not_allocate_the_skipped_sparse_prefix() {
+        let mut core = test_interpreter();
+        let array = core.alloc_array_from_values(&[]).expect("array");
+        let last = u32::MAX - 1;
+        core.set_object_property(array, last.to_string(), Value::Int(42))
+            .expect("last sparse element");
+        core.set_object_property(array, "length".to_string(), Value::Int(i64::from(u32::MAX)))
+            .expect("length");
+        let Value::Object(result) = core
+            .slice_array_suffix(None, Value::Object(array), Value::Int(i64::from(last)))
+            .expect("one-element suffix")
+        else {
+            panic!("suffix array")
+        };
+        assert_eq!(
+            core.heap[result.0 as usize].properties.get("length"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[result.0 as usize].properties.get("0"),
+            Some(&Value::Int(42))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn array_suffix_internal_loop_obeys_instruction_budget() {
+        let mut core = test_interpreter();
+        let array = core.alloc_array_from_values(&[]).expect("array");
+        core.set_object_property(array, "length".to_string(), Value::Int(1_000_000))
+            .expect("sparse length");
+        core.config.instruction_budget = 3;
+        assert!(matches!(
+            core.slice_array_suffix(None, Value::Object(array), Value::Int(0)),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 3,
+                budget: 3
+            })
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
     #[test]
     fn array_slice_propagates_source_array_label_onto_dst() {
         let module = test_module_with_functions(
@@ -132841,6 +133021,7 @@ mod memory_accounting_tests {
                     core.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                         values: values.iter().map(H8MemoryValue::to_runtime_value).collect(),
                         next_index: 0,
+                        array: None,
                         typed_array: None,
                         iterator_object: None,
                         next_method: Some(next_method.to_runtime_value()),

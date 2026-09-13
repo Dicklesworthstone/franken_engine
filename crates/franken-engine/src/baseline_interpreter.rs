@@ -29112,9 +29112,14 @@ impl InterpreterCore {
                 budget: self.config.instruction_budget,
             });
         }
+        if *next_index == u32::MAX {
+            return Err(InterpreterError::RangeError {
+                message: "array spread exceeds the maximum array length".to_string(),
+            });
+        }
         self.instructions_executed += 1;
         self.set_object_property(array_id, next_index.to_string(), value)?;
-        *next_index = next_index.saturating_add(1);
+        *next_index += 1;
         Ok(())
     }
 
@@ -29181,47 +29186,106 @@ impl InterpreterCore {
             original_memory_ceiling.saturating_sub(transaction_temporary_bytes);
 
         let mutation_result = (|| {
-            let mut next_index = self
-                .heap
-                .get(heap_index)
-                .map(|object| {
-                    object.properties.keys().fold(0u32, |current, key| {
-                        key.parse::<u32>()
-                            .ok()
-                            .filter(|&index| index != u32::MAX)
-                            .map_or(current, |index| current.max(index + 1))
-                    })
-                })
-                .unwrap_or(0);
+            // Length, not the highest populated index, owns the insertion
+            // point: preceding elisions still occupy array positions.
+            let mut next_index = u32::try_from(self.array_like_length(array_id)?).map_err(|_| {
+                InterpreterError::RangeError {
+                    message: "array spread target length exceeds the array index range".to_string(),
+                }
+            })?;
 
             match iterable_value {
                 Value::Object(iterable_id) => {
-                    if let Some(view) = self.typed_array_view_for_object(iterable_id)? {
+                    // GetMethod happens exactly once, including an inherited
+                    // accessor or Proxy trap. An array's own @@iterator may
+                    // override the intrinsic; an indexed ordinary object is
+                    // not iterable merely because it has numeric properties.
+                    let iterator_method = self
+                        .lookup_symbol_iterator_method(
+                            Some(module),
+                            iterable_id,
+                            Value::Object(iterable_id),
+                        )?
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "callable Symbol.iterator method".to_string(),
+                            got: "null or undefined Symbol.iterator".to_string(),
+                        })?;
+                    let intrinsic_kind = match &iterator_method {
+                        Value::BuiltinFunction(builtin) => Some(&builtin.kind),
+                        _ => None,
+                    };
+                    if matches!(intrinsic_kind, Some(BuiltinFunctionKind::TypedArrayValues)) {
+                        let (_, view) = self.typed_array_receiver_view(
+                            Value::Object(iterable_id),
+                            "values",
+                        )?;
                         for index in 0..view.length {
                             let value = self.with_array_buffer_bytes(view.buffer, |bytes| {
                                 Self::read_typed_array_element_bytes(&view, bytes, index)
                             })??;
                             self.append_spread_array_element(array_id, &mut next_index, value)?;
                         }
-                    } else {
+                    } else if matches!(intrinsic_kind, Some(BuiltinFunctionKind::ArrayValues)) {
+                        // Stream the intrinsic instead of allocating an eager
+                        // snapshot of every element. The live length and Get
+                        // operations preserve holes, inherited properties,
+                        // accessor effects, and changes made by those getters.
+                        let initial_length = self.array_like_length(iterable_id)?;
                         let mut index = 0u32;
                         loop {
                             // Spreading an array into itself must consume the
                             // finite pre-transaction view. Reading the live
                             // target would observe our own appends forever.
-                            let value = if iterable_id == array_id {
-                                array_snapshot.properties.get(&index.to_string()).cloned()
+                            let length = if iterable_id == array_id {
+                                initial_length
                             } else {
-                                self.heap
-                                    .get(iterable_id.0 as usize)
-                                    .and_then(|object| object.properties.get(&index.to_string()))
-                                    .cloned()
+                                self.array_like_length(iterable_id)?
                             };
-                            let Some(value) = value else {
+                            if index as usize >= length {
                                 break;
+                            }
+                            let value = if iterable_id == array_id {
+                                let raw = array_snapshot
+                                    .properties
+                                    .get(&index.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined);
+                                self.resolve_accessor_get(
+                                    Some(module),
+                                    raw,
+                                    Value::Object(iterable_id),
+                                )?
+                            } else {
+                                self.proxy_aware_get_property(
+                                    Some(module),
+                                    iterable_id,
+                                    &index.to_string(),
+                                    Value::Object(iterable_id),
+                                    0,
+                                )?
                             };
                             self.append_spread_array_element(array_id, &mut next_index, value)?;
-                            index = index.saturating_add(1);
+                            index = index.checked_add(1).ok_or_else(|| InterpreterError::RangeError {
+                                message: "array spread exceeds the array index range".to_string(),
+                            })?;
+                        }
+                    } else {
+                        let iterator_value = self.invoke_inline_method_call(
+                            Some(module),
+                            iterator_method,
+                            Value::Object(iterable_id),
+                            Vec::new(),
+                        )?;
+                        let init = self.prepare_custom_iterator_result(module, iterator_value)?;
+                        let iterator = self.init_iterator_from_state(
+                            Value::Object(iterable_id),
+                            init,
+                            IterationKind::ArraySpread,
+                        )?;
+                        while let Some(value) =
+                            self.advance_for_of_iterator(Some(module), iterator.clone())?
+                        {
+                            self.append_spread_array_element(array_id, &mut next_index, value)?;
                         }
                     }
                 }
@@ -29241,7 +29305,12 @@ impl InterpreterCore {
                         self.append_spread_array_element(array_id, &mut next_index, value)?;
                     }
                 }
-                _ => {}
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterable".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
             }
             self.set_object_property(
                 array_id,
@@ -42927,8 +42996,19 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
-                    self.spread_into_array_transaction(module, array, iterable)?;
-                    self.ip += 1;
+                    match self.spread_into_array_transaction(module, array, iterable) {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            // Guest throws from @@iterator, next, done, or
+                            // value cross an isolated callback boundary. Route
+                            // their original value through the surrounding
+                            // catch/finally/async boundary; resource refusals
+                            // remain uncatchable interpreter failures.
+                            if let Some(error) = self.route_iterator_close_failure(module, error)? {
+                                return Err(error);
+                            }
+                        }
+                    }
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
                     // Spread source object properties into target
@@ -45771,9 +45851,19 @@ impl InterpreterCore {
 
         let iterator_value =
             self.invoke_inline_method_call(Some(module), iterator_method, receiver, Vec::new())?;
+        self.prepare_custom_iterator_result(module, iterator_value).map(Some)
+    }
+
+    /// Capture the iterator's next method once. Both for-of and spread use
+    /// this boundary, rather than re-reading a mutable next property per step.
+    fn prepare_custom_iterator_result(
+        &mut self,
+        module: &Ir3Module,
+        iterator_value: Value,
+    ) -> Result<RuntimeForOfInit, InterpreterError> {
         let backing = match iterator_value {
             Value::Iterator(handle) => {
-                return Ok(Some(RuntimeForOfInit::from_existing(handle)));
+                return Ok(RuntimeForOfInit::from_existing(handle));
             }
             // bd-es2ra: every object-like carrier is a valid iterator; only
             // primitives keep the historical TypeError.
@@ -45803,10 +45893,10 @@ impl InterpreterCore {
             });
         };
 
-        Ok(Some(RuntimeForOfInit::from_custom(
+        Ok(RuntimeForOfInit::from_custom(
             iterator_object,
             next_method,
-        )))
+        ))
     }
 
     fn optional_callable_property(
@@ -45912,13 +46002,22 @@ impl InterpreterCore {
             return Ok(value);
         }
 
-        let iterable_ref = self.iteration_ref_for_value(&value);
         let init = self.prepare_for_of_state(module, &value)?;
+        self.init_iterator_from_state(value, init, IterationKind::ForOf)
+    }
+
+    fn init_iterator_from_state(
+        &mut self,
+        value: Value,
+        init: RuntimeForOfInit,
+        kind: IterationKind,
+    ) -> Result<Value, InterpreterError> {
         if let Some(handle) = init.existing_handle {
             return Ok(Value::Iterator(handle));
         }
+        let iterable_ref = self.iteration_ref_for_value(&value);
         let trace_index = self.start_iteration_trace(
-            IterationKind::ForOf,
+            kind,
             format!("iterable:{}|{}", value.type_name(), value),
         );
         self.record_iteration_event(trace_index, |record_id, step_index| {

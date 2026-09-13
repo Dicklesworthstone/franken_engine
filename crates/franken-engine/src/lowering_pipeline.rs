@@ -3095,27 +3095,21 @@ fn lower_destructuring_to_ir1(
                     None => continue, // hole: `[, b]`
                 };
 
-                // Handle rest element: `[a, ...rest]`
+                // A rest target can itself be an array or object pattern.
                 if let BindingPattern::Rest(inner) = element {
-                    let target_names = inner.binding_names();
-                    let target_name = match target_names.first() {
-                        Some(n) => *n,
-                        None => continue,
+                    let rest_status = if let BindingPattern::Identifier(name) = inner.as_ref() {
+                        prepare_destructuring_target_status(
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            name,
+                            target_store,
+                        )?
+                    } else {
+                        None
                     };
-                    let rest_status = matches!(inner.as_ref(), BindingPattern::Identifier(_))
-                        .then(|| {
-                            prepare_destructuring_target_status(
-                                ops,
-                                bindings,
-                                binding_lookup,
-                                binding_index,
-                                scope_id,
-                                target_name,
-                                target_store,
-                            )
-                        })
-                        .transpose()?
-                        .flatten();
                     // Rest collects remaining elements by slicing the source array
                     // from the current index to the end.
                     ops.push(Ir1Op::LoadBinding {
@@ -3125,14 +3119,43 @@ fn lower_destructuring_to_ir1(
                         value: Ir1Literal::Integer(index as i64),
                     });
                     ops.push(Ir1Op::ArraySlice);
-                    push_destructuring_target_store(
-                        ops,
-                        binding_lookup,
-                        target_name,
-                        target_store,
-                        rest_status,
-                    )?;
-                    ops.push(Ir1Op::Pop);
+                    if let BindingPattern::Identifier(name) = inner.as_ref() {
+                        push_destructuring_target_store(
+                            ops,
+                            binding_lookup,
+                            name,
+                            target_store,
+                            rest_status,
+                        )?;
+                        ops.push(Ir1Op::Pop);
+                    } else {
+                        // Keep the collected array separate from every target
+                        // binding, including the first one in a nested pattern.
+                        let rest_bid = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            "destructure_array_rest",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: rest_bid,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        lower_destructuring_to_ir1(
+                            inner,
+                            rest_bid,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            span_table,
+                            target_store,
+                            None,
+                        )?;
+                    }
                     continue;
                 }
 

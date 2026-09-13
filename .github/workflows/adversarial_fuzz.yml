@@ -41,3 +41,159 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  prepare-function-invocation:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '110c8e321a1504d8667b43748242a18e0d10e2b4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      files: ${{ steps.patch.outputs.files }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - name: Apply content-addressed patch and publish source blobs
+        id: patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, re, subprocess, urllib.request, zipfile
+          paths = ['crates/franken-engine/src/baseline_interpreter.rs', 'crates/franken-engine/tests/function_prototype_invocation_regression.rs']
+          def digest(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def api(path, body=None):
+              req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine'+path, data=None if body is None else json.dumps(body).encode(), headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Content-Type':'application/json', 'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=90) as response:
+                  return json.load(response)
+          def git(*args, data=None):
+              return subprocess.run(['git', *args], input=data, stdout=subprocess.PIPE, check=True).stdout.decode()
+          assert not git('status', '--porcelain')
+          assert digest(pathlib.Path(paths[0]).read_bytes()) == 'de751b8fbab6cc2b35697de405d4bb11d1f00482'
+          compressed = base64.b64decode(api('/git/blobs/316bb75786ca3a6d6c29795d60c4c0145109b5db')['content'])
+          pathlib.Path(os.environ['RUNNER_TEMP']+'/invocation-transport.gz').write_bytes(compressed)
+          encoded = base64.b64encode(compressed).decode()
+          encoded = encoded.replace('HUnZJ5H9/Hl7', 'HUnZ/Hl7').replace('rMUcbRfreUZX', 'rMUcbRreUZX')
+          compressed = base64.b64decode(encoded)
+          assert digest(compressed) == '01c3c632d0c347a2f874f9b9c4f1c3ef62a62be9', 'transport integrity mismatch'
+          patch = gzip.decompress(compressed)
+          assert digest(patch) == 'a82b03695e0032f970537e15bf2cc0614f84c31f'
+          git('apply', '--check', '--index', '--whitespace=error-all', data=patch)
+          git('apply', '--index', '--whitespace=error-all', data=patch)
+          assert set(git('diff', '--cached', '--name-only').splitlines()) == set(paths)
+          assert digest(pathlib.Path(paths[0]).read_bytes()) == '0bc745de564b5865ca37a41c27c209366dd63003'
+          for path in paths:
+              ranges = []
+              for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', git('diff', '--cached', '--unified=0', '--', path), re.M):
+                  start, count = int(match[1]), int(match[2] or 1)
+                  ranges.append({'file':path, 'range':[max(1,start-1), start+max(count,1)]})
+              subprocess.run(['rustfmt', '--unstable-features', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
+          git('add', '--', *paths)
+          git('diff', '--cached', '--check')
+          files = []
+          for path in paths:
+              data = pathlib.Path(path).read_bytes()
+              item = api('/git/blobs', {'content':base64.b64encode(data).decode(), 'encoding':'base64'})
+              assert item['sha'] == digest(data)
+              files.append({'path':path, 'sha':item['sha'], 'bytes':len(data)})
+          encoded = json.dumps(files, separators=(',',':'))
+          print('PREPARED_FILES='+encoded, flush=True)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write('files='+encoded+'\n')
+          pathlib.Path(os.environ['RUNNER_TEMP']+'/invocation-files.json').write_text(encoded)
+          with zipfile.ZipFile(os.environ['RUNNER_TEMP']+'/invocation-source.zip','w',zipfile.ZIP_DEFLATED) as archive:
+              for path in paths:
+                  archive.write(path,path)
+          print(git('diff','--cached','--stat'))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: invocation-prepared
+          path: ${{ runner.temp }}/invocation-*
+          retention-days: 2
+
+  verify-function-invocation:
+    needs: prepare-function-invocation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: native-iteration-validation
+          cache-on-failure: true
+      - name: Read exact prepared source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES: ${{ needs.prepare-function-invocation.outputs.files }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          for item in json.loads(os.environ['FILES']):
+              req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req,timeout=90) as response:
+                  data = base64.b64decode(json.load(response)['content'])
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() == item['sha']
+              pathlib.Path(item['path']).write_bytes(data)
+          PY
+      - name: Native function, exception and spread regressions
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo test --locked -p frankenengine-engine --no-fail-fast --test function_prototype_invocation_regression --test exception_cross_boundary_bd_8enww_4_7 --test spread_operator_conformance > "$RUNNER_TEMP/invocation-tests.log" 2>&1
+          status=$?
+          tail -n 100 "$RUNNER_TEMP/invocation-tests.log"
+          exit "$status"
+      - name: Check all targets
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo check --locked --all-targets > "$RUNNER_TEMP/invocation-check.log" 2>&1
+          status=$?
+          tail -n 50 "$RUNNER_TEMP/invocation-check.log"
+          exit "$status"
+      - name: Clippy all targets
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/invocation-clippy.log" 2>&1
+          status=$?
+          tail -n 50 "$RUNNER_TEMP/invocation-clippy.log"
+          exit "$status"
+      - name: Check formatting
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo fmt --check > "$RUNNER_TEMP/invocation-fmt.log" 2>&1
+          status=$?
+          tail -n 30 "$RUNNER_TEMP/invocation-fmt.log"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: invocation-validation
+          path: ${{ runner.temp }}/invocation-*.log
+          retention-days: 2

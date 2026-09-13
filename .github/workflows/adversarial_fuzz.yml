@@ -41,3 +41,43 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  inspect-property-key-sources:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '28d26821e479182988d8e432200f37731601e214'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - name: Package exact tracked runtime sources
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess,zipfile
+          paths=subprocess.check_output(['git','ls-files','-z']).decode().split('\0')
+          manifest=[]
+          destination=pathlib.Path(os.environ['RUNNER_TEMP'])/'property-key-sources.zip'
+          with zipfile.ZipFile(destination,'w',zipfile.ZIP_DEFLATED) as archive:
+              for name in paths:
+                  if not name or not (name.startswith('crates/') or name in ['Cargo.toml','Cargo.lock','rust-toolchain.toml','AGENTS.md','README.md','docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md','.beads/issues.jsonl','.cargo/config.toml']):
+                      continue
+                  path=pathlib.Path(name)
+                  if not path.is_file() or path.is_symlink():
+                      continue
+                  data=path.read_bytes()
+                  sha=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+                  archive.writestr(name,data)
+                  manifest.append({'path':name,'sha':sha,'bytes':len(data)})
+              archive.writestr('SOURCE_MANIFEST.json',json.dumps({'revision':os.environ['GITHUB_SHA'],'files':manifest}))
+          print('snapshot_revision='+os.environ['GITHUB_SHA'])
+          print('tracked_source_files='+str(len(manifest)))
+          print('archive_bytes='+str(destination.stat().st_size))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: property-key-sources
+          path: ${{ runner.temp }}/property-key-sources.zip
+          retention-days: 2

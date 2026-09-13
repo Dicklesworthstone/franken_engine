@@ -41,3 +41,159 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  prepare-object-assignment:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'ec6f85bc35c33bbe460dd9951b3b5f163aa0c450'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      files: ${{ steps.prepare.outputs.files }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - name: Apply hash-pinned source and regressions
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re, subprocess, urllib.request, zipfile
+          root = 'crates/franken-engine/'
+          originals = {
+              root+'src/baseline_interpreter.rs': '6df20a76275c38474139cd45266e141902454932',
+              root+'src/lowering_pipeline.rs': '9b26b4f41d0de9f3afe9233b777192c30c6fdc30',
+              root+'src/capability.rs': '4223a94d30c5af8bd38dea54a338f2f4fa7b89b3',
+              root+'src/parser.rs': 'a095e276a37af342e45c7b0c7afdf19454143232',
+              root+'tests/spread_operator_conformance.rs': '5a104c94653d2681dd2388c6718de9b672eb0fdc',
+          }
+          expected = {
+              root+'src/baseline_interpreter.rs': '338bcdd37428c5e15a49062a74df322244256770',
+              root+'src/lowering_pipeline.rs': '34f913deb6fc5b0a39b18dd9d8c055715c0d9ce3',
+              root+'src/capability.rs': '9103f56c4f4d6a3453304457902ef5cc870248b4',
+              root+'src/parser.rs': '743e9ff373356557e8243c33e248d9434d27ec67',
+              root+'tests/spread_operator_conformance.rs': 'f534540e4dc563e1c29e125436ffaeec2e5e2c37',
+          }
+          def blob_hash(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def api(path, body=None):
+              request = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine'+path, data=None if body is None else json.dumps(body).encode(), headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  return json.load(response)
+          def git(*args, data=None):
+              return subprocess.run(['git', *args], input=data, stdout=subprocess.PIPE, check=True).stdout.decode()
+          for path, sha in originals.items():
+              assert blob_hash(pathlib.Path(path).read_bytes()) == sha, path
+          for sha in ['be043c227dfa322443ad6be6fb12df295f495e04', '89ba531cb067ec7e986868b882596595d9c79295', '5d57bfa69b93d9e1c4abac2319954999b6ce9fe4']:
+              blob = api('/git/blobs/'+sha)
+              patch = base64.b64decode(blob['content'])
+              assert blob_hash(patch) == sha
+              if sha == 'be043c227dfa322443ad6be6fb12df295f495e04':
+                  header = b'@@ -49400,1 +49400,68 @@'
+                  assert patch.count(header) == 1
+                  patch = patch.replace(header, b'@@ -49461,1 +49461,68 @@')
+              git('apply', '--recount', '--unidiff-zero', '--check', '--index', '--whitespace=error-all', data=patch)
+              git('apply', '--recount', '--unidiff-zero', '--index', '--whitespace=error-all', data=patch)
+          for path, sha in expected.items():
+              assert blob_hash(pathlib.Path(path).read_bytes()) == sha, 'prepared bytes differ: '+path
+          assert set(git('diff', '--cached', '--name-only').splitlines()) == set(originals)
+          for path in originals:
+              diff = git('diff', '--cached', '--unified=0', '--', path)
+              ranges = []
+              for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+                  start, count = int(match[1]), int(match[2] or 1)
+                  ranges.append({'file': path, 'range': [max(1, start-1), start+max(count,1)]})
+              subprocess.run(['rustfmt', '--unstable-features', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
+          git('add', '--', *originals)
+          git('diff', '--cached', '--check')
+          files = []
+          for path in originals:
+              data = pathlib.Path(path).read_bytes()
+              result = api('/git/blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              assert result['sha'] == blob_hash(data)
+              files.append({'path': path, 'sha': result['sha'], 'bytes': len(data)})
+          encoded = json.dumps(files, separators=(',', ':'))
+          print('OBJECT_ASSIGNMENT_FILES='+encoded, flush=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('files='+encoded+'\n')
+          pathlib.Path('/tmp/object-assignment-files.json').write_text(encoded)
+          with zipfile.ZipFile('/tmp/object-assignment-source.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in originals:
+                  archive.write(path, path)
+          print(git('diff', '--cached', '--stat'), flush=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: object-assignment-source
+          path: |
+            /tmp/object-assignment-source.zip
+            /tmp/object-assignment-files.json
+          retention-days: 2
+
+  verify-object-assignment:
+    needs: prepare-object-assignment
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: native-iteration-validation
+          cache-on-failure: true
+      - name: Read exact prepared source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES: ${{ needs.prepare-object-assignment.outputs.files }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          for item in json.loads(os.environ['FILES']):
+              request = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'], headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  blob = json.load(response)
+              data = base64.b64decode(blob['content'])
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() == item['sha']
+              pathlib.Path(item['path']).write_bytes(data)
+          PY
+      - name: Run native destructuring and spread suites
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-fail-fast --test spread_operator_conformance --test destructuring_assignment_bd_umee4 --test destructuring_default_branch_regression --test destructuring_nested_rest_regression 2>&1 | tee /tmp/object-assignment-tests.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: object-assignment-tests
+          path: /tmp/object-assignment-tests.log
+          retention-days: 2
+      - name: Check all targets
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: cargo check --locked --all-targets
+      - name: Clippy all targets
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Check formatting
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: cargo fmt --check

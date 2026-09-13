@@ -4755,7 +4755,7 @@ fn parse_primary_expression(
         && let Some((inner, rest)) = extract_balanced(expression, '[', ']')
         && rest.trim().is_empty()
     {
-        return parse_array_literal(inner, span, context, recursion_depth);
+        return parse_array_literal(inner, span, context, recursion_depth, false);
     }
 
     // Object literal: {a: 1, b: 2}
@@ -4764,7 +4764,7 @@ fn parse_primary_expression(
         && let Some((inner, rest)) = extract_balanced(expression, '{', '}')
         && rest.trim().is_empty()
     {
-        return parse_object_literal(inner, span, context, recursion_depth);
+        return parse_object_literal(inner, span, context, recursion_depth, false);
     }
 
     // Call expression: callee(args) or callee(args).member etc.
@@ -5510,7 +5510,7 @@ fn try_parse_assignment(
                 i += 1;
                 continue;
             }
-            let left = match parse_expression(lhs, span, context, recursion_depth + 1) {
+            let left = match parse_assignment_target_expression(lhs, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
@@ -7029,11 +7029,70 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
 // Array/object literal parsing
 // ---------------------------------------------------------------------------
 
+/// Parse cover grammar only where the caller has already recognized an
+/// assignment target. An initialized shorthand (`{x = value}`) must never be
+/// accepted as an ordinary object expression or in the default's RHS.
+fn parse_assignment_target_expression(
+    source: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    context.next_depth(recursion_depth);
+    if recursion_depth > context.options.budget.max_recursion_depth {
+        return Err(ParseError::with_witness(
+            ParseErrorCode::BudgetExceeded,
+            "assignment pattern recursion budget exceeded",
+            context.source_label.to_string(),
+            Some(span.clone()),
+            context.witness(Some(ParseBudgetKind::RecursionDepth)),
+        ));
+    }
+    let source = source.trim();
+    if source.starts_with('{')
+        && let Some((inner, rest)) = extract_balanced(source, '{', '}')
+        && rest.trim().is_empty()
+    {
+        return parse_object_literal(inner, span, context, recursion_depth, true);
+    }
+    if source.starts_with('[')
+        && let Some((inner, rest)) = extract_balanced(source, '[', ']')
+        && rest.trim().is_empty()
+    {
+        return parse_array_literal(inner, span, context, recursion_depth, true);
+    }
+    if let Some(rest) = source.strip_prefix("...") {
+        return Ok(Expression::SpreadElement(Box::new(
+            parse_assignment_target_expression(rest, span, context, recursion_depth + 1)?,
+        )));
+    }
+    let target = parse_expression(source, span, context, recursion_depth)?;
+    if !matches!(
+        target,
+        Expression::Identifier(_)
+            | Expression::Member { .. }
+            | Expression::ArrayLiteral(_)
+            | Expression::ObjectLiteral(_)
+            | Expression::Assignment {
+                operator: AssignmentOperator::Assign,
+                ..
+            }
+    ) {
+        return Err(unsupported_expression_syntax_error(
+            "invalid assignment target",
+            span,
+            context,
+        ));
+    }
+    Ok(target)
+}
+
 fn parse_array_literal(
     inner: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
+    assignment_pattern: bool,
 ) -> ParseResult<Expression> {
     let trimmed = inner.trim();
     if trimmed.is_empty() {
@@ -7041,17 +7100,25 @@ fn parse_array_literal(
     }
     let parts = split_top_level_commas(trimmed);
     let mut elements = Vec::with_capacity(4);
-    for part in &parts {
+    for (index, part) in parts.iter().enumerate() {
         let p = part.trim();
         if p.is_empty() {
             elements.push(None);
         } else {
-            elements.push(Some(parse_expression(
-                p,
-                span,
-                context,
-                recursion_depth + 1,
-            )?));
+            let element = if assignment_pattern {
+                parse_assignment_target_expression(p, span, context, recursion_depth + 1)?
+            } else {
+                parse_expression(p, span, context, recursion_depth + 1)?
+            };
+            if assignment_pattern
+                && let Expression::SpreadElement(target) = &element
+                && (index + 1 != parts.len() || matches!(target.as_ref(), Expression::Assignment { .. }))
+            {
+                return Err(unsupported_expression_syntax_error(
+                    "assignment rest element must be last, without a default or trailing comma", span, context,
+                ));
+            }
+            elements.push(Some(element));
         }
     }
     if let Some(None) = elements.last()
@@ -7067,6 +7134,7 @@ fn parse_object_literal(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
+    assignment_pattern: bool,
 ) -> ParseResult<Expression> {
     let trimmed = inner.trim();
     if trimmed.is_empty() {
@@ -7074,14 +7142,47 @@ fn parse_object_literal(
     }
     let parts = split_top_level_commas(trimmed);
     let mut properties = Vec::with_capacity(8);
-    for part in &parts {
+    for (index, part) in parts.iter().enumerate() {
         let p = part.trim();
         if p.is_empty() {
-            continue;
+            if index + 1 == parts.len() && trimmed.ends_with(',') {
+                continue;
+            }
+            return Err(unsupported_expression_syntax_error(
+                "object patterns cannot contain elisions",
+                span,
+                context,
+            ));
         }
+        let initialized_shorthand = assignment_pattern
+            && p.split_once('=').is_some_and(|(name, tail)| {
+                is_identifier(name.trim()) && !tail.starts_with(['=', '>'])
+            });
         // Spread property: `{ ...expr }` — parse the inner expression.
         if let Some(rest) = p.strip_prefix("...") {
-            let inner = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+            let inner = if assignment_pattern {
+                let target = parse_assignment_target_expression(
+                    rest.trim_start(),
+                    span,
+                    context,
+                    recursion_depth + 1,
+                )?;
+                if index + 1 != parts.len()
+                    || !matches!(
+                        target,
+                        Expression::Identifier(_) | Expression::Member { .. }
+                    )
+                {
+                    return Err(unsupported_expression_syntax_error(
+                        "object assignment rest requires a final simple reference without a default or trailing comma",
+                        span,
+                        context,
+                    ));
+                }
+                target
+            } else {
+                parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?
+            };
             let spread = Expression::SpreadElement(Box::new(inner));
             properties.push(ObjectProperty {
                 key: spread.clone(),
@@ -7090,7 +7191,7 @@ fn parse_object_literal(
                 shorthand: true,
                 kind: ObjectPropertyKind::Data,
             });
-        } else if let Some(colon_idx) = find_top_level_colon(p) {
+        } else if !initialized_shorthand && let Some(colon_idx) = find_top_level_colon(p) {
             // Split on first top-level colon for key:value.
             let key_src = p[..colon_idx].trim();
             let value_src = p[colon_idx + 1..].trim();
@@ -7110,7 +7211,11 @@ fn parse_object_literal(
                 key_src
             };
             let key = parse_expression(key_src_inner, span, context, recursion_depth + 1)?;
-            let value = parse_expression(value_src, span, context, recursion_depth + 1)?;
+            let value = if assignment_pattern {
+                parse_assignment_target_expression(value_src, span, context, recursion_depth + 1)?
+            } else {
+                parse_expression(value_src, span, context, recursion_depth + 1)?
+            };
             properties.push(ObjectProperty {
                 key,
                 value,
@@ -7118,9 +7223,17 @@ fn parse_object_literal(
                 shorthand: false,
                 kind: ObjectPropertyKind::Data,
             });
-        } else if let Some((key, value, computed, kind)) =
-            try_parse_object_accessor(p, span, context, recursion_depth)?
+        } else if !initialized_shorthand
+            && let Some((key, value, computed, kind)) =
+                try_parse_object_accessor(p, span, context, recursion_depth)?
         {
+            if assignment_pattern {
+                return Err(unsupported_expression_syntax_error(
+                    "accessors are not assignment patterns",
+                    span,
+                    context,
+                ));
+            }
             properties.push(ObjectProperty {
                 key,
                 value,
@@ -7128,9 +7241,17 @@ fn parse_object_literal(
                 shorthand: false,
                 kind,
             });
-        } else if let Some((key, value, computed)) =
-            try_parse_object_method(p, span, context, recursion_depth)?
+        } else if !initialized_shorthand
+            && let Some((key, value, computed)) =
+                try_parse_object_method(p, span, context, recursion_depth)?
         {
+            if assignment_pattern {
+                return Err(unsupported_expression_syntax_error(
+                    "methods are not assignment patterns",
+                    span,
+                    context,
+                ));
+            }
             // Method shorthand: `name(params){body}` or `[expr](params){body}`.
             // Preserve the method distinction for [[HomeObject]], inferred name,
             // prototype suppression, and non-constructability semantics (bd-gqaa4).
@@ -7143,8 +7264,39 @@ fn parse_object_literal(
             });
         } else {
             // Shorthand property: { x } means { x: x }
-            let key = Expression::Identifier(canonicalize_identifier(p));
-            let value = Expression::Identifier(canonicalize_identifier(p));
+            let (key, value) = if is_identifier(p) {
+                let key = Expression::Identifier(canonicalize_identifier(p));
+                (key.clone(), key)
+            } else if assignment_pattern {
+                let value =
+                    parse_assignment_target_expression(p, span, context, recursion_depth + 1)?;
+                let Expression::Assignment {
+                    operator: AssignmentOperator::Assign,
+                    left,
+                    ..
+                } = &value
+                else {
+                    return Err(unsupported_expression_syntax_error(
+                        "invalid initialized assignment shorthand",
+                        span,
+                        context,
+                    ));
+                };
+                if !matches!(left.as_ref(), Expression::Identifier(_)) {
+                    return Err(unsupported_expression_syntax_error(
+                        "initialized shorthand requires an identifier",
+                        span,
+                        context,
+                    ));
+                }
+                (left.as_ref().clone(), value)
+            } else {
+                return Err(unsupported_expression_syntax_error(
+                    "invalid object shorthand property",
+                    span,
+                    context,
+                ));
+            };
             properties.push(ObjectProperty {
                 key,
                 value,

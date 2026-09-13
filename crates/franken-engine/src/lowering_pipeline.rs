@@ -3365,7 +3365,7 @@ fn lower_destructuring_to_ir1(
 /// default. Binding patterns cannot represent member-expression targets, so
 /// assignment elements retain their expression AST and reuse ordinary stores.
 #[allow(clippy::too_many_arguments)]
-fn lower_array_assignment_element_to_ir1(
+fn lower_destructuring_assignment_element_to_ir1(
     element: &Expression,
     value_ops: Vec<Ir1Op>,
     assignment_strictness: AssignmentStrictness,
@@ -3460,7 +3460,7 @@ fn lower_array_assignment_element_to_ir1(
             };
             member_reference = Some((object_bid, key, key_bid));
         }
-        Expression::ArrayLiteral(_) => {}
+        Expression::ArrayLiteral(_) | Expression::ObjectLiteral(_) => {}
         _ => {
             return Err(unsupported_frontier_expression_error(
                 "assignment_target",
@@ -3472,7 +3472,6 @@ fn lower_array_assignment_element_to_ir1(
         }
     }
 
-    let value_name = format!("<internal:assignment_value:{}>", *binding_index);
     let value_bid = alloc_internal_binding(
         bindings,
         binding_lookup,
@@ -3524,9 +3523,17 @@ fn lower_array_assignment_element_to_ir1(
         ops.push(Ir1Op::LoadBinding {
             binding_id: object_bid,
         });
+        // PutValue checks the saved base and coerces the saved property-name
+        // value only after GetV/default evaluation, not at reference capture.
+        ops.push(Ir1Op::HostCall {
+            capability: "builtin:RequireObjectCoercible".to_string(), arg_count: 1,
+        });
         if let Some(key_bid) = key_bid {
             ops.push(Ir1Op::LoadBinding {
                 binding_id: key_bid,
+            });
+            ops.push(Ir1Op::HostCall {
+                capability: "builtin:ToPropertyKey".to_string(), arg_count: 1,
             });
         }
         ops.push(Ir1Op::LoadBinding {
@@ -3534,14 +3541,83 @@ fn lower_array_assignment_element_to_ir1(
         });
         ops.push(Ir1Op::SetProperty { key });
     } else {
-        let assignment = Expression::Assignment {
-            operator: AssignmentOperator::Assign,
-            left: Box::new(target.clone()),
-            right: Box::new(Expression::Identifier(value_name)),
-            assignment_strictness,
+        // Internal registers are not source lexical names. Reifying value_bid
+        // as an Identifier would send it through dynamic global resolution.
+        match target {
+            Expression::ArrayLiteral(elements) => lower_array_assignment_pattern_to_ir1(
+                elements, value_bid, assignment_strictness, ops, bindings,
+                binding_lookup, binding_index, scope_id, label_counter, span_table,
+            )?,
+            Expression::ObjectLiteral(properties) => lower_object_assignment_pattern_to_ir1(
+                properties, value_bid, assignment_strictness, ops, bindings,
+                binding_lookup, binding_index, scope_id, label_counter, span_table,
+            )?,
+            _ => return Err(LoweringPipelineError::InvariantViolation {
+                detail: "validated assignment target lost its reference",
+            }),
+        }
+        return Ok(());
+    }
+    ops.push(Ir1Op::Discard);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_array_assignment_pattern_to_ir1(
+    elements: &[Option<Expression>],
+    source_bid: BindingId,
+    assignment_strictness: AssignmentStrictness,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    for (index, element) in elements.iter().enumerate() {
+        let Some(element) = element else { continue };
+        let (target, value_ops) = if let Expression::SpreadElement(target) = element {
+            if index + 1 != elements.len()
+                || matches!(target.as_ref(), Expression::Assignment { .. })
+            {
+                return Err(unsupported_frontier_expression_error(
+                    "assignment_target",
+                    "FE-LOWER-ASSIGN-0002",
+                    "lower_ir0_to_ir1.destructuring_assignment",
+                    "rest must be the final assignment element and cannot have a default",
+                    None,
+                ));
+            }
+            (
+                target.as_ref(),
+                vec![
+                    Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(index as i64),
+                    },
+                    Ir1Op::ArraySlice,
+                ],
+            )
+        } else {
+            (
+                element,
+                vec![
+                    Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    },
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static(index.to_string().into()),
+                    },
+                ],
+            )
         };
-        lower_expression_to_ir1(
-            &assignment,
+        lower_destructuring_assignment_element_to_ir1(
+            target,
+            value_ops,
+            assignment_strictness,
             ops,
             bindings,
             binding_lookup,
@@ -3551,7 +3627,147 @@ fn lower_array_assignment_element_to_ir1(
             span_table,
         )?;
     }
+    Ok(())
+}
+
+/// Lower an object assignment pattern without turning assignment references
+/// into declarations. The source, keys, getters and references are evaluated
+/// in source order; the caller retains the original RHS as the result.
+#[allow(clippy::too_many_arguments)]
+fn lower_object_assignment_pattern_to_ir1(
+    properties: &[crate::ast::ObjectProperty],
+    source_bid: BindingId,
+    assignment_strictness: AssignmentStrictness,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: source_bid,
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:RequireObjectCoercible".to_string(),
+        arg_count: 1,
+    });
     ops.push(Ir1Op::Discard);
+    let mut excluded_keys = Vec::new();
+    for (index, property) in properties.iter().enumerate() {
+        if property.kind != ObjectPropertyKind::Data {
+            return Err(unsupported_frontier_expression_error(
+                "assignment_target",
+                "FE-LOWER-ASSIGN-0002",
+                "lower_ir0_to_ir1.destructuring_assignment",
+                "methods and accessors are not object assignment patterns",
+                None,
+            ));
+        }
+        if let Expression::SpreadElement(target) = &property.value {
+            if index + 1 != properties.len()
+                || !matches!(
+                    target.as_ref(),
+                    Expression::Identifier(_) | Expression::Member { .. }
+                )
+            {
+                return Err(unsupported_frontier_expression_error(
+                    "assignment_target",
+                    "FE-LOWER-ASSIGN-0002",
+                    "lower_ir0_to_ir1.destructuring_assignment",
+                    "object rest must be a final simple assignment reference",
+                    None,
+                ));
+            }
+            let arg_count = u32::try_from(excluded_keys.len())
+                .ok()
+                .and_then(|count| count.checked_add(1))
+                .ok_or(LoweringPipelineError::InvariantViolation {
+                    detail: "object rest exclusion count exceeds IR argument range",
+                })?;
+            let mut value_ops = vec![Ir1Op::LoadBinding {
+                binding_id: source_bid,
+            }];
+            value_ops.extend(excluded_keys.iter().cloned());
+            value_ops.push(Ir1Op::HostCall {
+                capability: "builtin:ObjectRest".to_string(),
+                arg_count,
+            });
+            lower_destructuring_assignment_element_to_ir1(
+                target,
+                value_ops,
+                assignment_strictness,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            continue;
+        }
+
+        let mut value_ops = vec![Ir1Op::LoadBinding {
+            binding_id: source_bid,
+        }];
+        if property.computed {
+            lower_expression_to_ir1(
+                &property.key,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::HostCall {
+                capability: "builtin:ToPropertyKey".to_string(),
+                arg_count: 1,
+            });
+            let key_bid = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                "object_assignment_key",
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: key_bid,
+            });
+            ops.push(Ir1Op::Discard);
+            let load_key = Ir1Op::LoadBinding {
+                binding_id: key_bid,
+            };
+            excluded_keys.push(load_key.clone());
+            value_ops.push(load_key);
+            value_ops.push(Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic,
+            });
+        } else {
+            let key = canonical_static_object_property_key(&property.key)?;
+            excluded_keys.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(key.clone()),
+            });
+            value_ops.push(Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key),
+            });
+        }
+        lower_destructuring_assignment_element_to_ir1(
+            &property.value,
+            value_ops,
+            assignment_strictness,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+            span_table,
+        )?;
+    }
     Ok(())
 }
 
@@ -12955,35 +13171,35 @@ fn lower_expression_to_ir1_inner(
                 )?;
                 ops.push(Ir1Op::StoreBinding { binding_id: temp_bid });
                 ops.push(Ir1Op::Discard);
-                for (index, element) in elements.iter().enumerate() {
-                    let Some(element) = element else { continue };
-                    let (target, value_ops) = if let Expression::SpreadElement(target) = element {
-                        if index + 1 != elements.len() || matches!(target.as_ref(), Expression::Assignment { .. }) {
-                            return Err(unsupported_frontier_expression_error(
-                                "assignment_target", "FE-LOWER-ASSIGN-0002",
-                                "lower_ir0_to_ir1.destructuring_assignment",
-                                "rest must be the final assignment element and cannot have a default", None,
-                            ));
-                        }
-                        (target.as_ref(), vec![
-                            Ir1Op::LoadBinding { binding_id: temp_bid },
-                            Ir1Op::LoadLiteral { value: Ir1Literal::Integer(index as i64) },
-                            Ir1Op::ArraySlice,
-                        ])
-                    } else {
-                        (element, vec![
-                            Ir1Op::LoadBinding { binding_id: temp_bid },
-                            Ir1Op::GetProperty { key: Ir1PropertyKey::Static(index.to_string().into()) },
-                        ])
-                    };
-                    lower_array_assignment_element_to_ir1(
-                        target, value_ops, *assignment_strictness, ops, bindings,
-                        binding_lookup, binding_index, root_scope_id, label_counter, span_table,
-                    )?;
-                }
+                lower_array_assignment_pattern_to_ir1(
+                    elements, temp_bid, *assignment_strictness, ops, bindings,
+                    binding_lookup, binding_index, root_scope_id, label_counter, span_table,
+                )?;
                 ops.push(Ir1Op::LoadBinding {
                     binding_id: temp_bid,
                 });
+            } else if let Expression::ObjectLiteral(properties) = left.as_ref() {
+                if *operator != AssignmentOperator::Assign {
+                    return Err(unsupported_frontier_expression_error(
+                        "assignment_target", "FE-LOWER-ASSIGN-0002",
+                        "lower_ir0_to_ir1.destructuring_assignment",
+                        "compound assignment to a destructuring pattern is not valid", None,
+                    ));
+                }
+                let source_bid = alloc_internal_binding(
+                    bindings, binding_lookup, binding_index, root_scope_id, "object_assignment_rhs",
+                )?;
+                lower_expression_to_ir1(
+                    right, ops, bindings, binding_lookup, binding_index,
+                    root_scope_id, label_counter, span_table,
+                )?;
+                ops.push(Ir1Op::StoreBinding { binding_id: source_bid });
+                ops.push(Ir1Op::Discard);
+                lower_object_assignment_pattern_to_ir1(
+                    properties, source_bid, *assignment_strictness, ops, bindings,
+                    binding_lookup, binding_index, root_scope_id, label_counter, span_table,
+                )?;
+                ops.push(Ir1Op::LoadBinding { binding_id: source_bid });
             } else {
                 return Err(unsupported_frontier_expression_error(
                     "assignment_target",

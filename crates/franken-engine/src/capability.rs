@@ -267,7 +267,7 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             HostcallDispatchBinding::Internal,
         ),
         tag if internal_builtin_meta_tag(tag)
-            || matches!(tag, "builtin:RequireObjectCoercible" | "builtin:ObjectRest") =>
+            || matches!(tag, "builtin:RequireObjectCoercible" | "builtin:ObjectRest" | "builtin:ToPropertyKey") =>
         (
             None,
             HostcallResultContract::JoinInputs,

@@ -49458,6 +49458,102 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Resolve observable ToPrimitive(string) hooks once. Source property names
+    /// are coerced eagerly; saved assignment references defer this to PutValue.
+    fn coerce_runtime_property_key(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        let primitive = if value.is_object_like() {
+            if let Some(object_id) =
+                self.iterator_carrier_backing_id(&value, "property key object")?
+            {
+                let exotic_key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
+                let exotic = self.optional_callable_runtime_property(
+                    module,
+                    object_id,
+                    &exotic_key,
+                    value.clone(),
+                )?;
+                let mut primitive = None;
+                if let Some(method) = exotic {
+                    let (result, label) = self.invoke_inline_method_call_with_argument_label(
+                        module,
+                        method,
+                        value.clone(),
+                        vec![Value::str("string")],
+                        None,
+                    )?;
+                    let label = self
+                        .pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public)
+                        .join(&label);
+                    self.replace_pending_hostcall_result_label(Some(label))?;
+                    if result.is_object_like() {
+                        return Err(InterpreterError::TypeError {
+                            expected: "primitive from Symbol.toPrimitive".to_string(),
+                            got: result.type_name().to_string(),
+                        });
+                    }
+                    primitive = Some(result);
+                } else {
+                    for name in ["toString", "valueOf"] {
+                        let method = self.proxy_aware_get_property(
+                            module,
+                            object_id,
+                            name,
+                            value.clone(),
+                            0,
+                        )?;
+                        if !method.is_callable() {
+                            continue;
+                        }
+                        let (result, label) = self.invoke_inline_method_call_with_argument_label(
+                            module,
+                            method,
+                            value.clone(),
+                            Vec::new(),
+                            None,
+                        )?;
+                        let label = self
+                            .pending_hostcall_result_label
+                            .as_ref()
+                            .unwrap_or(&Label::Public)
+                            .join(&label);
+                        self.replace_pending_hostcall_result_label(Some(label))?;
+                        if !result.is_object_like() {
+                            primitive = Some(result);
+                            break;
+                        }
+                    }
+                }
+                primitive.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "primitive property key".to_string(),
+                    got: "object from both conversion methods".to_string(),
+                })?
+            } else {
+                return Err(InterpreterError::TypeError {
+                    expected: "property-key carrier with native conversion methods".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+        } else {
+            value
+        };
+        let result = match primitive {
+            Value::Str(_) | Value::Symbol(_) => primitive,
+            Value::Float(number) if number.inner().is_finite() => {
+                let mut buffer = ryu_js::Buffer::new();
+                Value::str(buffer.format(number.inner()))
+            }
+            other => Value::str(self.value_to_string(&other)),
+        };
+        self.validate_executable_property_key(&self.executable_property_key_from_value(&result))?;
+        Ok(result)
+    }
+
     fn require_object_coercible(value: Value) -> Result<Value, InterpreterError> {
         if matches!(value, Value::Null | Value::Undefined) {
             return Err(InterpreterError::TypeError {
@@ -65302,6 +65398,15 @@ impl InterpreterCore {
         }
 
         match cap {
+            "builtin:ToPropertyKey" => {
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one ToPropertyKey argument".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                self.coerce_runtime_property_key(module, self.read_reg(args.start)?)
+            }
             "builtin:RequireObjectCoercible" => {
                 if args.count != 1 {
                     return Err(InterpreterError::TypeError {

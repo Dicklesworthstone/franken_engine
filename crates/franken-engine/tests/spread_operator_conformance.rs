@@ -651,3 +651,244 @@ fn destructuring_intrinsics_do_not_require_extra_authority() {
         assert_eq!(row.result_contract, HostcallResultContract::JoinInputs);
     }
 }
+
+#[test]
+fn object_assignment_shorthand_and_renaming() {
+    assert_object_copy(
+        r#"let a = 0, b = 0; ({a, other: b} = {a: 3, other: 5}); a + ':' + b;"#,
+        "3:5",
+    );
+}
+
+#[test]
+fn object_assignment_defaults_are_undefined_only_and_sequential() {
+    assert_object_copy(
+        r#"let a, b, c, d, calls = 0; ({a = ++calls, b = ++calls, c = ++calls, d = a + 2} = {b: null, c: false}); a + ':' + (b === null) + ':' + c + ':' + d + ':' + calls;"#,
+        "1:true:false:3:1",
+    );
+}
+
+#[test]
+fn object_assignment_shorthand_default_can_be_conditional() {
+    assert_object_copy(
+        r#"let a, b; ({a = true ? 3 : 4, b = a + 1} = {}); a + ':' + b;"#,
+        "3:4",
+    );
+}
+
+#[test]
+fn object_assignment_nested_defaults_preserve_original_rhs() {
+    assert_object_copy(
+        r#"let a, b, source = {}; let result = ({inner: {a = 7, b = a + 1} = {}} = source); (result === source) + ':' + a + ':' + b;"#,
+        "true:7:8",
+    );
+}
+
+#[test]
+fn object_assignment_can_nest_arrays_and_objects() {
+    assert_object_copy(
+        r#"let a, b; ({list: [{x: a}, b = 5]} = {list: [{x: 3}]}); a + ':' + b;"#,
+        "3:5",
+    );
+}
+
+#[test]
+fn array_assignment_can_nest_object_defaults_and_rest() {
+    assert_object_copy(
+        r#"let a, rest; [{a = 7, ...rest} = {b: 9}] = []; a + ':' + rest.b;"#,
+        "7:9",
+    );
+}
+
+#[test]
+fn object_assignment_rhs_runs_once() {
+    assert_object_copy(
+        r#"let calls = 0, a, b; function source() { calls += 1; return {a: 2, b: 3}; } ({a, b} = source()); calls + ':' + a + ':' + b;"#,
+        "1:2:3",
+    );
+}
+
+#[test]
+fn object_assignment_rest_excludes_without_repeating_getter() {
+    assert_object_copy(
+        r#"let reads = 0, a, rest; ({a, ...rest} = {get a() { reads += 1; return 3; }, b: 4}); reads + ':' + a + ':' + rest.b + ':' + ('a' in rest);"#,
+        "1:3:4:false",
+    );
+}
+
+#[test]
+fn object_assignment_rest_can_target_a_member() {
+    assert_object_copy(
+        r#"let a, target = {}; ({a, ...target.tail} = {a: 1, b: 2}); a + ':' + target.tail.b;"#,
+        "1:2",
+    );
+}
+
+#[test]
+fn object_assignment_captures_member_before_source_getter() {
+    assert_object_copy(
+        r#"let trace = '', target = {}; function base() { trace += 'b'; return target; } function key() { trace += 'k'; return 'x'; } ({a: base()[key()] = (trace += 'd', 9)} = {get a() { trace += 'g'; return undefined; }}); trace + ':' + target.x;"#,
+        "bkgd:9",
+    );
+}
+
+#[test]
+fn object_assignment_preserves_member_base_across_default() {
+    assert_object_copy(
+        r#"let first = {}, second = {}, target = first; ({a: target.x = (target = second, 7)} = {}); first.x + ':' + (second.x === undefined);"#,
+        "7:true",
+    );
+}
+
+#[test]
+fn object_assignment_coerces_saved_member_key_at_putvalue() {
+    assert_object_copy(
+        r#"let trace = '', target = {}; let key = {toString() { trace += 'k'; return 'x'; }}; ({a: target[key] = (trace += 'd', 7)} = {get a() { trace += 'g'; return undefined; }}); trace + ':' + target.x;"#,
+        "gdk:7",
+    );
+}
+
+#[test]
+fn object_assignment_computed_source_key_coerces_once_before_reference() {
+    assert_object_copy(
+        r#"let trace = '', target = {}, rest; let key = {[Symbol.toPrimitive](hint) { trace += hint + ';'; return 'a'; }}; function base() { trace += 'base;'; return target; } ({[key]: base().x, ...rest} = {get a() { trace += 'get;'; return 3; }, b: 4}); trace + target.x + ':' + rest.b + ':' + ('a' in rest);"#,
+        "string;base;get;3:4:false",
+    );
+}
+
+#[test]
+fn object_assignment_computed_source_key_keeps_symbol_identity() {
+    assert_object_copy(
+        r#"let a, rest; let key = Symbol('k'); ({[key]: a, ...rest} = {[key]: 7, other: 3}); a + ':' + rest.other + ':' + (key in rest);"#,
+        "7:3:false",
+    );
+}
+
+#[test]
+fn object_assignment_source_key_ordinary_conversion_order() {
+    assert_object_copy(
+        r#"let trace = '', a; let key = {toString() { trace += 's'; return {}; }, valueOf() { trace += 'v'; return 'x'; }}; ({[key]: a} = {x: 9}); trace + ':' + a;"#,
+        "sv:9",
+    );
+}
+
+#[test]
+fn object_assignment_source_key_rejects_object_from_exotic_conversion() {
+    assert_object_copy(
+        r#"let a, name = ''; let key = {[Symbol.toPrimitive]() { return {}; }}; try { ({[key]: a} = {}); } catch (e) { name = e.name; } name;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn object_assignment_key_conversion_throw_is_catchable() {
+    assert_object_copy(
+        r#"let a, result = ''; let key = {toString() { throw 12; }}; try { ({[key]: a} = {}); } catch (e) { result += e; } result;"#,
+        "12",
+    );
+}
+
+#[test]
+fn object_assignment_number_keys_exclude_canonical_strings() {
+    assert_object_copy(
+        r#"let a, b, rest; ({[-0]: a, [1e21]: b, ...rest} = {'0': 7, '1e+21': 9, keep: 5}); a + ':' + b + ':' + rest.keep + ':' + ('0' in rest) + ':' + ('1e+21' in rest);"#,
+        "7:9:5:false:false",
+    );
+}
+
+#[test]
+fn object_assignment_empty_pattern_rejects_null_before_key_effects() {
+    assert_object_copy(
+        r#"let a, trace = ''; function key() { trace += 'bad'; return 'x'; } try { ({[key()]: a} = null); } catch (e) { trace += e.name; } trace;"#,
+        "TypeError",
+    );
+}
+
+#[test]
+fn object_assignment_null_member_checks_after_getter_not_before() {
+    assert_object_copy(
+        r#"let trace = ''; let key = {toString() { trace += 'bad'; return 'x'; }}; try { ({a: null[key]} = {get a() { trace += 'get;'; return 1; }}); } catch (e) { trace += e.name; } trace;"#,
+        "get;TypeError",
+    );
+}
+
+#[test]
+fn object_assignment_rest_prepares_reference_before_copy() {
+    assert_object_copy(
+        r#"let trace = '', target = {}; function base() { trace += 'b'; return target; } ({...base().rest} = {get a() { trace += 'g'; return 3; }}); trace + ':' + target.rest.a;"#,
+        "bg:3",
+    );
+}
+
+#[test]
+fn object_assignment_preserves_const_write_error() {
+    assert_object_copy(
+        r#"const a = 1; let result = ''; try { ({a = 7} = {}); } catch (e) { result = e.name; } result + ':' + a;"#,
+        "TypeError:1",
+    );
+}
+
+#[test]
+fn object_assignment_strict_unresolved_reference_is_not_a_declaration() {
+    assert_object_copy(
+        r#"'use strict'; let result = ''; try { ({x: missing} = {x: 1}); } catch (e) { result = e.name; } result;"#,
+        "ReferenceError",
+    );
+}
+
+#[test]
+fn object_assignment_earlier_writes_survive_later_throw() {
+    assert_object_copy(
+        r#"let a = 0, b = 0, trace = ''; try { ({a, b} = {a: 3, get b() { throw 9; }}); } catch (e) { trace += e; } a + ':' + b + ':' + trace;"#,
+        "3:0:9",
+    );
+}
+
+#[test]
+fn initialized_object_shorthand_is_rejected_outside_assignment_patterns() {
+    for source in ["let value = {x = 3};", "let x; ({x = {bad = 3}} = {});"] {
+        let mut engine = frankenengine_engine::HybridRouter::default();
+        assert!(
+            engine.eval(source).is_err(),
+            "invalid object expression accepted: {source}"
+        );
+    }
+}
+
+#[test]
+fn invalid_object_assignment_patterns_are_rejected() {
+    for source in [
+        "let a, b; ({...a, b} = {});",
+        "let a; ({...a,} = {});",
+        "let a; ({...a = {}} = {});",
+        "let a; ({...{a}} = {});",
+        "({method() {}} = {});",
+        "({get a() { return 1; }} = {});",
+        "let a; ({a,,} = {});",
+        "({x: 3} = {});",
+    ] {
+        let mut engine = frankenengine_engine::HybridRouter::default();
+        assert!(
+            engine.eval(source).is_err(),
+            "invalid assignment pattern accepted: {source}"
+        );
+    }
+}
+
+#[test]
+fn assignment_pattern_parser_keeps_recursion_budget() {
+    use frankenengine_engine::parser::{
+        CanonicalEs2020Parser, ParseErrorCode, ParseGoal, ParserOptions,
+    };
+    let mut target = "value".to_string();
+    for _ in 0..24 {
+        target = format!("{{x: {target}}}");
+    }
+    let source = format!("let value; ({target} = {{}});");
+    let mut options = ParserOptions::default();
+    options.budget.max_recursion_depth = 8;
+    let error = CanonicalEs2020Parser
+        .parse_with_options(source.as_str(), ParseGoal::Script, &options)
+        .expect_err("recursive assignment cover grammar must share the parser budget");
+    assert_eq!(error.code, ParseErrorCode::BudgetExceeded);
+}

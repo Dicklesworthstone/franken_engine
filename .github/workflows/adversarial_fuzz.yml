@@ -43,7 +43,7 @@ jobs:
           path: artifacts/fuzz_adversarial/
 
   prepare-object-copy:
-    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'a4e2ca14377aa1cdc41e1c164cda0bcb766ebf88'
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '86c2db485fc12d73ce8f22b2f912d48578fb1ee0'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -112,7 +112,7 @@ jobs:
               for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
                   start, count = int(match[1]), int(match[2] or 1)
                   ranges.append({'file': path, 'range': [max(1, start-1), start+max(count,1)]})
-              subprocess.run(['rustfmt', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
+              subprocess.run(['rustfmt', '--unstable-features', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
           git('add', '--', *originals)
           git('diff', '--cached', '--check')
           outputs = []

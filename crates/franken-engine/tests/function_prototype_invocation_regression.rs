@@ -308,3 +308,131 @@ fn symbol_to_primitive_noncallable_hook_is_type_error() {
         "TypeError",
     );
 }
+
+#[test]
+fn computed_literal_key_conversion_precedes_value_and_later_keys() {
+    assert_eval(
+        "let trace = ''; const key = { [Symbol.toPrimitive](hint) { trace += 'k' + hint; return 'x'; } }; const result = {[key]: (trace += 'v', 7), [(trace += 'n', 'y')]: 8}; trace + ':' + result.x + ':' + result.y;",
+        "kstringvn:7:8",
+    );
+}
+
+#[test]
+fn computed_literal_key_is_snapshotted_before_value_mutates_hook() {
+    assert_eval(
+        "const key = { [Symbol.toPrimitive]() { return 'before'; } }; const result = {[key]: (key[Symbol.toPrimitive] = () => 'after', 7)}; result.before + ':' + result.after;",
+        "7:undefined",
+    );
+}
+
+#[test]
+fn computed_literal_key_ordinary_conversion_observes_string_hint_order() {
+    assert_eval(
+        "let trace = ''; const key = {toString() {trace += 's'; return {};}, valueOf() {trace += 'v'; return 3;}}; const result = {[key]: (trace += 'r', 9)}; trace + ':' + result[3];",
+        "svr:9",
+    );
+}
+
+#[test]
+fn computed_literal_key_uses_inherited_hook_with_original_receiver() {
+    assert_eval(
+        "let trace = ''; const proto = {get [Symbol.toPrimitive]() {trace += 'g'; return function(hint) {trace += hint; return this.name;};}}; const key = Object.create(proto); key.name = 'x'; const result = {[key]: 7}; trace + ':' + result.x;",
+        "gstring:7",
+    );
+}
+
+#[test]
+fn computed_literal_key_conversion_throw_skips_value_and_runs_finally_once() {
+    assert_eval(
+        "let trace = ''; const token = {}; const key = {[Symbol.toPrimitive]() {trace += 'k'; throw token;}}; try {const result = {[key]: (trace += 'bad', 7)};} catch (e) {trace += e === token ? 'c' : 'bad';} finally {trace += 'f';} trace;",
+        "kcf",
+    );
+}
+
+#[test]
+fn computed_literal_key_getter_throw_skips_value() {
+    assert_eval(
+        "let trace = ''; const key = {get [Symbol.toPrimitive]() {trace += 'g'; throw 7;}}; try {const result = {[key]: (trace += 'bad', 1)};} catch(e) {trace += e;} trace;",
+        "g7",
+    );
+}
+
+#[test]
+fn computed_literal_key_rejects_noncallable_and_nonprimitive_hooks() {
+    for hook in ["3", "function() { return {}; }"] {
+        assert_eval(
+            &format!(
+                "let trace = ''; const key = {{[Symbol.toPrimitive]: {hook}}}; try {{const result = {{[key]: (trace += 'bad', 7)}};}} catch(e) {{trace += e.name;}} trace;"
+            ),
+            "TypeError",
+        );
+    }
+}
+
+#[test]
+fn computed_literal_key_nullish_exotic_hook_uses_ordinary_conversion() {
+    for hook in ["null", "undefined"] {
+        assert_eval(
+            &format!(
+                "let trace = ''; const key = {{[Symbol.toPrimitive]: {hook}, toString() {{trace += 's'; return 'x';}}, valueOf() {{throw 99;}}}}; const result = {{[key]: 7}}; trace + ':' + result.x;"
+            ),
+            "s:7",
+        );
+    }
+}
+
+#[test]
+fn computed_literal_keys_preserve_primitive_property_names() {
+    assert_eval(
+        "const result = {[null]: 1, [undefined]: 2, [true]: 3, [7n]: 4, [-0]: 5, [1.5]: 6}; result.null + ':' + result.undefined + ':' + result.true + ':' + result[7] + ':' + result[0] + ':' + result['1.5'];",
+        "1:2:3:4:5:6",
+    );
+}
+
+#[test]
+fn computed_literal_key_symbol_does_not_alias_its_description() {
+    assert_eval(
+        "const sym = Symbol('x'); const key = {[Symbol.toPrimitive]() {return sym;}}; const result = {[key]: 7, x: 9}; result[sym] + ':' + result.x + ':' + Object.getOwnPropertySymbols(result).length;",
+        "7:9:1",
+    );
+}
+
+#[test]
+fn computed_literal_key_conversion_works_in_incremental_spread_path() {
+    assert_eval(
+        "let trace = ''; const key = {[Symbol.toPrimitive](hint) {trace += hint; return 'x';}}; const result = {...{a: 3}, [key]: (trace += 'v', 7), ...{b: 5}}; trace + ':' + result.a + ':' + result.x + ':' + result.b;",
+        "stringv:3:7:5",
+    );
+}
+
+#[test]
+fn computed_literal_method_key_converts_once_and_preserves_receiver() {
+    assert_eval(
+        "let trace = ''; const key = {[Symbol.toPrimitive](hint) {trace += hint; return 'm';}}; const result = {x: 7, [key]() {return this.x;}}; result.m() + ':' + trace;",
+        "7:string",
+    );
+}
+
+#[test]
+fn computed_literal_accessors_share_converted_key_and_receiver() {
+    assert_eval(
+        "let trace = ''; const key = {[Symbol.toPrimitive](hint) {trace += hint + ':'; return 'x';}}; const result = {backing: 3, get [key]() {return this.backing;}, set [key](v) {this.backing = v;}}; result.x = 9; result.x + ':' + trace;",
+        "9:string:string:",
+    );
+}
+
+#[test]
+fn computed_literal_method_and_accessor_keys_preserve_symbols() {
+    assert_eval(
+        "const sym = Symbol('m'); const tag = Symbol('a'); const key = {[Symbol.toPrimitive]() {return sym;}}; const accessor = {[Symbol.toPrimitive]() {return tag;}}; const result = {[key]() {return 7;}, get [accessor]() {return 9;}}; result[sym]() + ':' + result[tag];",
+        "7:9",
+    );
+}
+
+#[test]
+fn computed_literal_key_conversion_works_inside_functions_and_closures() {
+    assert_eval(
+        "function make(name) {return () => {const key = {[Symbol.toPrimitive]() {return name;}}; return {[key]: 7};};} const f = make('x'); f().x;",
+        "7",
+    );
+}

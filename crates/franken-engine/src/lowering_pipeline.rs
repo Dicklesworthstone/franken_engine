@@ -15513,6 +15513,10 @@ fn lower_expression_to_ir1_inner(
                                         label_counter,
                                         span_table,
                                     )?;
+                                    ops.push(Ir1Op::HostCall {
+                                        capability: "builtin:ToPropertyKey".to_string(),
+                                        arg_count: 1,
+                                    });
                                 } else {
                                     let key_str = canonical_static_object_property_key(&prop.key)?;
                                     ops.push(Ir1Op::LoadLiteral {
@@ -15556,6 +15560,10 @@ fn lower_expression_to_ir1_inner(
                                         label_counter,
                                         span_table,
                                     )?;
+                                    ops.push(Ir1Op::HostCall {
+                                        capability: "builtin:ToPropertyKey".to_string(),
+                                        arg_count: 1,
+                                    });
                                     Ir1PropertyKey::Dynamic
                                 } else {
                                     let key_str = canonical_static_object_property_key(&prop.key)?;
@@ -15585,6 +15593,10 @@ fn lower_expression_to_ir1_inner(
                                         label_counter,
                                         span_table,
                                     )?;
+                                    ops.push(Ir1Op::HostCall {
+                                        capability: "builtin:ToPropertyKey".to_string(),
+                                        arg_count: 1,
+                                    });
                                     Ir1PropertyKey::Dynamic
                                 } else {
                                     let key_str = canonical_static_object_property_key(&prop.key)?;
@@ -15629,6 +15641,13 @@ fn lower_expression_to_ir1_inner(
                             label_counter,
                             span_table,
                         )?;
+                        // PropertyName evaluation includes ToPropertyKey before
+                        // evaluating the value, even when allocation is batched.
+                        // The shared intrinsic preserves Symbols and guest throws.
+                        ops.push(Ir1Op::HostCall {
+                            capability: "builtin:ToPropertyKey".to_string(),
+                            arg_count: 1,
+                        });
                     } else {
                         let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {

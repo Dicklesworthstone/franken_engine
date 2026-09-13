@@ -42,43 +42,169 @@ jobs:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
 
-  inspect-native-backlog:
-    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'd015ba967778aec48c75b47bdfd66984304a1d48'
+  prepare-object-copy:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'a4e2ca14377aa1cdc41e1c164cda0bcb766ebf88'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      files: ${{ steps.prepare.outputs.files }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           clean: false
-      - name: Read executable-language backlog and source locations
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - name: Apply reviewed source and regressions
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import json, pathlib, collections
-          issues = [json.loads(line) for line in pathlib.Path('.beads/issues.jsonl').read_text().splitlines() if line.strip()]
-          active = [x for x in issues if x.get('status') in ('open', 'in_progress', 'blocked')]
-          print('BEAD_COUNTS', dict(collections.Counter(x.get('status') for x in issues)))
-          print('ACTIVE_P0_P1_BEGIN')
-          for x in sorted(active, key=lambda x: (x.get('priority', 9), x['id'])):
-              if x.get('priority', 9) <= 1:
-                  print(x['id'], x.get('priority'), x['status'], x.get('title'))
-          print('ACTIVE_P0_P1_END')
-          terms = ('destructur', 'iterator', 'language completeness', 'language-completion', 'es2020', 'semantic completion', 'parser', 'native vm')
-          relevant = [x for x in active if any(t in x.get('title', '').lower() for t in terms)]
-          for x in sorted(relevant, key=lambda x: (x.get('priority', 9), x['id']))[:16]:
-              print('BEAD_DETAIL', json.dumps({k: x.get(k) for k in ('id', 'title', 'priority', 'status', 'description', 'acceptance_criteria', 'dependencies')}, ensure_ascii=False))
-          for path in ('crates/franken-engine/src/lowering_pipeline.rs', 'crates/franken-engine/src/parser.rs', 'crates/franken-engine/src/ir_contract.rs'):
-              print('SOURCE_LOCATIONS', path)
-              for i, line in enumerate(pathlib.Path(path).read_text().splitlines(), 1):
-                  if any(t in line for t in ('fn lower_for_of', 'fn parse_object', 'fn parse_binding', 'ObjectRest', 'CopyDataProperties', 'RequireObjectCoercible', 'GetIterator', 'IteratorClose', 'ObjectLiteral(properties)', 'ObjectLiteral(props)')):
-                      print(i, line.strip())
-          print('TEST_FILES')
-          for path in sorted(pathlib.Path('crates/franken-engine/tests').glob('*.rs')):
-              if any(t in path.name for t in ('destructur', 'iterator', 'object_rest', 'object_spread')):
-                  print(str(path))
-          print('LOCAL_AGENT_RULES')
-          for p in pathlib.Path('crates').rglob('AGENTS.md'):
-              print(str(p), p.read_text())
+          import base64, hashlib, json, os, pathlib, re, subprocess, urllib.request, zipfile
+          root = 'crates/franken-engine/'
+          originals = {
+              root+'src/baseline_interpreter.rs': 'ae4cf9c98fa2c824110fa44693e3186b4d8c55d0',
+              root+'src/lowering_pipeline.rs': 'c34ccac5564abe70e0b03c01a18be4722b79fac6',
+              root+'src/capability.rs': '0d26418bde0bd704a3ad8e639266ab2c5d6efc6d',
+              root+'tests/spread_operator_conformance.rs': '1ebd8eee65c92897c44cb22eb03e899bc803b7c4',
+          }
+          def hash_blob(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def api(path, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine'+path, data=data, headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  return json.load(response)
+          def git(*args, data=None):
+              return subprocess.run(['git', *args], input=data, stdout=subprocess.PIPE, check=True).stdout.decode()
+          for path, sha in originals.items():
+              assert hash_blob(pathlib.Path(path).read_bytes()) == sha, path
+          for sha in ['2156b33108c8742cfe86ac3571d17186bec0e9b5', 'd280fa5783a20ebec6d1a458fd383f149c6c29bc']:
+              blob = api('/git/blobs/'+sha)
+              patch = base64.b64decode(blob['content'])
+              assert hash_blob(patch) == sha
+              if sha == '2156b33108c8742cfe86ac3571d17186bec0e9b5':
+                  old = b'@@ -135000,3 +135000,50 @@\n+#[cfg(test)]'
+                  new = b'@@ -134145,3 +134381,50 @@\n         }\n     }\n }\n+\n+#[cfg(test)]'
+                  assert patch.count(old) == 1
+                  patch = patch.replace(old, new)
+                  ending = b'+}\n+\ndiff --git a/crates/franken-engine/src/lowering_pipeline.rs'
+                  assert patch.count(ending) == 1
+                  patch = patch.replace(ending, b'+}\ndiff --git a/crates/franken-engine/src/lowering_pipeline.rs')
+              git('apply', '--recount', '--check', '--index', '--whitespace=error-all', data=patch)
+              git('apply', '--recount', '--index', '--whitespace=error-all', data=patch)
+          expected = {
+              root+'src/baseline_interpreter.rs': 'b8982c4e18acffc67673aa69eb6aaecc37ee668b',
+              root+'src/lowering_pipeline.rs': '9b26b4f41d0de9f3afe9233b777192c30c6fdc30',
+              root+'tests/spread_operator_conformance.rs': 'eb4ee026cf2d56edf19a9aefb641e310e9e08a31',
+          }
+          for path, sha in expected.items():
+              assert hash_blob(pathlib.Path(path).read_bytes()) == sha, 'prepared source differs from reviewed local bytes: '+path
+          assert set(git('diff', '--cached', '--name-only').splitlines()) == set(originals)
+          for path in originals:
+              diff = git('diff', '--cached', '--unified=0', '--', path)
+              ranges = []
+              for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+                  start, count = int(match[1]), int(match[2] or 1)
+                  ranges.append({'file': path, 'range': [max(1, start-1), start+max(count,1)]})
+              subprocess.run(['rustfmt', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
+          git('add', '--', *originals)
+          git('diff', '--cached', '--check')
+          outputs = []
+          for path in originals:
+              data = pathlib.Path(path).read_bytes()
+              result = api('/git/blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              assert result['sha'] == hash_blob(data)
+              outputs.append({'path': path, 'sha': result['sha'], 'bytes': len(data)})
+          encoded = json.dumps(outputs, separators=(',', ':'))
+          print('OBJECT_COPY_FILES='+encoded, flush=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('files='+encoded+'\n')
+          pathlib.Path('/tmp/object-copy-files.json').write_text(encoded)
+          with zipfile.ZipFile('/tmp/object-copy-source.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in list(originals)+[root+'src/parser.rs', root+'src/ast.rs', root+'src/js_string.rs', root+'Cargo.toml', 'Cargo.toml']:
+                  archive.write(path, path)
+          print(git('diff', '--cached', '--stat'), flush=True)
           PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: object-copy-source
+          path: |
+            /tmp/object-copy-source.zip
+            /tmp/object-copy-files.json
+          retention-days: 2
+
+  verify-object-copy:
+    needs: prepare-object-copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: native-iteration-validation
+          cache-on-failure: true
+      - name: Read hash-verified source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES: ${{ needs.prepare-object-copy.outputs.files }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          for item in json.loads(os.environ['FILES']):
+              request = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'], headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  blob = json.load(response)
+              data = base64.b64decode(blob['content'])
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() == item['sha']
+              pathlib.Path(item['path']).write_bytes(data)
+          PY
+      - name: Execute native tests and required checks
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          commands = [
+              ['cargo', 'test', '--locked', '-p', 'frankenengine-engine', '--test', 'spread_operator_conformance'],
+              ['cargo', 'test', '--locked', '-p', 'frankenengine-engine', '--lib', 'object_copy_runtime_regression'],
+              ['cargo', 'check', '--locked', '--all-targets'],
+              ['cargo', 'clippy', '--locked', '--all-targets', '--', '-D', 'warnings'],
+              ['cargo', 'fmt', '--check'],
+          ]
+          results = []
+          for index, command in enumerate(commands):
+              print('RUN '+ ' '.join(command), flush=True)
+              with open('/tmp/object-copy-check-'+str(index)+'.log', 'w') as log:
+                  process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                  for line in process.stdout:
+                      print(line, end='', flush=True)
+                      log.write(line)
+                  status = process.wait()
+              results.append({'command': command, 'exit_code': status})
+              pathlib.Path('/tmp/object-copy-checks.json').write_text(json.dumps(results))
+          raise SystemExit(1 if any(row['exit_code'] for row in results) else 0)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: object-copy-native-checks
+          path: /tmp/object-copy-check*
+          retention-days: 2

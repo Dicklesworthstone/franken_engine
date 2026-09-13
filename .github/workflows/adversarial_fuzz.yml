@@ -41,3 +41,44 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  inspect-native-backlog:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'd015ba967778aec48c75b47bdfd66984304a1d48'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - name: Read executable-language backlog and source locations
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, collections
+          issues = [json.loads(line) for line in pathlib.Path('.beads/issues.jsonl').read_text().splitlines() if line.strip()]
+          active = [x for x in issues if x.get('status') in ('open', 'in_progress', 'blocked')]
+          print('BEAD_COUNTS', dict(collections.Counter(x.get('status') for x in issues)))
+          print('ACTIVE_P0_P1_BEGIN')
+          for x in sorted(active, key=lambda x: (x.get('priority', 9), x['id'])):
+              if x.get('priority', 9) <= 1:
+                  print(x['id'], x.get('priority'), x['status'], x.get('title'))
+          print('ACTIVE_P0_P1_END')
+          terms = ('destructur', 'iterator', 'language completeness', 'language-completion', 'es2020', 'semantic completion', 'parser', 'native vm')
+          relevant = [x for x in active if any(t in x.get('title', '').lower() for t in terms)]
+          for x in sorted(relevant, key=lambda x: (x.get('priority', 9), x['id']))[:16]:
+              print('BEAD_DETAIL', json.dumps({k: x.get(k) for k in ('id', 'title', 'priority', 'status', 'description', 'acceptance_criteria', 'dependencies')}, ensure_ascii=False))
+          for path in ('crates/franken-engine/src/lowering_pipeline.rs', 'crates/franken-engine/src/parser.rs', 'crates/franken-engine/src/ir_contract.rs'):
+              print('SOURCE_LOCATIONS', path)
+              for i, line in enumerate(pathlib.Path(path).read_text().splitlines(), 1):
+                  if any(t in line for t in ('fn lower_for_of', 'fn parse_object', 'fn parse_binding', 'ObjectRest', 'CopyDataProperties', 'RequireObjectCoercible', 'GetIterator', 'IteratorClose', 'ObjectLiteral(properties)', 'ObjectLiteral(props)')):
+                      print(i, line.strip())
+          print('TEST_FILES')
+          for path in sorted(pathlib.Path('crates/franken-engine/tests').glob('*.rs')):
+              if any(t in path.name for t in ('destructur', 'iterator', 'object_rest', 'object_spread')):
+                  print(str(path))
+          print('LOCAL_AGENT_RULES')
+          for p in pathlib.Path('crates').rglob('AGENTS.md'):
+              print(str(p), p.read_text())
+          PY

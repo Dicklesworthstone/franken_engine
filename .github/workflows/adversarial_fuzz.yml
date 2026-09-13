@@ -41,3 +41,112 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  native-caught-throw-flow:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '19b88a7752a5c6b4b4695d46b3f1f04c2d372a42'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+      - name: Apply exact local-transfer patch and publish source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,json,os,pathlib,subprocess,urllib.request,zipfile
+          paths=['crates/franken-engine/src/lowering_pipeline.rs','crates/franken-engine/tests/exception_cross_boundary_bd_8enww_4_7.rs']
+          def digest(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def api(path,body=None):
+              req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine'+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req,timeout=90) as response:
+                  return json.load(response)
+          def git(*args,data=None):
+              return subprocess.run(['git',*args],input=data,stdout=subprocess.PIPE,check=True).stdout.decode()
+          assert not git('status','--porcelain')
+          assert digest(pathlib.Path(paths[0]).read_bytes())=='d8f5675253d8cd15df8c8a7acd062b659bece3a1'
+          assert digest(pathlib.Path(paths[1]).read_bytes())=='b0790098f51a4536a109dea858c1b7e643624bc8'
+          patch=base64.b64decode(api('/git/blobs/ca3e1bea4ef1dbd31e83a518e229139d5450996e')['content'])
+          assert digest(patch)=='ca3e1bea4ef1dbd31e83a518e229139d5450996e'
+          git('apply','--check','--index','--whitespace=error-all',data=patch)
+          git('apply','--index','--whitespace=error-all',data=patch)
+          assert set(git('diff','--cached','--name-only').splitlines())==set(paths)
+          assert digest(pathlib.Path(paths[0]).read_bytes())=='b78e457c8902f8b1175c2cec154cdab63aa6f963'
+          subprocess.run(['rustfmt','--edition','2024',paths[1]],check=True)
+          subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--emit','stdout',paths[0]],stdout=subprocess.DEVNULL,check=True)
+          git('add','--',*paths)
+          git('diff','--cached','--check')
+          files=[]
+          for path in paths:
+              data=pathlib.Path(path).read_bytes()
+              item=api('/git/blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})
+              assert item['sha']==digest(data)
+              files.append({'path':path,'sha':item['sha'],'bytes':len(data)})
+          encoded=json.dumps(files,separators=(',',':'))
+          print('PREPARED_FILES='+encoded,flush=True)
+          pathlib.Path(os.environ['RUNNER_TEMP']+'/throw-flow-files.json').write_text(encoded)
+          with zipfile.ZipFile(os.environ['RUNNER_TEMP']+'/throw-flow-source.zip','w',zipfile.ZIP_DEFLATED) as archive:
+              for path in paths:
+                  archive.write(path,path)
+          print(git('diff','--cached','--stat'))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: throw-flow-prepared
+          path: ${{ runner.temp }}/throw-flow-*
+          retention-days: 2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: native-iteration-validation
+          cache-on-failure: true
+      - name: Execute native runtime and negative IFC regressions
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo test --locked -p frankenengine-engine --no-fail-fast --test function_prototype_invocation_regression --test exception_cross_boundary_bd_8enww_4_7 --test array_callback_catchability_bd_8enww_4_10 --test array_callback_throw_value_fidelity_bd_8enww_4_8 --test destructuring_default_branch_regression --test destructuring_nested_rest_regression > "$RUNNER_TEMP/throw-flow-tests.log" 2>&1
+          status=$?
+          tail -n 120 "$RUNNER_TEMP/throw-flow-tests.log"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: throw-flow-native-tests
+          path: ${{ runner.temp }}/throw-flow-tests.log
+          retention-days: 2
+      - name: Compiler lint and format gates
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo check --locked --all-targets > "$RUNNER_TEMP/throw-flow-check.log" 2>&1
+          check=$?
+          cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/throw-flow-clippy.log" 2>&1
+          clippy=$?
+          cargo fmt --check > "$RUNNER_TEMP/throw-flow-fmt.log" 2>&1
+          fmt=$?
+          printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt"
+          tail -n 30 "$RUNNER_TEMP/throw-flow-check.log"
+          tail -n 30 "$RUNNER_TEMP/throw-flow-clippy.log"
+          tail -n 20 "$RUNNER_TEMP/throw-flow-fmt.log"
+          test "$check:$clippy:$fmt" = "0:0:0"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: throw-flow-validation
+          path: ${{ runner.temp }}/throw-flow-*.log
+          retention-days: 2

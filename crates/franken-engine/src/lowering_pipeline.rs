@@ -3353,6 +3353,200 @@ fn lower_destructuring_to_ir1(
     Ok(())
 }
 
+/// Prepare the assignment reference before getting an element or evaluating its
+/// default. Binding patterns cannot represent member-expression targets, so
+/// assignment elements retain their expression AST and reuse ordinary stores.
+#[allow(clippy::too_many_arguments)]
+fn lower_array_assignment_element_to_ir1(
+    element: &Expression,
+    value_ops: Vec<Ir1Op>,
+    assignment_strictness: AssignmentStrictness,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    let (target, default) = match element {
+        Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left,
+            right,
+            ..
+        } => (left.as_ref(), Some(right.as_ref())),
+        _ => (element, None),
+    };
+    let store = DestructuringTargetStore::ReferenceAssign {
+        assignment_strictness,
+    };
+    let mut name_status = None;
+    let mut member_reference = None;
+    match target {
+        Expression::Identifier(name) => {
+            name_status = prepare_destructuring_target_status(
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                name,
+                store,
+            )?;
+        }
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            // Capture the base and computed key exactly once, before GetValue.
+            lower_expression_to_ir1(
+                object,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            let object_bid = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                "assignment_base",
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: object_bid,
+            });
+            ops.push(Ir1Op::Discard);
+            let key = lower_member_property_key_to_ir1(
+                property,
+                *computed,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            let key_bid = if matches!(key, Ir1PropertyKey::Dynamic) {
+                let key_bid = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    "assignment_key",
+                )?;
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: key_bid,
+                });
+                ops.push(Ir1Op::Discard);
+                Some(key_bid)
+            } else {
+                None
+            };
+            member_reference = Some((object_bid, key, key_bid));
+        }
+        Expression::ArrayLiteral(_) => {}
+        _ => {
+            return Err(unsupported_frontier_expression_error(
+                "assignment_target",
+                "FE-LOWER-ASSIGN-0001",
+                "lower_ir0_to_ir1.destructuring_assignment",
+                "invalid or unsupported destructuring assignment target",
+                None,
+            ));
+        }
+    }
+
+    let value_name = format!("<internal:assignment_value:{}>", *binding_index);
+    let value_bid = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        "assignment_value",
+    )?;
+    ops.extend(value_ops);
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: value_bid,
+    });
+    ops.push(Ir1Op::Discard);
+    if let Some(default) = default {
+        let assign_label = alloc_label(label_counter);
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: value_bid,
+        });
+        ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        });
+        ops.push(Ir1Op::BinaryOp {
+            operator: BinaryOperator::StrictEqual,
+        });
+        ops.push(Ir1Op::JumpIfFalsyConsume {
+            label_id: assign_label,
+        });
+        lower_expression_to_ir1(
+            default,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+            span_table,
+        )?;
+        ops.push(Ir1Op::StoreBinding {
+            binding_id: value_bid,
+        });
+        ops.push(Ir1Op::Discard);
+        ops.push(Ir1Op::Label { id: assign_label });
+    }
+    if let Expression::Identifier(name) = target {
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: value_bid,
+        });
+        push_destructuring_target_store(ops, binding_lookup, name, store, name_status)?;
+    } else if let Some((object_bid, key, key_bid)) = member_reference {
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: object_bid,
+        });
+        if let Some(key_bid) = key_bid {
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: key_bid,
+            });
+        }
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: value_bid,
+        });
+        ops.push(Ir1Op::SetProperty { key });
+    } else {
+        let assignment = Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(target.clone()),
+            right: Box::new(Expression::Identifier(value_name)),
+            assignment_strictness,
+        };
+        lower_expression_to_ir1(
+            &assignment,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+            span_table,
+        )?;
+    }
+    ops.push(Ir1Op::Discard);
+    Ok(())
+}
+
 fn push_param_slot<'a>(
     index: usize,
     param: &'a crate::ast::FunctionParam,
@@ -12733,113 +12927,51 @@ fn lower_expression_to_ir1_inner(
                 )?;
                 ops.push(Ir1Op::SetProperty { key });
             } else if let Expression::ArrayLiteral(elements) = left.as_ref() {
-                // Array destructuring assignment to existing lvalues (bd-umee4,
-                // ES2020 §13.15.5). Only `=` is valid — a compound op on a
-                // pattern is a syntax error. Evaluate the RHS exactly once into a
-                // temp so swaps like `[a, b] = [b, a]` read pre-assignment values,
-                // then assign each element target from `temp[index]`. Each element
-                // is lowered as an ordinary `target = temp[i]` assignment, so
-                // identifier and member targets reuse the existing paths and
-                // nested array patterns recurse here; unsupported element forms
-                // (rest `...`, defaults `=`, object sub-patterns) fall through to
-                // FE-LOWER-ASSIGN-0001 on the recursive call rather than being
-                // silently mishandled. The expression evaluates to the RHS value.
+                // Evaluate the RHS once and retain it independently of selected
+                // default values, rest arrays, and every target assignment.
                 if *operator != AssignmentOperator::Assign {
                     return Err(unsupported_frontier_expression_error(
                         "assignment_target",
                         "FE-LOWER-ASSIGN-0002",
                         "lower_ir0_to_ir1.destructuring_assignment",
-                        "compound assignment to an array destructuring pattern is not valid; only `=` is allowed",
+                        "compound assignment to a destructuring pattern is not valid",
                         None,
                     ));
                 }
-                let temp_name = format!("<internal:destructure_rhs:{}>", *binding_index);
                 let temp_bid = alloc_internal_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    "destructure_rhs",
+                    bindings, binding_lookup, binding_index, root_scope_id, "destructure_rhs",
                 )?;
-                // temp = right  (RHS evaluated once, before any target is written)
                 lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                    span_table,
+                    right, ops, bindings, binding_lookup, binding_index,
+                    root_scope_id, label_counter, span_table,
                 )?;
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: temp_bid,
-                });
-                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::StoreBinding { binding_id: temp_bid });
+                ops.push(Ir1Op::Discard);
                 for (index, element) in elements.iter().enumerate() {
-                    let Some(target) = element else {
-                        continue; // elision / hole: nothing to assign
+                    let Some(element) = element else { continue };
+                    let (target, value_ops) = if let Expression::SpreadElement(target) = element {
+                        if index + 1 != elements.len() || matches!(target.as_ref(), Expression::Assignment { .. }) {
+                            return Err(unsupported_frontier_expression_error(
+                                "assignment_target", "FE-LOWER-ASSIGN-0002",
+                                "lower_ir0_to_ir1.destructuring_assignment",
+                                "rest must be the final assignment element and cannot have a default", None,
+                            ));
+                        }
+                        (target.as_ref(), vec![
+                            Ir1Op::LoadBinding { binding_id: temp_bid },
+                            Ir1Op::LoadLiteral { value: Ir1Literal::Integer(index as i64) },
+                            Ir1Op::ArraySlice,
+                        ])
+                    } else {
+                        (element, vec![
+                            Ir1Op::LoadBinding { binding_id: temp_bid },
+                            Ir1Op::GetProperty { key: Ir1PropertyKey::Static(index.to_string().into()) },
+                        ])
                     };
-                    let element_value = Expression::Member {
-                        object: Box::new(Expression::Identifier(temp_name.clone())),
-                        property: Box::new(Expression::NumericLiteral(index as i64)),
-                        computed: true,
-                        span: None,
-                    };
-                    // Destructuring resolves a direct assignment target after
-                    // the outer RHS but before obtaining this element value.
-                    // Lower the bare identifier leaf directly so its status
-                    // register straddles the element GetValue.
-                    if let Expression::Identifier(name) = target {
-                        let target_store = DestructuringTargetStore::ReferenceAssign {
-                            assignment_strictness: *assignment_strictness,
-                        };
-                        let prepared_status = prepare_destructuring_target_status(
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            name,
-                            target_store,
-                        )?;
-                        lower_expression_to_ir1(
-                            &element_value,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                        push_destructuring_target_store(
-                            ops,
-                            binding_lookup,
-                            name,
-                            target_store,
-                            prepared_status,
-                        )?;
-                        ops.push(Ir1Op::Pop);
-                        continue;
-                    }
-                    let element_assign = Expression::Assignment {
-                        operator: AssignmentOperator::Assign,
-                        left: Box::new(target.clone()),
-                        right: Box::new(element_value),
-                        assignment_strictness: *assignment_strictness,
-                    };
-                    lower_expression_to_ir1(
-                        &element_assign,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
+                    lower_array_assignment_element_to_ir1(
+                        target, value_ops, *assignment_strictness, ops, bindings,
+                        binding_lookup, binding_index, root_scope_id, label_counter, span_table,
                     )?;
-                    ops.push(Ir1Op::Pop);
                 }
                 ops.push(Ir1Op::LoadBinding {
                     binding_id: temp_bid,

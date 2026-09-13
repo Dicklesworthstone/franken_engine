@@ -3222,7 +3222,7 @@ fn lower_destructuring_to_ir1(
             // already been stored to source_bid. Only `undefined` triggers
             // the default (not null).
             let default_label = alloc_label(label_counter);
-            let end_label = alloc_label(label_counter);
+            let initialize_label = alloc_label(label_counter);
             let prepared_status = if let BindingPattern::Identifier(name) = left.as_ref() {
                 match prepared_status {
                     Some(prepared_status) => Some(prepared_status),
@@ -3253,38 +3253,8 @@ fn lower_destructuring_to_ir1(
                 label_id: default_label,
             });
 
-            match left.as_ref() {
-                BindingPattern::Identifier(name) => {
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: source_bid,
-                    });
-                    push_destructuring_target_store(
-                        ops,
-                        binding_lookup,
-                        name,
-                        target_store,
-                        prepared_status,
-                    )?;
-                    ops.push(Ir1Op::Pop);
-                }
-                _ => {
-                    lower_destructuring_to_ir1(
-                        left,
-                        source_bid,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                        span_table,
-                        target_store,
-                        None,
-                    )?;
-                }
-            }
             ops.push(Ir1Op::Jump {
-                label_id: end_label,
+                label_id: initialize_label,
             });
 
             ops.push(Ir1Op::Label { id: default_label });
@@ -3302,6 +3272,13 @@ fn lower_destructuring_to_ir1(
                 binding_id: source_bid,
             });
             ops.push(Ir1Op::Pop);
+
+            // Both paths now hold the selected value in source_bid. Lower the
+            // target once: duplicating it on each branch makes nested defaults
+            // emit exponentially many ops and allocate duplicate captures.
+            ops.push(Ir1Op::Label {
+                id: initialize_label,
+            });
             match left.as_ref() {
                 BindingPattern::Identifier(name) => {
                     ops.push(Ir1Op::LoadBinding {
@@ -3332,8 +3309,6 @@ fn lower_destructuring_to_ir1(
                     )?;
                 }
             }
-
-            ops.push(Ir1Op::Label { id: end_label });
         }
         BindingPattern::Rest(inner) => {
             // Rest at top level (unusual but valid). Recurse into inner.

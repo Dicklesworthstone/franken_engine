@@ -41,3 +41,85 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  execution-source-checkout:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '5db334e29244b5f42e54fed2273f94e93fb19b9c'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - name: Read open execution beads and package the exact checkout
+        run: |
+          python3 - <<'PY'
+          import collections, json, os, pathlib, subprocess, zipfile
+          rows = [json.loads(line) for line in pathlib.Path('.beads/issues.jsonl').read_text().splitlines() if line.strip()]
+          opened = [row for row in rows if row.get('status') not in ('closed', 'tombstone')]
+          print('BEAD_STATUS_COUNTS', dict(collections.Counter(row.get('status') for row in rows)))
+          for row in sorted(opened, key=lambda row: (row.get('priority', 9), row.get('id', ''))):
+              print(json.dumps({key: row.get(key) for key in ('id', 'title', 'status', 'priority', 'issue_type', 'dependencies')}))
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          destination = pathlib.Path(os.environ['RUNNER_TEMP']) / 'franken-engine-source.zip'
+          with zipfile.ZipFile(destination, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+              for name in paths:
+                  if name and pathlib.Path(name).is_file() and not name.startswith(('legacy_quickjs/', 'legacy_v8/', 'artifacts/', 'docs/assets/')):
+                      archive.write(name, name)
+              archive.writestr('CHECKOUT_REVISION', subprocess.check_output(['git', 'rev-parse', 'HEAD']))
+          print('SOURCE_ARCHIVE_BYTES', destination.stat().st_size)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: execution-source-checkout
+          path: ${{ runner.temp }}/franken-engine-source.zip
+          retention-days: 2
+
+  execution-native-baseline:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '5db334e29244b5f42e54fed2273f94e93fb19b9c'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: execution-native
+          cache-on-failure: true
+      - name: Compile and execute the existing native regressions
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --test destructuring_default_branch_regression --test destructuring_nested_rest_regression 2>&1 | tee "$RUNNER_TEMP/native-baseline.log"
+      - name: Print build diagnostics
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'native-baseline.log'
+          if path.exists():
+              lines = path.read_text(errors='replace').splitlines()
+              for index, line in enumerate(lines):
+                  if any(word in line for word in ('error', 'FAILED', 'test result:', 'panicked', 'SIGKILL')):
+                      print('\n'.join(lines[max(0, index - 2):index + 14]))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: execution-native-baseline-log
+          path: ${{ runner.temp }}/native-baseline.log
+          retention-days: 2

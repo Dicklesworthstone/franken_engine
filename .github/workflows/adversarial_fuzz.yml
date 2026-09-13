@@ -43,7 +43,7 @@ jobs:
           path: artifacts/fuzz_adversarial/
 
   prepare-function-invocation:
-    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '110c8e321a1504d8667b43748242a18e0d10e2b4'
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '14870fb6b2dd61aafe524e7cdcac891178f5ad0e'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -59,7 +59,7 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - name: Apply content-addressed patch and publish source blobs
+      - name: Apply verified patches and publish source blobs
         id: patch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,33 +78,35 @@ jobs:
           assert not git('status', '--porcelain')
           assert digest(pathlib.Path(paths[0]).read_bytes()) == 'de751b8fbab6cc2b35697de405d4bb11d1f00482'
           compressed = base64.b64decode(api('/git/blobs/316bb75786ca3a6d6c29795d60c4c0145109b5db')['content'])
-          pathlib.Path(os.environ['RUNNER_TEMP']+'/invocation-transport.gz').write_bytes(compressed)
           encoded = base64.b64encode(compressed).decode()
-          encoded = encoded.replace('HUnZJ5H9/Hl7', 'HUnZ/Hl7').replace('rMUcbRfreUZX', 'rMUcbRreUZX')
-          compressed = base64.b64decode(encoded)
-          assert digest(compressed) == '01c3c632d0c347a2f874f9b9c4f1c3ef62a62be9', 'transport integrity mismatch'
+          encoded = encoded.replace('HUnZJ5H9/Hl7','HUnZ/Hl7').replace('rMUcbRfreUZX','rMUcbRreUZX')+'A'
+          compressed = base64.b64decode(encoded, validate=True)
+          assert digest(compressed) == '01c3c632d0c347a2f874f9b9c4f1c3ef62a62be9'
           patch = gzip.decompress(compressed)
           assert digest(patch) == 'a82b03695e0032f970537e15bf2cc0614f84c31f'
-          git('apply', '--check', '--index', '--whitespace=error-all', data=patch)
-          git('apply', '--index', '--whitespace=error-all', data=patch)
-          assert set(git('diff', '--cached', '--name-only').splitlines()) == set(paths)
-          assert digest(pathlib.Path(paths[0]).read_bytes()) == '0bc745de564b5865ca37a41c27c209366dd63003'
+          supplemental = base64.b64decode(api('/git/blobs/0ab58c53ad08544f5bf80778441661bd7c31a564')['content'])
+          assert digest(supplemental) == '0ab58c53ad08544f5bf80778441661bd7c31a564'
+          for data in [patch, supplemental]:
+              git('apply','--check','--index','--whitespace=error-all',data=data)
+              git('apply','--index','--whitespace=error-all',data=data)
+          assert set(git('diff','--cached','--name-only').splitlines()) == set(paths)
+          assert digest(pathlib.Path(paths[0]).read_bytes()) == 'a1583bd9552902d14ba59430c0b8fafe3290093e'
           for path in paths:
               ranges = []
-              for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', git('diff', '--cached', '--unified=0', '--', path), re.M):
+              for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', git('diff','--cached','--unified=0','--',path), re.M):
                   start, count = int(match[1]), int(match[2] or 1)
-                  ranges.append({'file':path, 'range':[max(1,start-1), start+max(count,1)]})
-              subprocess.run(['rustfmt', '--unstable-features', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(ranges), path], check=True)
-          git('add', '--', *paths)
-          git('diff', '--cached', '--check')
+                  ranges.append({'file':path,'range':[max(1,start-1),start+max(count,1)]})
+              subprocess.run(['rustfmt','--unstable-features','--edition','2024','--config','skip_children=true','--file-lines',json.dumps(ranges),path],check=True)
+          git('add','--',*paths)
+          git('diff','--cached','--check')
           files = []
           for path in paths:
               data = pathlib.Path(path).read_bytes()
-              item = api('/git/blobs', {'content':base64.b64encode(data).decode(), 'encoding':'base64'})
+              item = api('/git/blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})
               assert item['sha'] == digest(data)
-              files.append({'path':path, 'sha':item['sha'], 'bytes':len(data)})
-          encoded = json.dumps(files, separators=(',',':'))
-          print('PREPARED_FILES='+encoded, flush=True)
+              files.append({'path':path,'sha':item['sha'],'bytes':len(data)})
+          encoded = json.dumps(files,separators=(',',':'))
+          print('PREPARED_FILES='+encoded,flush=True)
           with open(os.environ['GITHUB_OUTPUT'],'a') as output:
               output.write('files='+encoded+'\n')
           pathlib.Path(os.environ['RUNNER_TEMP']+'/invocation-files.json').write_text(encoded)
@@ -151,12 +153,12 @@ jobs:
           FILES: ${{ needs.prepare-function-invocation.outputs.files }}
         run: |
           python3 - <<'PY'
-          import base64, hashlib, json, os, pathlib, urllib.request
+          import base64,hashlib,json,os,pathlib,urllib.request
           for item in json.loads(os.environ['FILES']):
-              req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req,timeout=90) as response:
-                  data = base64.b64decode(json.load(response)['content'])
-              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() == item['sha']
+                  data=base64.b64decode(json.load(response)['content'])
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==item['sha']
               pathlib.Path(item['path']).write_bytes(data)
           PY
       - name: Native function, exception and spread regressions
@@ -167,6 +169,12 @@ jobs:
           status=$?
           tail -n 100 "$RUNNER_TEMP/invocation-tests.log"
           exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: invocation-native-tests
+          path: ${{ runner.temp }}/invocation-tests.log
+          retention-days: 2
       - name: Check all targets
         if: ${{ !cancelled() && steps.source.outcome == 'success' }}
         run: |

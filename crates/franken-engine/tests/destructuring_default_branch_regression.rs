@@ -131,7 +131,7 @@ fn lowered_default_ops(depth: usize) -> usize {
     }
     let source = format!("let [{pattern}] = []; value;");
     let tree = CanonicalEs2020Parser
-        .parse(&source, ParseGoal::Script)
+        .parse(source.as_str(), ParseGoal::Script)
         .expect("nested default source should parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "nested-default-branch-regression");
     lower_ir0_to_ir1(&ir0)

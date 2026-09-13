@@ -40408,6 +40408,16 @@ impl InterpreterCore {
     ) -> Result<LabeledReturn, InterpreterError> {
         loop {
             match self.run_loop_dispatch(module, compact_tier1) {
+                Err(err @ InterpreterError::UncaughtException { .. }) => {
+                    // Accessors, Proxy traps, and conversion callbacks can
+                    // leave dispatch through `?`, not only through Call. The
+                    // isolated driver restores the caller and re-arms the
+                    // original value and label; route that completion here so
+                    // every instruction observes the enclosing catch/finally.
+                    if let Some(err) = self.route_isolated_explicit_throw(module, err)? {
+                        return Err(err);
+                    }
+                }
                 Err(err)
                     if Self::js_catchable_error_name(&err).is_some()
                         && (self.has_active_catch_frame()

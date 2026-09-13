@@ -195,3 +195,122 @@ fn crossed_exception_can_be_rethrown_to_outer_handler() {
         "inner:again",
     );
 }
+
+#[test]
+fn property_getter_throw_reaches_enclosing_catch() {
+    assert_eq!(
+        caught(
+            r#"let answer = 0; const source = { get x() { throw 17; } }; try { source.x; } catch (e) { answer = e; } answer;"#
+        ),
+        "17",
+    );
+}
+
+#[test]
+fn property_getter_throw_preserves_object_identity() {
+    assert_eq!(
+        caught(
+            r#"const token = { tag: 1 }; const source = { get x() { throw token; } }; let same = false; try { source.x; } catch (e) { same = e === token; } same;"#
+        ),
+        "true",
+    );
+}
+
+#[test]
+fn property_setter_throw_reaches_enclosing_catch() {
+    assert_eq!(
+        caught(
+            r#"let answer = 0; const target = { set x(v) { throw v; } }; try { target.x = 23; } catch (e) { answer = e; } answer;"#
+        ),
+        "23",
+    );
+}
+
+#[test]
+fn proxy_get_trap_throw_reaches_enclosing_catch() {
+    assert_eq!(
+        caught(
+            r#"const p = new Proxy({}, { get(target, key) { throw key; } }); let answer = ''; try { p.missing; } catch (e) { answer = e; } answer;"#
+        ),
+        "missing",
+    );
+}
+
+#[test]
+fn proxy_set_trap_throw_reaches_enclosing_catch() {
+    assert_eq!(
+        caught(
+            r#"const p = new Proxy({}, { set(target, key, value) { throw value; } }); let answer = 0; try { p.x = 29; } catch (e) { answer = e; } answer;"#
+        ),
+        "29",
+    );
+}
+
+#[test]
+fn getter_throw_runs_each_finally_once() {
+    assert_eq!(
+        caught(
+            r#"let trace = ''; const source = { get x() { try { throw 3; } finally { trace += 'g'; } } }; try { try { source.x; } finally { trace += 'i'; } } catch (e) { trace += e; } finally { trace += 'o'; } trace;"#
+        ),
+        "gi3o",
+    );
+}
+
+#[test]
+fn getter_throw_from_finally_replaces_pending_return() {
+    assert_eq!(
+        caught(
+            r#"const source = { get x() { throw 31; } }; function f() { try { return 1; } finally { source.x; } } let answer = 0; try { answer = f(); } catch (e) { answer = e; } answer;"#
+        ),
+        "31",
+    );
+}
+
+#[test]
+fn caught_getter_throw_does_not_resurrect_after_finally() {
+    assert_eq!(
+        caught(
+            r#"let trace = ''; const source = { get x() { throw 5; } }; try { source.x; } catch (e) { trace += e; } finally { trace += 'f'; } trace += 'n'; trace;"#
+        ),
+        "5fn",
+    );
+}
+
+#[test]
+fn getter_throw_can_be_rethrown_through_an_outer_handler() {
+    assert_eq!(
+        caught(
+            r#"const source = { get x() { throw 7; } }; let answer = 0; try { try { source.x; } catch (e) { throw e + 1; } } catch (e) { answer = e; } answer;"#
+        ),
+        "8",
+    );
+}
+
+#[test]
+fn object_assignment_commits_earlier_writes_before_getter_throw() {
+    assert_eq!(
+        caught(
+            r#"let a = 0, b = 0, trace = ''; try { ({ a, b } = { a: 3, get b() { throw 9; } }); } catch (e) { trace += e; } a + ':' + b + ':' + trace;"#
+        ),
+        "3:0:9",
+    );
+}
+
+#[test]
+fn getter_internal_catch_does_not_trigger_caller_catch() {
+    assert_eq!(
+        caught(
+            r#"const source = { get x() { try { throw 11; } catch (e) { return e + 1; } } }; let answer = 0; try { answer = source.x; } catch (e) { answer = 99; } answer;"#
+        ),
+        "12",
+    );
+}
+
+#[test]
+fn getter_without_handler_remains_an_uncaught_exception() {
+    let message = uncaught(r#"const source = { get x() { throw 37; } }; source.x;"#);
+    assert!(
+        message.contains("uncaught exception") && message.contains("37"),
+        "{message}"
+    );
+}

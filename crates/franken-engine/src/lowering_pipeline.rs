@@ -15135,17 +15135,26 @@ fn lower_expression_to_ir1_inner(
                 )?;
                 return Ok(());
             }
-            // `Symbol.iterator` resolves to the engine's canonical typed
-            // well-known Symbol value (id 1). There is no global `Symbol` binding
-            // in the eval scope, so it is recognized here at lowering. Emitting
-            // the builtin rather than the legacy `"@@iterator"` string keeps
-            // computed object keys and member reads on
-            // the same Symbol identity used by the runtime property sidecar
-            // (bd-n8eta.4.2).
-            if symbol_iterator_member(object, property, *computed, binding_lookup) {
+            // Resolve intrinsic Symbol properties to the canonical identities
+            // used by runtime protocol hooks. Preserve lexical shadowing and
+            // the existing iterator opcode for replay-compatible artifacts.
+            if let Some(symbol) =
+                well_known_symbol_member(object, property, *computed, binding_lookup)
+            {
+                let iterator = symbol == crate::object_model::WellKnownSymbol::Iterator;
+                if !iterator {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(i64::from(symbol.id().0)),
+                    });
+                }
                 ops.push(Ir1Op::HostCall {
-                    capability: "builtin:SymbolIterator".to_string(),
-                    arg_count: 0,
+                    capability: if iterator {
+                        "builtin:SymbolIterator"
+                    } else {
+                        "builtin:WellKnownSymbol"
+                    }
+                    .to_string(),
+                    arg_count: u32::from(!iterator),
                 });
                 return Ok(());
             }
@@ -16735,27 +16744,25 @@ fn property_key_function_display_name(key: &JsString) -> String {
     display
 }
 
-/// Recognize `Symbol.iterator` member access (the well-known iterator symbol).
-///
-/// `Symbol` has no global binding in the eval scope, so the access is resolved
-/// here at lowering. Returns `false` when
-/// `Symbol` is shadowed by a user binding (`let Symbol = …`). Both the static
-/// `Symbol.iterator` and quoted `Symbol["iterator"]` forms are accepted.
-fn symbol_iterator_member(
+/// Recognize static and quoted well-known Symbol properties, but never
+/// reinterpret a lexically shadowed Symbol binding as an intrinsic.
+fn well_known_symbol_member(
     object: &Expression,
     property: &Expression,
     computed: bool,
     binding_lookup: &BTreeMap<String, BindingId>,
-) -> bool {
+) -> Option<crate::object_model::WellKnownSymbol> {
     if !matches!(object, Expression::Identifier(name) if name == "Symbol")
         || is_lexically_shadowed(binding_lookup, "Symbol")
     {
-        return false;
+        return None;
     }
-    match computed {
-        false => well_formed_static_name(property).is_some_and(|name| name == "iterator"),
-        true => well_formed_string_literal(property).is_some_and(|name| name == "iterator"),
-    }
+    let name = if computed {
+        well_formed_string_literal(property)
+    } else {
+        well_formed_static_name(property)
+    }?;
+    crate::object_model::WellKnownSymbol::from_property_name(name)
 }
 
 fn builtin_prototype_capability(
@@ -24613,7 +24620,7 @@ fn global_function_call_capability(
         // binding, so route the call to the existing `builtin:Symbol` hostcall
         // (which allocates a fresh, unique `__type:"symbol"` value; `typeof` of it
         // already yields "symbol"). Member forms `Symbol.iterator`
-        // (`symbol_iterator_member`) and `Symbol.for` (a registry, bd-bn1z7
+        // (`well_known_symbol_member`) and `Symbol.for` (a registry, bd-bn1z7
         // follow-up) are handled elsewhere; this is the bare constructor call.
         // Slot-0 description argument, no receiver — same convention as the other
         // global function builtins above (bd-bn1z7).

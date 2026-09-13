@@ -252,6 +252,31 @@ pub enum WellKnownSymbol {
 }
 
 impl WellKnownSymbol {
+    /// Canonical fixed identities, shared by source lowering and execution.
+    pub const ALL: [Self; 13] = [
+        Self::Iterator,
+        Self::ToPrimitive,
+        Self::HasInstance,
+        Self::ToStringTag,
+        Self::Species,
+        Self::IsConcatSpreadable,
+        Self::Unscopables,
+        Self::AsyncIterator,
+        Self::Match,
+        Self::MatchAll,
+        Self::Replace,
+        Self::Search,
+        Self::Split,
+    ];
+
+    /// Resolve a property of the intrinsic Symbol constructor, not a symbol
+    /// registry description. User-created symbols never alias these values.
+    pub fn from_property_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|symbol| symbol.name().strip_prefix("@@") == Some(name))
+    }
+
     /// Get the `SymbolId` for this well-known symbol.
     /// Well-known symbols occupy ids 1..=13.
     pub fn id(self) -> SymbolId {

@@ -2303,7 +2303,8 @@ fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
 /// first-class values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BuiltinFunctionKind {    Require,
+pub enum BuiltinFunctionKind {
+    Require,
     FunctionConstructor,
     GeneratedFunction,
     IteratorNext,
@@ -70765,6 +70766,20 @@ impl InterpreterCore {
             }
 
             "builtin:SymbolIterator" => Ok(Value::Symbol(WellKnownSymbol::Iterator.id())),
+
+            "builtin:WellKnownSymbol" => {
+                let identity = match self.builtin_arg(args, 0)? {
+                    Some(Value::Int(id)) => WellKnownSymbol::ALL
+                        .into_iter()
+                        .find(|symbol| i64::from(symbol.id().0) == id),
+                    _ => None,
+                };
+                let symbol = identity.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "canonical well-known symbol identity".to_string(),
+                    got: "invalid well-known symbol id".to_string(),
+                })?;
+                Ok(Value::Symbol(symbol.id()))
+            }
 
             "builtin:StringPrototypeNormalize" => {
                 // String.prototype.normalize(form) implementation - Unicode normalization

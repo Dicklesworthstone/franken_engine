@@ -216,3 +216,95 @@ fn forwarding_call_preserves_thrown_value_identity() {
         "true",
     );
 }
+
+#[test]
+fn well_known_symbols_have_stable_distinct_typed_identities() {
+    let names = [
+        "iterator",
+        "toPrimitive",
+        "hasInstance",
+        "toStringTag",
+        "species",
+        "isConcatSpreadable",
+        "unscopables",
+        "asyncIterator",
+        "match",
+        "matchAll",
+        "replace",
+        "search",
+        "split",
+    ];
+    for name in names {
+        assert_eval(
+            &format!("typeof Symbol.{name} + ':' + (Symbol.{name} === Symbol['{name}']);"),
+            "symbol:true",
+        );
+    }
+    let symbols = names.map(|name| format!("Symbol.{name}")).join(",");
+    assert_eval(
+        &format!(
+            "const symbols = [{symbols}]; let unique = true; for (let i = 0; i < symbols.length; i++) {{ for (let j = i + 1; j < symbols.length; j++) {{ if (symbols[i] === symbols[j]) unique = false; }} }} unique;"
+        ),
+        "true",
+    );
+}
+
+#[test]
+fn well_known_symbol_resolution_respects_lexical_shadowing() {
+    assert_eval(
+        "let Symbol = {toPrimitive: 7}; Symbol.toPrimitive + ':' + Symbol['toPrimitive'];",
+        "7:7",
+    );
+    assert_eval(
+        "function f(Symbol) { return Symbol.toPrimitive; } f({toPrimitive: 11});",
+        "11",
+    );
+}
+
+#[test]
+fn apply_length_uses_symbol_to_primitive_number_hint() {
+    assert_eval(
+        "let trace = ''; const length = { [Symbol.toPrimitive](hint) { trace += hint; return 2; }, valueOf() { throw 99; } }; function f(a, b) { return a + b; } const result = f.apply(null, {length, 0: 3, 1: 4}); trace + ':' + result;",
+        "number:7",
+    );
+}
+
+#[test]
+fn computed_property_uses_symbol_to_primitive_string_hint() {
+    assert_eval(
+        "let trace = ''; const key = { [Symbol.toPrimitive](hint) { trace += hint; return 'x'; }, toString() { throw 99; } }; const result = { [key]: 7 }; trace + ':' + result.x;",
+        "string:7",
+    );
+}
+
+#[test]
+fn symbol_to_primitive_can_return_a_symbol_property_key() {
+    assert_eval(
+        "const key = { [Symbol.toPrimitive](hint) { return Symbol.toStringTag; } }; const result = {[key]: 7, '@@toStringTag': 9}; result[Symbol.toStringTag] + ':' + result['@@toStringTag'];",
+        "7:9",
+    );
+}
+
+#[test]
+fn throwing_symbol_to_primitive_stops_index_reads() {
+    assert_eval(
+        "let trace = ''; const length = { [Symbol.toPrimitive](hint) { trace += hint; throw 7; } }; const args = {length, get 0() { trace += 'bad'; return 1; }}; function f() { trace += 'bad'; } try { f.apply(null, args); } catch (e) { trace += ':' + e; } trace;",
+        "number:7",
+    );
+}
+
+#[test]
+fn symbol_to_primitive_object_result_is_type_error() {
+    assert_eval(
+        "const length = { [Symbol.toPrimitive]() { return {}; } }; let result = ''; function f() {} try { f.apply(null, {length}); } catch (e) { result = e.name; } result;",
+        "TypeError",
+    );
+}
+
+#[test]
+fn symbol_to_primitive_noncallable_hook_is_type_error() {
+    assert_eval(
+        "const length = { [Symbol.toPrimitive]: 3 }; let result = ''; function f() {} try { f.apply(null, {length}); } catch (e) { result = e.name; } result;",
+        "TypeError",
+    );
+}

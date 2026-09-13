@@ -41,3 +41,24 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  read-runtime-slice:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == 'a6ec4fa7cfa9a8cacd5404062608efb6a6742e46'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - name: Export pinned runtime sources and planning inputs
+        run: |
+          git archive --format=zip --output="$RUNNER_TEMP/runtime-slice.zip" HEAD AGENTS.md README.md Cargo.toml Cargo.lock .beads/issues.jsonl docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md crates/franken-engine/src crates/franken-engine/tests crates/franken-engine/Cargo.toml crates/franken-core/src crates/franken-core/Cargo.toml
+          git rev-parse HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runtime-slice
+          path: ${{ runner.temp }}/runtime-slice.zip
+          retention-days: 2

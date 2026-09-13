@@ -28336,14 +28336,41 @@ fn infer_ir2_flow_annotations(
         static_proven_ops: 0,
         runtime_check_ops: 0,
     };
+    let (catch_region_starts, catch_region_ends, _) = &catch_region_events;
+    let mut active_catch_regions = Vec::<u32>::new();
 
     for (op_index, (op, inferred_data_label)) in ir2.ops.iter_mut().zip(inferred_labels).enumerate()
     {
-        let inferred_sink_clearance = infer_sink_clearance(
-            &op.effect,
-            op.required_capability.as_ref(),
-            &inferred_data_label,
-        );
+        if let Some(ending) = catch_region_ends.get(&op_index) {
+            for catch_label in ending {
+                if active_catch_regions.pop().as_ref() != Some(catch_label) {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "catch annotation region termination is not properly nested",
+                    });
+                }
+            }
+        }
+        if let Some(starting) = catch_region_starts.get(&op_index) {
+            active_catch_regions.extend(starting.iter().copied());
+        }
+        let inferred_sink_clearance = if matches!(op.inner, Ir1Op::Throw)
+            && !active_catch_regions.is_empty()
+            && op.required_capability.is_none()
+        {
+            // A statically enclosed throw transfers its value to another
+            // local binding; it is not host egress. Keep the exact label,
+            // already joined into the innermost catch by flow simulation.
+            // Releasing that caught value still checks the real sink. Throws
+            // without a local catch (including finally-only regions) retain
+            // the normal boundary clearance and fail closed when necessary.
+            inferred_data_label.clone()
+        } else {
+            infer_sink_clearance(
+                &op.effect,
+                op.required_capability.as_ref(),
+                &inferred_data_label,
+            )
+        };
         let requires_declassification = !inferred_data_label.can_flow_to(&inferred_sink_clearance);
         let runtime_guard_needed = op.required_capability.as_ref().is_some_and(|capability| {
             flow_requires_runtime_check(

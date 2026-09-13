@@ -314,3 +314,133 @@ fn getter_without_handler_remains_an_uncaught_exception() {
         "{message}"
     );
 }
+
+fn protected_throw_flow(
+    sink: Option<&str>,
+    rethrow: bool,
+) -> frankenengine_engine::ir_contract::Ir2Module {
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ir_contract::{Ir1Literal, Ir1Module, Ir1Op};
+    use frankenengine_engine::lowering_pipeline::lower_ir1_to_ir2;
+    let mut ir1 = Ir1Module::new(
+        ContentHash::compute(b"protected-throw-flow"),
+        "protected-throw.js",
+    );
+    ir1.ops.extend([
+        Ir1Op::BeginTry {
+            catch_label: 1,
+            finally_label: None,
+        },
+        Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret-sensitive-value".into()),
+        },
+        Ir1Op::Throw,
+        Ir1Op::EndTry,
+        Ir1Op::Jump { label_id: 2 },
+        Ir1Op::Label { id: 1 },
+    ]);
+    match sink {
+        Some(capability) => {
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: capability.into(),
+                arg_count: 1,
+            });
+            ir1.ops.push(Ir1Op::Pop);
+        }
+        None => ir1
+            .ops
+            .push(if rethrow { Ir1Op::Throw } else { Ir1Op::Pop }),
+    }
+    ir1.ops.extend([
+        Ir1Op::Label { id: 2 },
+        Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        },
+        Ir1Op::Return,
+    ]);
+    lower_ir1_to_ir2(&ir1)
+        .expect("valid protected throw lowers")
+        .module
+}
+
+#[test]
+fn locally_caught_throw_keeps_its_label_without_becoming_egress() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    let ir2 = protected_throw_flow(None, false);
+    let flow = ir2.ops[2].flow.as_ref().expect("throw provenance");
+    assert_eq!(flow.data_label, Label::Secret);
+    assert_eq!(flow.sink_clearance, Label::Secret);
+    assert!(!flow.declassification_required);
+    assert_eq!(
+        caught("try { throw 'secret-sensitive-value'; } catch (e) {} 7;"),
+        "7"
+    );
+}
+
+#[test]
+fn caught_sensitive_throw_still_cannot_flow_to_real_sinks() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    for capability in ["console:log", "net.http.request"] {
+        let ir2 = protected_throw_flow(Some(capability), false);
+        let flow = ir2.ops[6].flow.as_ref().expect("real sink provenance");
+        assert_eq!(flow.data_label, Label::Secret);
+        assert!(flow.declassification_required);
+    }
+    let diagnostic =
+        uncaught("try { throw 'secret-sensitive-value'; } catch (e) { console.log(e); }");
+    assert!(diagnostic.contains("unauthorized flow"), "{diagnostic}");
+}
+
+#[test]
+fn rethrow_leaving_local_handlers_retains_external_clearance() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    let ir2 = protected_throw_flow(None, true);
+    let flow = ir2.ops[6]
+        .flow
+        .as_ref()
+        .expect("uncaught rethrow provenance");
+    assert_eq!(flow.data_label, Label::Secret);
+    assert_eq!(flow.sink_clearance, Label::Internal);
+    assert!(flow.declassification_required);
+    let diagnostic = uncaught("try { throw 'secret-sensitive-value'; } catch (e) { throw e; }");
+    assert!(diagnostic.contains("unauthorized flow"), "{diagnostic}");
+}
+
+#[test]
+fn finally_only_region_does_not_authorize_sensitive_throw_egress() {
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{Ir1Literal, Ir1Module, Ir1Op};
+    use frankenengine_engine::lowering_pipeline::lower_ir1_to_ir2;
+    let mut ir1 = Ir1Module::new(
+        ContentHash::compute(b"finally-only-flow"),
+        "finally-only.js",
+    );
+    ir1.ops.extend([
+        Ir1Op::BeginTry {
+            catch_label: 1,
+            finally_label: Some(1),
+        },
+        Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret-sensitive-value".into()),
+        },
+        Ir1Op::Throw,
+        Ir1Op::EndTry,
+        Ir1Op::Label { id: 1 },
+        Ir1Op::EnterFinally,
+        Ir1Op::EndFinally,
+        Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        },
+        Ir1Op::Return,
+    ]);
+    let ir2 = lower_ir1_to_ir2(&ir1)
+        .expect("finally-only flow lowers")
+        .module;
+    let flow = ir2.ops[2].flow.as_ref().expect("throw provenance");
+    assert_eq!(flow.data_label, Label::Secret);
+    assert_eq!(flow.sink_clearance, Label::Internal);
+    assert!(flow.declassification_required);
+    let diagnostic = uncaught("try { throw 'secret-sensitive-value'; } finally { 0; }");
+    assert!(diagnostic.contains("unauthorized flow"), "{diagnostic}");
+}

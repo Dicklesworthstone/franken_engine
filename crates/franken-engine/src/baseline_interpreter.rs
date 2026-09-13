@@ -2303,8 +2303,7 @@ fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
 /// first-class values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BuiltinFunctionKind {
-    Require,
+pub enum BuiltinFunctionKind {    Require,
     FunctionConstructor,
     GeneratedFunction,
     IteratorNext,
@@ -2979,6 +2978,10 @@ pub enum BuiltinFunctionKind {
     /// surface (bd-dspwz). Appended at the true enum tail because builtin
     /// discriminants participate in deterministic register hashes.
     EventEmitterConstructor,
+    /// First-class Function.prototype methods. Append only: existing builtin
+    /// ordinals participate in deterministic register hashing.
+    FunctionPrototypeCall,
+    FunctionPrototypeApply,
 }
 
 impl BuiltinFunctionKind {
@@ -4580,6 +4583,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::EmitterRawListeners => "rawListeners",
             BuiltinFunctionKind::EmitterOnceWrapper => "onceWrapper",
             BuiltinFunctionKind::EventEmitterConstructor => "EventEmitter",
+            BuiltinFunctionKind::FunctionPrototypeCall => "call",
+            BuiltinFunctionKind::FunctionPrototypeApply => "apply",
         }
     }
 }
@@ -33561,6 +33566,14 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
+            BuiltinFunctionKind::FunctionPrototypeCall
+            | BuiltinFunctionKind::FunctionPrototypeApply => self.forward_function_invocation(
+                Some(module),
+                receiver.unwrap_or(Value::Undefined),
+                receiver_register,
+                args,
+                builtin.kind == BuiltinFunctionKind::FunctionPrototypeApply,
+            ),
             BuiltinFunctionKind::StreamWritableWrite
             | BuiltinFunctionKind::StreamWritableEnd
             | BuiltinFunctionKind::StreamWritableCork
@@ -33609,6 +33622,14 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
+            BuiltinFunctionKind::FunctionPrototypeCall
+            | BuiltinFunctionKind::FunctionPrototypeApply => self.forward_function_invocation(
+                Some(module),
+                receiver.unwrap_or(Value::Undefined),
+                receiver_register,
+                args,
+                builtin.kind == BuiltinFunctionKind::FunctionPrototypeApply,
+            ),
             BuiltinFunctionKind::Require => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                 let args_label = self.join_arg_range_label(args)?;
@@ -42414,13 +42435,18 @@ impl InterpreterCore {
                                     Some(module),
                                     property_object,
                                     &property_key,
-                                    Value::Object(property_object),
+                                    Value::BuiltinFunction(builtin),
                                     0,
                                 )?
                             } else {
-                                Value::Undefined
+                                property_key.as_str().and_then(Self::function_prototype_property)
+                                    .unwrap_or(Value::Undefined)
                             }
                         }
+                        Value::GeneratorFunction(_) | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_) => property_key.as_str()
+                            .and_then(Self::function_prototype_property)
+                            .unwrap_or(Value::Undefined),
                         Value::Generator(gen_id) => {
                             // Generator iterator-protocol member access (bd-v6cv1).
                             // Previously a generator had no arm here, so `it.next`
@@ -47574,6 +47600,13 @@ impl InterpreterCore {
             );
             return Ok(Value::Undefined);
         };
+        // Consult virtual function prototypes only after real own/inherited
+        // properties, including an explicitly stored undefined, have won.
+        if receiver.is_callable()
+            && let Some(value) = Self::function_prototype_property(key_text)
+        {
+            return Ok(value);
+        }
         if let Some(value) = self.url_object_property_value(object_id, key_text)? {
             return Ok(value);
         }
@@ -49475,7 +49508,27 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         value: Value,
     ) -> Result<Value, InterpreterError> {
-        let primitive = if value.is_object_like() {
+        let primitive = self.coerce_runtime_primitive(module, value, true)?;
+        let result = match primitive {
+            Value::Str(_) | Value::Symbol(_) => primitive,
+            Value::Float(number) if number.inner().is_finite() => {
+                let mut buffer = ryu_js::Buffer::new();
+                Value::str(buffer.format(number.inner()))
+            }
+            other => Value::str(self.value_to_string(&other)),
+        };
+        self.validate_executable_property_key(&self.executable_property_key_from_value(&result))?;
+        Ok(result)
+    }
+
+    /// Shared observable ToPrimitive for property keys and array-like length.
+    fn coerce_runtime_primitive(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        prefer_string: bool,
+    ) -> Result<Value, InterpreterError> {
+        Ok(if value.is_object_like() {
             if let Some(object_id) =
                 self.iterator_carrier_backing_id(&value, "property key object")?
             {
@@ -49492,7 +49545,7 @@ impl InterpreterCore {
                         module,
                         method,
                         value.clone(),
-                        vec![Value::str("string")],
+                        vec![Value::str(if prefer_string { "string" } else { "number" })],
                         None,
                     )?;
                     let label = self
@@ -49509,7 +49562,12 @@ impl InterpreterCore {
                     }
                     primitive = Some(result);
                 } else {
-                    for name in ["toString", "valueOf"] {
+                    let names = if prefer_string {
+                        ["toString", "valueOf"]
+                    } else {
+                        ["valueOf", "toString"]
+                    };
+                    for name in names {
                         let method = self.proxy_aware_get_property(
                             module,
                             object_id,
@@ -49540,7 +49598,7 @@ impl InterpreterCore {
                     }
                 }
                 primitive.ok_or_else(|| InterpreterError::TypeError {
-                    expected: "primitive property key".to_string(),
+                    expected: "primitive conversion result".to_string(),
                     got: "object from both conversion methods".to_string(),
                 })?
             } else {
@@ -49551,17 +49609,7 @@ impl InterpreterCore {
             }
         } else {
             value
-        };
-        let result = match primitive {
-            Value::Str(_) | Value::Symbol(_) => primitive,
-            Value::Float(number) if number.inner().is_finite() => {
-                let mut buffer = ryu_js::Buffer::new();
-                Value::str(buffer.format(number.inner()))
-            }
-            other => Value::str(self.value_to_string(&other)),
-        };
-        self.validate_executable_property_key(&self.executable_property_key_from_value(&result))?;
-        Ok(result)
+        })
     }
 
     fn require_object_coercible(value: Value) -> Result<Value, InterpreterError> {
@@ -56163,6 +56211,229 @@ impl InterpreterCore {
         } else {
             std::cmp::Ordering::Equal
         })
+    }
+
+    /// One invocation path for property-resolved and intrinsic call/apply.
+    /// `args` starts at thisArg; the target itself is never an argument.
+    fn forward_function_invocation(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: Value,
+        function_register: Option<u32>,
+        args: RegRange,
+        apply: bool,
+    ) -> Result<Value, InterpreterError> {
+        if !function.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable Function.prototype receiver".to_string(),
+                got: function.type_name().to_string(),
+            });
+        }
+        let this_arg = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let mut context_label = function_register
+            .map(|register| self.clone_register_label_with_temporary_budget(register))
+            .transpose()?
+            .unwrap_or(Label::Public);
+        let first_argument = args.start.checked_add(u32::from(args.count > 0)).ok_or(
+            InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            },
+        )?;
+        let argument_range = RegRange {
+            start: first_argument,
+            count: if apply {
+                0
+            } else {
+                args.count.saturating_sub(1)
+            },
+        };
+        let mut labels = self.clone_isolated_call_labels_from_registers(
+            (args.count > 0).then_some(args.start),
+            argument_range,
+        )?;
+        let mut reserved = 0u64;
+        let result = (|| {
+            let values = if apply {
+                let source = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let source_label = if args.count > 1 {
+                    self.join_arg_range_with_object_mutation_label(RegRange {
+                        start: first_argument,
+                        count: 1,
+                    })?
+                } else {
+                    Label::Public
+                };
+                let (values, value_labels, selection_label) =
+                    self.observable_apply_arguments(module, source, source_label, &mut reserved)?;
+                context_label =
+                    self.join_owned_label_with_temporary_budget(context_label, &selection_label)?;
+                labels.arguments = IsolatedArgumentLabels::Exact(value_labels);
+                values
+            } else {
+                self.preflight_inline_method_call_with_labels(
+                    module,
+                    &function,
+                    argument_range.count as usize,
+                    Some(&context_label),
+                    Some(&labels),
+                    u64::from(argument_range.count)
+                        .saturating_mul(std::mem::size_of::<Value>() as u64),
+                )?;
+                let mut values = Vec::with_capacity(argument_range.count as usize);
+                for offset in 0..argument_range.count {
+                    values.push(self.read_reg(argument_range.start + offset)?);
+                }
+                values
+            };
+            let (value, label) = self.invoke_inline_method_call_with_labels(
+                module,
+                function,
+                this_arg,
+                values,
+                Some(context_label),
+                labels,
+            )?;
+            self.replace_pending_hostcall_result_label(Some(label))?;
+            Ok(value)
+        })();
+        self.simple_callback_temporary_bytes = self
+            .simple_callback_temporary_bytes
+            .saturating_sub(reserved);
+        result
+    }
+
+    /// CreateListFromArrayLike for apply, not iterable spread. Read length
+    /// once, then use observable Get (including inherited values) in order.
+    fn observable_apply_arguments(
+        &mut self,
+        module: Option<&Ir3Module>,
+        source: Value,
+        mut source_label: Label,
+        reserved: &mut u64,
+    ) -> Result<(Vec<Value>, Vec<Label>, Label), InterpreterError> {
+        if matches!(source, Value::Null | Value::Undefined) {
+            return Ok((Vec::new(), Vec::new(), source_label));
+        }
+        let backing = self.iterator_carrier_backing_id(&source, "array-like object")?;
+        let raw_length = if let Some(object_id) = backing {
+            let key = RuntimePropertyKey::String("length".into());
+            if let Some(module) = module {
+                self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
+            }
+            source_label = self.join_owned_label_with_temporary_budget(
+                source_label,
+                &self.runtime_property_label(object_id, &key),
+            )?;
+            self.proxy_aware_get_runtime_property(module, object_id, &key, source.clone(), 0)?
+        } else {
+            Value::Undefined
+        };
+        let primitive = self.coerce_runtime_primitive(module, raw_length, false)?;
+        if let Some(label) = self.take_pending_hostcall_result_label() {
+            source_label = self.join_owned_label_with_temporary_budget(source_label, &label)?;
+        }
+        let numeric = match &primitive {
+            Value::BigInt(_) | Value::Symbol(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "Number-convertible array-like length".to_string(),
+                    got: primitive.type_name().to_string(),
+                });
+            }
+            Value::Str(text) => Self::array_like_length_string_number(text),
+            _ => Self::coerce_to_float(&primitive).unwrap_or(f64::NAN),
+        };
+        let length = if numeric.is_nan() || numeric <= 0.0 {
+            0.0
+        } else {
+            numeric.floor().min(9_007_199_254_740_991.0)
+        };
+        // Refuse before indexed getters or allocation. Untrusted length is
+        // not permitted to reserve an unbounded Rust Vec or evade VM limits.
+        if length > f64::from(self.config.max_registers.saturating_sub(2)) {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: u32::MAX,
+                max: self.config.max_registers,
+            });
+        }
+        let length = length as usize;
+        let bytes = (length as u64)
+            .saturating_mul((std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64);
+        self.check_temporary_memory_budget(bytes)?;
+        *reserved = reserved.saturating_add(bytes);
+        // Keep the carrier in the existing scratch-memory component so a
+        // getter's heap mutation/recompute cannot erase this reservation.
+        self.simple_callback_temporary_bytes =
+            self.simple_callback_temporary_bytes.saturating_add(bytes);
+        let mut values = Vec::with_capacity(length);
+        let mut labels = Vec::with_capacity(length);
+        for index in 0..length {
+            self.charge_property_copy_work()?;
+            let key = RuntimePropertyKey::String(index.to_string().into());
+            let mut label = source_label.clone();
+            let value = if let Some(object_id) = backing {
+                if let Some(module) = module {
+                    self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
+                }
+                label = self.join_owned_label_with_temporary_budget(
+                    label,
+                    &self.runtime_property_label(object_id, &key),
+                )?;
+                self.proxy_aware_get_runtime_property(module, object_id, &key, source.clone(), 0)?
+            } else {
+                Value::Undefined
+            };
+            if let Some(callback_label) = self.take_pending_hostcall_result_label() {
+                label = self.join_owned_label_with_temporary_budget(label, &callback_label)?;
+            }
+            let bytes = Self::estimate_value_bytes(&value)
+                .saturating_add(Self::estimate_label_bytes(&label));
+            self.check_temporary_memory_budget(bytes)?;
+            *reserved = reserved.saturating_add(bytes);
+            self.simple_callback_temporary_bytes =
+                self.simple_callback_temporary_bytes.saturating_add(bytes);
+            values.push(value);
+            labels.push(label);
+        }
+        Ok((values, labels, source_label))
+    }
+
+    fn array_like_length_string_number(text: &JsString) -> f64 {
+        let text = text.trim();
+        let text = text.trim_matches('\u{feff}').trim();
+        match text {
+            "" => return 0.0,
+            "Infinity" | "+Infinity" => return f64::INFINITY,
+            "-Infinity" => return f64::NEG_INFINITY,
+            _ => {}
+        }
+        for (lower, upper, radix) in [("0x", "0X", 16), ("0o", "0O", 8), ("0b", "0B", 2)] {
+            if let Some(digits) = text
+                .strip_prefix(lower)
+                .or_else(|| text.strip_prefix(upper))
+            {
+                if digits.is_empty() {
+                    return f64::NAN;
+                }
+                let mut number = 0.0;
+                for digit in digits.chars() {
+                    let Some(digit) = digit.to_digit(radix) else {
+                        return f64::NAN;
+                    };
+                    number = number * f64::from(radix) + f64::from(digit);
+                }
+                return number;
+            }
+        }
+        // Rust also accepts inf/infinity spellings that JS does not. Permit
+        // only decimal-grammar characters after the exact Infinity cases.
+        if !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-'))
+        {
+            return f64::NAN;
+        }
+        text.parse::<f64>().unwrap_or(f64::NAN)
     }
 
     fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {
@@ -69739,44 +70010,14 @@ impl InterpreterCore {
             }
 
             "builtin:FunctionPrototypeCall" => {
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let function = self.read_reg(args.start)?;
-                let this_arg = if args.count >= 2 {
-                    self.read_reg(args.start + 1)?
-                } else {
-                    Value::Undefined
-                };
-                let mut call_args = Vec::with_capacity(args.count.saturating_sub(2) as usize);
-                for arg_offset in 2..args.count {
-                    call_args.push(self.read_reg(args.start + arg_offset)?);
-                }
-                let argument_start =
-                    args.start
-                        .checked_add(2)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        })?;
-                let call_labels = self.clone_isolated_call_labels_from_registers(
-                    (args.count >= 2).then_some(args.start + 1),
+                let function = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.forward_function_invocation(
+                    module, function, (args.count > 0).then_some(args.start),
                     RegRange {
-                        start: argument_start,
-                        count: args.count.saturating_sub(2),
-                    },
-                )?;
-                let (value, label) = self.invoke_inline_method_call_with_labels(
-                    module,
-                    function,
-                    this_arg,
-                    call_args,
-                    None,
-                    call_labels,
-                )?;
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                Ok(value)
+                        start: args.start.saturating_add(u32::from(args.count > 0)),
+                        count: args.count.saturating_sub(1),
+                    }, false,
+                )
             }
 
             "builtin:MathAsin" => {
@@ -69943,48 +70184,14 @@ impl InterpreterCore {
             }
 
             "builtin:FunctionPrototypeApply" => {
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let function = self.read_reg(args.start)?;
-                let this_arg = if args.count >= 2 {
-                    self.read_reg(args.start + 1)?
-                } else {
-                    Value::Undefined
-                };
-                let args_array = if args.count >= 3 {
-                    self.read_reg(args.start + 2)?
-                } else {
-                    Value::Undefined
-                };
-                let apply_args = self.array_like_argument_values(args_array)?;
-                let arguments_list_register = (args.count >= 3).then(|| args.start + 2);
-                let argument_label = match arguments_list_register {
-                    Some(register) => self.join_arg_range_with_object_mutation_label(RegRange {
-                        start: register,
-                        count: 1,
-                    })?,
-                    None => Label::Public,
-                };
-                let mut call_labels = self.clone_isolated_call_labels_from_registers(
-                    (args.count >= 2).then_some(args.start + 1),
+                let function = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.forward_function_invocation(
+                    module, function, (args.count > 0).then_some(args.start),
                     RegRange {
-                        start: args.start,
-                        count: 0,
-                    },
-                )?;
-                call_labels.arguments = IsolatedArgumentLabels::Uniform(argument_label);
-                let (value, label) = self.invoke_inline_method_call_with_labels(
-                    module,
-                    function,
-                    this_arg,
-                    apply_args,
-                    None,
-                    call_labels,
-                )?;
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                Ok(value)
+                        start: args.start.saturating_add(u32::from(args.count > 0)),
+                        count: args.count.saturating_sub(1),
+                    }, true,
+                )
             }
 
             "builtin:StringPrototypeLocaleCompare" => {
@@ -79428,6 +79635,9 @@ impl InterpreterCore {
         func_idx: u32,
         key: &str,
     ) -> Result<Value, InterpreterError> {
+        if let Some(value) = Self::function_prototype_property(key) {
+            return Ok(value);
+        }
         if key == "prototype" {
             Ok(Value::Object(
                 self.ensure_function_prototype(module, func_idx)?,
@@ -79443,6 +79653,9 @@ impl InterpreterCore {
         closure_id: u32,
         key: &str,
     ) -> Result<Value, InterpreterError> {
+        if let Some(value) = Self::function_prototype_property(key) {
+            return Ok(value);
+        }
         if let Some(metadata) = self.closure_method_metadata.get(&closure_id) {
             return Ok(match key {
                 "name" => Value::Str(metadata.name.clone()),
@@ -79459,7 +79672,16 @@ impl InterpreterCore {
         }
     }
 
-    /// Return the ordinary-property backing object for a builtin function that
+    fn function_prototype_property(key: &str) -> Option<Value> {
+        let kind = match key {
+            "call" => BuiltinFunctionKind::FunctionPrototypeCall,
+            "apply" => BuiltinFunctionKind::FunctionPrototypeApply,
+            _ => return None,
+        };
+        Some(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)))
+    }
+
+/// Return the ordinary-property backing object for a builtin function that
     /// also acts as a mutable JavaScript object. `Date` aliases share one object
     /// so writes to `Date.now` remain visible through every reference
     /// (bd-1piai); every EventEmitter once wrapper owns a distinct object so

@@ -41,3 +41,153 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  prepare-native-iteration:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '5d49c182a57e43002fe2498697e90c29ed113429'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      files: ${{ steps.prepare.outputs.files }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - name: Apply pinned implementation patches and format changed ranges
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, re, subprocess, urllib.request, zipfile
+          repo = 'Dicklesworthstone/franken_engine'
+          expected = {
+              'crates/franken-engine/src/baseline_interpreter.rs': 'c708040400aaef48f0ce403f71d870e026167f35',
+              'crates/franken-engine/tests/spread_operator_conformance.rs': 'b68966072f81fd0abade1a7d01939222f6a2bfab',
+              'crates/franken-engine/src/lowering_pipeline.rs': 'e36b157d8ba847410c67474f05fb0baa12367e30',
+              'crates/franken-engine/tests/destructuring_assignment_bd_umee4.rs': '3d232ddb7475d2079c8d0d0a0bd72d1e9e0852c7',
+          }
+          def git(*args, data=None):
+              return subprocess.run(['git', *args], input=data, stdout=subprocess.PIPE, check=True).stdout.decode().strip()
+          def sha(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          def api(path, payload=None):
+              request = urllib.request.Request('https://api.github.com/repos/' + repo + path,
+                  data=None if payload is None else json.dumps(payload).encode(), headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                      'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
+                      'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  return json.load(response)
+          if git('status', '--porcelain'):
+              raise RuntimeError('Dirty checkout')
+          for path, original in expected.items():
+              if sha(pathlib.Path(path).read_bytes()) != original:
+                  raise RuntimeError('Source changed since review: ' + path)
+          for patch_sha in ['4e17fd34a826c924677976b674a77d0bcfd71748', '337c2b7c02feb8bac139dbb5ba51355fd813339f']:
+              compressed = base64.b64decode(api('/git/blobs/' + patch_sha)['content'])
+              if sha(compressed) != patch_sha:
+                  raise RuntimeError('Patch integrity mismatch')
+              patch = gzip.decompress(compressed)
+              git('apply', '--check', '--index', '--whitespace=error-all', data=patch)
+              git('apply', '--index', '--whitespace=error-all', data=patch)
+          for path in expected:
+              if '/tests/' in path:
+                  command = ['rustfmt', '--edition', '2024', path]
+              else:
+                  diff = git('diff', '--cached', '--unified=0', '--', path)
+                  ranges = [{'file': path, 'range': [int(start), int(start) + max(1, int(count or '1')) - 1]}
+                      for start, count in re.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M)]
+                  command = ['rustfmt', '--edition', '2024', '--unstable-features', '--file-lines', json.dumps(ranges), path]
+              subprocess.run(command, check=True)
+          git('add', '--', *expected)
+          git('diff', '--cached', '--check')
+          if set(git('diff', '--cached', '--name-only').splitlines()) != set(expected):
+              raise RuntimeError('Unexpected changed files')
+          files = []
+          for path in expected:
+              data = pathlib.Path(path).read_bytes()
+              result = api('/git/blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              if result['sha'] != sha(data):
+                  raise RuntimeError('Published source integrity mismatch')
+              files.append({'path': path, 'sha': result['sha'], 'bytes': len(data)})
+          encoded = json.dumps(files, separators=(',', ':'))
+          print('PREPARED_ITERATION_FILES=' + encoded, flush=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('files=' + encoded + '\n')
+          temporary = pathlib.Path(os.environ['RUNNER_TEMP'])
+          (temporary / 'prepared-iteration-files.json').write_text(encoded)
+          with zipfile.ZipFile(temporary / 'prepared-iteration-source.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+              for path in expected:
+                  archive.write(path, path)
+          print(git('diff', '--cached', '--stat'))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: prepared-iteration-source
+          path: ${{ runner.temp }}/prepared-iteration-*
+          retention-days: 2
+
+  verify-native-iteration:
+    needs: prepare-native-iteration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: execution-native
+          cache-on-failure: true
+      - name: Fetch hash-verified prepared implementation and tests
+        id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_FILES: ${{ needs.prepare-native-iteration.outputs.files }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          files = json.loads(os.environ['PREPARED_FILES'])
+          expected = {'crates/franken-engine/src/baseline_interpreter.rs', 'crates/franken-engine/tests/spread_operator_conformance.rs', 'crates/franken-engine/src/lowering_pipeline.rs', 'crates/franken-engine/tests/destructuring_assignment_bd_umee4.rs'}
+          if {entry['path'] for entry in files} != expected:
+              raise RuntimeError('Unexpected verification paths')
+          for entry in files:
+              request = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/' + entry['sha'], headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  data = base64.b64decode(json.load(response)['content'])
+              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if actual != entry['sha'] or len(data) != entry['bytes']:
+                  raise RuntimeError('Source integrity mismatch')
+              pathlib.Path(entry['path']).write_bytes(data)
+          PY
+      - name: Execute all selected native suites without stopping after a failure
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-fail-fast --test spread_operator_conformance --test call_spread_bd_hsv77 --test spread_member_call_regression --test bd_8xxcl_new_spread_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test array_rest_destructuring 2>&1 | tee "$RUNNER_TEMP/native-iteration-tests.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-iteration-test-log
+          path: ${{ runner.temp }}/native-iteration-tests.log
+          retention-days: 2

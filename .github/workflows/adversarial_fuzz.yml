@@ -41,3 +41,114 @@ jobs:
         with:
           name: fuzz-adversarial
           path: artifacts/fuzz_adversarial/
+
+  native-symbol-protocols:
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/franken_engine' && github.ref == 'refs/heads/main' && github.event.before == '456d8f66a7ac9338228701584a91f18cc085968e'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+      - name: Apply exact symbol patch and publish source bytes
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,json,os,pathlib,subprocess,urllib.request,zipfile
+          root='crates/franken-engine/'
+          expected={root+'src/baseline_interpreter.rs':'819ddc18799aeb7b66bbcc15aa8754a439357609',root+'src/lowering_pipeline.rs':'d8f5675253d8cd15df8c8a7acd062b659bece3a1',root+'src/object_model.rs':'c5936222f5033630ec5e755f4139af19fc36a243',root+'tests/function_prototype_invocation_regression.rs':'f548dcd6106691136406afbfc41dd0533f7156d6'}
+          def digest(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def api(path,body=None):
+              req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine'+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req,timeout=90) as response:
+                  return json.load(response)
+          def git(*args,data=None):
+              return subprocess.run(['git',*args],input=data,stdout=subprocess.PIPE,check=True).stdout.decode()
+          assert not git('status','--porcelain')
+          data=base64.b64decode(api('/git/blobs/250364a213f5b301eb7ff51218f8282cd4134b42')['content'])
+          assert digest(data)=='250364a213f5b301eb7ff51218f8282cd4134b42'
+          git('apply','--check','--index','--whitespace=error-all',data=data)
+          git('apply','--index','--whitespace=error-all',data=data)
+          assert set(git('diff','--cached','--name-only').splitlines())==set(expected)
+          for path,sha in expected.items():
+              assert digest(pathlib.Path(path).read_bytes())==sha,path
+              if '/tests/' in path:
+                  subprocess.run(['rustfmt','--edition','2024',path],check=True)
+              else:
+                  subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--emit','stdout',path],stdout=subprocess.DEVNULL,check=True)
+          git('add','--',*expected)
+          git('diff','--cached','--check')
+          files=[]
+          for path in expected:
+              data=pathlib.Path(path).read_bytes()
+              item=api('/git/blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})
+              assert item['sha']==digest(data)
+              files.append({'path':path,'sha':item['sha'],'bytes':len(data)})
+          encoded=json.dumps(files,separators=(',',':'))
+          print('PREPARED_FILES='+encoded,flush=True)
+          pathlib.Path(os.environ['RUNNER_TEMP']+'/symbols-files.json').write_text(encoded)
+          with zipfile.ZipFile(os.environ['RUNNER_TEMP']+'/symbols-source.zip','w',zipfile.ZIP_DEFLATED) as archive:
+              for path in expected:
+                  archive.write(path,path)
+          print(git('diff','--cached','--stat'))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: symbols-prepared
+          path: ${{ runner.temp }}/symbols-*
+          retention-days: 2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: native-iteration-validation
+          cache-on-failure: true
+      - name: Execute native symbol and call/apply regressions
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo test --locked -p frankenengine-engine --no-fail-fast --test function_prototype_invocation_regression --test exception_cross_boundary_bd_8enww_4_7 --test spread_operator_conformance > "$RUNNER_TEMP/symbols-tests.log" 2>&1
+          status=$?
+          tail -n 100 "$RUNNER_TEMP/symbols-tests.log"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: symbols-native-tests
+          path: ${{ runner.temp }}/symbols-tests.log
+          retention-days: 2
+      - name: Compiler lint and format gates
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set +e
+          cargo check --locked --all-targets > "$RUNNER_TEMP/symbols-check.log" 2>&1
+          check=$?
+          cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/symbols-clippy.log" 2>&1
+          clippy=$?
+          cargo fmt --check > "$RUNNER_TEMP/symbols-fmt.log" 2>&1
+          fmt=$?
+          printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt"
+          tail -n 30 "$RUNNER_TEMP/symbols-check.log"
+          tail -n 30 "$RUNNER_TEMP/symbols-clippy.log"
+          tail -n 20 "$RUNNER_TEMP/symbols-fmt.log"
+          test "$check:$clippy:$fmt" = "0:0:0"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: symbols-validation
+          path: ${{ runner.temp }}/symbols-*.log
+          retention-days: 2

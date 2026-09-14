@@ -1,6 +1,10 @@
 //! End-to-end iterator destructuring: lazy consumption, references and completions.
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::ifc_artifacts::Label;
+use frankenengine_engine::ir_contract::{Ir1Literal, Ir1Module, Ir1Op};
+use frankenengine_engine::lowering_pipeline::lower_ir1_to_ir2;
 
 fn assert_eval(source: &str, expected: &str) {
     let mut router = HybridRouter::default();
@@ -645,4 +649,151 @@ fn computed_binding_canonicalizes_primitive_keys() {
         r#"let {[1]:a,[true]:b,[null]:c,[undefined]:d,...rest}={'1':2,true:3,null:4,undefined:5,x:6};a+b+c+d+rest.x;"#,
         "20",
     );
+}
+
+#[test]
+fn defining_an_array_index_grows_length_without_invoking_its_getter() {
+    assert_eval(
+        r#"let reads=0;let a=[];Object.defineProperty(a,'0',{get(){reads+=1;return 7;}});let before=reads+':'+a.length;let [value]=a;before+':'+value+':'+reads;"#,
+        "0:1:7:1",
+    );
+}
+
+#[test]
+fn defining_a_sparse_array_accessor_preserves_iteration_holes() {
+    assert_eval(
+        r#"let reads=0;let a=[];Object.defineProperty(a,'3',{get(){reads+=1;return 8;}});let [x=1,y=2,z=3,last,...rest]=a;x+':'+y+':'+z+':'+last+':'+rest.length+':'+reads+':'+a.length;"#,
+        "1:2:3:8:0:1:4",
+    );
+}
+
+#[test]
+fn define_property_dense_append_does_not_let_push_overwrite_it() {
+    assert_eval(
+        r#"let a=[];Object.defineProperty(a,'0',{value:4});a.push(5);let [x,y]=a;a.length+':'+x+':'+y;"#,
+        "2:4:5",
+    );
+}
+
+#[test]
+fn only_canonical_array_indices_affect_defined_array_length() {
+    assert_eval(
+        r#"let a=[];Object.defineProperty(a,'01',{value:1});Object.defineProperty(a,'-0',{value:2});Object.defineProperty(a,'4294967295',{value:3});Object.defineProperty(a,Symbol('index'),{value:4});let before=a.length;Object.defineProperty(a,'4294967294',{value:5});before+':'+a.length;"#,
+        "0:4294967295",
+    );
+}
+
+#[test]
+fn redefining_an_in_bounds_index_keeps_length_and_getter_laziness() {
+    assert_eval(
+        r#"let reads=0;let a=[1,2,3];Object.defineProperty(a,'1',{get(){reads+=1;return 9;}});let before=reads;let [,middle]=a;a.length+':'+middle+':'+before+':'+reads;"#,
+        "3:9:0:1",
+    );
+}
+
+#[test]
+fn builtin_membership_observation_preserves_secret_label_at_real_egress() {
+    let mut ir1 = Ir1Module::new(ContentHash::compute(b"membership-flow"), "membership-flow");
+    ir1.ops = vec![
+        Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret material".into()),
+        },
+        Ir1Op::HostCall {
+            capability: "builtin:instanceof:TypeError".into(),
+            arg_count: 1,
+        },
+        Ir1Op::HostCall {
+            capability: "net.write".into(),
+            arg_count: 1,
+        },
+        Ir1Op::Pop,
+    ];
+    let ir2 = lower_ir1_to_ir2(&ir1).expect("flow inference").module;
+    let predicate = ir2.ops[1].flow.as_ref().expect("membership flow");
+    assert_eq!(predicate.data_label, Label::Secret);
+    assert_eq!(predicate.sink_clearance, Label::TopSecret);
+    assert!(!predicate.declassification_required);
+    let sink = ir2.ops[2].flow.as_ref().expect("network flow");
+    assert_eq!(sink.data_label, Label::Secret);
+    assert_eq!(sink.sink_clearance, Label::Public);
+    assert!(
+        sink.declassification_required,
+        "membership must not declassify its boolean result"
+    );
+}
+
+#[test]
+fn unrecognized_membership_intrinsics_do_not_inherit_internal_clearance() {
+    for capability in [
+        "builtin:instanceof:UnreviewedType",
+        "builtin:instanceof:typeerror",
+    ] {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(capability.as_bytes()),
+            "unknown-membership",
+        );
+        ir1.ops = vec![
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("secret material".into()),
+            },
+            Ir1Op::HostCall {
+                capability: capability.into(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+        ];
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("flow inference").module;
+        let flow = ir2.ops[1].flow.as_ref().expect("unknown intrinsic flow");
+        assert!(flow.declassification_required, "{capability}");
+        assert_eq!(flow.sink_clearance, Label::Internal);
+    }
+}
+
+#[test]
+fn sync_iteration_and_yield_do_not_launder_secret_operands() {
+    for operations in [
+        vec![
+            Ir1Op::ForOfInit,
+            Ir1Op::ForOfNext { done_label: 77 },
+            Ir1Op::HostCall {
+                capability: "net.write".into(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Label { id: 77 },
+        ],
+        vec![
+            Ir1Op::Yield { delegate: false },
+            Ir1Op::HostCall {
+                capability: "net.write".into(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+        ],
+    ] {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"iterator-flow"), "iterator-flow");
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret material".into()),
+        });
+        ir1.ops.extend(operations);
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("flow inference").module;
+        let sink = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner, Ir1Op::HostCall { capability, .. } if capability == "net.write"
+                )
+            })
+            .expect("network operation")
+            .flow
+            .as_ref()
+            .expect("network flow");
+        assert_eq!(sink.data_label, Label::Secret);
+        assert_eq!(sink.sink_clearance, Label::Public);
+        assert!(
+            sink.declassification_required,
+            "private protocol operations must retain taint"
+        );
+    }
 }

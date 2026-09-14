@@ -16920,6 +16920,10 @@ fn canonical_static_object_property_key(
     match key {
         Expression::Identifier(name) => Ok(name.clone().into()),
         Expression::StringLiteral(value) => Ok(value.clone()),
+        // The parser retains literal AST nodes for these valid IdentifierName
+        // keys. In a noncomputed property position they name string keys.
+        Expression::BooleanLiteral(value) => Ok(value.to_string().into()),
+        Expression::NullLiteral => Ok("null".into()),
         Expression::NumericLiteral(value) => Ok(value.to_string().into()),
         Expression::BigIntLiteral(value) => Ok(value.clone().into()),
         Expression::FloatLiteral(bits) => {
@@ -25362,7 +25366,7 @@ fn classify_ir1_op(
             None,
             None,
         ),
-        Ir1Op::Await | Ir1Op::Yield { .. } => (
+        Ir1Op::Await => (
             EffectBoundary::ReadEffect,
             None,
             Some(FlowAnnotation {
@@ -25412,10 +25416,16 @@ fn classify_ir1_op(
         // off it tripped a TopSecret -> Internal egress denial even though
         // nothing leaves the program (bd-az056).
         Ir1Op::GetProperty { .. } => (EffectBoundary::Pure, None, None),
-        // IteratorClose invokes an ordinary return method. Like CallMethod it
-        // is internal computation, not an egress sink. The callback executes
-        // with the iterator/lookup provenance; its actual effects still gate.
-        Ir1Op::IteratorClose { .. } => (EffectBoundary::Pure, None, None),
+        // Synchronous iterator operations transfer labeled values inside the
+        // interpreter. Like CallMethod, the protocol operation itself is not
+        // egress. Acquisition/stepping/closing callbacks and generator resume
+        // retain their receiver, lookup and completion provenance; any actual
+        // callback effects still gate at their own sinks. Await remains on its
+        // separately modeled asynchronous settlement boundary above.
+        Ir1Op::IteratorClose { .. }
+        | Ir1Op::ForOfInit
+        | Ir1Op::ForOfNext { .. }
+        | Ir1Op::Yield { .. } => (EffectBoundary::Pure, None, None),
         // SetProperty and DeleteProperty stay checked: they MUTATE the heap,
         // whose per-property IFC labels are not yet persisted (bd-ojvo1), so
         // their Internal sink is a fail-closed guard against laundering a high
@@ -25425,8 +25435,6 @@ fn classify_ir1_op(
         }
         Ir1Op::ForInInit
         | Ir1Op::ForInNext { .. }
-        | Ir1Op::ForOfInit
-        | Ir1Op::ForOfNext { .. }
         | Ir1Op::Construct { .. }
         | Ir1Op::ConstructSuper { .. }
         | Ir1Op::RegisterDerivedConstructor { .. }
@@ -28678,6 +28686,14 @@ fn infer_sink_clearance(
 }
 
 fn sink_clearance_from_capability(capability: &str) -> Label {
+    // Authenticated builtin prototype membership is internal observation, not
+    // egress. Share the runtime's exact finite-name recognizer rather than
+    // allowing an unaudited future `instanceof:*` hostcall by prefix. The
+    // boolean keeps its operand label; printing or exporting it still checks
+    // the actual sink's clearance.
+    if crate::baseline_interpreter::builtin_instanceof_capability_name(capability).is_some() {
+        return Label::TopSecret;
+    }
     let normalized = capability.to_ascii_lowercase();
     if normalized == "hostcall.invoke" {
         return Label::Internal;

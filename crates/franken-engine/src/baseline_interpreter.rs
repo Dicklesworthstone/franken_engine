@@ -758,7 +758,7 @@ fn builtin_prototype_capability_name(tag: &str) -> Option<&'static str> {
         .and_then(canonical_builtin_prototype_name)
 }
 
-fn builtin_instanceof_capability_name(tag: &str) -> Option<&'static str> {
+pub(crate) fn builtin_instanceof_capability_name(tag: &str) -> Option<&'static str> {
     tag.strip_prefix("builtin:instanceof:")
         .and_then(canonical_builtin_prototype_name)
 }
@@ -69345,7 +69345,14 @@ impl InterpreterCore {
                     }
                     other => other,
                 };
+                let array_index = prop_name.as_str().and_then(Self::canonical_array_index_key);
                 self.set_object_runtime_property(obj_id, prop_name, effective_value)?;
+                if let Some(index) = array_index {
+                    // Defining an own array index grows length just like an
+                    // indexed assignment, including accessor descriptors. Do
+                    // not invoke the getter while maintaining array metadata.
+                    self.maintain_array_index_assignment(obj_id, index)?;
+                }
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(obj_id, &mutation_label)?;
 

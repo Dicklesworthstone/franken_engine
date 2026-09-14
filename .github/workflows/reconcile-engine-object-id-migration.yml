@@ -11,7 +11,7 @@ permissions:
 jobs:
   prepare:
     if: >-
-      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): verify generator completion and lazy destructuring integration'
+      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): resume exact-source validation and recover implementation artifacts'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -34,7 +34,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import base64,gzip,hashlib,json,os,pathlib,re,subprocess,urllib.request
+          import base64,gzip,hashlib,json,os,pathlib,re,subprocess,tarfile,urllib.request
           root='https://api.github.com/repos/Dicklesworthstone/franken_engine'
           def api(path,body=None):
               req=urllib.request.Request(root+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
@@ -48,10 +48,13 @@ jobs:
           assert not git('status','--porcelain')
           for path,sha in paths.items():
               assert (not pathlib.Path(path).exists()) if sha is None else digest(pathlib.Path(path).read_bytes())==sha,path
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'iterator-recovered'
+          out.mkdir()
+          with (out/'base.tar.gz').open('wb') as stream:
+              subprocess.run(['git','archive','--format=tar.gz','HEAD','AGENTS.md','README.md','Cargo.toml','Cargo.lock','crates','.beads','docs/plans','.github/workflows','.cargo'],stdout=stream,check=True)
           compressed=b''
           for sha in ['109f636e10483f0e932375fdd710cbef5c5d80fc','adaa388968a594ce91f51024cf490d3b685d2ce1','a32d6e558bfe7d1604f5708464df668034f67bea']:
-              blob=api('/git/blobs/'+sha)
-              chunk=base64.b64decode(blob['content'])
+              chunk=base64.b64decode(api('/git/blobs/'+sha)['content'])
               assert digest(chunk)==sha
               compressed+=chunk
           assert digest(compressed)=='aa59aac316a225ede285e999edef432cf0b6d4a9'
@@ -65,14 +68,12 @@ jobs:
                   subprocess.run(['rustfmt','--edition','2024',path],check=True)
               else:
                   diff=git('diff','--cached','--unified=0','--',path)
-                  ranges=[]
                   length=len(pathlib.Path(path).read_text().splitlines())
-                  for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@',diff,re.M):
-                      start=int(match[1]); count=int(match[2] or 1)
-                      ranges.append({'file':path,'range':[max(1,start-2),min(length,start+count+2)]})
-                  subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--file-lines',json.dumps(ranges),path],check=True)
+                  ranges=[{'file':path,'range':[max(1,int(m[1])-2),min(length,int(m[1])+int(m[2] or 1)+2)]} for m in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@',diff,re.M)]
+                  subprocess.run(['rustfmt','--unstable-features','--edition','2024','--config','skip_children=true','--file-lines',json.dumps(ranges),path],check=True)
           git('add','--',*paths)
           git('diff','--cached','--check')
+          (out/'implementation.patch').write_text(git('diff','--cached','--binary'))
           files=[]
           for path in paths:
               data=pathlib.Path(path).read_bytes()
@@ -80,17 +81,20 @@ jobs:
               assert item['sha']==digest(data)
               files.append({'path':path,'sha':item['sha'],'bytes':len(data)})
           manifest={'base':os.environ['GITHUB_SHA'],'files':files}
-          destination=pathlib.Path(os.environ['RUNNER_TEMP'])/'iterator-complete-prepared.json'
-          destination.write_text(json.dumps(manifest))
+          (out/'prepared.json').write_text(json.dumps(manifest))
+          with tarfile.open(out/'prepared.tar.gz','w:gz') as archive:
+              for path in paths:
+                  archive.add(path,arcname=path)
           print('PREPARED_FILES='+json.dumps(manifest),flush=True)
           with open(os.environ['GITHUB_OUTPUT'],'a') as output:
               output.write('files='+json.dumps(files,separators=(',',':'))+'\n')
           print(git('diff','--cached','--stat'))
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: iterator-complete-prepared
-          path: ${{ runner.temp }}/iterator-complete-prepared.json
+          name: iterator-recovered
+          path: ${{ runner.temp }}/iterator-recovered
           retention-days: 2
 
   native:
@@ -111,7 +115,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: nightly
-          components: rustfmt, clippy
+          components: rustfmt,clippy
       - name: Load exact prepared source files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -136,51 +140,35 @@ jobs:
         with:
           shared-key: native-iterator-standalone
           cache-on-failure: true
-      - name: Standalone native compiler check
+      - name: Native tests
         run: |
           set +e
-          timeout 900 cargo check --locked --no-default-features -p frankenengine-engine --lib > "$RUNNER_TEMP/iterator-complete-check.log" 2>&1
+          timeout 1500 cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast --test generator_next_bd_v6cv1_regression --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/iterator-tests.log" 2>&1
           status=$?
-          tail -n 150 "$RUNNER_TEMP/iterator-complete-check.log"
+          tail -n 200 "$RUNNER_TEMP/iterator-tests.log"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-complete-check
-          path: ${{ runner.temp }}/iterator-complete-check.log
+          name: iterator-tests
+          path: ${{ runner.temp }}/iterator-tests.log
           retention-days: 2
-      - name: Execute standalone native generator and destructuring regressions
-        run: |
-          set +e
-          timeout 1500 cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast --test generator_next_bd_v6cv1_regression --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/iterator-complete-tests.log" 2>&1
-          status=$?
-          tail -n 200 "$RUNNER_TEMP/iterator-complete-tests.log"
-          exit "$status"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: iterator-complete-tests
-          path: ${{ runner.temp }}/iterator-complete-tests.log
-          retention-days: 2
-      - name: Standalone lint check
+      - name: Compiler lint and formatting gates
         if: ${{ !cancelled() }}
         run: |
           set +e
-          timeout 900 cargo clippy --locked --no-default-features -p frankenengine-engine --lib -- -D warnings > "$RUNNER_TEMP/iterator-complete-clippy.log" 2>&1
-          status=$?
-          tail -n 80 "$RUNNER_TEMP/iterator-complete-clippy.log"
-          exit "$status"
-      - name: Workspace formatting check
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          cargo fmt --check > "$RUNNER_TEMP/iterator-complete-fmt.log" 2>&1
-          status=$?
-          tail -n 40 "$RUNNER_TEMP/iterator-complete-fmt.log"
-          exit "$status"
+          timeout 600 cargo check --locked --all-targets > "$RUNNER_TEMP/iterator-check.log" 2>&1
+          check=$?
+          timeout 600 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/iterator-clippy.log" 2>&1
+          clippy=$?
+          cargo fmt --check > "$RUNNER_TEMP/iterator-fmt.log" 2>&1
+          fmt=$?
+          printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt"
+          tail -n 30 "$RUNNER_TEMP/iterator-check.log" "$RUNNER_TEMP/iterator-clippy.log" "$RUNNER_TEMP/iterator-fmt.log"
+          test "$check" = 0 && test "$clippy" = 0 && test "$fmt" = 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-complete-gates
-          path: ${{ runner.temp }}/iterator-complete-*.log
+          name: iterator-gates
+          path: ${{ runner.temp }}/iterator-*.log
           retention-days: 2

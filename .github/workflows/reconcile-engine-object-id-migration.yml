@@ -11,7 +11,7 @@ permissions:
 jobs:
   prepare:
     if: >-
-      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): resume exact-source validation and recover implementation artifacts'
+      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): validate callback label ownership and protocol callability fixes'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -28,13 +28,13 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - name: Apply exact reviewed source changes
+      - name: Apply exact protocol correction and prepare source blobs
         id: patch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import base64,gzip,hashlib,json,os,pathlib,re,subprocess,tarfile,urllib.request
+          import base64,gzip,hashlib,json,os,pathlib,subprocess,tarfile,urllib.request
           root='https://api.github.com/repos/Dicklesworthstone/franken_engine'
           def api(path,body=None):
               req=urllib.request.Request(root+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
@@ -44,22 +44,14 @@ jobs:
               return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
           def git(*args,data=None):
               return subprocess.run(['git',*args],input=data,stdout=subprocess.PIPE,check=True).stdout.decode()
-          paths={'crates/franken-engine/src/baseline_interpreter.rs':'e1c37f874813f7965d00cbb66d34bdf548a2ae8e','crates/franken-engine/src/lowering_pipeline.rs':'83504bfa69bd966ed95ac2a3f2bab91f227bd3c1','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs':'c4d45833bc10a1e4f5471ce6cc0c43673e7d001d','crates/franken-engine/tests/iterator_destructuring_regression.rs':None}
+          paths={'crates/franken-engine/src/baseline_interpreter.rs':'93931c6b2c99c8590d72a9c8f6fd48bf819aabfb','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs':'f0b240f2037b89bf23ed5f30e6c7dadd67dbffd0','crates/franken-engine/tests/iterator_destructuring_regression.rs':'b39c86e8b86946c39b2e0d0d5c11ea0b3f0bdc59'}
           assert not git('status','--porcelain')
           for path,sha in paths.items():
-              assert (not pathlib.Path(path).exists()) if sha is None else digest(pathlib.Path(path).read_bytes())==sha,path
-          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'iterator-recovered'
-          out.mkdir()
-          with (out/'base.tar.gz').open('wb') as stream:
-              subprocess.run(['git','archive','--format=tar.gz','HEAD','AGENTS.md','README.md','Cargo.toml','Cargo.lock','crates','.beads','docs/plans','.github/workflows','.cargo'],stdout=stream,check=True)
-          compressed=b''
-          for sha in ['109f636e10483f0e932375fdd710cbef5c5d80fc','adaa388968a594ce91f51024cf490d3b685d2ce1','a32d6e558bfe7d1604f5708464df668034f67bea']:
-              chunk=base64.b64decode(api('/git/blobs/'+sha)['content'])
-              assert digest(chunk)==sha
-              compressed+=chunk
-          assert digest(compressed)=='aa59aac316a225ede285e999edef432cf0b6d4a9'
-          patch=gzip.decompress(compressed)
-          assert digest(patch)=='721d8995800850888f6de193c05932a7c40bb07d'
+              assert digest(pathlib.Path(path).read_bytes())==sha,path
+          chunk=base64.b64decode(api('/git/blobs/8f45c75ae6e98e36e7a01b826ee3cd23c070725d')['content'])
+          assert digest(chunk)=='8f45c75ae6e98e36e7a01b826ee3cd23c070725d'
+          patch=gzip.decompress(chunk)
+          assert digest(patch)=='2e1134b2e2f8957b482068cb6ae6b7c6aae50292'
           git('apply','--check','--index','--whitespace=error-all',data=patch)
           git('apply','--index','--whitespace=error-all',data=patch)
           assert set(git('diff','--cached','--name-only').splitlines())==set(paths)
@@ -67,12 +59,11 @@ jobs:
               if '/tests/' in path:
                   subprocess.run(['rustfmt','--edition','2024',path],check=True)
               else:
-                  diff=git('diff','--cached','--unified=0','--',path)
-                  length=len(pathlib.Path(path).read_text().splitlines())
-                  ranges=[{'file':path,'range':[max(1,int(m[1])-2),min(length,int(m[1])+int(m[2] or 1)+2)]} for m in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@',diff,re.M)]
-                  subprocess.run(['rustfmt','--unstable-features','--edition','2024','--config','skip_children=true','--file-lines',json.dumps(ranges),path],check=True)
+                  subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--emit','stdout',path],stdout=subprocess.DEVNULL,check=True)
           git('add','--',*paths)
           git('diff','--cached','--check')
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'protocol-prepared'
+          out.mkdir()
           (out/'implementation.patch').write_text(git('diff','--cached','--binary'))
           files=[]
           for path in paths:
@@ -93,8 +84,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-recovered
-          path: ${{ runner.temp }}/iterator-recovered
+          name: protocol-prepared
+          path: ${{ runner.temp }}/protocol-prepared
           retention-days: 2
 
   native:
@@ -124,7 +115,7 @@ jobs:
           python3 - <<'PY'
           import base64,hashlib,json,os,pathlib,urllib.request
           files=json.loads(os.environ['FILES'])
-          allowed={'crates/franken-engine/src/baseline_interpreter.rs','crates/franken-engine/src/lowering_pipeline.rs','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs','crates/franken-engine/tests/iterator_destructuring_regression.rs'}
+          allowed={'crates/franken-engine/src/baseline_interpreter.rs','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs','crates/franken-engine/tests/iterator_destructuring_regression.rs'}
           assert {item['path'] for item in files}==allowed
           for item in files:
               req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
@@ -143,32 +134,32 @@ jobs:
       - name: Native tests
         run: |
           set +e
-          timeout 1500 cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast --test generator_next_bd_v6cv1_regression --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/iterator-tests.log" 2>&1
+          timeout 1500 cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast --test generator_next_bd_v6cv1_regression --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/protocol-tests.log" 2>&1
           status=$?
-          tail -n 200 "$RUNNER_TEMP/iterator-tests.log"
+          tail -n 200 "$RUNNER_TEMP/protocol-tests.log"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-tests
-          path: ${{ runner.temp }}/iterator-tests.log
+          name: protocol-tests
+          path: ${{ runner.temp }}/protocol-tests.log
           retention-days: 2
       - name: Compiler lint and formatting gates
         if: ${{ !cancelled() }}
         run: |
           set +e
-          timeout 600 cargo check --locked --all-targets > "$RUNNER_TEMP/iterator-check.log" 2>&1
+          timeout 600 cargo check --locked --all-targets > "$RUNNER_TEMP/protocol-check.log" 2>&1
           check=$?
-          timeout 600 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/iterator-clippy.log" 2>&1
+          timeout 600 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/protocol-clippy.log" 2>&1
           clippy=$?
-          cargo fmt --check > "$RUNNER_TEMP/iterator-fmt.log" 2>&1
+          cargo fmt --check > "$RUNNER_TEMP/protocol-fmt.log" 2>&1
           fmt=$?
           printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt"
-          tail -n 30 "$RUNNER_TEMP/iterator-check.log" "$RUNNER_TEMP/iterator-clippy.log" "$RUNNER_TEMP/iterator-fmt.log"
+          tail -n 30 "$RUNNER_TEMP/protocol-check.log" "$RUNNER_TEMP/protocol-clippy.log" "$RUNNER_TEMP/protocol-fmt.log"
           test "$check" = 0 && test "$clippy" = 0 && test "$fmt" = 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-gates
-          path: ${{ runner.temp }}/iterator-*.log
+          name: protocol-gates
+          path: ${{ runner.temp }}/protocol-*.log
           retention-days: 2

@@ -267,3 +267,33 @@ fn generator_next_after_return_has_no_suspended_completion_leak() {
         "5:undefined"
     );
 }
+
+#[test]
+fn generator_object_is_not_callable_and_does_not_start() {
+    assert_eq!(
+        eval(
+            r#"let n=0;function* g(){n+=1;yield 7;}let it=g();let caught=false;try{it();}catch(e){caught=e instanceof TypeError;}let before=n;let r=it.next();caught+':'+before+':'+r.value+':'+n;"#
+        ),
+        "true:0:7:1"
+    );
+}
+
+#[test]
+fn generator_object_as_method_is_not_callable() {
+    assert_eq!(
+        eval(
+            r#"let n=0;function* g(){n+=1;yield 8;}let it=g();let obj={run:it};let caught=false;try{obj.run();}catch(e){caught=e instanceof TypeError;}let before=n;caught+':'+before+':'+it.next().value;"#
+        ),
+        "true:0:8"
+    );
+}
+
+#[test]
+fn extracted_generator_method_requires_its_receiver() {
+    assert_eq!(
+        eval(
+            r#"let n=0;function* g(){n+=1;yield 9;}let it=g();let step=it.next;let caught=false;try{step();}catch(e){caught=e instanceof TypeError;}let before=n;caught+':'+before+':'+step.call(it).value;"#
+        ),
+        "true:0:9"
+    );
+}

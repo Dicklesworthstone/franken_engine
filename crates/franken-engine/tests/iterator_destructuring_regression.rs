@@ -446,3 +446,67 @@ fn native_iterator_records_do_not_rewind_each_other() {
         "1:2:3",
     );
 }
+
+#[test]
+fn empty_pattern_does_not_require_callable_next() {
+    assert_eval(
+        r#"let trace='';let xs={[Symbol.iterator]:function(){trace+='i';return {get next(){trace+='n';return 42;},return:function(){trace+='r';return {};}};}};let []=xs;trace;"#,
+        "inr",
+    );
+}
+
+#[test]
+fn empty_assignment_can_close_iterator_with_missing_next() {
+    assert_eval(
+        r#"let trace='';let xs={[Symbol.iterator]:function(){return {return:function(){trace+='r';return {};}};}};[] = xs;trace;"#,
+        "r",
+    );
+}
+
+#[test]
+fn empty_pattern_accepts_iterator_without_next_or_return() {
+    assert_eval(
+        r#"let xs={[Symbol.iterator]:function(){return {};}};let []=xs;7;"#,
+        "7",
+    );
+}
+
+#[test]
+fn noncallable_next_fails_at_step_without_closing() {
+    assert_eval(
+        r#"let trace='';let xs={[Symbol.iterator]:function(){return {get next(){trace+='n';return 42;},return:function(){trace+='r';return {};}};}};let caught=false;try{let [a]=xs;}catch(e){caught=e instanceof TypeError;}caught+':'+trace;"#,
+        "true:n",
+    );
+}
+
+#[test]
+fn assignment_reference_precedes_noncallable_next_failure() {
+    assert_eval(
+        r#"let trace='';let target={};function key(){trace+='k';return 'x';}let xs={[Symbol.iterator]:function(){return {get next(){trace+='n';return null;},return:function(){trace+='r';return {};}};}};let caught=false;try{[target[key()]]=xs;}catch(e){caught=e instanceof TypeError;}caught+':'+trace;"#,
+        "true:nk",
+    );
+}
+
+#[test]
+fn failing_reference_closes_even_when_cached_next_is_noncallable() {
+    assert_eval(
+        r#"let trace='';let token={};let target={};function key(){trace+='k';throw token;}let xs={[Symbol.iterator]:function(){return {next:42,return:function(){trace+='r';return {};}};}};let same=false;try{[target[key()]]=xs;}catch(e){same=e===token;}same+':'+trace;"#,
+        "true:kr",
+    );
+}
+
+#[test]
+fn next_getter_failure_is_acquisition_failure_without_close() {
+    assert_eval(
+        r#"let trace='';let token={};let xs={[Symbol.iterator]:function(){return {get next(){trace+='n';throw token;},return:function(){trace+='r';return {};}};}};let same=false;try{let []=xs;}catch(e){same=e===token;}same+':'+trace;"#,
+        "true:n",
+    );
+}
+
+#[test]
+fn empty_pattern_preserves_close_failure_with_noncallable_next() {
+    assert_eval(
+        r#"let token={};let xs={[Symbol.iterator]:function(){return {next:42,return:function(){throw token;}};}};let same=false;try{let []=xs;}catch(e){same=e===token;}same;"#,
+        "true",
+    );
+}

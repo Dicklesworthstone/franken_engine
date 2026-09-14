@@ -33639,14 +33639,18 @@ impl InterpreterCore {
         if let Some(reg) = receiver_register {
             label = label.join(self.get_register_label(reg)?);
         }
-        let resume_kind = match kind {
-            BuiltinFunctionKind::GeneratorNext => GeneratorResumeKind::Next,
-            BuiltinFunctionKind::GeneratorReturn => GeneratorResumeKind::Return,
-            BuiltinFunctionKind::GeneratorThrow => GeneratorResumeKind::Throw,
+        let (result, result_label) = match kind {
+            BuiltinFunctionKind::GeneratorNext => {
+                self.generator_next(module, gen_id, argument, label)
+            }
+            BuiltinFunctionKind::GeneratorReturn => {
+                self.generator_resume(module, gen_id, GeneratorResumeKind::Return, argument, label)
+            }
+            BuiltinFunctionKind::GeneratorThrow => {
+                self.generator_resume(module, gen_id, GeneratorResumeKind::Throw, argument, label)
+            }
             _ => unreachable!("finite generator method dispatcher"),
-        };
-        let (result, result_label) =
-            self.generator_resume(module, gen_id, resume_kind, argument, label)?;
+        }?;
         self.replace_pending_hostcall_result_label(Some(result_label))?;
         Ok(result)
     }
@@ -41056,32 +41060,6 @@ impl InterpreterCore {
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
 
-                    // Generator .next() call: step the generator.
-                    if let Value::Generator(gen_id) = &callee_val {
-                        let gen_id = *gen_id;
-                        let (argument, argument_label) = if args.count > 0 {
-                            (
-                                self.read_reg(args.start)?,
-                                self.get_register_label(args.start)?.clone(),
-                            )
-                        } else {
-                            (Value::Undefined, Label::Public)
-                        };
-                        let (result, result_label) =
-                            match self.generator_next(module, gen_id, argument, argument_label) {
-                                Ok(result) => result,
-                                Err(error) => {
-                                    match self.route_isolated_explicit_throw(module, error)? {
-                                        None => continue,
-                                        Some(error) => return Err(error),
-                                    }
-                                }
-                            };
-                        self.write_reg_with_label(dst, result, result_label)?;
-                        self.ip += 1;
-                        continue;
-                    }
-
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         // An explicit `throw` inside a generated function (or an
                         // inline callback the builtin runs) escapes the isolated
@@ -41687,38 +41665,6 @@ impl InterpreterCore {
                 } => {
                     let receiver_val = self.read_reg(receiver)?;
                     let callee_val = self.read_reg(callee)?;
-
-                    // Generator `.next()` method-call: step the generator
-                    // (bd-v6cv1). The `next` member resolves to the generator
-                    // itself (see the Value::Generator arm in GetProperty), so a
-                    // `it.next()` method-call arrives here with the generator as
-                    // the callee — mirror the plain `Call` handler and resume it
-                    // via generator_next, yielding the {value, done} object.
-                    if let Value::Generator(gen_id) = &callee_val {
-                        let gen_id = *gen_id;
-                        let (argument, argument_label) = if args.count > 0 {
-                            (
-                                self.read_reg(args.start)?,
-                                self.get_register_label(args.start)?.clone(),
-                            )
-                        } else {
-                            (Value::Undefined, Label::Public)
-                        };
-                        self.mark_inline_callback_started();
-                        let (result, result_label) =
-                            match self.generator_next(module, gen_id, argument, argument_label) {
-                                Ok(result) => result,
-                                Err(error) => {
-                                    match self.route_isolated_explicit_throw(module, error)? {
-                                        None => continue,
-                                        Some(error) => return Err(error),
-                                    }
-                                }
-                            };
-                        self.write_reg_with_label(dst, result, result_label)?;
-                        self.ip += 1;
-                        continue;
-                    }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         // Mirror the plain-`Call` arm: an explicit `throw` that
@@ -46022,7 +45968,7 @@ impl InterpreterCore {
             iterator_method,
             receiver,
             Vec::new(),
-            lookup_label.as_ref(),
+            lookup_label,
         )?;
         let label = self
             .pending_hostcall_result_label
@@ -46055,26 +46001,18 @@ impl InterpreterCore {
             // separate backing object (for example a builtin function).
             value => self.iterator_carrier_backing_id(value, "object returned by @@iterator")?,
         };
-        let Some(iterator_object) = backing else {
-// Object-like iterator without ordinary-property backing: `next`
-            // reads as undefined.
-            return Err(InterpreterError::TypeError {
-                expected: "callable iterator.next".to_string(),
-                got: "undefined".to_string(),
-            });
-        };
         let iterator_receiver = iterator_value;
-        let Some(next_method) = self.optional_callable_property(
-            Some(module),
-            iterator_object,
-            "next",
-            iterator_receiver.clone(),
-        )?
-        else {
-            return Err(InterpreterError::TypeError {
-                expected: "callable iterator.next".to_string(),
-                got: "undefined".to_string(),
-            });
+        // GetIterator caches Get(iterator, "next"), not GetMethod. A missing
+        // or noncallable value fails only if a consumer actually takes a step;
+        // an empty pattern must still be able to close the acquired iterator.
+        let next_method = match backing {
+            Some(iterator_object) => self.iterator_protocol_property(
+                Some(module),
+                iterator_object,
+                &RuntimePropertyKey::String(JsString::from("next")),
+                iterator_receiver.clone(),
+            )?,
+            None => Value::Undefined,
         };
 
         Ok(RuntimeForOfInit::from_receiver(
@@ -46460,7 +46398,7 @@ impl InterpreterCore {
             next_method,
             receiver,
             Vec::new(),
-            lookup_label.as_ref(),
+            lookup_label,
         )?;
         let label = self
             .pending_hostcall_result_label
@@ -47658,7 +47596,7 @@ impl InterpreterCore {
                 return_method,
                 receiver,
                 Vec::new(),
-                lookup_label.as_ref(),
+                lookup_label,
             );
         let result = match invocation {
             Ok((result, _label)) => result,

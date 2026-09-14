@@ -5806,6 +5806,23 @@ enum GeneratorResumeKind {
     Throw,
 }
 
+/// One suspended `yield*` expression. The canonical iterator table owns the
+/// receiver and cached next method; the resume register owns the sent value.
+/// Keeping only their handle here avoids a second, unrooted value carrier.
+#[derive(Debug, Clone)]
+struct GeneratorDelegation {
+    iterator: u32,
+    label: Label,
+    resume_kind: GeneratorResumeKind,
+    started: bool,
+}
+
+enum GeneratorDelegationStep {
+    Yield(LabeledReturn),
+    Complete(LabeledReturn),
+    Return(LabeledReturn),
+}
+
 /// A generator object holds the suspended state of a generator function.
 #[derive(Debug, Clone)]
 struct GeneratorObject {
@@ -5861,6 +5878,7 @@ struct GeneratorInvocation {
 struct GeneratorExecutionSnapshot {
     registers: Vec<Value>,
     register_labels: Vec<Label>,
+    delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
     ip: usize,
@@ -8466,6 +8484,7 @@ enum TraceHandoff {
 struct ModuleExecutionSnapshot {
     accounted_bytes: u64,
     registers: Vec<Value>,
+    generator_delegation: Option<GeneratorDelegation>,
     /// IFC labels parallel the logical register file. Inline callback
     /// execution replaces the register values, so its snapshot must preserve
     /// labels as well or a stream/event callback can corrupt caller taint.
@@ -10175,6 +10194,9 @@ pub struct InterpreterCore {
     generator_resume_dst: Option<u32>,
     /// IFC label of the value yielded by the most recent generator suspension.
     generator_result_label: Label,
+    /// Execution-local delegation, transferred with the complete activation
+    /// when a nested generator or isolated async continuation runs.
+    generator_delegation: Option<GeneratorDelegation>,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
     /// Context information for async function resumption after await.
@@ -10980,6 +11002,7 @@ impl InterpreterCore {
             generator_yielded: false,
             generator_resume_dst: None,
             generator_result_label: Label::Public,
+            generator_delegation: None,
             async_functions: Vec::new(),
             async_resumption_contexts: BTreeMap::new(),
             top_level_await_resumption_contexts: BTreeMap::new(),
@@ -30260,6 +30283,7 @@ impl InterpreterCore {
         self.generator_yielded = false;
         self.generator_resume_dst = None;
         self.generator_result_label = Label::Public;
+        self.generator_delegation = None;
         self.async_functions.clear();
         self.async_generators.clear();
         self.async_resumption_contexts.clear();
@@ -30411,6 +30435,7 @@ impl InterpreterCore {
 
     fn module_execution_snapshot_memory_bytes(&self) -> u64 {
         Self::estimate_value_vec_bytes(&self.registers)
+            .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(
                 u64::try_from(self.register_labels.len())
                     .unwrap_or(u64::MAX)
@@ -30645,6 +30670,7 @@ impl InterpreterCore {
 
     fn active_module_execution_memory_bytes(&self) -> u64 {
         self.registers_memory_bytes()
+            .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(self.scope_chain_memory_bytes())
             .saturating_add(self.call_stack_memory_bytes())
@@ -30659,6 +30685,7 @@ impl InterpreterCore {
         Ok(ModuleExecutionSnapshot {
             accounted_bytes,
             registers: self.registers.clone(),
+            generator_delegation: self.generator_delegation.clone(),
             register_labels: self.register_labels.clone(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.clone(),
@@ -30691,6 +30718,7 @@ impl InterpreterCore {
             0
         };
         self.registers = SeedTrackedField::new(snapshot.registers);
+        self.generator_delegation = snapshot.generator_delegation;
         self.register_labels = snapshot.register_labels;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
         self.call_stack = snapshot.call_stack;
@@ -39602,6 +39630,7 @@ impl InterpreterCore {
         let execution = GeneratorExecutionSnapshot {
             registers,
             register_labels,
+            delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
                 return_ip: module.instructions.len(),
@@ -39654,6 +39683,7 @@ impl InterpreterCore {
         GeneratorExecutionSnapshot {
             registers: std::mem::take(&mut self.registers.value),
             register_labels: std::mem::take(&mut self.register_labels),
+            delegation: self.generator_delegation.take(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.take(),
             call_stack: std::mem::take(&mut self.call_stack),
             ip: std::mem::take(&mut self.ip),
@@ -39996,6 +40026,7 @@ impl InterpreterCore {
         self.before_seed_surface_write();
         self.registers.value = execution.registers;
         self.register_labels = execution.register_labels;
+        self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
         self.call_stack = execution.call_stack;
         self.ip = execution.ip;
@@ -40012,6 +40043,239 @@ impl InterpreterCore {
         self.pending_captures = execution.pending_captures;
         self.current_module_specifier = execution.current_module_specifier;
         self.active_generated_function_artifact = execution.active_generated_function_artifact;
+    }
+
+    /// Inject a return through the same finally stack for direct `.return()`
+    /// and a completed yield* return request.
+    fn inject_generator_return(
+        &mut self,
+        completion: LabeledReturn,
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
+        self.pending_finally_entry = None;
+        self.suspend_current_abrupt_completion()?;
+        self.replace_pending_abrupt_slots(None, Some(completion))?;
+        if let Some(target) = self.pop_current_finally_target() {
+            self.pending_finally_entry = Some(PendingFinallyEntry {
+                target,
+                mode: FinallyMode::Return,
+            });
+            self.ip = target;
+            Ok(None)
+        } else {
+            let completion = self
+                .take_pending_return_slot()
+                .expect("injected return remains pending");
+            self.complete_return(completion.value, completion.label)
+        }
+    }
+
+    fn replace_generator_delegation(
+        &mut self,
+        delegation: GeneratorDelegation,
+    ) -> Result<(), InterpreterError> {
+        self.apply_memory_component_delta(
+            self.generator_delegation_memory_bytes(),
+            Self::estimate_generator_delegation_bytes(&delegation),
+        )?;
+        self.generator_delegation = Some(delegation);
+        Ok(())
+    }
+
+    fn take_generator_delegation(&mut self) -> Option<GeneratorDelegation> {
+        let delegation = self.generator_delegation.take()?;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+            Self::estimate_generator_delegation_bytes(&delegation),
+        );
+        Some(delegation)
+    }
+
+    /// ES2020 YieldExpression evaluation for a synchronous yield*. In
+    /// particular, non-done results are yielded *as objects*: reading their
+    /// value here would invoke a getter too early and lose result identity.
+    fn step_generator_delegation(
+        &mut self,
+        module: &Ir3Module,
+        source_reg: u32,
+        resume_dst: u32,
+    ) -> Result<GeneratorDelegationStep, InterpreterError> {
+        if self.generator_delegation.is_none() {
+            let source = self.read_reg(source_reg)?;
+            let label = self.unary_operation_label(source_reg)?;
+            self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+            let init = self.prepare_for_of_state(Some(module), &source)?;
+            let iterator = self.init_iterator_from_state(source, init, IterationKind::YieldDelegate)?;
+            let label = label.join(
+                &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+            );
+            self.replace_generator_delegation(GeneratorDelegation {
+                iterator: self.expect_iterator_handle(iterator)?,
+                label,
+                resume_kind: GeneratorResumeKind::Next,
+                started: false,
+            })?;
+        }
+
+        self.check_temporary_memory_budget(self.generator_delegation_memory_bytes())?;
+        let delegation = self.generator_delegation.as_ref().expect("delegation initialized");
+        let (handle, kind, started, mut label) = (
+            delegation.iterator,
+            delegation.resume_kind,
+            delegation.started,
+            delegation.label.clone(),
+        );
+        let argument = if started {
+            label = label.join(&self.unary_operation_label(resume_dst)?);
+            self.read_reg(resume_dst)?
+        } else {
+            // The first next sent to the delegate has exactly one argument,
+            // undefined, irrespective of the outer generator's first next.
+            Value::Undefined
+        };
+        self.replace_generator_delegation(GeneratorDelegation {
+            iterator: handle,
+            label: label.clone(),
+            resume_kind: kind,
+            started,
+        })?;
+        self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+
+        let (receiver, cached_next, trace_index) = match self.iterator_state_mut(handle)? {
+            RuntimeIteratorState::ForOf(state) => (
+                state.iterator_receiver.clone(),
+                state.next_method.clone(),
+                state.trace_index,
+            ),
+            RuntimeIteratorState::ForIn(_) => {
+                return Err(InterpreterError::InternalError {
+                    details: "yield* retained a for-in iterator".to_string(),
+                });
+            }
+        };
+        let native_next = receiver.is_none() && kind == GeneratorResumeKind::Next;
+        let method = if kind == GeneratorResumeKind::Next {
+            cached_next
+        } else {
+            match &receiver {
+                Some(Value::Generator(_)) => Some(Value::BuiltinFunction(
+                    BuiltinFunction::new_kind(if kind == GeneratorResumeKind::Return {
+                        BuiltinFunctionKind::GeneratorReturn
+                    } else {
+                        BuiltinFunctionKind::GeneratorThrow
+                    }),
+                )),
+                Some(Value::Iterator(_)) | None => None,
+                Some(receiver) => {
+                    match self.iterator_carrier_backing_id(receiver, "iterator receiver")? {
+                        Some(object_id) => self.optional_callable_property(
+                            Some(module),
+                            object_id,
+                            if kind == GeneratorResumeKind::Return { "return" } else { "throw" },
+                            receiver.clone(),
+                        )?,
+                        None => None,
+                    }
+                }
+            }
+        };
+
+        if kind != GeneratorResumeKind::Next && method.is_none() {
+            if kind == GeneratorResumeKind::Throw {
+                // This close has a NORMAL completion. Any return getter/call
+                // failure replaces the missing-throw TypeError; the original
+                // argument is not an outer pending exception yet.
+                self.close_iterator(module, Value::Iterator(handle), IteratorCloseReason::Throw)?;
+                return Err(InterpreterError::TypeError {
+                    expected: "callable iterator.throw method for yield*".to_string(),
+                    got: "null or undefined iterator.throw".to_string(),
+                });
+            }
+            label = label.join(
+                self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public),
+            );
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.done = true;
+            }
+            self.record_iterator_close_event(
+                trace_index, CloseReason::Return, false, IterationCompletion::Normal,
+            );
+            return Ok(GeneratorDelegationStep::Return(LabeledReturn { value: argument, label }));
+        }
+
+        let result = if native_next {
+            let value = self.advance_for_of_iterator(Some(module), Value::Iterator(handle))?;
+            let done = value.is_none();
+            self.generator_result_object(value.unwrap_or(Value::Undefined), done)?
+        } else {
+            let lookup_label = label.join(
+                self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public),
+            );
+            let (result, callback_label) = self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                method.unwrap_or(Value::Undefined),
+                receiver.unwrap_or(Value::Undefined),
+                vec![argument],
+                Some(lookup_label.clone()),
+            )?;
+            label = lookup_label.join(&callback_label);
+            self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+            result
+        };
+        let done = self.iterator_result_done(module, &result)?;
+        if !native_next {
+            if kind == GeneratorResumeKind::Next {
+                // No IteratorValue observation on a non-done delegated
+                // result: the recipient, not yield*, performs that Get.
+                self.record_iteration_next_result_impl(
+                    trace_index, (!done).then_some(Value::Undefined), false, false,
+                );
+            } else {
+                self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
+                    record_id,
+                    step_index,
+                    operation: IterationOperation::IteratorComplete { done },
+                    completion: IterationCompletion::Normal,
+                });
+                if let Some(trace) = self.iteration_traces.get_mut(trace_index) {
+                    trace.completed = done;
+                    if !done {
+                        trace.values_produced = trace.values_produced.saturating_add(1);
+                    }
+                }
+            }
+        }
+        if done {
+            let value = self.iterator_result_value(module, &result)?;
+            label = label.join(
+                &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+            );
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.done = true;
+            }
+            let observed = self.iterator_value_from_runtime(&value);
+            self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
+                record_id,
+                step_index,
+                operation: IterationOperation::IteratorValue { value: observed },
+                completion: IterationCompletion::Normal,
+            });
+            let completion = LabeledReturn { value, label };
+            return Ok(if kind == GeneratorResumeKind::Return {
+                GeneratorDelegationStep::Return(completion)
+            } else {
+                GeneratorDelegationStep::Complete(completion)
+            });
+        }
+
+        label = label.join(
+            &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+        );
+        self.replace_generator_delegation(GeneratorDelegation {
+            iterator: handle,
+            label: label.clone(),
+            resume_kind: GeneratorResumeKind::Next,
+            started: true,
+        })?;
+        Ok(GeneratorDelegationStep::Yield(LabeledReturn { value: result, label }))
     }
 
     /// Step a generator by swapping its complete isolated activation into the
@@ -40187,11 +40451,15 @@ impl InterpreterCore {
         let setup_result = (|| -> Result<(), InterpreterError> {
             self.sync_estimated_memory_bytes()?;
             if phase == GeneratorPhase::SuspendedYield
-                && resume_kind == GeneratorResumeKind::Next
+                && (resume_kind == GeneratorResumeKind::Next
+                    || self.generator_delegation.is_some())
                 && let Some(resume_dst) = resume_dst
             {
                 let completion = resume_completion.take().expect("one generator resumption");
                 self.write_reg_with_label(resume_dst, completion.value, completion.label)?;
+                if let Some(delegation) = &mut self.generator_delegation {
+                    delegation.resume_kind = resume_kind;
+                }
             }
             Ok(())
         })();
@@ -40228,28 +40496,17 @@ impl InterpreterCore {
         // Keep all fallible injection inside this closure: the caller's full
         // activation must be restored even if completion transport is refused.
         let result = (|| -> Result<LabeledReturn, InterpreterError> {
+            // A suspended yield* receives abrupt completions before the outer
+            // generator unwinds. Its delegate may handle throw or defer return.
+            if self.generator_delegation.is_some() {
+                return self.run_loop_labeled(owner_module.as_ref());
+            }
             match resume_kind {
                 GeneratorResumeKind::Next => {}
                 GeneratorResumeKind::Return => {
                     let completion = resume_completion.take().expect("one generator return");
-                    self.pending_finally_entry = None;
-                    self.suspend_current_abrupt_completion()?;
-                    self.replace_pending_abrupt_slots(None, Some(completion))?;
-                    if let Some(target) = self.pop_current_finally_target() {
-                        self.pending_finally_entry = Some(PendingFinallyEntry {
-                            target,
-                            mode: FinallyMode::Return,
-                        });
-                        self.ip = target;
-                    } else {
-                        let completion = self
-                            .take_pending_return_slot()
-                            .expect("injected return remains pending");
-                        if let Some(completion) =
-                            self.complete_return(completion.value, completion.label)?
-                        {
-                            return Ok(completion);
-                        }
+                    if let Some(completion) = self.inject_generator_return(completion)? {
+                        return Ok(completion);
                     }
                 }
                 GeneratorResumeKind::Throw => {
@@ -44309,9 +44566,51 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Yield {
                     value,
-                    delegate: _,
+                    delegate,
                     resume_dst,
                 } => {
+                    if delegate {
+                        match self.step_generator_delegation(module, value, resume_dst) {
+                            Ok(GeneratorDelegationStep::Yield(result)) => {
+                                // Re-enter this same opcode on the next resume;
+                                // neither the iterable nor next is reacquired.
+                                self.generator_yielded = true;
+                                self.generator_resume_dst = Some(resume_dst);
+                                self.generator_result_label = result.label.clone();
+                                return Ok(result);
+                            }
+                            Ok(GeneratorDelegationStep::Complete(completion)) => {
+                                self.take_generator_delegation();
+                                self.write_reg_with_label(
+                                    resume_dst, completion.value, completion.label,
+                                )?;
+                                self.ip += 1;
+                                continue;
+                            }
+                            Ok(GeneratorDelegationStep::Return(completion)) => {
+                                self.take_generator_delegation();
+                                if let Some(completion) = self.inject_generator_return(completion)? {
+                                    return Ok(completion);
+                                }
+                                continue;
+                            }
+                            Err(error) => {
+                                if let Some(delegation) = self.take_generator_delegation() {
+                                    let label = delegation.label.join(
+                                        self.pending_hostcall_result_label
+                                            .as_ref().unwrap_or(&Label::Public),
+                                    );
+                                    if self.pending_exception.is_some() {
+                                        self.join_pending_exception_label(&label)?;
+                                    }
+                                    self.replace_pending_hostcall_result_label(Some(label))?;
+                                }
+                                // The outer dispatch wrapper routes native
+                                // faults and exact callback throws alike.
+                                return Err(error);
+                            }
+                        }
+                    }
                     let yielded = self.read_reg(value)?;
                     let yielded_label = self.clone_register_label_with_temporary_budget(value)?;
                     let yielded_label =
@@ -58138,6 +58437,10 @@ impl InterpreterCore {
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let mut result = (|| -> Result<Value, InterpreterError> {
+            // An isolated callback is not the suspended delegating generator.
+            // In particular, a foreign async callback must not retain its
+            // caller's yield* record in the callback's own activation.
+            self.take_generator_delegation();
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
@@ -77082,6 +77385,17 @@ impl InterpreterCore {
             )
     }
 
+    fn estimate_generator_delegation_bytes(delegation: &GeneratorDelegation) -> u64 {
+        (std::mem::size_of::<GeneratorDelegation>() as u64)
+            .saturating_add(Self::estimate_label_bytes(&delegation.label))
+    }
+
+    fn generator_delegation_memory_bytes(&self) -> u64 {
+        self.generator_delegation.as_ref()
+            .map(Self::estimate_generator_delegation_bytes)
+            .unwrap_or(0)
+    }
+
     fn estimate_generator_execution_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
         let pending_abrupt = execution
             .pending_exception
@@ -77116,6 +77430,11 @@ impl InterpreterCore {
 
         Self::estimate_value_vec_bytes(&execution.registers)
             .saturating_add(Self::estimate_label_vec_bytes(&execution.register_labels))
+            .saturating_add(
+                execution.delegation.as_ref()
+                    .map(Self::estimate_generator_delegation_bytes)
+                    .unwrap_or(0),
+            )
             .saturating_add(
                 execution
                     .active_inline_callback_context_label
@@ -77615,6 +77934,7 @@ impl InterpreterCore {
                 self.iterators.iter().map(Self::estimate_iterator_bytes),
             ))
             .saturating_add(Self::estimate_generators_bytes(&self.generators))
+            .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(self.async_functions_memory_bytes())
             .saturating_add(self.async_generators_memory_bytes())
             .saturating_add(self.top_level_await_outcome_memory_bytes())

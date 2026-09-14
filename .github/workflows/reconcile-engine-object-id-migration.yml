@@ -2,182 +2,95 @@ name: EngineObjectId Migration Reconciliation
 
 on:
   push:
-    branches: [main]
-    paths: [.github/workflows/reconcile-engine-object-id-migration.yml]
+    branches:
+      - main
+    paths:
+      - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
 
 jobs:
-  prepare:
-    if: >-
-      contains(github.event.head_commit.message, 'work(yield-star): prepare native delegation')
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    outputs:
-      files: ${{ steps.prepare.outputs.files }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fd4a6e17354bf3572e069ac87df5ae18021964ab
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
-      - name: Apply exact runtime patch and prepare verified blobs
-        id: prepare
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import base64,gzip,hashlib,json,os,pathlib,subprocess,tarfile,urllib.request
-          root=pathlib.Path.cwd()
-          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'yield-prepared'
-          out.mkdir()
-          prefix='https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs'
-          headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0','Content-Type':'application/json'}
-          def api(url,data=None):
-              req=urllib.request.Request(url,data=None if data is None else json.dumps(data).encode(),headers=headers)
-              with urllib.request.urlopen(req,timeout=90) as response:
-                  return json.load(response)
-          def sha(data):
-              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
-          expected={'crates/franken-engine/src/baseline_interpreter.rs':('36b26ce532f20a47ad083da637468253312eb901','4398746293ccd2db5fe34c48f80934b317bc6516'),'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs':('3fad8c4b2bf99394ec3737c5b09f83e708d7660c','66c26326116d757cb959a510e613718a2708b3b4')}
-          for name,(before,after) in expected.items():
-              assert sha((root/name).read_bytes())==before,name
-          packed=base64.b64decode(api(prefix+'/266a5b4b5d9581a25255c1ed5e10b40bd709cf41')['content'])
-          assert sha(packed)=='266a5b4b5d9581a25255c1ed5e10b40bd709cf41'
-          patch=gzip.decompress(packed)
-          (out/'implementation.patch').write_bytes(patch)
-          subprocess.run(['git','apply','--check','-'],input=patch,check=True)
-          subprocess.run(['git','apply','-'],input=patch,check=True)
-          for name,(before,after) in expected.items():
-              assert sha((root/name).read_bytes())==after,name
-          with (out/'syntax-formatted.rs').open('w') as formatted:
-              subprocess.run(['rustfmt','--edition','2024','--emit','stdout','crates/franken-engine/src/baseline_interpreter.rs'],stdout=formatted,check=True)
-          subprocess.run(['rustfmt','--edition','2024','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'],check=True)
-          subprocess.run(['git','diff','--check'],check=True)
-          files=[]
-          for name in expected:
-              data=(root/name).read_bytes()
-              result=api(prefix,{'content':base64.b64encode(data).decode(),'encoding':'base64'})
-              assert result['sha']==sha(data),name
-              files.append({'path':name,'sha':result['sha'],'bytes':len(data)})
-          (out/'files.json').write_text(json.dumps(files,indent=2))
-          with tarfile.open(out/'source.tar.gz','w:gz') as archive:
-              for name in expected:
-                  archive.add(root/name,arcname=name)
-          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
-              output.write('files='+json.dumps(files,separators=(',',':'))+'\n')
-          print(json.dumps(files,indent=2))
-          PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: yield-prepared
-          path: |
-            ${{ runner.temp }}/yield-prepared/files.json
-            ${{ runner.temp }}/yield-prepared/source.tar.gz
-            ${{ runner.temp }}/yield-prepared/implementation.patch
-          retention-days: 2
-          if-no-files-found: error
-  native:
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
-          ref: fd4a6e17354bf3572e069ac87df5ae18021964ab
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@nightly
+          fetch-depth: 0
+          ref: main
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt,clippy
-      - name: Load exact prepared runtime and original test suite
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FILES: ${{ needs.prepare.outputs.files }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
+        shell: bash
         run: |
-          python3 - <<'PY'
-          import base64,hashlib,json,os,pathlib,shutil,subprocess,tomllib,urllib.request
-          root=pathlib.Path.cwd()
-          files=json.loads(os.environ['FILES'])
-          assert {item['path'] for item in files}=={'crates/franken-engine/src/baseline_interpreter.rs','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'}
-          for item in files:
-              req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(req,timeout=90) as response:
-                  data=base64.b64decode(json.load(response)['content'])
-              assert len(data)==item['bytes']
-              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==item['sha']
-              (root/item['path']).write_bytes(data)
-          harness=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-runtime-probes'
-          harness.mkdir()
-          tests=['generator_next_bd_v6cv1_regression','iterator_destructuring_regression','destructuring_default_branch_regression','destructuring_nested_rest_regression','destructuring_assignment_bd_umee4','for_of_destructuring_lowering_conformance','for_of_iterator_throw_regression']
-          manifest='[package]\nname="franken-native-runtime-probes"\nversion="0.0.0"\nedition="2024"\npublish=false\n[workspace]\nresolver="2"\n[dependencies]\nfrankenengine-engine={path='+json.dumps(str(root/'crates/franken-engine'))+',default-features=false}\n'
-          for test in tests:
-              source=root/'crates/franken-engine/tests'/f'{test}.rs'
-              assert source.is_file()
-              manifest+='\n[[test]]\nname='+json.dumps(test)+'\npath='+json.dumps(str(source))+'\n'
-          (harness/'Cargo.toml').write_text(manifest)
-          shutil.copyfile(root/'Cargo.lock',harness/'Cargo.lock')
-          with (harness/'metadata.json').open('w') as output:
-              subprocess.run(['cargo','metadata','--format-version','1','--manifest-path',str(harness/'Cargo.toml')],stdout=output,check=True)
-          def identities(path):
-              return {(p['name'],p['version'],p.get('source'),p.get('checksum')) for p in tomllib.loads(path.read_text())['package']}
-          assert identities(harness/'Cargo.lock')-identities(root/'Cargo.lock') <= {('franken-native-runtime-probes','0.0.0',None,None)}
-          print('Original engine and test programs; dependency versions and checksums preserved.')
+          set -euo pipefail
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
           PY
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          shared-key: native-iterator-standalone
-          cache-on-failure: true
-      - name: Execute synchronous generator and yield-star regressions
-        run: |
-          set +e
-          timeout 1500 cargo test --locked --manifest-path "$RUNNER_TEMP/native-runtime-probes/Cargo.toml" --test generator_next_bd_v6cv1_regression > "$RUNNER_TEMP/yield-generator.log" 2>&1
-          status=$?
-          tail -n 240 "$RUNNER_TEMP/yield-generator.log"
-          exit "$status"
-      - name: Execute surrounding native regression suites without masking known failures
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          timeout 600 cargo test --locked --manifest-path "$RUNNER_TEMP/native-runtime-probes/Cargo.toml" --no-fail-fast > "$RUNNER_TEMP/yield-surrounding.log" 2>&1
-          status=$?
-          tail -n 200 "$RUNNER_TEMP/yield-surrounding.log"
-          exit "$status"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: yield-native-tests
-          path: ${{ runner.temp }}/yield-*.log
-          retention-days: 2
-      - name: Full workspace compiler lint and formatting gates
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          timeout 240 cargo check --locked --all-targets > "$RUNNER_TEMP/yield-check.log" 2>&1
-          check=$?
-          timeout 240 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/yield-clippy.log" 2>&1
-          clippy=$?
-          cargo fmt --check > "$RUNNER_TEMP/yield-fmt.log" 2>&1
-          fmt=$?
-          printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt"
-          tail -n 25 "$RUNNER_TEMP/yield-check.log" "$RUNNER_TEMP/yield-clippy.log" "$RUNNER_TEMP/yield-fmt.log"
-          test "$check" = 0 && test "$clippy" = 0 && test "$fmt" = 0
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: yield-native-gates
-          path: ${{ runner.temp }}/yield-*.log
-          retention-days: 2
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

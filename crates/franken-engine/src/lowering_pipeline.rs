@@ -16924,6 +16924,7 @@ fn canonical_static_object_property_key(
         // keys. In a noncomputed property position they name string keys.
         Expression::BooleanLiteral(value) => Ok(value.to_string().into()),
         Expression::NullLiteral => Ok("null".into()),
+        Expression::UndefinedLiteral => Ok("undefined".into()),
         Expression::NumericLiteral(value) => Ok(value.to_string().into()),
         Expression::BigIntLiteral(value) => Ok(value.clone().into()),
         Expression::FloatLiteral(bits) => {

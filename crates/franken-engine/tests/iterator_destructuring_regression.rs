@@ -797,3 +797,19 @@ fn sync_iteration_and_yield_do_not_launder_secret_operands() {
         );
     }
 }
+
+#[test]
+fn literal_identifier_names_are_static_binding_keys() {
+    assert_eval(
+        r#"let o={undefined:6,true:7,false:8,null:9};let {undefined:a,true:b,false:c,null:d,...rest}=o;a+b+c+d+Object.keys(rest).length;"#,
+        "30",
+    );
+}
+
+#[test]
+fn undefined_named_accessor_retains_its_static_key() {
+    assert_eval(
+        r#"let reads=0;let o={get undefined(){reads+=1;return 7;}};let {undefined:value}=o;value+':'+reads;"#,
+        "7:1",
+    );
+}

@@ -2778,10 +2778,8 @@ fn alloc_pattern_primary_binding(
 
 fn object_pattern_static_key(
     prop: &ObjectPatternProperty,
-    fallback_name: Option<&str>,
 ) -> Result<JsString, LoweringPipelineError> {
-    Ok(canonical_static_object_property_key(&prop.key)
-        .unwrap_or_else(|_| fallback_name.unwrap_or_default().into()))
+    canonical_static_object_property_key(&prop.key)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3190,7 +3188,7 @@ fn lower_destructuring_to_ir1(
                 arg_count: 1,
             });
             ops.push(Ir1Op::Discard);
-            let mut rest_excluded_keys: Vec<JsString> = Vec::new();
+            let mut rest_excluded_keys: Vec<Ir1Op> = Vec::new();
             for prop in props {
                 if let BindingPattern::Rest(inner) = &prop.value {
                     let target_names = inner.binding_names();
@@ -3224,11 +3222,7 @@ fn lower_destructuring_to_ir1(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: source_bid,
                     });
-                    for key in &rest_excluded_keys {
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(key.clone()),
-                        });
-                    }
+                    ops.extend(rest_excluded_keys.iter().cloned());
                     ops.push(Ir1Op::HostCall {
                         capability: "builtin:ObjectRest".to_string(),
                         arg_count: u32::try_from(rest_excluded_keys.len())
@@ -3274,9 +3268,55 @@ fn lower_destructuring_to_ir1(
                     continue;
                 }
 
-                let target_names = prop.value.binding_names();
-                let excluded_key = object_pattern_static_key(prop, target_names.first().copied())?;
-                rest_excluded_keys.push(excluded_key.clone());
+                // Evaluate and canonicalize PropertyName before resolving the
+                // target or reading the source. Capture it once so a default,
+                // getter or later key cannot change the rest exclusion set.
+                let mut value_ops = vec![Ir1Op::LoadBinding {
+                    binding_id: source_bid,
+                }];
+                if prop.computed {
+                    lower_expression_to_ir1(
+                        &prop.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ToPropertyKey".to_string(),
+                        arg_count: 1,
+                    });
+                    let key_bid = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "object_binding_key",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: key_bid,
+                    });
+                    ops.push(Ir1Op::Discard);
+                    let load_key = Ir1Op::LoadBinding {
+                        binding_id: key_bid,
+                    };
+                    rest_excluded_keys.push(load_key.clone());
+                    value_ops.push(load_key);
+                    value_ops.push(Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic,
+                    });
+                } else {
+                    let key = object_pattern_static_key(prop)?;
+                    rest_excluded_keys.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(key.clone()),
+                    });
+                    value_ops.push(Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                    });
+                }
 
                 let property_status = match &prop.value {
                     BindingPattern::Identifier(name) => prepare_destructuring_target_status(
@@ -3304,15 +3344,7 @@ fn lower_destructuring_to_ir1(
                     _ => None,
                 };
 
-                let key_str = excluded_key;
-
-                // Load the source object, get the property, store to target binding.
-                ops.push(Ir1Op::LoadBinding {
-                    binding_id: source_bid,
-                });
-                ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(key_str),
-                });
+                ops.extend(value_ops);
 
                 match &prop.value {
                     BindingPattern::Identifier(name) => {

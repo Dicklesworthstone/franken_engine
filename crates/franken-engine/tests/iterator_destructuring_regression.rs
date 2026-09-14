@@ -510,3 +510,139 @@ fn empty_pattern_preserves_close_failure_with_noncallable_next() {
         "true",
     );
 }
+
+#[test]
+fn computed_binding_key_uses_expression_not_target_name() {
+    assert_eval(
+        r#"let key='chosen';let {[key]:value}={chosen:7,value:99};value;"#,
+        "7",
+    );
+}
+
+#[test]
+fn computed_binding_key_is_evaluated_and_converted_once() {
+    assert_eval(
+        r#"let trace='';let key={[Symbol.toPrimitive]:function(hint){trace+=hint;return 'a';}};function choose(){trace+='k';return key;}let {[choose()]:value,...rest}={a:3,b:5};value+':'+rest.b+':'+('a' in rest)+':'+trace;"#,
+        "3:5:false:kstring",
+    );
+}
+
+#[test]
+fn computed_binding_orders_keys_getters_and_defaults() {
+    assert_eval(
+        r#"let trace='';let key={[Symbol.toPrimitive]:function(){trace+='k';return 'a';}};let source={get a(){trace+='g';return undefined;},get b(){trace+='b';return 2;}};let {[key]:a=(trace+='d',1),b}=source;a+':'+b+':'+trace;"#,
+        "1:2:kgdb",
+    );
+}
+
+#[test]
+fn computed_binding_rest_keeps_exact_symbol_identity() {
+    assert_eval(
+        r#"let s=Symbol('same');let t=Symbol('same');let source={[s]:1,[t]:2,'Symbol(same)':3};let {[s]:value,...rest}=source;value+':'+(s in rest)+':'+rest[t]+':'+rest['Symbol(same)'];"#,
+        "1:false:2:3",
+    );
+}
+
+#[test]
+fn computed_binding_symbol_coercion_is_shared_with_rest() {
+    assert_eval(
+        r#"let n=0;let s=Symbol('k');let key={[Symbol.toPrimitive]:function(){n+=1;return s;}};let {[key]:value,...rest}={[s]:7,other:8};value+':'+rest.other+':'+(s in rest)+':'+n;"#,
+        "7:8:false:1",
+    );
+}
+
+#[test]
+fn computed_binding_rest_does_not_reconvert_mutated_key() {
+    assert_eval(
+        r#"let n=0;let name='a';let key={[Symbol.toPrimitive]:function(){n+=1;return name;}};let {[key]:value=(name='b',7),...rest}={a:undefined,b:9};value+':'+rest.b+':'+('a' in rest)+':'+n;"#,
+        "7:9:false:1",
+    );
+}
+
+#[test]
+fn computed_binding_keys_observe_prior_initializations() {
+    assert_eval(
+        r#"let {name,[name]:value,...rest}={name:'a',a:7,b:8};name+':'+value+':'+rest.b+':'+('name' in rest)+':'+('a' in rest);"#,
+        "a:7:8:false:false",
+    );
+}
+
+#[test]
+fn computed_binding_parameter_key_uses_parameter_environment() {
+    assert_eval(
+        r#"let key='a';function f({[key]:value,...rest}){let key='b';return value+rest.b;}f({a:2,b:3});"#,
+        "5",
+    );
+}
+
+#[test]
+fn computed_binding_parameter_can_use_prior_parameter() {
+    assert_eval(
+        r#"function f(key,{[key]:value=7,...rest}){return value+rest.b;}f('a',{b:3});"#,
+        "10",
+    );
+}
+
+#[test]
+fn computed_binding_key_runs_for_each_loop_head() {
+    assert_eval(
+        r#"let n=0;let total=0;function key(){n+=1;return 'a';}for(const {[key()]:value} of [{a:2},{a:3}]){total+=value;}total+':'+n;"#,
+        "5:2",
+    );
+}
+
+#[test]
+fn computed_binding_nested_array_pattern_consumes_iterable() {
+    assert_eval(
+        r#"let key='a';let {[key]:[first,...rest]}={a:'abc'};first+':'+rest.join('');"#,
+        "a:bc",
+    );
+}
+
+#[test]
+fn computed_binding_key_throw_closes_enclosing_iterator() {
+    assert_eval(
+        r#"let trace='';let token={};function key(){trace+='k';throw token;}function* g(){try{yield {a:1};}finally{trace+='r';}}let same=false;try{let [{[key()]:value}]=g();}catch(e){same=e===token;}same+':'+trace;"#,
+        "true:kr",
+    );
+}
+
+#[test]
+fn nullish_binding_source_rejects_before_computed_key() {
+    assert_eval(
+        r#"let n=0;function key(){n+=1;return 'x';}let caught=false;try{let {[key()]:value}=null;}catch(e){caught=e instanceof TypeError;}caught+':'+n;"#,
+        "true:0",
+    );
+}
+
+#[test]
+fn computed_binding_key_failure_skips_property_and_default() {
+    assert_eval(
+        r#"let trace='';let token={};let key={[Symbol.toPrimitive]:function(){trace+='k';throw token;}};let source={get a(){trace+='g';return undefined;}};let same=false;try{let {[key]:value=(trace+='d',1)}=source;}catch(e){same=e===token;}same+':'+trace;"#,
+        "true:k",
+    );
+}
+
+#[test]
+fn computed_binding_getter_receives_original_source() {
+    assert_eval(
+        r#"let key='a';let source={n:8,get a(){return this.n;}};let {[key]:value}=source;value;"#,
+        "8",
+    );
+}
+
+#[test]
+fn computed_binding_duplicate_keys_read_again_but_exclude_once() {
+    assert_eval(
+        r#"let n=0;let key='a';let source={get a(){n+=1;return n;},b:9};let {[key]:first,[key]:second,...rest}=source;first+':'+second+':'+rest.b+':'+('a' in rest)+':'+n;"#,
+        "1:2:9:false:2",
+    );
+}
+
+#[test]
+fn computed_binding_canonicalizes_primitive_keys() {
+    assert_eval(
+        r#"let {[1]:a,[true]:b,[null]:c,[undefined]:d,...rest}={'1':2,true:3,null:4,undefined:5,x:6};a+b+c+d+rest.x;"#,
+        "20",
+    );
+}

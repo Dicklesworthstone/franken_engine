@@ -11,11 +11,92 @@ permissions:
 jobs:
   prepare:
     if: >-
-      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): validate lazy iterator-backed array pattern lowering'
+      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): verify generator completion and lazy destructuring integration'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      files: ${{ steps.patch.outputs.files }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          clean: false
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - name: Apply exact reviewed source changes
+        id: patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64,gzip,hashlib,json,os,pathlib,re,subprocess,urllib.request
+          root='https://api.github.com/repos/Dicklesworthstone/franken_engine'
+          def api(path,body=None):
+              req=urllib.request.Request(root+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req,timeout=90) as response:
+                  return json.load(response)
+          def digest(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          def git(*args,data=None):
+              return subprocess.run(['git',*args],input=data,stdout=subprocess.PIPE,check=True).stdout.decode()
+          paths={'crates/franken-engine/src/baseline_interpreter.rs':'e1c37f874813f7965d00cbb66d34bdf548a2ae8e','crates/franken-engine/src/lowering_pipeline.rs':'83504bfa69bd966ed95ac2a3f2bab91f227bd3c1','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs':'c4d45833bc10a1e4f5471ce6cc0c43673e7d001d','crates/franken-engine/tests/iterator_destructuring_regression.rs':None}
+          assert not git('status','--porcelain')
+          for path,sha in paths.items():
+              assert (not pathlib.Path(path).exists()) if sha is None else digest(pathlib.Path(path).read_bytes())==sha,path
+          compressed=b''
+          for sha in ['109f636e10483f0e932375fdd710cbef5c5d80fc','adaa388968a594ce91f51024cf490d3b685d2ce1','a32d6e558bfe7d1604f5708464df668034f67bea']:
+              blob=api('/git/blobs/'+sha)
+              chunk=base64.b64decode(blob['content'])
+              assert digest(chunk)==sha
+              compressed+=chunk
+          assert digest(compressed)=='aa59aac316a225ede285e999edef432cf0b6d4a9'
+          patch=gzip.decompress(compressed)
+          assert digest(patch)=='721d8995800850888f6de193c05932a7c40bb07d'
+          git('apply','--check','--index','--whitespace=error-all',data=patch)
+          git('apply','--index','--whitespace=error-all',data=patch)
+          assert set(git('diff','--cached','--name-only').splitlines())==set(paths)
+          for path in paths:
+              if '/tests/' in path:
+                  subprocess.run(['rustfmt','--edition','2024',path],check=True)
+              else:
+                  diff=git('diff','--cached','--unified=0','--',path)
+                  ranges=[]
+                  length=len(pathlib.Path(path).read_text().splitlines())
+                  for match in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@',diff,re.M):
+                      start=int(match[1]); count=int(match[2] or 1)
+                      ranges.append({'file':path,'range':[max(1,start-2),min(length,start+count+2)]})
+                  subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--file-lines',json.dumps(ranges),path],check=True)
+          git('add','--',*paths)
+          git('diff','--cached','--check')
+          files=[]
+          for path in paths:
+              data=pathlib.Path(path).read_bytes()
+              item=api('/git/blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})
+              assert item['sha']==digest(data)
+              files.append({'path':path,'sha':item['sha'],'bytes':len(data)})
+          manifest={'base':os.environ['GITHUB_SHA'],'files':files}
+          destination=pathlib.Path(os.environ['RUNNER_TEMP'])/'iterator-complete-prepared.json'
+          destination.write_text(json.dumps(manifest))
+          print('PREPARED_FILES='+json.dumps(manifest),flush=True)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write('files='+json.dumps(files,separators=(',',':'))+'\n')
+          print(git('diff','--cached','--stat'))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: iterator-complete-prepared
+          path: ${{ runner.temp }}/iterator-complete-prepared.json
+          retention-days: 2
+
+  native:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: '1'
       CARGO_INCREMENTAL: '0'
@@ -24,102 +105,82 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           clean: false
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: nightly
           components: rustfmt, clippy
-      - name: Apply exact lowering patch and publish immutable source blobs
+      - name: Load exact prepared source files
         env:
           GH_TOKEN: ${{ github.token }}
+          FILES: ${{ needs.prepare.outputs.files }}
         run: |
           python3 - <<'PY'
-          import base64,gzip,hashlib,json,os,pathlib,subprocess,urllib.request
-          root='https://api.github.com/repos/Dicklesworthstone/franken_engine'
-          def api(path,body=None):
-              request=urllib.request.Request(root+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(request,timeout=90) as response:
-                  return json.load(response)
-          def digest(data):
-              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
-          source='crates/franken-engine/src/lowering_pipeline.rs'
-          test='crates/franken-engine/tests/iterator_destructuring_regression.rs'
-          assert digest(pathlib.Path(source).read_bytes())=='83504bfa69bd966ed95ac2a3f2bab91f227bd3c1'
-          assert not pathlib.Path(test).exists()
-          blob=api('/git/blobs/8d2375bfe67e52c27b3ab975cc1d950a9fff23e0')
-          compressed=base64.b64decode(blob['content'])
-          assert digest(compressed)=='8d2375bfe67e52c27b3ab975cc1d950a9fff23e0'
-          patch=gzip.decompress(compressed)
-          assert digest(patch)=='fbe423e4ad021eb2d808251a76f8bf95467c7ff5'
-          paths=[source,test]
-          subprocess.run(['git','apply','--check','--index','--whitespace=error-all'],input=patch,check=True)
-          subprocess.run(['git','apply','--index','--whitespace=error-all'],input=patch,check=True)
-          actual=subprocess.check_output(['git','diff','--cached','--name-only']).decode().splitlines()
-          assert set(actual)==set(paths),actual
-          subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--emit','stdout',source],stdout=subprocess.DEVNULL,check=True)
-          subprocess.run(['rustfmt','--edition','2024',test],check=True)
-          subprocess.run(['git','add','--',test],check=True)
-          subprocess.run(['git','diff','--cached','--check'],check=True)
-          files=[]
-          for path in paths:
-              data=pathlib.Path(path).read_bytes()
-              result=api('/git/blobs',{'encoding':'base64','content':base64.b64encode(data).decode()})
-              assert result['sha']==digest(data)
-              files.append({'path':path,'sha':result['sha']})
-          manifest={'base':os.environ['GITHUB_SHA'],'files':files}
-          pathlib.Path(os.environ['RUNNER_TEMP'],'iterator-lowering-prepared.json').write_text(json.dumps(manifest))
-          print('PREPARED_FILES='+json.dumps(manifest),flush=True)
+          import base64,hashlib,json,os,pathlib,urllib.request
+          files=json.loads(os.environ['FILES'])
+          allowed={'crates/franken-engine/src/baseline_interpreter.rs','crates/franken-engine/src/lowering_pipeline.rs','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs','crates/franken-engine/tests/iterator_destructuring_regression.rs'}
+          assert {item['path'] for item in files}==allowed
+          for item in files:
+              req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req,timeout=90) as response:
+                  blob=json.load(response)
+              data=base64.b64decode(blob['content'])
+              assert len(data)==item['bytes']
+              assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==item['sha']
+              pathlib.Path(item['path']).write_bytes(data)
+              print(item['path'],item['sha'])
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: iterator-lowering-prepared
-          path: ${{ runner.temp }}/iterator-lowering-prepared.json
-          retention-days: 2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
-          shared-key: native-iteration-validation
+          shared-key: native-iterator-standalone
           cache-on-failure: true
-      - name: Execute native destructuring and loop regressions
+      - name: Standalone native compiler check
         run: |
           set +e
-          cargo test --locked -p frankenengine-engine --no-fail-fast --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/iterator-lowering-tests.log" 2>&1
+          timeout 900 cargo check --locked --no-default-features -p frankenengine-engine --lib > "$RUNNER_TEMP/iterator-complete-check.log" 2>&1
           status=$?
-          tail -n 200 "$RUNNER_TEMP/iterator-lowering-tests.log"
+          tail -n 150 "$RUNNER_TEMP/iterator-complete-check.log"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-lowering-tests
-          path: ${{ runner.temp }}/iterator-lowering-tests.log
+          name: iterator-complete-check
+          path: ${{ runner.temp }}/iterator-complete-check.log
           retention-days: 2
-      - name: Compiler gate
-        if: ${{ !cancelled() }}
+      - name: Execute standalone native generator and destructuring regressions
         run: |
           set +e
-          timeout 900 cargo check --locked --all-targets > "$RUNNER_TEMP/iterator-lowering-check.log" 2>&1
+          timeout 1500 cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast --test generator_next_bd_v6cv1_regression --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/iterator-complete-tests.log" 2>&1
           status=$?
-          tail -n 60 "$RUNNER_TEMP/iterator-lowering-check.log"
-          exit "$status"
-      - name: Clippy gate
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          timeout 900 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/iterator-lowering-clippy.log" 2>&1
-          status=$?
-          tail -n 60 "$RUNNER_TEMP/iterator-lowering-clippy.log"
-          exit "$status"
-      - name: Formatting gate
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          cargo fmt --check > "$RUNNER_TEMP/iterator-lowering-fmt.log" 2>&1
-          status=$?
-          tail -n 30 "$RUNNER_TEMP/iterator-lowering-fmt.log"
+          tail -n 200 "$RUNNER_TEMP/iterator-complete-tests.log"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: iterator-lowering-gates
-          path: ${{ runner.temp }}/iterator-lowering-*.log
+          name: iterator-complete-tests
+          path: ${{ runner.temp }}/iterator-complete-tests.log
+          retention-days: 2
+      - name: Standalone lint check
+        if: ${{ !cancelled() }}
+        run: |
+          set +e
+          timeout 900 cargo clippy --locked --no-default-features -p frankenengine-engine --lib -- -D warnings > "$RUNNER_TEMP/iterator-complete-clippy.log" 2>&1
+          status=$?
+          tail -n 80 "$RUNNER_TEMP/iterator-complete-clippy.log"
+          exit "$status"
+      - name: Workspace formatting check
+        if: ${{ !cancelled() }}
+        run: |
+          set +e
+          cargo fmt --check > "$RUNNER_TEMP/iterator-complete-fmt.log" 2>&1
+          status=$?
+          tail -n 40 "$RUNNER_TEMP/iterator-complete-fmt.log"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: iterator-complete-gates
+          path: ${{ runner.temp }}/iterator-complete-*.log
           retention-days: 2

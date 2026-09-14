@@ -153,3 +153,57 @@ fn nested_default_ir_size_grows_linearly() {
         "nested-default IR is growing superlinearly: {counts:?}"
     );
 }
+
+#[test]
+fn large_destructuring_frames_work_in_functions_and_prepared_reexecution() {
+    let mut pattern = "value = 7".to_string();
+    for _ in 0..12 {
+        pattern = format!("[{pattern}] = []");
+    }
+    let source = format!("function f() {{ let [{pattern}] = []; return value; }} f() + f();");
+    let prepared = HybridRouter::prepare_eval(&source).expect("prepare wide function");
+    let mut router = HybridRouter::default();
+    for _ in 0..3 {
+        assert_eq!(
+            router
+                .eval_prepared(&prepared)
+                .expect("execute wide function")
+                .value,
+            "14"
+        );
+    }
+}
+
+#[test]
+fn automatically_sized_registers_cannot_bypass_the_memory_budget() {
+    let mut pattern = "value = 7".to_string();
+    for _ in 0..12 {
+        pattern = format!("[{pattern}] = []");
+    }
+    let source = format!("let [{pattern}] = []; value;");
+    let prepared = HybridRouter::prepare_eval(&source).expect("prepare wide frame");
+    let budget = frankenengine_engine::EngineMemoryBudget {
+        max_heap_objects: 100_000,
+        max_total_memory_bytes: 1024 * 1024,
+    };
+    let mut router = HybridRouter::default();
+    let one_shot = router
+        .eval_with_budgets(&source, None, Some(budget))
+        .expect_err("wide frame carriers must fit before core allocation");
+    let reused = router
+        .eval_prepared_with_budgets(&prepared, None, Some(budget))
+        .expect_err("prepared eval must apply the same capacity reservation");
+    assert_eq!(one_shot, reused);
+    assert_eq!(
+        one_shot.code,
+        frankenengine_engine::EvalErrorCode::RuntimeFault
+    );
+    assert!(one_shot.to_string().contains("memory budget"), "{one_shot}");
+    assert_eq!(
+        router
+            .eval_prepared(&prepared)
+            .expect("fresh default budget")
+            .value,
+        "7"
+    );
+}

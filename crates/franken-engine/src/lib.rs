@@ -2295,7 +2295,16 @@ fn execute_prepared_eval(
     capture_tier_control_evidence: bool,
 ) -> EvalResult<NativeEvalOutput> {
     let execution_started = capture_tier_control_evidence.then(std::time::Instant::now);
-    let lane_router = eval_lane_router_for_ir3(&prepared.ir3, budgets);
+    let lane_router = eval_lane_router_for_ir3(&prepared.ir3, budgets, lane)
+        .map_err(map_interpreter_error)
+        .map_err(|error| {
+            attach_eval_correlation(
+                error,
+                prepared.trace_id.as_str(),
+                prepared.decision_id.as_str(),
+                prepared.policy_id.as_str(),
+            )
+        })?;
     let routed = match (dispatch_policy, prepared.compact_tier1.as_ref()) {
         (PreparedTierDispatchPolicy::Production, Some(compact_tier1)) => {
             debug_assert!(compact_tier1.compact_instruction_count() > 0);
@@ -2391,7 +2400,11 @@ fn execute_prepared_eval(
     })
 }
 
-fn eval_lane_router_for_ir3(ir3: &Ir3Module, budgets: EngineEvalBudgets) -> LaneRouter {
+fn eval_lane_router_for_ir3(
+    ir3: &Ir3Module,
+    budgets: EngineEvalBudgets,
+    lane: LaneChoice,
+) -> Result<LaneRouter, InterpreterError> {
     let mut granted_capabilities = std::collections::BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -2422,7 +2435,54 @@ fn eval_lane_router_for_ir3(ir3: &Ir3Module, budgets: EngineEvalBudgets) -> Lane
         v8_config.max_heap_objects = memory_budget.max_heap_objects;
         v8_config.max_total_memory_bytes = memory_budget.max_total_memory_bytes;
     }
-    LaneRouter::with_configs(quickjs_config, v8_config)
+    let required_registers = ir3
+        .function_table
+        .iter()
+        .map(|function| function.frame_size)
+        .max()
+        .unwrap_or(0);
+    let config = match lane {
+        LaneChoice::QuickJs => &mut quickjs_config,
+        LaneChoice::V8 => &mut v8_config,
+    };
+    reserve_eval_register_capacity(config, required_registers)?;
+    Ok(LaneRouter::with_configs(quickjs_config, v8_config))
+}
+
+/// Source eval owns its lane configuration and knows the compiled frame widths.
+/// Accommodate those widths without increasing the caller's memory budget or
+/// changing raw-interpreter limits. The runtime already accounts register
+/// payloads, but not the shallow stacked value/label carriers, so reserve all
+/// *additional* carriers at the maximum call depth before allocating any core.
+/// This conservative reservation prevents wide recursive functions from
+/// turning automatic frame sizing into an unaccounted allocation channel.
+fn reserve_eval_register_capacity(
+    config: &mut InterpreterConfig,
+    required_registers: u32,
+) -> Result<(), InterpreterError> {
+    let extra_registers = required_registers.saturating_sub(config.max_registers);
+    if extra_registers == 0 {
+        return Ok(());
+    }
+    let carrier_bytes = (std::mem::size_of::<baseline_interpreter::Value>()
+        + std::mem::size_of::<ifc_artifacts::Label>()) as u64;
+    let frame_count = u64::try_from(config.max_call_depth)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let reservation = u64::from(extra_registers)
+        .saturating_mul(frame_count)
+        .saturating_mul(carrier_bytes);
+    if reservation >= config.max_total_memory_bytes {
+        return Err(InterpreterError::MemoryBudgetExceeded {
+            requested_bytes: reservation,
+            max_bytes: config.max_total_memory_bytes,
+            requested_heap_objects: 0,
+            max_heap_objects: config.max_heap_objects,
+        });
+    }
+    config.max_total_memory_bytes -= reservation;
+    config.max_registers = required_registers;
+    Ok(())
 }
 
 /// Patch IR3 instructions for eval completion semantics.

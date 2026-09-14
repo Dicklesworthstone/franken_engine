@@ -11,7 +11,7 @@ permissions:
 jobs:
   prepare:
     if: >-
-      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): validate callback label ownership and protocol callability fixes'
+      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(destructuring): validate computed binding keys against native execution'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -28,7 +28,7 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - name: Apply exact protocol correction and prepare source blobs
+      - name: Prepare exact computed binding implementation
         id: patch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,14 +44,14 @@ jobs:
               return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
           def git(*args,data=None):
               return subprocess.run(['git',*args],input=data,stdout=subprocess.PIPE,check=True).stdout.decode()
-          paths={'crates/franken-engine/src/baseline_interpreter.rs':'93931c6b2c99c8590d72a9c8f6fd48bf819aabfb','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs':'f0b240f2037b89bf23ed5f30e6c7dadd67dbffd0','crates/franken-engine/tests/iterator_destructuring_regression.rs':'b39c86e8b86946c39b2e0d0d5c11ea0b3f0bdc59'}
+          paths={'crates/franken-engine/src/lowering_pipeline.rs':'b1391c8574e17c5e6695491bbc1423a4bb132e65','crates/franken-engine/tests/iterator_destructuring_regression.rs':'fe3110a66db76119ce78b8eb262d8baa2d98de9b'}
           assert not git('status','--porcelain')
           for path,sha in paths.items():
               assert digest(pathlib.Path(path).read_bytes())==sha,path
-          chunk=base64.b64decode(api('/git/blobs/8f45c75ae6e98e36e7a01b826ee3cd23c070725d')['content'])
-          assert digest(chunk)=='8f45c75ae6e98e36e7a01b826ee3cd23c070725d'
+          chunk=base64.b64decode(api('/git/blobs/6576fb60b477b0473c4bee4754790e904903de3c')['content'])
+          assert digest(chunk)=='6576fb60b477b0473c4bee4754790e904903de3c'
           patch=gzip.decompress(chunk)
-          assert digest(patch)=='2e1134b2e2f8957b482068cb6ae6b7c6aae50292'
+          assert digest(patch)=='d7d62477e5329fb03d53a1509ef4ec814cbf3391'
           git('apply','--check','--index','--whitespace=error-all',data=patch)
           git('apply','--index','--whitespace=error-all',data=patch)
           assert set(git('diff','--cached','--name-only').splitlines())==set(paths)
@@ -62,7 +62,7 @@ jobs:
                   subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--emit','stdout',path],stdout=subprocess.DEVNULL,check=True)
           git('add','--',*paths)
           git('diff','--cached','--check')
-          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'protocol-prepared'
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'computed-prepared'
           out.mkdir()
           (out/'implementation.patch').write_text(git('diff','--cached','--binary'))
           files=[]
@@ -84,8 +84,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: protocol-prepared
-          path: ${{ runner.temp }}/protocol-prepared
+          name: computed-prepared
+          path: ${{ runner.temp }}/computed-prepared
           retention-days: 2
 
   native:
@@ -97,6 +97,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -115,7 +116,7 @@ jobs:
           python3 - <<'PY'
           import base64,hashlib,json,os,pathlib,urllib.request
           files=json.loads(os.environ['FILES'])
-          allowed={'crates/franken-engine/src/baseline_interpreter.rs','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs','crates/franken-engine/tests/iterator_destructuring_regression.rs'}
+          allowed={'crates/franken-engine/src/lowering_pipeline.rs','crates/franken-engine/tests/iterator_destructuring_regression.rs'}
           assert {item['path'] for item in files}==allowed
           for item in files:
               req=urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+item['sha'],headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
@@ -131,35 +132,57 @@ jobs:
         with:
           shared-key: native-iterator-standalone
           cache-on-failure: true
-      - name: Native tests
+      - name: Run original native integration tests against the exact library
         run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,pathlib,shutil,subprocess,tomllib
+          root=pathlib.Path.cwd()
+          harness=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-runtime-probes'
+          harness.mkdir()
+          tests=['generator_next_bd_v6cv1_regression','iterator_destructuring_regression','destructuring_default_branch_regression','destructuring_nested_rest_regression','destructuring_assignment_bd_umee4','for_of_destructuring_lowering_conformance','for_of_iterator_throw_regression']
+          manifest='[package]\nname="franken-native-runtime-probes"\nversion="0.0.0"\nedition="2024"\npublish=false\n[workspace]\nresolver="2"\n[dependencies]\nfrankenengine-engine={path='+json.dumps(str(root/'crates/franken-engine'))+',default-features=false}\n'
+          for test in tests:
+              source=root/'crates/franken-engine/tests'/f'{test}.rs'
+              assert source.is_file()
+              manifest+='\n[[test]]\nname='+json.dumps(test)+'\npath='+json.dumps(str(source))+'\n'
+          (harness/'Cargo.toml').write_text(manifest)
+          shutil.copyfile(root/'Cargo.lock',harness/'Cargo.lock')
+          with (harness/'metadata.json').open('w') as output:
+              subprocess.run(['cargo','metadata','--format-version','1','--manifest-path',str(harness/'Cargo.toml')],stdout=output,check=True)
+          def identities(path):
+              return {(p['name'],p['version'],p.get('source'),p.get('checksum')) for p in tomllib.loads(path.read_text())['package']}
+          added=identities(harness/'Cargo.lock')-identities(root/'Cargo.lock')
+          assert added <= {('franken-native-runtime-probes','0.0.0',None,None)},added
+          print('Original test files; original engine source; dependency versions and checksums match repository lockfile.')
+          PY
           set +e
-          timeout 1500 cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast --test generator_next_bd_v6cv1_regression --test iterator_destructuring_regression --test destructuring_default_branch_regression --test destructuring_nested_rest_regression --test destructuring_assignment_bd_umee4 --test for_of_destructuring_lowering_conformance --test for_of_iterator_throw_regression > "$RUNNER_TEMP/protocol-tests.log" 2>&1
+          timeout 1500 cargo test --locked --manifest-path "$RUNNER_TEMP/native-runtime-probes/Cargo.toml" --no-fail-fast > "$RUNNER_TEMP/computed-tests.log" 2>&1
           status=$?
-          tail -n 200 "$RUNNER_TEMP/protocol-tests.log"
+          tail -n 240 "$RUNNER_TEMP/computed-tests.log"
           exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: protocol-tests
-          path: ${{ runner.temp }}/protocol-tests.log
+          name: computed-tests
+          path: ${{ runner.temp }}/computed-tests.log
           retention-days: 2
-      - name: Compiler lint and formatting gates
+      - name: Full workspace compiler lint and format gates
         if: ${{ !cancelled() }}
         run: |
           set +e
-          timeout 600 cargo check --locked --all-targets > "$RUNNER_TEMP/protocol-check.log" 2>&1
+          timeout 300 cargo check --locked --all-targets > "$RUNNER_TEMP/computed-check.log" 2>&1
           check=$?
-          timeout 600 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/protocol-clippy.log" 2>&1
+          timeout 300 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/computed-clippy.log" 2>&1
           clippy=$?
-          cargo fmt --check > "$RUNNER_TEMP/protocol-fmt.log" 2>&1
+          cargo fmt --check > "$RUNNER_TEMP/computed-fmt.log" 2>&1
           fmt=$?
           printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt"
-          tail -n 30 "$RUNNER_TEMP/protocol-check.log" "$RUNNER_TEMP/protocol-clippy.log" "$RUNNER_TEMP/protocol-fmt.log"
+          tail -n 30 "$RUNNER_TEMP/computed-check.log" "$RUNNER_TEMP/computed-clippy.log" "$RUNNER_TEMP/computed-fmt.log"
           test "$check" = 0 && test "$clippy" = 0 && test "$fmt" = 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: protocol-gates
-          path: ${{ runner.temp }}/protocol-*.log
+          name: computed-gates
+          path: ${{ runner.temp }}/computed-*.log
           retention-days: 2

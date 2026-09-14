@@ -1,9 +1,4 @@
-//! Regression for bd-v6cv1: generator `.next()` faulted with the misleading
-//! "expected object, got object". The generator engine (generator_next) and the
-//! Call-handler that steps a generator-as-callee already existed; the gap was
-//! the GetProperty member-access handler having no Value::Generator arm, so
-//! `it.next` faulted before the call. Fix exposes `.next` as the generator
-//! itself so `it.next()` resumes it via the existing path, yielding {value,done}.
+//! End-to-end synchronous generator protocol: next, return, throw, and isolated completions.
 use frankenengine_engine::HybridRouter;
 
 fn eval(src: &str) -> String {
@@ -70,5 +65,205 @@ fn generator_yields_computed_values() {
     assert_eq!(
         eval("function* g(){ yield 1+1; yield 2*5; } let it = g(); it.next(); it.next().value;"),
         "10"
+    );
+}
+
+#[test]
+fn generator_methods_are_real_callable_values() {
+    assert_eq!(
+        eval(
+            r#"function* g(){yield 1;} let it=g(); typeof it.next+':'+typeof it.return+':'+typeof it.throw;"#
+        ),
+        "function:function:function"
+    );
+}
+
+#[test]
+fn generator_return_skips_an_unstarted_body() {
+    assert_eq!(
+        eval(
+            r#"let trace=''; function* g(){try{trace+='b';yield 1;}finally{trace+='f';}} let it=g(); let r=it.return(9); r.value+':'+r.done+':'+it.next().done+':'+trace;"#
+        ),
+        "9:true:true:"
+    );
+}
+
+#[test]
+fn generator_throw_skips_an_unstarted_body() {
+    assert_eq!(
+        eval(
+            r#"let trace=''; let token={}; function* g(){try{trace+='b';yield 1;}finally{trace+='f';}} let it=g(); let same=false; try{it.throw(token);}catch(e){same=e===token;} same+':'+it.next().done+':'+trace;"#
+        ),
+        "true:true:"
+    );
+}
+
+#[test]
+fn generator_return_executes_finally_and_stops_body() {
+    assert_eq!(
+        eval(
+            r#"let trace=''; function* g(){try{yield 1;trace+='b';yield 2;}finally{trace+='f';}} let it=g(); it.next(); let r=it.return(8); r.value+':'+r.done+':'+it.next().done+':'+trace;"#
+        ),
+        "8:true:true:f"
+    );
+}
+
+#[test]
+fn generator_return_suspends_through_a_finally_yield() {
+    assert_eq!(
+        eval(
+            r#"function* g(){try{yield 1;}finally{yield 2;}} let it=g();it.next();let a=it.return(7);let b=it.next();a.value+':'+a.done+':'+b.value+':'+b.done;"#
+        ),
+        "2:false:7:true"
+    );
+}
+
+#[test]
+fn generator_new_return_overrides_suspended_return() {
+    assert_eq!(
+        eval(
+            r#"function* g(){try{yield 1;}finally{yield 2;}} let it=g();it.next();it.return(7);let r=it.return(9);r.value+':'+r.done+':'+it.next().done;"#
+        ),
+        "9:true:true"
+    );
+}
+
+#[test]
+fn generator_finally_return_overrides_injected_return() {
+    assert_eq!(
+        eval(
+            r#"function* g(){try{yield 1;}finally{return 11;}}let it=g();it.next();let r=it.return(7);r.value+':'+r.done;"#
+        ),
+        "11:true"
+    );
+}
+
+#[test]
+fn generator_throw_is_caught_at_the_suspension_point() {
+    assert_eq!(
+        eval(
+            r#"function* g(){try{yield 1;}catch(e){yield e+2;}return 9;}let it=g();it.next();let a=it.throw(5);let b=it.next();a.value+':'+a.done+':'+b.value+':'+b.done;"#
+        ),
+        "7:false:9:true"
+    );
+}
+
+#[test]
+fn generator_throw_preserves_object_identity_through_finally() {
+    assert_eq!(
+        eval(
+            r#"let token={};let trace='';function* g(){try{yield 1;}finally{trace+='f';}}let it=g();it.next();let same=false;try{it.throw(token);}catch(e){same=e===token;}same+':'+trace+':'+it.next().done;"#
+        ),
+        "true:f:true"
+    );
+}
+
+#[test]
+fn generator_throw_survives_finally_yield() {
+    assert_eq!(
+        eval(
+            r#"let token={};function* g(){try{yield 1;}finally{yield 2;}}let it=g();it.next();let a=it.throw(token);let same=false;try{it.next();}catch(e){same=e===token;}a.value+':'+a.done+':'+same+':'+it.next().done;"#
+        ),
+        "2:false:true:true"
+    );
+}
+
+#[test]
+fn generator_finally_throw_overrides_injected_return() {
+    assert_eq!(
+        eval(
+            r#"function* g(){try{yield 1;}finally{throw 12;}}let it=g();it.next();let got=0;try{it.return(7);}catch(e){got=e;}got+':'+it.next().done;"#
+        ),
+        "12:true"
+    );
+}
+
+#[test]
+fn generator_return_unwinds_nested_finally_in_order() {
+    assert_eq!(
+        eval(
+            r#"let trace='';function* g(){try{try{yield 1;}finally{trace+='i';}}finally{trace+='o';}}let it=g();it.next();let r=it.return(7);r.value+':'+trace;"#
+        ),
+        "7:io"
+    );
+}
+
+#[test]
+fn generator_completed_return_and_throw_use_supplied_value() {
+    assert_eq!(
+        eval(
+            r#"function* g(){return 3;}let it=g();it.next();let r=it.return(8);let got=0;try{it.throw(6);}catch(e){got=e;}r.value+':'+r.done+':'+got+':'+it.next().done;"#
+        ),
+        "8:true:6:true"
+    );
+}
+
+#[test]
+fn generator_next_method_uses_its_call_receiver() {
+    assert_eq!(
+        eval(
+            r#"function* g(){yield 1;yield 2;}let a=g(),b=g();a.next();let next=a.next;next.call(b).value+':'+a.next().value;"#
+        ),
+        "1:2"
+    );
+}
+
+#[test]
+fn generator_return_method_uses_its_call_receiver() {
+    assert_eq!(
+        eval(
+            r#"function* g(){yield 1;yield 2;}let a=g(),b=g();a.next();b.next();let close=a.return;let r=close.call(b,7);r.value+':'+b.next().done+':'+a.next().value;"#
+        ),
+        "7:true:2"
+    );
+}
+
+#[test]
+fn generator_methods_reject_non_generator_receivers() {
+    assert_eq!(
+        eval(
+            r#"function* g(){yield 1;}let it=g();let count=0;try{it.next.call({});}catch(e){count+=1;}try{it.return.call({});}catch(e){count+=1;}try{it.throw.call({});}catch(e){count+=1;}count+':'+it.next().value;"#
+        ),
+        "3:1"
+    );
+}
+
+#[test]
+fn generator_return_reentry_is_rejected_without_corrupting_state() {
+    assert_eq!(
+        eval(
+            r#"let it;function* g(){try{it.return(9);}catch(e){yield 4;}yield 5;}it=g();it.next().value+':'+it.next().value;"#
+        ),
+        "4:5"
+    );
+}
+
+#[test]
+fn generator_bare_return_passes_undefined() {
+    assert_eq!(
+        eval(
+            r#"function* g(){yield 1;}let it=g();it.next();let r=it.return();r.value+':'+r.done;"#
+        ),
+        "undefined:true"
+    );
+}
+
+#[test]
+fn generator_caller_finally_survives_generator_throw() {
+    assert_eq!(
+        eval(
+            r#"let trace='';function* g(){try{yield 1;}finally{trace+='g';}}let it=g();it.next();try{try{it.throw(6);}finally{trace+='c';}}catch(e){trace+=e;}trace;"#
+        ),
+        "gc6"
+    );
+}
+
+#[test]
+fn generator_next_after_return_has_no_suspended_completion_leak() {
+    assert_eq!(
+        eval(
+            r#"function* g(){yield 1;}let it=g();it.next();it.return(7);let got=0;try{throw 5;}catch(e){got=e;}got+':'+it.next().value;"#
+        ),
+        "5:undefined"
     );
 }

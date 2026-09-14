@@ -21,9 +21,9 @@ use crate::object_model::{PropertyKey, SymbolId, WellKnownSymbol};
 // Schema versioning
 // ---------------------------------------------------------------------------
 
-/// V2 adds the replay-visible `CloseReason::Continue` used when a labelled
-/// continue crosses a `for..of` iterator boundary.
-pub const ITERATOR_PROTOCOL_SCHEMA_VERSION: &str = "franken-engine.iterator-protocol.v2";
+/// V3 distinguishes an elided, unobserved result value from JavaScript
+/// `undefined`. V2 added the boundary-crossing `CloseReason::Continue`.
+pub const ITERATOR_PROTOCOL_SCHEMA_VERSION: &str = "franken-engine.iterator-protocol.v3";
 pub const ITERATOR_PROTOCOL_BEAD_ID: &str = "bd-1lsy.4.8.1";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +36,9 @@ pub const ITERATOR_PROTOCOL_BEAD_ID: &str = "bd-1lsy.4.8.1";
 /// and replayed independently of the runtime evaluator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IteratorValue {
+    /// IteratorStep succeeded, but IteratorValue was not performed (elision).
+    /// This is a trace marker, never a JavaScript runtime value.
+    Unobserved,
     /// Undefined value (used for the `value` field when `done: true`).
     Undefined,
     /// Null value.
@@ -57,6 +60,7 @@ pub enum IteratorValue {
 impl fmt::Display for IteratorValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Unobserved => write!(f, "<unobserved>"),
             Self::Undefined => write!(f, "undefined"),
             Self::Null => write!(f, "null"),
             Self::Boolean(b) => write!(f, "{b}"),

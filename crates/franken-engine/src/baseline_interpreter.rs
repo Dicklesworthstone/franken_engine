@@ -40704,16 +40704,21 @@ impl InterpreterCore {
                     let iterator_reg = iterator;
                     let result_label = self.unary_operation_label(iterator_reg)?;
                     let iterator = self.read_reg(iterator_reg)?;
+                    self.clear_pending_hostcall_result_label();
                     match self.advance_for_of_iterator(Some(module), iterator) {
                         Ok(Some(value)) => {
                             // Each bound element derives from the iterable; carry
                             // its label onto the loop variable so a
                             // `for (const x of secret) egress(x)` cannot launder
                             // the taint (sibling of bd-ooaka.1).
+                            let result_label = result_label.join(
+                                &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+                            );
                             self.write_reg_with_label(value_dst, value, result_label)?;
                             self.ip += 1;
                         }
                         Ok(None) => {
+                            self.clear_pending_hostcall_result_label();
                             self.ip = done_target as usize;
                         }
                         Err(err) => {
@@ -45637,11 +45642,11 @@ impl InterpreterCore {
     }
 
     fn record_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
-        self.record_iteration_next_result_impl(trace_index, value, false);
+        self.record_iteration_next_result_impl(trace_index, value, false, true);
     }
 
     fn record_for_in_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
-        self.record_iteration_next_result_impl(trace_index, value, true);
+        self.record_iteration_next_result_impl(trace_index, value, true, true);
     }
 
     fn record_iteration_next_result_impl(
@@ -45649,8 +45654,10 @@ impl InterpreterCore {
         trace_index: usize,
         value: Option<Value>,
         exact_for_in_key: bool,
+        read_value: bool,
     ) {
         let result = match value.as_ref() {
+            Some(_) if !read_value => IteratorResult::value(IteratorValue::Unobserved),
             Some(Value::Str(value)) if exact_for_in_key => IteratorResult::value(
                 IteratorValue::String(RuntimePropertyKey::String(value.clone()).diagnostic()),
             ),
@@ -45669,7 +45676,7 @@ impl InterpreterCore {
             operation: IterationOperation::IteratorComplete { done },
             completion: IterationCompletion::Normal,
         });
-        if !done {
+        if !done && read_value {
             self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
                 record_id,
                 step_index,
@@ -45981,7 +45988,14 @@ impl InterpreterCore {
         else {
             return Ok(Value::Undefined);
         };
-        self.proxy_aware_get_property(Some(module), result_id, key, result.clone(), 0)
+        let stored_label = self.runtime_property_label(
+            result_id, &RuntimePropertyKey::String(JsString::from(key)),
+        );
+        let value = self.proxy_aware_get_property(Some(module), result_id, key, result.clone(), 0)?;
+        let label = self.pending_hostcall_result_label.as_ref()
+            .unwrap_or(&Label::Public).join(&stored_label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(value)
     }
 
     fn iterator_result_done(
@@ -46058,7 +46072,19 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
-        enum ForOfStep {            Done,
+        self.advance_for_of_iterator_with_value_read(module, iterator, true)
+    }
+
+    /// Advance the canonical iterator once. Elisions perform IteratorStep but
+    /// not IteratorValue: a custom result's `value` getter must not run.
+    fn advance_for_of_iterator_with_value_read(
+        &mut self,
+        module: Option<&Ir3Module>,
+        iterator: Value,
+        read_value: bool,
+    ) -> Result<Option<Value>, InterpreterError> {
+        enum ForOfStep {
+            Done,
             Value(Value),
             Array {
                 iterator: RuntimeArrayIterator,
@@ -46138,11 +46164,11 @@ impl InterpreterCore {
 
         let (receiver, next_method) = match step {
             ForOfStep::Done => {
-                self.record_iteration_next_result(trace_index, None);
+                self.record_iteration_next_result_impl(trace_index, None, false, read_value);
                 return Ok(None);
             }
             ForOfStep::Value(value) => {
-                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
                 return Ok(Some(value));
             }
             ForOfStep::Array { iterator, index } => {
@@ -46166,7 +46192,7 @@ impl InterpreterCore {
                     if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                         state.done = true;
                     }
-                    self.record_iteration_next_result(trace_index, None);
+                    self.record_iteration_next_result_impl(trace_index, None, false, read_value);
                     return Ok(None);
                 }
                 // Advance before the indexed Get, as ArrayIterator.next does.
@@ -46192,7 +46218,7 @@ impl InterpreterCore {
                         }
                     }
                 };
-                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
                 return Ok(Some(value));
             }
             ForOfStep::TypedArray { iterator, index } => {
@@ -46218,7 +46244,7 @@ impl InterpreterCore {
                     }
                     RuntimeTypedArrayIteratorKind::Values => element,
                 };
-                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
                 return Ok(Some(value));
             }
             ForOfStep::IntervalTick { delay_ms, value } => {
@@ -46228,7 +46254,7 @@ impl InterpreterCore {
                 self.event_loop
                     .clock
                     .advance_to(now.saturating_add(delay_ms));
-                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
                 return Ok(Some(value));
             }
             ForOfStep::Custom {
@@ -46240,17 +46266,25 @@ impl InterpreterCore {
             expected: "module-backed iterator.next dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let result =
-            self.invoke_inline_method_call(Some(module), next_method, receiver, Vec::new())?;
+        let (result, callback_label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module), next_method, receiver, Vec::new(), None,
+        )?;
+        let label = self.pending_hostcall_result_label.as_ref()
+            .unwrap_or(&Label::Public).join(&callback_label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
         if self.iterator_result_done(module, &result)? {
             if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                 state.done = true;
             }
-            self.record_iteration_next_result(trace_index, None);
+            self.record_iteration_next_result_impl(trace_index, None, false, read_value);
             Ok(None)
         } else {
-            let value = self.iterator_result_value(module, &result)?;
-            self.record_iteration_next_result(trace_index, Some(value.clone()));
+            let value = if read_value {
+                self.iterator_result_value(module, &result)?
+            } else {
+                Value::Undefined
+            };
+            self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
             Ok(Some(value))
         }
     }
@@ -47375,7 +47409,14 @@ impl InterpreterCore {
                 (state.trace_index, return_target)
             }
         };
-        let close_reason = Self::close_reason_from_ir(reason);
+        let close_reason = if reason == IteratorCloseReason::Break
+            && self.iteration_traces.get(trace_index)
+                .is_some_and(|trace| trace.kind == IterationKind::Destructuring)
+        {
+            CloseReason::DestructuringExhausted
+        } else {
+            Self::close_reason_from_ir(reason)
+        };
 
         let Some(iterator_object) = return_target else {
             self.record_iterator_close_event(
@@ -65680,6 +65721,61 @@ impl InterpreterCore {
         }
 
         match cap {
+            "builtin:DestructureIteratorInit" => {
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one destructuring iterable".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                let value = self.read_reg(args.start)?;
+                let init = self.prepare_for_of_state(module, &value)?;
+                self.init_iterator_from_state(value, init, IterationKind::Destructuring)
+            }
+            "builtin:DestructureIteratorNext" | "builtin:DestructureIteratorElide" => {
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one destructuring iterator".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                let iterator = self.read_reg(args.start)?;
+                let handle = self.expect_iterator_handle(iterator.clone())?;
+                match self.iterator_state_mut(handle)? {
+                    RuntimeIteratorState::ForOf(state) if state.done || state.closed => {
+                        // The iterator record remains exhausted: later pattern
+                        // elements neither call next nor emit fictitious steps.
+                        return Ok(Value::Undefined);
+                    }
+                    RuntimeIteratorState::ForOf(_) => {}
+                    RuntimeIteratorState::ForIn(_) => return Err(InterpreterError::TypeError {
+                        expected: "destructuring for-of iterator".to_string(),
+                        got: "for-in iterator".to_string(),
+                    }),
+                }
+                Ok(self.advance_for_of_iterator_with_value_read(
+                    module, iterator, cap == "builtin:DestructureIteratorNext",
+                )?.unwrap_or(Value::Undefined))
+            }
+            "builtin:DestructureIteratorDone" => {
+                // The second operand is the just-observed step value. It is
+                // not inspected, but carries the step's callback/done-getter
+                // provenance into the branch through the JoinInputs contract.
+                if args.count != 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterator and observed step".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                let handle = self.expect_iterator_handle(self.read_reg(args.start)?)?;
+                match self.iterator_state_mut(handle)? {
+                    RuntimeIteratorState::ForOf(state) => Ok(Value::Bool(state.done || state.closed)),
+                    RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
+                        expected: "destructuring for-of iterator".to_string(),
+                        got: "for-in iterator".to_string(),
+                    }),
+                }
+            }
             "builtin:ToPropertyKey" => {
                 if args.count != 1 {
                     return Err(InterpreterError::TypeError {
@@ -82236,6 +82332,105 @@ mod active_builtin_regressions {
 
     fn test_core() -> InterpreterCore {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    #[test]
+    fn destructuring_iterator_intrinsics_keep_exhaustion_sticky() {
+        let mut core = test_core();
+        let array = core.alloc_array_from_values(&[Value::Int(10)]).unwrap();
+        core.write_reg(0, Value::Object(array)).unwrap();
+        let one = RegRange { start: 0, count: 1 };
+        let iterator = core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None).unwrap();
+        core.write_reg(0, iterator).unwrap();
+        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Int(10));
+        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Undefined);
+        let event_count = core.iteration_traces[0].events.len();
+        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Undefined);
+        assert_eq!(core.iteration_traces[0].events.len(), event_count);
+        assert_eq!(core.iteration_traces[0].kind, IterationKind::Destructuring);
+        core.write_reg(1, Value::Undefined).unwrap();
+        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorDone", RegRange { start: 0, count: 2 }, None).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn destructuring_iterator_elision_advances_without_claiming_a_value_read() {
+        let mut core = test_core();
+        let array = core.alloc_array_from_values(&[Value::Int(10), Value::Int(20)]).unwrap();
+        core.write_reg(0, Value::Object(array)).unwrap();
+        let one = RegRange { start: 0, count: 1 };
+        let iterator = core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None).unwrap();
+        core.write_reg(0, iterator).unwrap();
+        core.dispatch_builtin_hostcall("builtin:DestructureIteratorElide", one, None).unwrap();
+        let trace = &core.iteration_traces[0];
+        assert_eq!(trace.values_produced, 1);
+        assert!(trace.events.iter().any(|event| matches!(event.operation,
+            IterationOperation::IteratorNext { result: IteratorResult { value: IteratorValue::Unobserved, done: false } })));
+        assert!(!trace.events.iter().any(|event| matches!(event.operation, IterationOperation::IteratorValue { .. })));
+        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Int(20));
+    }
+
+    #[test]
+    fn destructuring_iterator_intrinsics_reject_invalid_carriers_and_arities() {
+        let mut core = test_core();
+        for cap in ["builtin:DestructureIteratorInit", "builtin:DestructureIteratorNext", "builtin:DestructureIteratorElide", "builtin:DestructureIteratorDone"] {
+            assert!(matches!(core.dispatch_builtin_hostcall(cap, RegRange { start: 0, count: 0 }, None), Err(InterpreterError::TypeError { .. })));
+        }
+        for value in [Value::Null, Value::Undefined, Value::Int(7), Value::Bool(false)] {
+            core.write_reg(0, value).unwrap();
+            assert!(matches!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", RegRange { start: 0, count: 1 }, None), Err(InterpreterError::TypeError { .. })));
+            assert!(matches!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", RegRange { start: 0, count: 1 }, None), Err(InterpreterError::TypeError { .. })));
+        }
+    }
+
+    #[test]
+    fn destructuring_iterator_unobserved_trace_round_trips_distinct_from_undefined() {
+        let encoded = serde_json::to_string(&IteratorValue::Unobserved).unwrap();
+        let decoded: IteratorValue = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, IteratorValue::Unobserved);
+        assert_ne!(encoded, serde_json::to_string(&IteratorValue::Undefined).unwrap());
+        assert_eq!(decoded.to_string(), "<unobserved>");
+    }
+
+    #[test]
+    fn destructuring_iterator_result_reads_preserve_stored_property_taint() {
+        let mut core = test_core();
+        let result = core.alloc_object_with_properties(&[("done", Value::Bool(false)), ("value", Value::Int(17))]).unwrap();
+        core.set_own_property_label(result, "value", &Label::Secret).unwrap();
+        let value = core.iterator_result_value(&halted_test_module(), &Value::Object(result)).unwrap();
+        assert_eq!(value, Value::Int(17));
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+    }
+
+    #[test]
+    fn destructuring_iterator_normal_close_has_destructuring_trace_reason() {
+        let mut core = test_core();
+        let array = core.alloc_array_from_values(&[Value::Int(1)]).unwrap();
+        core.write_reg(0, Value::Object(array)).unwrap();
+        let iterator = core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", RegRange { start: 0, count: 1 }, None).unwrap();
+        core.close_iterator(&halted_test_module(), iterator, IteratorCloseReason::Break).unwrap();
+        assert!(core.iteration_traces[0].events.iter().any(|event| matches!(event.operation,
+            IterationOperation::IteratorClose { reason: CloseReason::DestructuringExhausted, .. })));
+    }
+
+    #[test]
+    fn destructuring_iterator_elision_never_invokes_custom_value_getter() {
+        let mut core = test_core();
+        let result = core.alloc_object_with_properties(&[
+            ("done", Value::Bool(false)),
+            ("value", Value::Accessor { get: Some(Box::new(Value::Function(1))), set: None }),
+        ]).unwrap();
+        core.scope_chain.current_mut().unwrap().bindings.insert(
+            "result".to_string(), ScopeBinding::with_state(BindingKind::Var, Value::Object(result), true),
+        );
+        let mut module = iterator_return_value_module();
+        module.instructions.extend([Ir3Instruction::LoadInt { dst: 0, value: 99 }, Ir3Instruction::Throw { value: 0 }]);
+        module.function_table.push(crate::ir_contract::Ir3FunctionDesc {
+            entry: 2, arity: 0, frame_size: 1, name: Some("throwing_value_getter".to_string()), is_generator: false, rest_param_index: None,
+        });
+        let object = core.alloc_object_with_properties(&[]).unwrap();
+        let iterator = core.init_iterator_from_state(Value::Object(object), RuntimeForOfInit::from_custom(object, Value::Function(0)), IterationKind::Destructuring).unwrap();
+        assert_eq!(core.advance_for_of_iterator_with_value_read(Some(&module), iterator.clone(), false).unwrap(), Some(Value::Undefined));
+        assert!(matches!(core.advance_for_of_iterator_with_value_read(Some(&module), iterator, true), Err(InterpreterError::UncaughtException { .. })));
     }
 
     fn halted_test_module() -> Ir3Module {

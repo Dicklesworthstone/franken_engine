@@ -2,89 +2,95 @@ name: EngineObjectId Migration Reconciliation
 
 on:
   push:
-    branches: [main]
-    paths: [.github/workflows/reconcile-engine-object-id-migration.yml]
+    branches:
+      - main
+    paths:
+      - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
 
 jobs:
-  prepare:
-    if: >-
-      github.repository == 'Dicklesworthstone/franken_engine' && github.event.head_commit.message == 'work(iterator): prepare and verify native destructuring iterator operations'
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions:
-      contents: write
     env:
-      CARGO_BUILD_JOBS: '1'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTUP_TOOLCHAIN: nightly
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 1
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
-          clean: false
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+          fetch-depth: 0
+          ref: main
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          components: rustfmt, clippy
-      - name: Apply exact reviewed patch and publish immutable source blobs
-        env:
-          GH_TOKEN: ${{ github.token }}
+          components: rustfmt,clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
+        shell: bash
         run: |
-          python3 - <<'PY'
-          import base64,gzip,hashlib,json,os,pathlib,subprocess,urllib.request
-          root='https://api.github.com/repos/Dicklesworthstone/franken_engine'
-          def api(path,body=None):
-              request=urllib.request.Request(root+path,data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(request,timeout=90) as response:
-                  return json.load(response)
-          def digest(data):
-              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
-          blob=api('/git/blobs/03eddf69b1fcee1544358f5727c44dd385cbac35')
-          compressed=base64.b64decode(blob['content'])
-          assert digest(compressed)=='03eddf69b1fcee1544358f5727c44dd385cbac35'
-          patch=gzip.decompress(compressed)
-          assert digest(patch)=='9b713aa73df712935eef5f71322156f7ca844d5e'
-          paths=['crates/franken-engine/src/baseline_interpreter.rs','crates/franken-engine/src/capability.rs','crates/franken-engine/src/iterator_protocol.rs']
-          subprocess.run(['git','apply','--check','--index','--whitespace=error-all'],input=patch,check=True)
-          subprocess.run(['git','apply','--index','--whitespace=error-all'],input=patch,check=True)
-          actual=subprocess.check_output(['git','diff','--cached','--name-only']).decode().splitlines()
-          assert set(actual)==set(paths),actual
-          for path in paths:
-              subprocess.run(['rustfmt','--edition','2024','--config','skip_children=true','--emit','stdout',path],stdout=subprocess.DEVNULL,check=True)
-          subprocess.run(['git','diff','--cached','--check'],check=True)
-          files=[]
-          for path in paths:
-              data=pathlib.Path(path).read_bytes()
-              result=api('/git/blobs',{'encoding':'base64','content':base64.b64encode(data).decode()})
-              assert result['sha']==digest(data)
-              files.append({'path':path,'sha':result['sha']})
-          manifest={'base':os.environ['GITHUB_SHA'],'files':files}
-          pathlib.Path(os.environ['RUNNER_TEMP'],'iterator-prepared.json').write_text(json.dumps(manifest))
-          print('PREPARED_FILES='+json.dumps(manifest),flush=True)
+          set -euo pipefail
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: iterator-prepared
-          path: ${{ runner.temp }}/iterator-prepared.json
-          retention-days: 2
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          shared-key: native-iteration-validation
-          cache-on-failure: true
-      - name: Execute native iterator substrate tests
-        run: |
-          set +e
-          cargo test --locked -p frankenengine-engine --lib destructuring_iterator_ -- --nocapture > "$RUNNER_TEMP/iterator-substrate-tests.log" 2>&1
-          status=$?
-          tail -n 120 "$RUNNER_TEMP/iterator-substrate-tests.log"
-          exit "$status"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: iterator-substrate-tests
-          path: ${{ runner.temp }}/iterator-substrate-tests.log
-          retention-days: 2
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

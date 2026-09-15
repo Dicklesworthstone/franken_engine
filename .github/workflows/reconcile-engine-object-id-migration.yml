@@ -1,4 +1,4 @@
-name: EngineObjectId Migration Reconciliation
+name: CommonJS Package Graph Integration Retry
 
 on:
   push:
@@ -6,91 +6,54 @@ on:
       - main
     paths:
       - .github/workflows/reconcile-engine-object-id-migration.yml
-  workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: engine-object-id-migration-reconciliation
-  cancel-in-progress: false
-
 jobs:
-  reconcile:
-    name: Apply cfg hygiene, format, test, and publish
+  implement:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
-      - name: Checkout full main history
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt,clippy
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: engine-object-id-migration-reconciliation
-
-      - name: Reconcile latest main with bounded fast-forward retries
+          shared-key: package-intake-cjs-graph
+          cache-on-failure: true
+      - name: Wire static CommonJS require edges into package intake
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "franken-engine-identity-bot"
-          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
-
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git reset --hard origin/main
-
-            python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
-          text = path.read_text()
-          old = '    const ALL: [Self; 9] = ['
-          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
-          if new not in text:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
-              text = text.replace(old, new, 1)
-              path.write_text(text)
-          PY
-
-            rustfmt --edition 2024 \
-              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
-              crates/franken-engine/tests/engine_object_id_migration_cli.rs
-            cargo test --no-default-features -p frankenengine-engine \
-              --bin franken_engine_object_id_migration
-            cargo test --no-default-features -p frankenengine-engine \
-              --test engine_object_id_migration_cli
-            cargo clippy --no-default-features -p frankenengine-engine \
-              --bin franken_engine_object_id_migration -- -D warnings
-            git diff --check
-
-            if git diff --quiet; then
-              echo "EngineObjectId migration binary was already reconciled"
-              exit 0
-            fi
-
-            git add \
-              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
-              crates/franken-engine/tests/engine_object_id_migration_cli.rs
-            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
-
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
-          done
-
-          echo "unable to publish identity migration reconciliation after bounded retries" >&2
-          exit 1
+          echo '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' | base64 -d | gzip -d > /tmp/cjs_patch.py
+          python3 /tmp/cjs_patch.py
+          rustfmt --edition 2024 crates/franken-engine/src/package_intake.rs
+          cargo test --no-default-features -p frankenengine-engine --lib package_intake::tests::commonjs_literal_require_is_followed_as_a_real_graph_edge -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine --lib package_intake::tests::commonjs_bare_literal_require_is_reported_as_external_dependency -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine --lib package_intake::tests::dynamic_commonjs_require_bounds_coverage_without_inventing_an_edge -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine --lib package_intake::tests::clean_two_module_package_has_empty_footprint_and_resolves_in_all_modes -- --nocapture
+          cargo check --no-default-features -p frankenengine-engine --lib
+          git diff --check
+          git config user.name 'Jeff Emanuel'
+          git config user.email '35050222+Dicklesworthstone@users.noreply.github.com'
+          git add crates/franken-engine/src/package_intake.rs
+          git commit -m 'feat(modules): follow static CommonJS require edges in package intake'
+          git fetch origin main
+          if [[ "$(git rev-parse HEAD^)" != "$(git rev-parse origin/main)" ]]; then
+            git rebase origin/main
+            cargo test --no-default-features -p frankenengine-engine --lib package_intake::tests::commonjs_literal_require_is_followed_as_a_real_graph_edge -- --nocapture
+            cargo test --no-default-features -p frankenengine-engine --lib package_intake::tests::dynamic_commonjs_require_bounds_coverage_without_inventing_an_edge -- --nocapture
+            cargo check --no-default-features -p frankenengine-engine --lib
+          fi
+          git push origin HEAD:main

@@ -1,4 +1,4 @@
-name: Recursive Generator Consumer Diagnostic
+name: Generator Resume Depth Containment
 
 on:
   push:
@@ -8,12 +8,12 @@ on:
       - .github/workflows/reconcile-engine-object-id-migration.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  implement:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
@@ -23,31 +23,77 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
+          fetch-depth: 0
+          ref: main
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: native-iterator-standalone
+          shared-key: generator-resume-depth
           cache-on-failure: true
-      - name: Instrument exact recursive-consumer result
+      - name: Patch shared generator resume depth
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs')
-          s=p.read_text()
-          marker='fn iterator_consumers_refuse_recursive_generators_without_native_stack_abort() {'
-          start=s.index(marker)
-          end=s.find('\n#[test]', start + len(marker))
-          if end < 0:
-              end=len(s)
-          block=s[start:end]
-          old='''                assert!(matches!(\n                    core.execute(&module),\n                    Err(InterpreterError::StackOverflow { max: 8, .. })\n                ));'''
-          new='''                let outcome = core.execute(&module);\n                assert!(\n                    matches!(outcome, Err(InterpreterError::StackOverflow { max: 8, .. })),\n                    "unexpected recursive iterator-consumer outcome for {source}: {outcome:?}"\n                );'''
+          p = Path('crates/franken-engine/src/baseline_interpreter.rs')
+          s = p.read_text()
+          edits = [
+              (
+                  '    module_reentrant_call_depth: usize,\n    /// Non-zero only while an imported ordinary closure is executing in its\n',
+                  '    module_reentrant_call_depth: usize,\n    /// Active synchronous generator resumptions on the native Rust stack.\n    /// Generator execution swaps the visible call stack, so iterator consumers\n    /// can otherwise hide already-active generator frames from max_call_depth.\n    /// This counter is deliberately not part of generator/module snapshots.\n    active_generator_resume_depth: usize,\n    /// Non-zero only while an imported ordinary closure is executing in its\n',
+                  'field',
+              ),
+              (
+                  '            module_reentrant_call_depth: 0,\n            active_foreign_module_call_depth: 0,\n',
+                  '            module_reentrant_call_depth: 0,\n            active_generator_resume_depth: 0,\n            active_foreign_module_call_depth: 0,\n',
+                  'constructor',
+              ),
+              (
+                  '        self.module_reentrant_call_depth = 0;\n        self.active_foreign_module_call_depth = 0;\n',
+                  '        self.module_reentrant_call_depth = 0;\n        self.active_generator_resume_depth = 0;\n        self.active_foreign_module_call_depth = 0;\n',
+                  'top-level reset',
+              ),
+              (
+                  '    fn effective_call_depth(&self) -> usize {\n        self.call_stack\n            .len()\n            .saturating_add(self.module_reentrant_call_depth)\n    }\n',
+                  '    fn effective_call_depth(&self) -> usize {\n        self.call_stack\n            .len()\n            .saturating_add(self.module_reentrant_call_depth)\n            .max(self.active_generator_resume_depth)\n    }\n',
+                  'effective depth',
+              ),
+          ]
+          for old, new, label in edits:
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              s = s.replace(old, new, 1)
+
+          start = s.index('    fn generator_resume(\n')
+          end = s.index('    /// Execute .next() on an async generator.', start)
+          block = s[start:end]
+          old = '''        {\n            let generator = &mut self.generators[generator_index];\n            generator.phase = GeneratorPhase::Executing;\n        }\n\n        let caller_generator_yielded ='''
+          new = '''        {\n            let generator = &mut self.generators[generator_index];\n            generator.phase = GeneratorPhase::Executing;\n        }\n\n        let previous_generator_resume_depth = self.active_generator_resume_depth;\n        self.active_generator_resume_depth = previous_generator_resume_depth.saturating_add(1);\n\n        let caller_generator_yielded ='''
           if block.count(old) != 1:
-              raise SystemExit(f'expected one assertion in target test, found {block.count(old)}')
-          p.write_text(s[:start] + block.replace(old,new,1) + s[end:])
+              raise SystemExit(f'generator activation: expected one match, found {block.count(old)}')
+          block = block.replace(old, new, 1)
+          old = '''            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n            self.module_reentrant_call_depth = previous_reentrant_depth;\n            self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
+          new = '''            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n            self.module_reentrant_call_depth = previous_reentrant_depth;\n            self.active_generator_resume_depth = previous_generator_resume_depth;\n            self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
+          if block.count(old) != 1:
+              raise SystemExit(f'setup restore: expected one match, found {block.count(old)}')
+          block = block.replace(old, new, 1)
+          old = '''        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n        self.module_reentrant_call_depth = previous_reentrant_depth;\n        self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
+          new = '''        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n        self.module_reentrant_call_depth = previous_reentrant_depth;\n        self.active_generator_resume_depth = previous_generator_resume_depth;\n        self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
+          if block.count(old) != 1:
+              raise SystemExit(f'normal restore: expected one match, found {block.count(old)}')
+          block = block.replace(old, new, 1)
+          s = s[:start] + block + s[end:]
+          p.write_text(s)
           PY
           cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression iterator_consumers_refuse_recursive_generators_without_native_stack_abort -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression delegate_recursive_generators_respect_shared_call_depth_budget -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression generator_reentry_depth_errors_are_recoverable_on_a_small_embedding_stack -- --nocapture
+          cargo check --no-default-features -p frankenengine-engine --lib
+          git diff --check
+          git config user.name 'Jeff Emanuel'
+          git config user.email '35050222+Dicklesworthstone@users.noreply.github.com'
+          git add crates/franken-engine/src/baseline_interpreter.rs
+          git commit -m 'fix(generator): bound iterator-consumer resume depth'
+          git push origin HEAD:main

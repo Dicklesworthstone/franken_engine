@@ -107,7 +107,7 @@ fn family_method_set_is_stable_and_unique() {
 fn iterator_object_residual_is_exact_not_family_wide() {
     let partial: BTreeSet<_> = array_prototype::ROWS
         .iter()
-        .filter(|row| matches!(row.gap_status, GapStatus::Partial(_)))
+        .filter(|row| matches!(&row.gap_status, GapStatus::Partial(_)))
         .map(|row| row.name)
         .collect();
     assert_eq!(
@@ -141,7 +141,7 @@ fn callback_methods_declare_callback_dependent_ifc() {
             .iter()
             .find(|row| row.name == canonical)
             .expect("callback row");
-        assert!(matches!(row.ifc, IfcPropagation::Custom(_)), "{}", row.name);
+        assert!(matches!(&row.ifc, IfcPropagation::Custom(_)), "{}", row.name);
     }
 }
 

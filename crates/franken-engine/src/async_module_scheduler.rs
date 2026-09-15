@@ -110,7 +110,7 @@ impl fmt::Display for AsyncModuleSchedulerError {
                 write!(f, "async module scheduler dispatch budget {max} exhausted")
             }
             Self::UnknownTask { module_specifier } => {
-                write!(f, "no in-flight task for module {module_specifier}")
+                write!(f, "no scheduler state for module {module_specifier}")
             }
             Self::StaleTask {
                 module_specifier,
@@ -160,6 +160,10 @@ struct ReadyKey {
     kind: ModuleTaskKind,
 }
 
+fn runtime_terminal(phase: AsyncModulePhase) -> bool {
+    matches!(phase, AsyncModulePhase::Settled | AsyncModulePhase::Rejected)
+}
+
 pub struct AsyncModuleScheduler {
     bridge: AsyncModulePromiseBridge,
     config: AsyncModuleSchedulerConfig,
@@ -203,7 +207,7 @@ impl AsyncModuleScheduler {
             .register_module(specifier, has_top_level_await, dependencies)?;
         self.generations.entry(specifier.to_string()).or_insert(0);
         let state = &self.bridge.evaluator().states()[specifier];
-        if state.phase != AsyncModulePhase::Rejected && state.pending_dependencies.is_empty() {
+        if !runtime_terminal(state.phase) && state.pending_dependencies.is_empty() {
             self.enqueue(specifier, ModuleTaskKind::Start)?;
         }
         Ok(promise)
@@ -261,22 +265,24 @@ impl AsyncModuleScheduler {
         label: Label,
     ) -> Result<Option<ModulePromiseUpdate>, AsyncModuleSchedulerError> {
         self.validate_in_flight(task)?;
-        let state = &self.bridge.evaluator().states()[&task.module_specifier];
-        let dependency_ready = if state.has_top_level_await {
+        let has_top_level_await = self.bridge.evaluator().states()[&task.module_specifier]
+            .has_top_level_await;
+        if has_top_level_await {
             let update = self
                 .bridge
                 .fulfill_module(&task.module_specifier, value, label)?;
             let ready = update.dependency_ready.clone();
             self.in_flight.remove(&task.module_specifier);
             self.enqueue_newly_ready(&ready)?;
-            return Ok(Some(update));
+            Ok(Some(update))
         } else {
-            self.bridge
-                .complete_synchronous_module(&task.module_specifier)?
-        };
-        self.in_flight.remove(&task.module_specifier);
-        self.enqueue_newly_ready(&dependency_ready)?;
-        Ok(None)
+            let ready = self
+                .bridge
+                .complete_synchronous_module(&task.module_specifier)?;
+            self.in_flight.remove(&task.module_specifier);
+            self.enqueue_newly_ready(&ready)?;
+            Ok(None)
+        }
     }
 
     pub fn reject_task(
@@ -290,7 +296,7 @@ impl AsyncModuleScheduler {
             .bridge
             .reject_module(&task.module_specifier, reason, label)?;
         self.in_flight.remove(&task.module_specifier);
-        self.purge_terminal_modules();
+        self.purge_runtime_terminal_modules();
         Ok(update)
     }
 
@@ -318,7 +324,7 @@ impl AsyncModuleScheduler {
         let updates = self
             .bridge
             .reject_awaited_promise(promise, reason, label)?;
-        self.purge_terminal_modules();
+        self.purge_runtime_terminal_modules();
         Ok(updates)
     }
 
@@ -369,7 +375,7 @@ impl AsyncModuleScheduler {
             .ok_or_else(|| AsyncModuleSchedulerError::UnknownTask {
                 module_specifier: specifier.to_string(),
             })?;
-        if state.phase.is_terminal() {
+        if runtime_terminal(state.phase) {
             return Err(AsyncModuleSchedulerError::ModuleTerminal {
                 module_specifier: specifier.to_string(),
                 phase: state.phase,
@@ -442,13 +448,13 @@ impl AsyncModuleScheduler {
         Ok(())
     }
 
-    fn purge_terminal_modules(&mut self) {
+    fn purge_runtime_terminal_modules(&mut self) {
         let terminal: Vec<String> = self
             .bridge
             .evaluator()
             .states()
             .iter()
-            .filter(|(_, state)| state.phase.is_terminal())
+            .filter(|(_, state)| runtime_terminal(state.phase))
             .map(|(specifier, _)| specifier.clone())
             .collect();
         for specifier in terminal {
@@ -472,6 +478,23 @@ mod tests {
 
     fn public() -> Label {
         Label::Public
+    }
+
+    #[test]
+    fn synchronous_root_is_runnable_then_settles() {
+        let mut scheduler = AsyncModuleScheduler::default();
+        scheduler.register_module("sync.mjs", false, &[]).unwrap();
+        let task = scheduler.next_task().unwrap().expect("sync root ready");
+        assert_eq!(task.kind, ModuleTaskKind::Start);
+        assert_eq!(task.module_specifier, "sync.mjs");
+        scheduler
+            .complete_task(&task, JsValue::Undefined, public())
+            .unwrap();
+        assert_eq!(
+            scheduler.bridge().evaluator().states()["sync.mjs"].phase,
+            AsyncModulePhase::Settled
+        );
+        assert!(scheduler.next_task().unwrap().is_none());
     }
 
     #[test]
@@ -529,11 +552,7 @@ mod tests {
         let error = scheduler
             .complete_task(&first, JsValue::Undefined, public())
             .unwrap_err();
-        assert!(matches!(
-            error,
-            AsyncModuleSchedulerError::StaleTask { .. }
-                | AsyncModuleSchedulerError::ModuleNotInFlight { .. }
-        ));
+        assert!(matches!(error, AsyncModuleSchedulerError::StaleTask { .. }));
     }
 
     #[test]
@@ -558,6 +577,18 @@ mod tests {
             AsyncModulePhase::Rejected
         );
         assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn deterministic_registration_order_drives_ready_order() {
+        let mut scheduler = AsyncModuleScheduler::default();
+        scheduler.register_module("z.mjs", false, &[]).unwrap();
+        scheduler.register_module("a.mjs", false, &[]).unwrap();
+        let first = scheduler.next_task().unwrap().unwrap();
+        let second = scheduler.next_task().unwrap().unwrap();
+        assert_eq!(first.module_specifier, "z.mjs");
+        assert_eq!(second.module_specifier, "a.mjs");
+        assert!(first.sequence < second.sequence);
     }
 
     #[test]

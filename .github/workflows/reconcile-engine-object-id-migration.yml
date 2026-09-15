@@ -1,4 +1,4 @@
-name: RegExp Unicode Property Live Probe
+name: EngineObjectId Migration Reconciliation
 
 on:
   push:
@@ -6,61 +6,91 @@ on:
       - main
     paths:
       - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
 
 jobs:
-  probe:
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          shared-key: regexp-unicode-probe
-      - name: Probe HybridRouter Unicode-property behavior
+          components: rustfmt,clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
         shell: bash
         run: |
           set -euo pipefail
-          cat > crates/franken-engine/tests/regexp_unicode_live_probe.rs <<'RS'
-          use frankenengine_engine::HybridRouter;
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
 
-          fn eval(source: &str) -> String {
-              let mut engine = HybridRouter::default();
-              match engine.eval(source) {
-                  Ok(outcome) => outcome.value,
-                  Err(error) => format!("ERR:{error}"),
-              }
-          }
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
 
-          #[test]
-          fn print_live_unicode_property_results() {
-              let cases = [
-                  ("letter-short", r#"/\p{L}+/u.test("é")"#),
-                  ("uppercase-short", r#"/\p{Lu}+/u.test("A")"#),
-                  ("general-category", r#"/\p{General_Category=Uppercase_Letter}+/u.test("A")"#),
-                  ("script", r#"/\p{Script=Greek}+/u.test("Ω")"#),
-                  ("script-extensions", r#"/\p{Script_Extensions=Hiragana}+/u.test("あ")"#),
-                  ("binary-ascii", r#"/\p{ASCII}+/u.test("ABC")"#),
-                  ("binary-whitespace", r#"/\p{White_Space}+/u.test(" ")"#),
-                  ("negated-letter", r#"/\P{L}+/u.test("123")"#),
-                  ("legacy-without-u-on-A", r#"/\p{L}/.test("A")"#),
-                  ("legacy-without-u-literal", r#"/\p{L}/.test("p{L}")"#),
-              ];
-              for (name, source) in cases {
-                  println!("PROBE {name} => {}", eval(source));
-              }
-          }
-          RS
-          cargo test --no-default-features -p frankenengine-engine --test regexp_unicode_live_probe -- --nocapture
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+          PY
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

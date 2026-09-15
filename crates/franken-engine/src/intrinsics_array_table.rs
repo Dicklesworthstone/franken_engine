@@ -115,7 +115,7 @@ mod tests {
     fn only_live_iterator_methods_remain_partial() {
         let partial: BTreeSet<_> = ROWS
             .iter()
-            .filter(|row| matches!(row.gap_status, GapStatus::Partial(_)))
+            .filter(|row| matches!(&row.gap_status, GapStatus::Partial(_)))
             .map(|row| row.name)
             .collect();
         assert_eq!(
@@ -138,7 +138,7 @@ mod tests {
                 .iter()
                 .find(|row| row.name == format!("Array.prototype.{name}"))
                 .expect("callback method row");
-            assert!(matches!(row.ifc, IfcPropagation::Custom(_)), "{}", row.name);
+            assert!(matches!(&row.ifc, IfcPropagation::Custom(_)), "{}", row.name);
         }
     }
 }

@@ -1,4 +1,4 @@
-name: EngineObjectId Migration Reconciliation
+name: RegExp Exec Live Source Inspection
 
 on:
   push:
@@ -6,91 +6,44 @@ on:
       - main
     paths:
       - .github/workflows/reconcile-engine-object-id-migration.yml
-  workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: engine-object-id-migration-reconciliation
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  reconcile:
-    name: Apply cfg hygiene, format, test, and publish
+  inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      RUSTUP_TOOLCHAIN: nightly
-      CARGO_INCREMENTAL: 0
-      CARGO_BUILD_JOBS: 1
     steps:
-      - name: Checkout full main history
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: main
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt,clippy
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: engine-object-id-migration-reconciliation
-
-      - name: Reconcile latest main with bounded fast-forward retries
+      - name: Print RegExp execution seams
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name "franken-engine-identity-bot"
-          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
-
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git reset --hard origin/main
-
-            python3 - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
-          text = path.read_text()
-          old = '    const ALL: [Self; 9] = ['
-          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
-          if new not in text:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
-              text = text.replace(old, new, 1)
-              path.write_text(text)
+          path = Path('crates/franken-engine/src/baseline_interpreter.rs')
+          lines = path.read_text().splitlines()
+          needles = [
+              'RegExpPrototypeTest',
+              'fn regexp_test_value',
+              'fn alloc_match_result_array',
+              'fn compile_regexp_pattern',
+              'REGEXP_TYPE_NAME',
+              'BuiltinId::RegExpPrototypeTest',
+          ]
+          emitted = set()
+          for needle in needles:
+              for idx, line in enumerate(lines):
+                  if needle in line:
+                      start = max(0, idx - 45)
+                      end = min(len(lines), idx + 130)
+                      key = (start, end)
+                      if key in emitted:
+                          continue
+                      emitted.add(key)
+                      print(f'===== {needle} @ line {idx + 1} =====')
+                      for n in range(start, end):
+                          print(f'{n + 1:06d}: {lines[n]}')
+                      break
           PY
-
-            rustfmt --edition 2024 \
-              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
-              crates/franken-engine/tests/engine_object_id_migration_cli.rs
-            cargo test --no-default-features -p frankenengine-engine \
-              --bin franken_engine_object_id_migration
-            cargo test --no-default-features -p frankenengine-engine \
-              --test engine_object_id_migration_cli
-            cargo clippy --no-default-features -p frankenengine-engine \
-              --bin franken_engine_object_id_migration -- -D warnings
-            git diff --check
-
-            if git diff --quiet; then
-              echo "EngineObjectId migration binary was already reconciled"
-              exit 0
-            fi
-
-            git add \
-              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
-              crates/franken-engine/tests/engine_object_id_migration_cli.rs
-            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
-
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
-          done
-
-          echo "unable to publish identity migration reconciliation after bounded retries" >&2
-          exit 1

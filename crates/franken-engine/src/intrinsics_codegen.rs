@@ -8,6 +8,7 @@
 //! * a **dispatch plan** (name → the hand-written impl fn, or the documented escape-hatch site),
 //! * generated **gap-inventory entries** (replaces the hand-maintained `lowering_gap_inventory`
 //!   rows),
+//! * deterministic **prototype installation plans** for regular prototype families,
 //!   all derived from the single source of truth so they cannot drift from each other.
 //!
 //! # Two surfaces
@@ -26,7 +27,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::intrinsics_table::{GapStatus, ImplBinding, IntrinsicRow};
+use crate::capability::RuntimeCapability;
+use crate::intrinsics_table::{
+    Arity, GapStatus, IfcPropagation, ImplBinding, IntrinsicRow, ReceiverKind, ThisCoercion,
+};
 
 #[path = "intrinsics_array_table.rs"]
 pub mod array_prototype;
@@ -58,6 +62,15 @@ pub enum DispatchTarget {
     Manual { site: &'static str },
 }
 
+impl DispatchTarget {
+    fn from_row(row: &IntrinsicRow) -> Self {
+        match &row.impl_binding {
+            ImplBinding::Generated { impl_fn } => Self::Generated { impl_fn },
+            ImplBinding::Manual { site, .. } => Self::Manual { site },
+        }
+    }
+}
+
 /// One generated dispatch-plan entry: a builtin name and where it routes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedDispatch {
@@ -72,6 +85,29 @@ pub struct GeneratedGapEntry {
     pub name: &'static str,
     pub status: GapStatus,
     pub conformance: &'static str,
+}
+
+/// A prototype property installation derived entirely from one [`IntrinsicRow`].
+///
+/// These are deliberately data, not executable semantics.  A family migration can install
+/// methods from this plan and route the resulting function object through `dispatch_target`,
+/// while the semantic body remains hand-written and independently testable.  Ordinary builtin
+/// methods use the ECMAScript method-property attributes writable=true, enumerable=false,
+/// configurable=true.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedPrototypeInstallation {
+    pub canonical_name: &'static str,
+    pub constructor: &'static str,
+    pub property: &'static str,
+    pub receiver: ReceiverKind,
+    pub this_coercion: ThisCoercion,
+    pub arity: Arity,
+    pub capability: Option<RuntimeCapability>,
+    pub ifc: IfcPropagation,
+    pub dispatch_target: DispatchTarget,
+    pub writable: bool,
+    pub enumerable: bool,
+    pub configurable: bool,
 }
 
 /// All glue generated from a table: registry + dispatch plan + gap-inventory entries.
@@ -92,6 +128,16 @@ pub enum CodegenError {
     InvalidRow(String),
     /// Two rows share a name (the registry would be ambiguous).
     DuplicateName(&'static str),
+    /// A prototype installer was requested for a non-prototype canonical name.
+    NotPrototypeIntrinsic(&'static str),
+    /// A prototype row's canonical constructor and typed receiver disagree.
+    PrototypeReceiverMismatch {
+        name: &'static str,
+        expected_constructor: &'static str,
+        actual_constructor: &'static str,
+    },
+    /// A canonical prototype name ended at `.prototype.` with no property key.
+    EmptyPrototypeProperty(&'static str),
     /// Derived-glue counts disagree with the row count (a derivation bug).
     GlueCountMismatch {
         rows: usize,
@@ -105,6 +151,20 @@ impl std::fmt::Display for CodegenError {
         match self {
             CodegenError::InvalidRow(m) => write!(f, "invalid row: {m}"),
             CodegenError::DuplicateName(n) => write!(f, "duplicate intrinsic name: {n}"),
+            CodegenError::NotPrototypeIntrinsic(name) => {
+                write!(f, "intrinsic {name} is not a prototype method")
+            }
+            CodegenError::PrototypeReceiverMismatch {
+                name,
+                expected_constructor,
+                actual_constructor,
+            } => write!(
+                f,
+                "prototype receiver mismatch for {name}: typed receiver expects {expected_constructor}, canonical name targets {actual_constructor}"
+            ),
+            CodegenError::EmptyPrototypeProperty(name) => {
+                write!(f, "prototype intrinsic {name} has an empty property key")
+            }
             CodegenError::GlueCountMismatch {
                 rows,
                 dispatch,
@@ -117,6 +177,63 @@ impl std::fmt::Display for CodegenError {
     }
 }
 impl std::error::Error for CodegenError {}
+
+fn prototype_constructor(receiver: &ReceiverKind) -> Option<&'static str> {
+    match receiver {
+        ReceiverKind::String => Some("String"),
+        ReceiverKind::Array => Some("Array"),
+        ReceiverKind::Object => Some("Object"),
+        ReceiverKind::Number => Some("Number"),
+        ReceiverKind::Collection(tag) => Some(tag),
+        ReceiverKind::Global | ReceiverKind::Constructor(_) => None,
+    }
+}
+
+/// Generate deterministic prototype-property installation records for a regular family.
+///
+/// This fails closed if a row is not a canonical `X.prototype.y` method or if its canonical
+/// constructor disagrees with the typed [`ReceiverKind`].  Calling [`generate_glue`] first
+/// also preserves row validation and duplicate-name refusal, so an installer never accepts a
+/// table that the dispatch/gap generators would reject.
+pub fn generate_prototype_installations(
+    rows: &[IntrinsicRow],
+) -> Result<Vec<GeneratedPrototypeInstallation>, CodegenError> {
+    let _ = generate_glue(rows)?;
+    let mut installations = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (actual_constructor, property) = row
+            .name
+            .split_once(".prototype.")
+            .ok_or(CodegenError::NotPrototypeIntrinsic(row.name))?;
+        if property.is_empty() {
+            return Err(CodegenError::EmptyPrototypeProperty(row.name));
+        }
+        let expected_constructor = prototype_constructor(&row.receiver)
+            .ok_or(CodegenError::NotPrototypeIntrinsic(row.name))?;
+        if actual_constructor != expected_constructor {
+            return Err(CodegenError::PrototypeReceiverMismatch {
+                name: row.name,
+                expected_constructor,
+                actual_constructor,
+            });
+        }
+        installations.push(GeneratedPrototypeInstallation {
+            canonical_name: row.name,
+            constructor: expected_constructor,
+            property,
+            receiver: row.receiver.clone(),
+            this_coercion: row.this_coercion.clone(),
+            arity: row.arity.clone(),
+            capability: row.capability,
+            ifc: row.ifc.clone(),
+            dispatch_target: DispatchTarget::from_row(row),
+            writable: true,
+            enumerable: false,
+            configurable: true,
+        });
+    }
+    Ok(installations)
+}
 
 /// The codegen step: derive registry + dispatch plan + gap-inventory entries from the table.
 /// Every row produces exactly one dispatch entry and one gap entry, and is inserted into the
@@ -133,10 +250,7 @@ pub fn generate_glue(rows: &[IntrinsicRow]) -> Result<GeneratedGlue<'_>, Codegen
         }
         dispatch.push(GeneratedDispatch {
             name: row.name,
-            target: match &row.impl_binding {
-                ImplBinding::Generated { impl_fn } => DispatchTarget::Generated { impl_fn },
-                ImplBinding::Manual { site, .. } => DispatchTarget::Manual { site },
-            },
+            target: DispatchTarget::from_row(row),
         });
         gap_entries.push(GeneratedGapEntry {
             name: row.name,
@@ -224,7 +338,6 @@ mod tests {
     #[test]
     fn one_row_yields_all_glue_consistently() {
         let glue = generate_glue(SEED_ROWS).expect("seed table generates glue");
-        // exactly one registry + dispatch + gap entry per row
         assert_eq!(glue.registry.len(), SEED_ROWS.len());
         assert_eq!(glue.dispatch.len(), SEED_ROWS.len());
         assert_eq!(glue.gap_entries.len(), SEED_ROWS.len());
@@ -238,6 +351,70 @@ mod tests {
         assert_eq!(glue.dispatch.len(), array_prototype::ROWS.len());
         assert_eq!(glue.gap_entries.len(), array_prototype::ROWS.len());
         glue.verify().expect("Array glue is internally consistent");
+    }
+
+    #[test]
+    fn array_family_generates_exact_prototype_targets_and_attributes() {
+        let installations = generate_prototype_installations(array_prototype::ROWS)
+            .expect("Array table must generate prototype installations");
+        assert_eq!(installations.len(), array_prototype::ROWS.len());
+        let push = installations
+            .iter()
+            .find(|entry| entry.property == "push")
+            .expect("push installation");
+        assert_eq!(push.constructor, "Array");
+        assert_eq!(push.canonical_name, "Array.prototype.push");
+        assert_eq!(push.receiver, ReceiverKind::Array);
+        assert_eq!(push.this_coercion, ThisCoercion::Passthrough);
+        assert_eq!(push.ifc, IfcPropagation::JoinReceiverAndArgs);
+        assert!(push.capability.is_none());
+        assert!(push.writable);
+        assert!(!push.enumerable);
+        assert!(push.configurable);
+        assert!(matches!(push.dispatch_target, DispatchTarget::Manual { .. }));
+    }
+
+    #[test]
+    fn string_family_can_generate_prototype_installations_too() {
+        let installations = generate_prototype_installations(
+            crate::intrinsics_table::string_prototype::ROWS,
+        )
+        .expect("String table must generate prototype installations");
+        assert_eq!(installations.len(), 26);
+        assert!(installations.iter().all(|entry| entry.constructor == "String"));
+        assert!(installations.iter().all(|entry| entry.writable));
+        assert!(installations.iter().all(|entry| !entry.enumerable));
+        assert!(installations.iter().all(|entry| entry.configurable));
+    }
+
+    #[test]
+    fn prototype_installation_rejects_receiver_name_mismatch() {
+        let row = IntrinsicRow {
+            name: "String.prototype.trim",
+            receiver: ReceiverKind::Array,
+            this_coercion: ThisCoercion::Passthrough,
+            arity: Arity::Exact(0),
+            capability: None,
+            ifc: IfcPropagation::PropagateReceiverLabel,
+            impl_binding: ImplBinding::Manual {
+                reason: "test",
+                site: "test",
+            },
+            conformance: "test",
+            gap_status: GapStatus::Resolved,
+        };
+        assert!(matches!(
+            generate_prototype_installations(&[row]),
+            Err(CodegenError::PrototypeReceiverMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn prototype_installation_rejects_nonprototype_rows() {
+        assert!(matches!(
+            generate_prototype_installations(&[SEED_ROWS[3].clone()]),
+            Err(CodegenError::NotPrototypeIntrinsic("Date.now"))
+        ));
     }
 
     #[test]
@@ -284,7 +461,6 @@ mod tests {
 
     #[test]
     fn duplicate_name_fails_closed() {
-        // two rows with the same name must be rejected (registry would be ambiguous)
         let dup = [SEED_ROWS[0].clone(), SEED_ROWS[0].clone()];
         assert!(matches!(
             generate_glue(&dup),

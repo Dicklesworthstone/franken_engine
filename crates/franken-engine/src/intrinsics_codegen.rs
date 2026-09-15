@@ -8,7 +8,7 @@
 //! * a **dispatch plan** (name → the hand-written impl fn, or the documented escape-hatch site),
 //! * generated **gap-inventory entries** (replaces the hand-maintained `lowering_gap_inventory`
 //!   rows),
-//! * deterministic **prototype installation plans** for regular prototype families,
+//! * deterministic **prototype installation plans** and a cross-family installation index,
 //!   all derived from the single source of truth so they cannot drift from each other.
 //!
 //! # Two surfaces
@@ -89,9 +89,9 @@ pub struct GeneratedGapEntry {
 
 /// A prototype property installation derived entirely from one [`IntrinsicRow`].
 ///
-/// These are deliberately data, not executable semantics.  A family migration can install
+/// These are deliberately data, not executable semantics. A family migration can install
 /// methods from this plan and route the resulting function object through `dispatch_target`,
-/// while the semantic body remains hand-written and independently testable.  Ordinary builtin
+/// while the semantic body remains hand-written and independently testable. Ordinary builtin
 /// methods use the ECMAScript method-property attributes writable=true, enumerable=false,
 /// configurable=true.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +108,45 @@ pub struct GeneratedPrototypeInstallation {
     pub writable: bool,
     pub enumerable: bool,
     pub configurable: bool,
+}
+
+/// Canonical cross-family prototype installation index.
+///
+/// The key is `(constructor, property)`, so a family cannot silently shadow a method installed
+/// by another source. This is the data structure the eventual production flip can query instead
+/// of maintaining per-family name matches in the interpreter.
+#[derive(Debug, Clone)]
+pub struct PrototypeInstallationIndex {
+    entries: BTreeMap<(&'static str, &'static str), GeneratedPrototypeInstallation>,
+}
+
+impl PrototypeInstallationIndex {
+    pub fn get(
+        &self,
+        constructor: &str,
+        property: &str,
+    ) -> Option<&GeneratedPrototypeInstallation> {
+        self.entries.get(&(constructor, property))
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            (&'static str, &'static str),
+            &GeneratedPrototypeInstallation,
+        ),
+    > {
+        self.entries.iter().map(|(key, value)| (*key, value))
+    }
 }
 
 /// All glue generated from a table: registry + dispatch plan + gap-inventory entries.
@@ -138,6 +177,11 @@ pub enum CodegenError {
     },
     /// A canonical prototype name ended at `.prototype.` with no property key.
     EmptyPrototypeProperty(&'static str),
+    /// Two family tables claim the same `(constructor, property)` installation target.
+    DuplicatePrototypeProperty {
+        constructor: &'static str,
+        property: &'static str,
+    },
     /// Derived-glue counts disagree with the row count (a derivation bug).
     GlueCountMismatch {
         rows: usize,
@@ -165,6 +209,10 @@ impl std::fmt::Display for CodegenError {
             CodegenError::EmptyPrototypeProperty(name) => {
                 write!(f, "prototype intrinsic {name} has an empty property key")
             }
+            CodegenError::DuplicatePrototypeProperty {
+                constructor,
+                property,
+            } => write!(f, "duplicate prototype installation target {constructor}.prototype.{property}"),
             CodegenError::GlueCountMismatch {
                 rows,
                 dispatch,
@@ -192,7 +240,7 @@ fn prototype_constructor(receiver: &ReceiverKind) -> Option<&'static str> {
 /// Generate deterministic prototype-property installation records for a regular family.
 ///
 /// This fails closed if a row is not a canonical `X.prototype.y` method or if its canonical
-/// constructor disagrees with the typed [`ReceiverKind`].  Calling [`generate_glue`] first
+/// constructor disagrees with the typed [`ReceiverKind`]. Calling [`generate_glue`] first
 /// also preserves row validation and duplicate-name refusal, so an installer never accepts a
 /// table that the dispatch/gap generators would reject.
 pub fn generate_prototype_installations(
@@ -233,6 +281,29 @@ pub fn generate_prototype_installations(
         });
     }
     Ok(installations)
+}
+
+/// Build one canonical prototype-property index from multiple migrated families.
+///
+/// Every family is validated independently before insertion. A duplicate target is refused even
+/// when the canonical row names happen to differ, so generated installation can never depend on
+/// family ordering.
+pub fn build_prototype_installation_index(
+    families: &[&[IntrinsicRow]],
+) -> Result<PrototypeInstallationIndex, CodegenError> {
+    let mut entries = BTreeMap::new();
+    for family in families {
+        for installation in generate_prototype_installations(family)? {
+            let key = (installation.constructor, installation.property);
+            if entries.insert(key, installation).is_some() {
+                return Err(CodegenError::DuplicatePrototypeProperty {
+                    constructor: key.0,
+                    property: key.1,
+                });
+            }
+        }
+    }
+    Ok(PrototypeInstallationIndex { entries })
 }
 
 /// The codegen step: derive registry + dispatch plan + gap-inventory entries from the table.
@@ -299,7 +370,6 @@ mod tests {
     use super::*;
     use crate::intrinsics_table::SEED_ROWS;
 
-    // Exercise the declaration macro itself (proves `define_intrinsics! { .. }` expands).
     mod macro_demo {
         use crate::flow_lattice::LabelClass;
         use crate::intrinsics_table::*;
@@ -385,6 +455,38 @@ mod tests {
         assert!(installations.iter().all(|entry| entry.writable));
         assert!(installations.iter().all(|entry| !entry.enumerable));
         assert!(installations.iter().all(|entry| entry.configurable));
+    }
+
+    #[test]
+    fn migrated_families_share_one_collision_free_installation_index() {
+        let index = build_prototype_installation_index(&[
+            crate::intrinsics_table::string_prototype::ROWS,
+            array_prototype::ROWS,
+        ])
+        .expect("String + Array installation index");
+        assert_eq!(index.len(), 60);
+        assert_eq!(
+            index.get("String", "trim").map(|entry| entry.canonical_name),
+            Some("String.prototype.trim")
+        );
+        assert_eq!(
+            index.get("Array", "push").map(|entry| entry.canonical_name),
+            Some("Array.prototype.push")
+        );
+    }
+
+    #[test]
+    fn duplicate_family_installation_is_refused() {
+        assert!(matches!(
+            build_prototype_installation_index(&[
+                array_prototype::ROWS,
+                array_prototype::ROWS,
+            ]),
+            Err(CodegenError::DuplicatePrototypeProperty {
+                constructor: "Array",
+                ..
+            })
+        ));
     }
 
     #[test]

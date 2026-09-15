@@ -1,4 +1,4 @@
-name: Generator Resume Depth Containment
+name: CommonJS Package Graph Integration
 
 on:
   push:
@@ -26,74 +26,966 @@ jobs:
           fetch-depth: 0
           ref: main
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: generator-resume-depth
+          shared-key: package-intake-cjs-graph
           cache-on-failure: true
-      - name: Patch shared generator resume depth
+      - name: Wire literal CommonJS require edges into package intake
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('crates/franken-engine/src/baseline_interpreter.rs')
+
+          p = Path('crates/franken-engine/src/package_intake.rs')
           s = p.read_text()
-          edits = [
-              (
-                  '    module_reentrant_call_depth: usize,\n    /// Non-zero only while an imported ordinary closure is executing in its\n',
-                  '    module_reentrant_call_depth: usize,\n    /// Active synchronous generator resumptions on the native Rust stack.\n    /// Generator execution swaps the visible call stack, so iterator consumers\n    /// can otherwise hide already-active generator frames from max_call_depth.\n    /// This counter is deliberately not part of generator/module snapshots.\n    active_generator_resume_depth: usize,\n    /// Non-zero only while an imported ordinary closure is executing in its\n',
-                  'field',
-              ),
-              (
-                  '            module_reentrant_call_depth: 0,\n            active_foreign_module_call_depth: 0,\n',
-                  '            module_reentrant_call_depth: 0,\n            active_generator_resume_depth: 0,\n            active_foreign_module_call_depth: 0,\n',
-                  'constructor',
-              ),
-              (
-                  '        self.module_reentrant_call_depth = 0;\n        self.active_foreign_module_call_depth = 0;\n',
-                  '        self.module_reentrant_call_depth = 0;\n        self.active_generator_resume_depth = 0;\n        self.active_foreign_module_call_depth = 0;\n',
-                  'top-level reset',
-              ),
-              (
-                  '    fn effective_call_depth(&self) -> usize {\n        self.call_stack\n            .len()\n            .saturating_add(self.module_reentrant_call_depth)\n    }\n',
-                  '    fn effective_call_depth(&self) -> usize {\n        self.call_stack\n            .len()\n            .saturating_add(self.module_reentrant_call_depth)\n            .max(self.active_generator_resume_depth)\n    }\n',
-                  'effective depth',
-              ),
-          ]
-          for old, new, label in edits:
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global s
               count = s.count(old)
               if count != 1:
                   raise SystemExit(f'{label}: expected one match, found {count}')
               s = s.replace(old, new, 1)
 
-          start = s.index('    fn generator_resume(\n')
-          end = s.index('    /// Execute .next() on an async generator.', start)
-          block = s[start:end]
-          old = '''        {\n            let generator = &mut self.generators[generator_index];\n            generator.phase = GeneratorPhase::Executing;\n        }\n\n        let caller_generator_yielded ='''
-          new = '''        {\n            let generator = &mut self.generators[generator_index];\n            generator.phase = GeneratorPhase::Executing;\n        }\n\n        let previous_generator_resume_depth = self.active_generator_resume_depth;\n        self.active_generator_resume_depth = previous_generator_resume_depth.saturating_add(1);\n\n        let caller_generator_yielded ='''
-          if block.count(old) != 1:
-              raise SystemExit(f'generator activation: expected one match, found {block.count(old)}')
-          block = block.replace(old, new, 1)
-          old = '''            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n            self.module_reentrant_call_depth = previous_reentrant_depth;\n            self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
-          new = '''            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n            self.module_reentrant_call_depth = previous_reentrant_depth;\n            self.active_generator_resume_depth = previous_generator_resume_depth;\n            self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
-          if block.count(old) != 1:
-              raise SystemExit(f'setup restore: expected one match, found {block.count(old)}')
-          block = block.replace(old, new, 1)
-          old = '''        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n        self.module_reentrant_call_depth = previous_reentrant_depth;\n        self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
-          new = '''        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;\n        self.module_reentrant_call_depth = previous_reentrant_depth;\n        self.active_generator_resume_depth = previous_generator_resume_depth;\n        self.restore_replaced_codegen_grants(previous_granted_capabilities);'''
-          if block.count(old) != 1:
-              raise SystemExit(f'normal restore: expected one match, found {block.count(old)}')
-          block = block.replace(old, new, 1)
-          s = s[:start] + block + s[end:]
+          replace_once(
+              'use crate::ast::{ExportKind, ParseGoal, Statement};',
+              'use crate::ast::{ExportKind, Expression, ParseGoal, Statement};',
+              'ast import',
+          )
+
+          replace_once(
+              '''//! **Honest boundaries (v1).** Only ES `import` declarations are followed as
+//! graph edges; CommonJS `require(...)` and dynamic `import(...)` are *not* yet
+//! followed as edges (they still surface in each module's per-file footprint as
+//! ambient-authority findings — they are never silently dropped). External
+//! (bare / npm) specifiers are reported, never analyzed. Re-export sources
+''',
+              '''//! **Honest boundaries (v1).** ES `import` declarations and static CommonJS
+//! `require("literal")` calls are followed as graph edges. Non-literal or otherwise
+//! dynamic `require(...)` calls are explicitly surfaced as bounded coverage rather
+//! than silently ignored. Dynamic `import(...)` remains a per-file analyzed surface,
+//! but is not followed as a package-graph edge. External (bare / npm) specifiers are
+//! reported, never analyzed. Re-export sources
+''',
+              'module boundary docs',
+          )
+
+          replace_once(
+              '''pub const PACKAGE_INTAKE_DISCLAIMER: &str = "inferred package authority footprint over the SUPPORTED ES-module graph reachable from the entry; \\
+not a proof of noninterference for arbitrary JS/TS. External packages, CommonJS/dynamic edges, and unanalyzable modules are reported, never silently covered.";''',
+              '''pub const PACKAGE_INTAKE_DISCLAIMER: &str = "inferred package authority footprint over the SUPPORTED static module graph reachable from the entry; \\
+not a proof of noninterference for arbitrary JS/TS. External packages, dynamic CommonJS/dynamic-import edges, and unanalyzable modules are reported, never silently covered.";''',
+              'disclaimer',
+          )
+
+          old_structs = '''/// An ES `import` declaration projected to (specifier, location).
+struct ImportEdge {
+    specifier: String,
+    location: SourceLocation,
+}
+
+/// What a single file contributes to the graph: its detected syntax and the ES
+/// import declarations it carries (the graph edges to follow).
+struct ExtractedModule {
+    syntax: ModuleSyntax,
+    imports: Vec<ImportEdge>,
+}
+
+'''
+          new_structs = '''/// A statically analyzable module edge projected to resolver style + source site.
+struct ImportEdge {
+    specifier: String,
+    style: ImportStyle,
+    location: SourceLocation,
+}
+
+/// What a single file contributes to the graph: detected syntax, static edges,
+/// and the count of dynamic CommonJS edges that cannot be followed safely.
+struct ExtractedModule {
+    syntax: ModuleSyntax,
+    imports: Vec<ImportEdge>,
+    dynamic_require_count: usize,
+}
+
+fn collect_require_edges_from_pattern(
+    pattern: &crate::ast::BindingPattern,
+    fallback_span: &crate::ast::SourceSpan,
+    imports: &mut Vec<ImportEdge>,
+    dynamic_require_count: &mut usize,
+) {
+    match pattern {
+        crate::ast::BindingPattern::Identifier(_) => {}
+        crate::ast::BindingPattern::ObjectPattern(properties) => {
+            for property in properties {
+                if property.computed {
+                    collect_require_edges_from_expression(
+                        &property.key,
+                        fallback_span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                collect_require_edges_from_pattern(
+                    &property.value,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        crate::ast::BindingPattern::ArrayPattern(elements) => {
+            for element in elements.iter().flatten() {
+                collect_require_edges_from_pattern(
+                    element,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        crate::ast::BindingPattern::Rest(inner) => collect_require_edges_from_pattern(
+            inner,
+            fallback_span,
+            imports,
+            dynamic_require_count,
+        ),
+        crate::ast::BindingPattern::AssignmentPattern { left, right } => {
+            collect_require_edges_from_pattern(
+                left,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                right,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+        }
+    }
+}
+
+fn collect_require_edges_from_expression(
+    expression: &Expression,
+    fallback_span: &crate::ast::SourceSpan,
+    imports: &mut Vec<ImportEdge>,
+    dynamic_require_count: &mut usize,
+) {
+    match expression {
+        Expression::Await(inner) | Expression::SpreadElement(inner) => {
+            collect_require_edges_from_expression(
+                inner,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Expression::Yield { argument, .. } => {
+            if let Some(argument) = argument {
+                collect_require_edges_from_expression(
+                    argument,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::Binary { left, right, .. }
+        | Expression::Assignment { left, right, .. } => {
+            collect_require_edges_from_expression(
+                left,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                right,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Expression::Unary { argument, .. } => collect_require_edges_from_expression(
+            argument,
+            fallback_span,
+            imports,
+            dynamic_require_count,
+        ),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            collect_require_edges_from_expression(
+                test,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                consequent,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                alternate,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Expression::Call {
+            callee,
+            arguments,
+            span,
+        } => {
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == "require") {
+                let location = SourceLocation::from(
+                    span.clone().unwrap_or_else(|| fallback_span.clone()),
+                );
+                match arguments.as_slice() {
+                    [Expression::StringLiteral(specifier)] => {
+                        if let Some(specifier) = specifier.as_str() {
+                            imports.push(ImportEdge {
+                                specifier: specifier.to_string(),
+                                style: ImportStyle::Require,
+                                location,
+                            });
+                        } else {
+                            *dynamic_require_count = dynamic_require_count.saturating_add(1);
+                        }
+                    }
+                    _ => {
+                        *dynamic_require_count = dynamic_require_count.saturating_add(1);
+                    }
+                }
+            }
+            collect_require_edges_from_expression(
+                callee,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            for argument in arguments {
+                collect_require_edges_from_expression(
+                    argument,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::OptionalCall {
+            callee, arguments, ..
+        }
+        | Expression::New { callee, arguments } => {
+            collect_require_edges_from_expression(
+                callee,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            for argument in arguments {
+                collect_require_edges_from_expression(
+                    argument,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            collect_require_edges_from_expression(
+                object,
+                fallback_span,
+                imports,
+                dynamic_require_count,
+            );
+            if *computed {
+                collect_require_edges_from_expression(
+                    property,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::ArrayLiteral(elements) => {
+            for element in elements.iter().flatten() {
+                collect_require_edges_from_expression(
+                    element,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::ObjectLiteral(properties) => {
+            for property in properties {
+                if property.computed {
+                    collect_require_edges_from_expression(
+                        &property.key,
+                        fallback_span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                collect_require_edges_from_expression(
+                    &property.value,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::ArrowFunction { params, body, .. } => {
+            for param in params {
+                collect_require_edges_from_pattern(
+                    &param.pattern,
+                    &param.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            match body {
+                crate::ast::ArrowBody::Expression(expression) => {
+                    collect_require_edges_from_expression(
+                        expression,
+                        fallback_span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                crate::ast::ArrowBody::Block(block) => {
+                    for statement in &block.body {
+                        collect_require_edges_from_statement(
+                            statement,
+                            imports,
+                            dynamic_require_count,
+                        );
+                    }
+                }
+            }
+        }
+        Expression::TemplateLiteral { expressions, .. } => {
+            for expression in expressions {
+                collect_require_edges_from_expression(
+                    expression,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Expression::Function {
+            params, body, ..
+        } => {
+            for param in params {
+                collect_require_edges_from_pattern(
+                    &param.pattern,
+                    &param.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            for statement in &body.body {
+                collect_require_edges_from_statement(statement, imports, dynamic_require_count);
+            }
+        }
+        Expression::ClassExpression {
+            super_class, body, ..
+        } => {
+            if let Some(super_class) = super_class {
+                collect_require_edges_from_expression(
+                    super_class,
+                    fallback_span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            for method in body {
+                if method.computed {
+                    collect_require_edges_from_expression(
+                        &method.key,
+                        &method.span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                for param in &method.params {
+                    collect_require_edges_from_pattern(
+                        &param.pattern,
+                        &param.span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                for statement in &method.body.body {
+                    collect_require_edges_from_statement(
+                        statement,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+            }
+        }
+        Expression::Identifier(_)
+        | Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::FloatLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral
+        | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
+        | Expression::Raw(_)
+        | Expression::RegExpLiteral { .. }
+        | Expression::Super => {}
+    }
+}
+
+fn collect_require_edges_from_statement(
+    statement: &Statement,
+    imports: &mut Vec<ImportEdge>,
+    dynamic_require_count: &mut usize,
+) {
+    match statement {
+        Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => {}
+        Statement::Export(declaration) => {
+            if let ExportKind::Default(expression) = &declaration.kind {
+                collect_require_edges_from_expression(
+                    expression,
+                    &declaration.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Statement::VariableDeclaration(declaration) => {
+            for declarator in &declaration.declarations {
+                collect_require_edges_from_pattern(
+                    &declarator.pattern,
+                    &declarator.span,
+                    imports,
+                    dynamic_require_count,
+                );
+                if let Some(initializer) = &declarator.initializer {
+                    collect_require_edges_from_expression(
+                        initializer,
+                        &declarator.span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+            }
+        }
+        Statement::Expression(expression) => collect_require_edges_from_expression(
+            &expression.expression,
+            &expression.span,
+            imports,
+            dynamic_require_count,
+        ),
+        Statement::Block(block) => {
+            for statement in &block.body {
+                collect_require_edges_from_statement(statement, imports, dynamic_require_count);
+            }
+        }
+        Statement::If(if_statement) => {
+            collect_require_edges_from_expression(
+                &if_statement.condition,
+                &if_statement.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_statement(
+                &if_statement.consequent,
+                imports,
+                dynamic_require_count,
+            );
+            if let Some(alternate) = &if_statement.alternate {
+                collect_require_edges_from_statement(alternate, imports, dynamic_require_count);
+            }
+        }
+        Statement::For(for_statement) => {
+            if let Some(init) = &for_statement.init {
+                collect_require_edges_from_statement(init, imports, dynamic_require_count);
+            }
+            if let Some(condition) = &for_statement.condition {
+                collect_require_edges_from_expression(
+                    condition,
+                    &for_statement.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            if let Some(update) = &for_statement.update {
+                collect_require_edges_from_expression(
+                    update,
+                    &for_statement.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            collect_require_edges_from_statement(
+                &for_statement.body,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Statement::While(while_statement) => {
+            collect_require_edges_from_expression(
+                &while_statement.condition,
+                &while_statement.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_statement(
+                &while_statement.body,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Statement::With(with_statement) => {
+            collect_require_edges_from_expression(
+                &with_statement.object,
+                &with_statement.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_statement(
+                &with_statement.body,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Statement::DoWhile(do_while) => {
+            collect_require_edges_from_statement(
+                &do_while.body,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                &do_while.condition,
+                &do_while.span,
+                imports,
+                dynamic_require_count,
+            );
+        }
+        Statement::Return(return_statement) => {
+            if let Some(argument) = &return_statement.argument {
+                collect_require_edges_from_expression(
+                    argument,
+                    &return_statement.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+        }
+        Statement::Throw(throw_statement) => collect_require_edges_from_expression(
+            &throw_statement.argument,
+            &throw_statement.span,
+            imports,
+            dynamic_require_count,
+        ),
+        Statement::TryCatch(try_statement) => {
+            for statement in &try_statement.block.body {
+                collect_require_edges_from_statement(statement, imports, dynamic_require_count);
+            }
+            if let Some(handler) = &try_statement.handler {
+                for statement in &handler.body.body {
+                    collect_require_edges_from_statement(
+                        statement,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+            }
+            if let Some(finalizer) = &try_statement.finalizer {
+                for statement in &finalizer.body {
+                    collect_require_edges_from_statement(
+                        statement,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+            }
+        }
+        Statement::Switch(switch_statement) => {
+            collect_require_edges_from_expression(
+                &switch_statement.discriminant,
+                &switch_statement.span,
+                imports,
+                dynamic_require_count,
+            );
+            for case in &switch_statement.cases {
+                if let Some(test) = &case.test {
+                    collect_require_edges_from_expression(
+                        test,
+                        &case.span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                for statement in &case.consequent {
+                    collect_require_edges_from_statement(
+                        statement,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+            }
+        }
+        Statement::FunctionDeclaration(function) => {
+            for param in &function.params {
+                collect_require_edges_from_pattern(
+                    &param.pattern,
+                    &param.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            for statement in &function.body.body {
+                collect_require_edges_from_statement(statement, imports, dynamic_require_count);
+            }
+        }
+        Statement::ClassDeclaration(class) => {
+            if let Some(super_class) = &class.super_class {
+                collect_require_edges_from_expression(
+                    super_class,
+                    &class.span,
+                    imports,
+                    dynamic_require_count,
+                );
+            }
+            for method in &class.body {
+                if method.computed {
+                    collect_require_edges_from_expression(
+                        &method.key,
+                        &method.span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                for param in &method.params {
+                    collect_require_edges_from_pattern(
+                        &param.pattern,
+                        &param.span,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+                for statement in &method.body.body {
+                    collect_require_edges_from_statement(
+                        statement,
+                        imports,
+                        dynamic_require_count,
+                    );
+                }
+            }
+        }
+        Statement::ForIn(for_in) => {
+            collect_require_edges_from_pattern(
+                &for_in.binding,
+                &for_in.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                &for_in.object,
+                &for_in.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_statement(&for_in.body, imports, dynamic_require_count);
+        }
+        Statement::ForOf(for_of) => {
+            collect_require_edges_from_pattern(
+                &for_of.binding,
+                &for_of.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_expression(
+                &for_of.iterable,
+                &for_of.span,
+                imports,
+                dynamic_require_count,
+            );
+            collect_require_edges_from_statement(&for_of.body, imports, dynamic_require_count);
+        }
+        Statement::Labeled(labeled) => {
+            collect_require_edges_from_statement(&labeled.body, imports, dynamic_require_count);
+        }
+    }
+}
+
+'''
+          replace_once(old_structs, new_structs, 'edge structs and traversal')
+
+          replace_once(
+              '''    let empty = || ExtractedModule {
+        syntax: ModuleSyntax::CommonJs,
+        imports: Vec::new(),
+    };''',
+              '''    let empty = || ExtractedModule {
+        syntax: ModuleSyntax::CommonJs,
+        imports: Vec::new(),
+        dynamic_require_count: 0,
+    };''',
+              'empty extracted module',
+          )
+
+          replace_once(
+              '''    let mut imports = Vec::new();
+    let mut has_module_syntax = false;
+    for statement in &tree.body {''',
+              '''    let mut imports = Vec::new();
+    let mut dynamic_require_count = 0usize;
+    let mut has_module_syntax = false;
+    for statement in &tree.body {''',
+              'extraction counters',
+          )
+
+          replace_once(
+              '''                imports.push(ImportEdge {
+                    specifier: specifier.to_string(),
+                    location: SourceLocation::from(decl.span),
+                });''',
+              '''                imports.push(ImportEdge {
+                    specifier: specifier.to_string(),
+                    style: ImportStyle::Import,
+                    location: SourceLocation::from(decl.span),
+                });''',
+              'esm edge style',
+          )
+
+          replace_once(
+              '''    ExtractedModule {
+        syntax: if has_module_syntax {
+            ModuleSyntax::EsModule
+        } else {
+            ModuleSyntax::CommonJs
+        },
+        imports,
+    }
+}''',
+              '''    for statement in &tree.body {
+        collect_require_edges_from_statement(
+            statement,
+            &mut imports,
+            &mut dynamic_require_count,
+        );
+    }
+
+    ExtractedModule {
+        syntax: if has_module_syntax {
+            ModuleSyntax::EsModule
+        } else {
+            ModuleSyntax::CommonJs
+        },
+        imports,
+        dynamic_require_count,
+    }
+}''',
+              'extract static require edges',
+          )
+
+          replace_once(
+              '''            definition = definition.with_dependency(ModuleDependency::new(
+                edge.specifier.clone(),
+                ImportStyle::Import,
+            ));''',
+              '''            definition = definition.with_dependency(ModuleDependency::new(
+                edge.specifier.clone(),
+                edge.style,
+            ));''',
+              'resolver dependency style',
+          )
+
+          replace_once(
+              '''                let request = ModuleRequest::new(edge.specifier.clone(), ImportStyle::Import)
+                    .with_referrer(referrer.clone())''',
+              '''                let request = ModuleRequest::new(edge.specifier.clone(), edge.style)
+                    .with_referrer(referrer.clone())''',
+              'runtime resolution style',
+          )
+
+          replace_once(
+              '''    modules.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // 4. Aggregate the five artifacts from the per-module reports.''',
+              '''    modules.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let dynamic_require_modules: Vec<(String, usize)> = reached
+        .iter()
+        .filter_map(|module| {
+            extracted.get(module).and_then(|extracted| {
+                (extracted.dynamic_require_count > 0)
+                    .then(|| (module.clone(), extracted.dynamic_require_count))
+            })
+        })
+        .collect();
+    let dynamic_require_count: usize = dynamic_require_modules
+        .iter()
+        .map(|(_, count)| *count)
+        .sum();
+
+    // 4. Aggregate the five artifacts from the per-module reports.''',
+              'dynamic require aggregate',
+          )
+
+          replace_once(
+              '''    if truncated {
+        completeness_notes.push(format!(
+            "file walk truncated at {MAX_PACKAGE_FILES} files; the package is larger than the intake bound"
+        ));
+    }
+    let bounded_modules:''',
+              '''    if truncated {
+        completeness_notes.push(format!(
+            "file walk truncated at {MAX_PACKAGE_FILES} files; the package is larger than the intake bound"
+        ));
+    }
+    if dynamic_require_count > 0 {
+        let details = dynamic_require_modules
+            .iter()
+            .map(|(module, count)| format!("{module} ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        completeness_notes.push(format!(
+            "{dynamic_require_count} non-literal or otherwise dynamic require() call(s) cannot be followed statically: {details}"
+        ));
+    }
+    let bounded_modules:''',
+              'dynamic require completeness note',
+          )
+
+          replace_once(
+              '''    let completeness = if truncated
+        || !bounded_modules.is_empty()
+        || !unresolved_edges.is_empty()
+        || !mode_fragile_edges.is_empty()
+    {''',
+              '''    let completeness = if truncated
+        || dynamic_require_count > 0
+        || !bounded_modules.is_empty()
+        || !unresolved_edges.is_empty()
+        || !mode_fragile_edges.is_empty()
+    {''',
+              'dynamic require completeness status',
+          )
+
+          test_marker = '''    #[test]
+    fn ambient_access_surfaces_in_denied_report_with_module_and_span() {'''
+          tests = r'''    #[test]
+    fn commonjs_literal_require_is_followed_as_a_real_graph_edge() {
+        let pkg = TempPackage::new("commonjs_literal_require_graph");
+        pkg.write(
+            "index.cjs",
+            "const dep = require(\"./dep.cjs\");\nmodule.exports = dep;\n",
+        );
+        pkg.write("dep.cjs", "module.exports = { value: 42 };\n");
+
+        let report = onboard_package(&pkg.root, "index.cjs", "demo-pkg", ParseGoal::Script);
+
+        assert!(report.analyzable);
+        assert_eq!(report.manifest_proposal.module_count, 2);
+        assert!(
+            report
+                .manifest_proposal
+                .modules
+                .contains(&"dep.cjs".to_string()),
+            "literal require target must join the reached package graph"
+        );
+        let edge = report
+            .module_resolution_report
+            .edges
+            .iter()
+            .find(|edge| edge.specifier == "./dep.cjs")
+            .expect("literal require edge must be resolved");
+        assert!(edge.modes_agree);
+        assert!(
+            edge.outcomes
+                .iter()
+                .all(|outcome| outcome.resolved_path.as_deref() == Some("dep.cjs"))
+        );
+    }
+
+    #[test]
+    fn commonjs_bare_literal_require_is_reported_as_external_dependency() {
+        let pkg = TempPackage::new("commonjs_external_require");
+        pkg.write("index.cjs", "const fs = require(\"node:fs\");\n");
+
+        let report = onboard_package(&pkg.root, "index.cjs", "demo-pkg", ParseGoal::Script);
+
+        assert!(report.external_dependencies.iter().any(|dependency| {
+            dependency.specifier == "node:fs"
+                && dependency.sites.iter().any(|site| site.module == "index.cjs")
+        }));
+    }
+
+    #[test]
+    fn dynamic_commonjs_require_bounds_coverage_without_inventing_an_edge() {
+        let pkg = TempPackage::new("commonjs_dynamic_require");
+        pkg.write(
+            "index.cjs",
+            "const target = './dep.cjs';\nconst dep = require(target);\nmodule.exports = dep;\n",
+        );
+        pkg.write("dep.cjs", "module.exports = 42;\n");
+
+        let report = onboard_package(&pkg.root, "index.cjs", "demo-pkg", ParseGoal::Script);
+
+        assert_eq!(report.completeness, PackageIntakeCompleteness::Bounded);
+        assert_eq!(report.manifest_proposal.module_count, 1);
+        assert!(report.module_resolution_report.edges.is_empty());
+        assert!(report.completeness_notes.iter().any(|note| {
+            note.contains("dynamic require()") && note.contains("index.cjs")
+        }));
+    }
+
+'''
+          if s.count(test_marker) != 1:
+              raise SystemExit(f'test insertion marker: expected one match, found {s.count(test_marker)}')
+          s = s.replace(test_marker, tests + test_marker, 1)
+
           p.write_text(s)
           PY
-          cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression iterator_consumers_refuse_recursive_generators_without_native_stack_abort -- --nocapture
-          cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression delegate_recursive_generators_respect_shared_call_depth_budget -- --nocapture
-          cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression generator_reentry_depth_errors_are_recoverable_on_a_small_embedding_stack -- --nocapture
+
+          rustfmt --edition 2024 crates/franken-engine/src/package_intake.rs
+          cargo test --no-default-features -p frankenengine-engine package_intake::tests::commonjs_literal_require_is_followed_as_a_real_graph_edge -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine package_intake::tests::commonjs_bare_literal_require_is_reported_as_external_dependency -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine package_intake::tests::dynamic_commonjs_require_bounds_coverage_without_inventing_an_edge -- --nocapture
+          cargo test --no-default-features -p frankenengine-engine package_intake::tests::clean_two_module_package_has_empty_footprint_and_resolves_in_all_modes -- --nocapture
           cargo check --no-default-features -p frankenengine-engine --lib
           git diff --check
+
           git config user.name 'Jeff Emanuel'
           git config user.email '35050222+Dicklesworthstone@users.noreply.github.com'
-          git add crates/franken-engine/src/baseline_interpreter.rs
-          git commit -m 'fix(generator): bound iterator-consumer resume depth'
+          git add crates/franken-engine/src/package_intake.rs
+          git commit -m 'feat(modules): follow static CommonJS require edges in package intake'
+
+          git fetch origin main
+          if [[ "$(git rev-parse HEAD^)" != "$(git rev-parse origin/main)" ]]; then
+            git rebase origin/main
+            cargo test --no-default-features -p frankenengine-engine package_intake::tests::commonjs_literal_require_is_followed_as_a_real_graph_edge -- --nocapture
+            cargo test --no-default-features -p frankenengine-engine package_intake::tests::dynamic_commonjs_require_bounds_coverage_without_inventing_an_edge -- --nocapture
+            cargo check --no-default-features -p frankenengine-engine --lib
+          fi
           git push origin HEAD:main

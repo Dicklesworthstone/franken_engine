@@ -28,6 +28,9 @@ use std::collections::BTreeMap;
 
 use crate::intrinsics_table::{GapStatus, ImplBinding, IntrinsicRow};
 
+#[path = "intrinsics_array_table.rs"]
+pub mod array_prototype;
+
 /// Declare an intrinsic table: collects [`IntrinsicRow`] literals into a `ROWS` const. The
 /// single edit site for adding a builtin (the impl fn is hand-written separately, E4.T3).
 ///
@@ -226,6 +229,15 @@ mod tests {
         assert_eq!(glue.dispatch.len(), SEED_ROWS.len());
         assert_eq!(glue.gap_entries.len(), SEED_ROWS.len());
         glue.verify().expect("glue is internally consistent");
+    }
+
+    #[test]
+    fn array_family_generates_verified_glue() {
+        let glue = generate_glue(array_prototype::ROWS).expect("Array table generates glue");
+        assert_eq!(glue.registry.len(), array_prototype::ROWS.len());
+        assert_eq!(glue.dispatch.len(), array_prototype::ROWS.len());
+        assert_eq!(glue.gap_entries.len(), array_prototype::ROWS.len());
+        glue.verify().expect("Array glue is internally consistent");
     }
 
     #[test]

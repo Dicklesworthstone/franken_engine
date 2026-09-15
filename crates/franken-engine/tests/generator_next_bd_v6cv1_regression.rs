@@ -772,3 +772,84 @@ fn delegate_iteration_traces_are_deterministic_without_unobserved_getter_reads()
             .any(|event| matches!(event.operation, IterationOperation::IteratorValue { .. }))
     );
 }
+
+#[test]
+fn generator_reentry_depth_errors_are_recoverable_on_a_small_embedding_stack() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    let programs = [
+        "function* g(){yield* g();}g().next();",
+        "function* g(){g().next();}g().next();",
+        "function* g(){let it=g();it.next.call(it);}g().next();",
+    ]
+    .map(delegation_program);
+    let recovery = delegation_program(
+        "function* g(){yield 40;return 2;}let it=g();it.next().value+it.next().value;",
+    );
+    std::thread::Builder::new()
+        .name("generator-small-stack-depth".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            for module in programs {
+                let mut config = delegation_config();
+                config.max_call_depth = 8;
+                let mut core = InterpreterCore::new(config, "generator-small-stack-depth");
+                assert!(matches!(
+                    core.execute(&module),
+                    Err(InterpreterError::StackOverflow { max: 8, .. })
+                ));
+                let result = core
+                    .execute(&recovery)
+                    .expect("depth refusal must restore the caller");
+                assert_eq!(result.value.to_string(), "42");
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        })
+        .expect("embedding thread")
+        .join()
+        .expect("bounded generator reentry must not abort the embedding thread");
+}
+
+#[test]
+fn finite_nested_delegation_preserves_values_and_returns_on_a_small_stack() {
+    use frankenengine_engine::baseline_interpreter::InterpreterCore;
+    let module = delegation_program(
+        "function* g(n){if(n===0){yield 40;return 2;}return yield* g(n-1);}let it=g(4);let first=it.next();let last=it.next();first.value+':'+last.value+':'+last.done;",
+    );
+    std::thread::Builder::new()
+        .name("generator-small-stack-finite".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let mut core =
+                InterpreterCore::new(delegation_config(), "generator-small-stack-finite");
+            let result = core.execute(&module).expect("finite nested delegation");
+            assert_eq!(result.value.to_string(), "40:2:true");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        })
+        .expect("embedding thread")
+        .join()
+        .expect("finite delegation must not retain bytecode-dispatch stack frames");
+}
+
+#[test]
+fn generator_builtin_handoffs_keep_instruction_budget_accounting() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    let module = delegation_program(
+        "function* g(){while(true){yield 1;}}let it=g();while(true){it.next();}",
+    );
+    let mut config = delegation_config();
+    config.instruction_budget = 2000;
+    let mut core = InterpreterCore::new(config, "generator-handoff-fuel");
+    assert!(matches!(
+        core.execute(&module),
+        Err(InterpreterError::BudgetExhausted {
+            executed: 2000,
+            budget: 2000
+        })
+    ));
+}

@@ -2,152 +2,95 @@ name: EngineObjectId Migration Reconciliation
 
 on:
   push:
-    branches: [main]
-    paths: [.github/workflows/reconcile-engine-object-id-migration.yml]
+    branches:
+      - main
+    paths:
+      - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
+
 jobs:
-  dispatch:
-    if: >-
-      contains(github.event.head_commit.message, 'work(runtime): verify reentrant dispatch')
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
-          ref: 264cf98e2e6e29959732aca0dd276baf1abcc21f
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@nightly
+          fetch-depth: 0
+          ref: main
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt,clippy
-      - name: Apply exact dispatch patch and prepare source blobs
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import base64,gzip,hashlib,json,os,pathlib,subprocess
-          root=pathlib.Path.cwd()
-          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'dispatch-prepared'
-          out.mkdir()
-          prefix='https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs'
-          import urllib.request
-          headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0','Content-Type':'application/json'}
-          def api(url,data=None):
-              request=urllib.request.Request(url,data=None if data is None else json.dumps(data).encode(),headers=headers)
-              with urllib.request.urlopen(request,timeout=90) as response:
-                  return json.load(response)
-          def sha(data):
-              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
-          names={'crates/franken-engine/src/baseline_interpreter.rs':'4398746293ccd2db5fe34c48f80934b317bc6516','crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs':'39096e02d3b4dea955f79cb3e33c4398fb4637d6'}
-          for name,expected in names.items():
-              assert sha((root/name).read_bytes())==expected,(name,'source changed')
-          chunks=[]
-          for expected in ['261794064764a2162ff54517476ca47ddcd14866','b916bf18b681e18b4e4803a368af5f83a9e58e8d','5413d090be5c02c6a6384c6b68164408e3a12c2a']:
-              chunk=base64.b64decode(api(prefix+'/'+expected)['content'])
-              assert sha(chunk)==expected
-              chunks.append(chunk)
-          packed=b''.join(chunks)
-          assert sha(packed)=='039a8af8ed98f7e9b46178a0ba016c77aaea4e65'
-          patch=gzip.decompress(packed)
-          subprocess.run(['git','apply','--check','-'],input=patch,check=True)
-          subprocess.run(['git','apply','-'],input=patch,check=True)
-          source=root/'crates/franken-engine/src/baseline_interpreter.rs'
-          text=source.read_text()
-          start=text.index('    /// Finish a builtin call after the dispatch frame has returned.')
-          end=text.index('    #[inline(never)]\n    fn run_loop_dispatch(',start)
-          fragment='impl InterpreterCore {\n'+text[start:end]+'}\n'
-          formatted=subprocess.run(['rustfmt','--edition','2024','--emit','stdout'],input=fragment.encode(),stdout=subprocess.PIPE,check=True).stdout.decode()
-          body=formatted[formatted.index('{\n')+2:formatted.rfind('\n}')]
-          source.write_text(text[:start]+body+'\n\n'+text[end:])
-          with (out/'syntax.log').open('w') as log:
-              subprocess.run(['rustfmt','--edition','2024','--emit','stdout',str(source)],stdout=subprocess.DEVNULL,stderr=log,check=True)
-          test='crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
-          subprocess.run(['rustfmt','--edition','2024',test],check=True)
-          subprocess.run(['git','diff','--check'],check=True)
-          files=[]
-          for name in names:
-              data=(root/name).read_bytes()
-              result=api(prefix,{'content':base64.b64encode(data).decode(),'encoding':'base64'})
-              assert result['sha']==sha(data)
-              files.append({'path':name,'sha':result['sha'],'bytes':len(data)})
-          (out/'files.json').write_text(json.dumps(files,indent=2))
-          (out/'dispatch.patch').write_bytes(subprocess.check_output(['git','diff','--',*names]))
-          print(json.dumps(files,indent=2))
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: dispatch-prepared
-          path: ${{ runner.temp }}/dispatch-prepared
-          retention-days: 2
-      - name: Prepare isolated native test harness with identical dependency versions
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json,os,pathlib,shutil,subprocess,tomllib
-          root=pathlib.Path.cwd()
-          harness=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-runtime-probes'
-          harness.mkdir()
-          tests=['generator_next_bd_v6cv1_regression','iterator_destructuring_regression','destructuring_default_branch_regression','destructuring_nested_rest_regression','destructuring_assignment_bd_umee4','for_of_destructuring_lowering_conformance','for_of_iterator_throw_regression']
-          manifest='[package]\nname="franken-native-runtime-probes"\nversion="0.0.0"\nedition="2024"\npublish=false\n[workspace]\nresolver="2"\n[dependencies]\nfrankenengine-engine={path='+json.dumps(str(root/'crates/franken-engine'))+',default-features=false}\n'
-          for test in tests:
-              source=root/'crates/franken-engine/tests'/f'{test}.rs'
-              assert source.is_file()
-              manifest+='\n[[test]]\nname='+json.dumps(test)+'\npath='+json.dumps(str(source))+'\n'
-          (harness/'Cargo.toml').write_text(manifest)
-          shutil.copyfile(root/'Cargo.lock',harness/'Cargo.lock')
-          with (harness/'metadata.json').open('w') as output:
-              subprocess.run(['cargo','metadata','--format-version','1','--manifest-path',str(harness/'Cargo.toml')],stdout=output,check=True)
-          def identities(path):
-              return {(p['name'],p['version'],p.get('source'),p.get('checksum')) for p in tomllib.loads(path.read_text())['package']}
-          assert identities(harness/'Cargo.lock')-identities(root/'Cargo.lock') <= {('franken-native-runtime-probes','0.0.0',None,None)}
-          PY
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          shared-key: native-iterator-standalone
-          cache-on-failure: true
-      - name: Test the original stack abort and small-stack reentry
-        run: |
-          set +e
-          timeout 1500 cargo test --locked --manifest-path "$RUNNER_TEMP/native-runtime-probes/Cargo.toml" --test generator_next_bd_v6cv1_regression delegate_recursive_generators_respect_shared_call_depth_budget -- --exact > "$RUNNER_TEMP/dispatch-depth.log" 2>&1
-          status=$?
-          tail -n 100 "$RUNNER_TEMP/dispatch-depth.log"
-          exit "$status"
-      - name: Run generator and surrounding native regressions
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          timeout 600 cargo test --locked --manifest-path "$RUNNER_TEMP/native-runtime-probes/Cargo.toml" --no-fail-fast > "$RUNNER_TEMP/dispatch-tests.log" 2>&1
-          status=$?
-          tail -n 250 "$RUNNER_TEMP/dispatch-tests.log"
-          exit "$status"
-      - name: Execute workspace compiler lint and formatting gates
-        if: ${{ !cancelled() }}
-        run: |
-          set +e
-          timeout 180 cargo check --locked --all-targets > "$RUNNER_TEMP/dispatch-check.log" 2>&1
-          check=$?
-          timeout 180 cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/dispatch-clippy.log" 2>&1
-          clippy=$?
-          cargo fmt --check > "$RUNNER_TEMP/dispatch-fmt.log" 2>&1
-          fmt=$?
-          printf 'check=%s clippy=%s fmt=%s\n' "$check" "$clippy" "$fmt" | tee "$RUNNER_TEMP/dispatch-status.log"
-          tail -n 25 "$RUNNER_TEMP/dispatch-check.log" "$RUNNER_TEMP/dispatch-clippy.log" "$RUNNER_TEMP/dispatch-fmt.log"
-          test "$check" = 0 && test "$clippy" = 0 && test "$fmt" = 0
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: dispatch-native-results
-          path: ${{ runner.temp }}/dispatch-*.log
-          retention-days: 2
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

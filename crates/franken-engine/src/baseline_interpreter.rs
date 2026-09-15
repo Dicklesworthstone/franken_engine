@@ -6083,6 +6083,23 @@ struct LabeledReturn {
     label: Label,
 }
 
+/// Execution boundaries that must leave the large bytecode-dispatch frame
+/// before entering a re-entrant runtime operation. This is private control
+/// flow, not a guest value or a serialized IR completion.
+enum DispatchOutcome {
+    Complete(LabeledReturn),
+    BuiltinCall {
+        builtin: BuiltinFunction,
+        args: RegRange,
+        dst: u32,
+        receiver: Option<(Value, u32)>,
+    },
+    GeneratorDelegate {
+        source: u32,
+        resume_dst: u32,
+    },
+}
+
 /// One fully accounted argument carrier owned by `ApplyHostCall` while it
 /// transfers an array-like guest value into the interpreter's scratch
 /// register window. The charge is converted into live-register plus saved
@@ -40835,13 +40852,228 @@ impl InterpreterCore {
         self.run_loop_labeled_with_compact_tier1(module, None)
     }
 
+    /// Finish a builtin call after the dispatch frame has returned. Generator
+    /// methods and user callbacks can re-enter execution, so retaining that
+    /// frame here would exhaust a small embedding-thread stack before the
+    /// logical call-depth guard can fire.
+    #[inline(never)]
+    fn finish_builtin_dispatch(
+        &mut self,
+        module: &Ir3Module,
+        builtin: BuiltinFunction,
+        args: RegRange,
+        dst: u32,
+        receiver: Option<(Value, u32)>,
+    ) -> Result<(), InterpreterError> {
+        if let Some((receiver_val, receiver)) = receiver {
+            // Mirror the plain-`Call` arm: an explicit `throw` that
+            // escapes a generated function or an inline callback the
+            // builtin runs (e.g. `arr.forEach(() => { throw … })`)
+            // must be catchable by an enclosing try/catch in this
+            // frame (bd-8enww.4.7).
+            self.clear_pending_hostcall_result_label();
+            self.mark_inline_callback_started();
+            let result = match self.dispatch_builtin_function(
+                module,
+                &builtin,
+                args,
+                Some(receiver_val.clone()),
+                Some(receiver),
+            ) {
+                Ok(value) => value,
+                Err(err) => match self.route_isolated_explicit_throw(module, err)? {
+                    None => {
+                        // IFC (bd-8enww.4.8): mirror the success-path
+                        // receiver+args label join (below) onto an
+                        // explicit throw escaping the builtin's
+                        // callback lane, so a Secret array's reducer
+                        // that throws one of its elements cannot
+                        // launder to a Public catch binding now that
+                        // the legacy mini-lane preserves the original
+                        // thrown value.
+                        let escaped = self
+                            .join_arg_range_label(args)?
+                            .join(self.get_register_label(receiver)?);
+                        self.join_pending_exception_label(&escaped)?;
+                        return Ok(());
+                    }
+                    Some(err) => return Err(err),
+                },
+            };
+            let callback_result_label = self
+                .take_pending_hostcall_result_label()
+                .unwrap_or(Label::Public);
+            // IFC: a receiver-aware builtin's result derives from
+            // the receiver and the arg registers (e.g. a Secret
+            // array's reduce/map/from result is at least Secret) —
+            // join both onto dst (bd-ooaka.1; the callback mini-
+            // lanes see only values seeded from these registers,
+            // so this join is a sound upper bound for anything
+            // they compute).
+            let binary_storage_label = match &receiver_val {
+                Value::Object(object_id) => self.binary_storage_label(*object_id),
+                _ => Label::Public,
+            };
+            let stream_state_label = match &receiver_val {
+                Value::Object(object_id) => self.stream_state_label(*object_id),
+                _ => Label::Public,
+            };
+            let url_state_label = match &receiver_val {
+                Value::Object(object_id) => self.url_state_label(*object_id),
+                _ => Label::Public,
+            };
+            let cluster_state_label = match &receiver_val {
+                Value::Object(object_id) => self.cluster_state_label(*object_id),
+                _ => Label::Public,
+            };
+            let result_label = self
+                .join_arg_range_label(args)?
+                .join(self.get_register_label(receiver)?)
+                .join(&binary_storage_label)
+                .join(&stream_state_label)
+                .join(&url_state_label)
+                .join(&cluster_state_label)
+                .join(&callback_result_label);
+            self.propagate_builtin_binary_mutation_label(
+                &builtin,
+                &receiver_val,
+                args,
+                &result_label,
+            )?;
+            self.write_reg_with_label(dst, result, result_label)?;
+            self.ip += 1;
+            return Ok(());
+        }
+        // An explicit `throw` inside a generated function (or an
+        // inline callback the builtin runs) escapes the isolated
+        // run as `UncaughtException` with the thrown value
+        // preserved; route it into THIS frame's catch handler
+        // rather than letting `?` escape the caller's try/catch
+        // (bd-8enww.4.7).
+        self.clear_pending_hostcall_result_label();
+        let result = match self.dispatch_builtin_function(module, &builtin, args, None, None) {
+            Ok(value) => value,
+            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
+                None => {
+                    // IFC (bd-8enww.4.8): an explicit throw
+                    // escaping the builtin's callback lane
+                    // carries a value seeded from the arg
+                    // registers, so join their labels onto the
+                    // re-armed exception label — the throw-path
+                    // mirror of the success-path join below.
+                    // Required now that the legacy reduce /
+                    // Array.from mini-lanes preserve the
+                    // original thrown value (not a Public
+                    // engine error), so a Secret arg cannot
+                    // launder to a Public catch binding.
+                    let escaped = self.join_arg_range_label(args)?;
+                    self.join_pending_exception_label(&escaped)?;
+                    return Ok(());
+                }
+                Some(err) => return Err(err),
+            },
+        };
+        let callback_result_label = self
+            .take_pending_hostcall_result_label()
+            .unwrap_or(Label::Public);
+        // IFC: builtin results derive entirely from the arg
+        // registers (incl. any callback lanes the builtin runs,
+        // which see only values seeded from these args), so the
+        // dst label is the join of the arg labels — mirrors the
+        // HostCall propagation (bd-ooaka.1, fourth member of
+        // the bd-n2mjy/bd-0zybl under-tainting family).
+        let args_label = self.join_arg_range_label(args)?;
+        self.write_reg_with_label(dst, result, args_label.join(&callback_result_label))?;
+        self.ip += 1;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn finish_generator_delegate_dispatch(
+        &mut self,
+        module: &Ir3Module,
+        value: u32,
+        resume_dst: u32,
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
+        match self.step_generator_delegation(module, value, resume_dst) {
+            Ok(GeneratorDelegationStep::Yield(result)) => {
+                // Re-enter this same opcode on the next resume;
+                // neither the iterable nor next is reacquired.
+                self.generator_yielded = true;
+                self.generator_resume_dst = Some(resume_dst);
+                self.generator_result_label = result.label.clone();
+                Ok(Some(result))
+            }
+            Ok(GeneratorDelegationStep::Complete(completion)) => {
+                self.take_generator_delegation();
+                self.write_reg_with_label(resume_dst, completion.value, completion.label)?;
+                self.ip += 1;
+                Ok(None)
+            }
+            Ok(GeneratorDelegationStep::Return(completion)) => {
+                self.take_generator_delegation();
+                self.inject_generator_return(completion)
+            }
+            Err(error) => {
+                if let Some(delegation) = self.take_generator_delegation() {
+                    let label = delegation.label.join(
+                        self.pending_hostcall_result_label
+                            .as_ref()
+                            .unwrap_or(&Label::Public),
+                    );
+                    if self.pending_exception.is_some() {
+                        self.join_pending_exception_label(&label)?;
+                    }
+                    self.replace_pending_hostcall_result_label(Some(label))?;
+                }
+                // The outer dispatch wrapper routes native
+                // faults and exact callback throws alike.
+                Err(error)
+            }
+        }
+    }
+
     fn run_loop_labeled_with_compact_tier1(
         &mut self,
         module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<LabeledReturn, InterpreterError> {
+        // Initialize CheckpointGuard if cancellation token is provided
+        let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
+            Some(CheckpointGuard::new(
+                LoopSite::BytecodeDispatch,
+                "baseline_interpreter",
+                &self.trace_id,
+                DensityConfig {
+                    max_iterations: self.config.checkpoint_density,
+                    max_total_iterations: self.config.instruction_budget,
+                },
+                token.clone(),
+            ))
+        } else {
+            None
+        };
+
         loop {
-            match self.run_loop_dispatch(module, compact_tier1) {
+            let result = match self.run_loop_dispatch(module, compact_tier1, &mut checkpoint_guard)
+            {
+                Ok(DispatchOutcome::Complete(completion)) => Ok(Some(completion)),
+                Ok(DispatchOutcome::BuiltinCall {
+                    builtin,
+                    args,
+                    dst,
+                    receiver,
+                }) => self
+                    .finish_builtin_dispatch(module, builtin, args, dst, receiver)
+                    .map(|()| None),
+                Ok(DispatchOutcome::GeneratorDelegate { source, resume_dst }) => {
+                    self.finish_generator_delegate_dispatch(module, source, resume_dst)
+                }
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(None) => continue,
+                Ok(Some(completion)) => return Ok(completion),
                 Err(err @ InterpreterError::UncaughtException { .. }) => {
                     // Accessors, Proxy traps, and conversion callbacks can
                     // leave dispatch through `?`, not only through Call. The
@@ -40894,31 +41126,18 @@ impl InterpreterCore {
                         }
                     }
                 }
-                other => return other,
+                Err(error) => return Err(error),
             }
         }
     }
 
+    #[inline(never)]
     fn run_loop_dispatch(
         &mut self,
         module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
-    ) -> Result<LabeledReturn, InterpreterError> {
-        // Initialize CheckpointGuard if cancellation token is provided
-        let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
-            Some(CheckpointGuard::new(
-                LoopSite::BytecodeDispatch,
-                "baseline_interpreter",
-                &self.trace_id,
-                DensityConfig {
-                    max_iterations: self.config.checkpoint_density,
-                    max_total_iterations: self.config.instruction_budget,
-                },
-                token.clone(),
-            ))
-        } else {
-            None
-        };
+        checkpoint_guard: &mut Option<CheckpointGuard>,
+    ) -> Result<DispatchOutcome, InterpreterError> {
 
         loop {
             // Retire the handoff even on EOF, implicit return, or budget refusal.
@@ -40934,13 +41153,13 @@ impl InterpreterCore {
                     if let Some(completion) =
                         self.complete_return(Value::Undefined, Label::Public)?
                     {
-                        return Ok(completion);
+                        return Ok(DispatchOutcome::Complete(completion));
                     }
                     continue;
                 } else {
                     let value = self.read_reg(0)?;
                     let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
-                    return Ok(LabeledReturn { value, label });
+                    return Ok(DispatchOutcome::Complete(LabeledReturn { value, label }));
                 }
             }
 
@@ -40974,7 +41193,7 @@ impl InterpreterCore {
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
-            if let Some(ref mut guard) = checkpoint_guard {
+            if let Some(guard) = checkpoint_guard.as_mut() {
                 guard.tick();
 
                 // Check at checkpoint density interval
@@ -41317,55 +41536,13 @@ impl InterpreterCore {
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
 
-                    if let Value::BuiltinFunction(builtin) = &callee_val {
-                        // An explicit `throw` inside a generated function (or an
-                        // inline callback the builtin runs) escapes the isolated
-                        // run as `UncaughtException` with the thrown value
-                        // preserved; route it into THIS frame's catch handler
-                        // rather than letting `?` escape the caller's try/catch
-                        // (bd-8enww.4.7).
-                        self.clear_pending_hostcall_result_label();
-                        let result = match self
-                            .dispatch_builtin_function(module, builtin, args, None, None)
-                        {
-                            Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
-                                None => {
-                                    // IFC (bd-8enww.4.8): an explicit throw
-                                    // escaping the builtin's callback lane
-                                    // carries a value seeded from the arg
-                                    // registers, so join their labels onto the
-                                    // re-armed exception label — the throw-path
-                                    // mirror of the success-path join below.
-                                    // Required now that the legacy reduce /
-                                    // Array.from mini-lanes preserve the
-                                    // original thrown value (not a Public
-                                    // engine error), so a Secret arg cannot
-                                    // launder to a Public catch binding.
-                                    let escaped = self.join_arg_range_label(args)?;
-                                    self.join_pending_exception_label(&escaped)?;
-                                    continue;
-                                }
-                                Some(err) => return Err(err),
-                            },
-                        };
-                        let callback_result_label = self
-                            .take_pending_hostcall_result_label()
-                            .unwrap_or(Label::Public);
-                        // IFC: builtin results derive entirely from the arg
-                        // registers (incl. any callback lanes the builtin runs,
-                        // which see only values seeded from these args), so the
-                        // dst label is the join of the arg labels — mirrors the
-                        // HostCall propagation (bd-ooaka.1, fourth member of
-                        // the bd-n2mjy/bd-0zybl under-tainting family).
-                        let args_label = self.join_arg_range_label(args)?;
-                        self.write_reg_with_label(
+                    if let Value::BuiltinFunction(builtin) = callee_val {
+                        return Ok(DispatchOutcome::BuiltinCall {
+                            builtin,
+                            args,
                             dst,
-                            result,
-                            args_label.join(&callback_result_label),
-                        )?;
-                        self.ip += 1;
-                        continue;
+                            receiver: None,
+                        });
                     }
 
                     if let Some(_origin_module) =
@@ -41923,84 +42100,13 @@ impl InterpreterCore {
                     let receiver_val = self.read_reg(receiver)?;
                     let callee_val = self.read_reg(callee)?;
 
-                    if let Value::BuiltinFunction(builtin) = &callee_val {
-                        // Mirror the plain-`Call` arm: an explicit `throw` that
-                        // escapes a generated function or an inline callback the
-                        // builtin runs (e.g. `arr.forEach(() => { throw … })`)
-                        // must be catchable by an enclosing try/catch in this
-                        // frame (bd-8enww.4.7).
-                        self.clear_pending_hostcall_result_label();
-                        self.mark_inline_callback_started();
-                        let result = match self.dispatch_builtin_function(
-                            module,
+                    if let Value::BuiltinFunction(builtin) = callee_val {
+                        return Ok(DispatchOutcome::BuiltinCall {
                             builtin,
                             args,
-                            Some(receiver_val.clone()),
-                            Some(receiver),
-                        ) {
-                            Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
-                                None => {
-                                    // IFC (bd-8enww.4.8): mirror the success-path
-                                    // receiver+args label join (below) onto an
-                                    // explicit throw escaping the builtin's
-                                    // callback lane, so a Secret array's reducer
-                                    // that throws one of its elements cannot
-                                    // launder to a Public catch binding now that
-                                    // the legacy mini-lane preserves the original
-                                    // thrown value.
-                                    let escaped = self
-                                        .join_arg_range_label(args)?
-                                        .join(self.get_register_label(receiver)?);
-                                    self.join_pending_exception_label(&escaped)?;
-                                    continue;
-                                }
-                                Some(err) => return Err(err),
-                            },
-                        };
-                        let callback_result_label = self
-                            .take_pending_hostcall_result_label()
-                            .unwrap_or(Label::Public);
-                        // IFC: a receiver-aware builtin's result derives from
-                        // the receiver and the arg registers (e.g. a Secret
-                        // array's reduce/map/from result is at least Secret) —
-                        // join both onto dst (bd-ooaka.1; the callback mini-
-                        // lanes see only values seeded from these registers,
-                        // so this join is a sound upper bound for anything
-                        // they compute).
-                        let binary_storage_label = match &receiver_val {
-                            Value::Object(object_id) => self.binary_storage_label(*object_id),
-                            _ => Label::Public,
-                        };
-                        let stream_state_label = match &receiver_val {
-                            Value::Object(object_id) => self.stream_state_label(*object_id),
-                            _ => Label::Public,
-                        };
-                        let url_state_label = match &receiver_val {
-                            Value::Object(object_id) => self.url_state_label(*object_id),
-                            _ => Label::Public,
-                        };
-                        let cluster_state_label = match &receiver_val {
-                            Value::Object(object_id) => self.cluster_state_label(*object_id),
-                            _ => Label::Public,
-                        };
-                        let result_label = self
-                            .join_arg_range_label(args)?
-                            .join(self.get_register_label(receiver)?)
-                            .join(&binary_storage_label)
-                            .join(&stream_state_label)
-                            .join(&url_state_label)
-                            .join(&cluster_state_label)
-                            .join(&callback_result_label);
-                        self.propagate_builtin_binary_mutation_label(
-                            builtin,
-                            &receiver_val,
-                            args,
-                            &result_label,
-                        )?;
-                        self.write_reg_with_label(dst, result, result_label)?;
-                        self.ip += 1;
-                        continue;
+                            dst,
+                            receiver: Some((receiver_val, receiver)),
+                        });
                     }
 
                     if let Some(_origin_module) =
@@ -42449,7 +42555,7 @@ impl InterpreterCore {
                             .take_pending_return_slot()
                             .expect("Return installed a pending completion before direct return");
                         match self.complete_return(pending_return.value, pending_return.label) {
-                            Ok(Some(completion)) => return Ok(completion),
+                            Ok(Some(completion)) => return Ok(DispatchOutcome::Complete(completion)),
                             Ok(None) => {}
                             Err(error) => {
                                 match self.route_isolated_explicit_throw(module, error)? {
@@ -42610,10 +42716,10 @@ impl InterpreterCore {
                         self.pending_async_module_import.take()
                     {
                         self.suspend_on_async_module_dependency(evaluation_promise, dependency)?;
-                        return Ok(LabeledReturn {
+                        return Ok(DispatchOutcome::Complete(LabeledReturn {
                             value: Value::Undefined,
                             label: Label::Public,
-                        });
+                        }));
                     }
                 }
                 Ir3Instruction::ExportBinding {
@@ -44221,7 +44327,7 @@ impl InterpreterCore {
                                 match self
                                     .complete_return(pending_return.value, pending_return.label)
                                 {
-                                    Ok(Some(completion)) => return Ok(completion),
+                                    Ok(Some(completion)) => return Ok(DispatchOutcome::Complete(completion)),
                                     Ok(None) => {}
                                     Err(error) => {
                                         match self.route_isolated_explicit_throw(module, error)? {
@@ -44570,46 +44676,10 @@ impl InterpreterCore {
                     resume_dst,
                 } => {
                     if delegate {
-                        match self.step_generator_delegation(module, value, resume_dst) {
-                            Ok(GeneratorDelegationStep::Yield(result)) => {
-                                // Re-enter this same opcode on the next resume;
-                                // neither the iterable nor next is reacquired.
-                                self.generator_yielded = true;
-                                self.generator_resume_dst = Some(resume_dst);
-                                self.generator_result_label = result.label.clone();
-                                return Ok(result);
-                            }
-                            Ok(GeneratorDelegationStep::Complete(completion)) => {
-                                self.take_generator_delegation();
-                                self.write_reg_with_label(
-                                    resume_dst, completion.value, completion.label,
-                                )?;
-                                self.ip += 1;
-                                continue;
-                            }
-                            Ok(GeneratorDelegationStep::Return(completion)) => {
-                                self.take_generator_delegation();
-                                if let Some(completion) = self.inject_generator_return(completion)? {
-                                    return Ok(completion);
-                                }
-                                continue;
-                            }
-                            Err(error) => {
-                                if let Some(delegation) = self.take_generator_delegation() {
-                                    let label = delegation.label.join(
-                                        self.pending_hostcall_result_label
-                                            .as_ref().unwrap_or(&Label::Public),
-                                    );
-                                    if self.pending_exception.is_some() {
-                                        self.join_pending_exception_label(&label)?;
-                                    }
-                                    self.replace_pending_hostcall_result_label(Some(label))?;
-                                }
-                                // The outer dispatch wrapper routes native
-                                // faults and exact callback throws alike.
-                                return Err(error);
-                            }
-                        }
+                        return Ok(DispatchOutcome::GeneratorDelegate {
+                            source: value,
+                            resume_dst,
+                        });
                     }
                     let yielded = self.read_reg(value)?;
                     let yielded_label = self.clone_register_label_with_temporary_budget(value)?;
@@ -44635,10 +44705,10 @@ impl InterpreterCore {
                     self.generator_yielded = true;
                     self.generator_resume_dst = Some(resume_dst);
                     self.generator_result_label = yielded_label;
-                    return Ok(LabeledReturn {
+                    return Ok(DispatchOutcome::Complete(LabeledReturn {
                         value: Value::Object(result_id),
                         label: self.generator_result_label.clone(),
-                    });
+                    }));
                 }
                 await_instruction @ (Ir3Instruction::AwaitValue { promise_reg }
                 | Ir3Instruction::ModuleAwaitValue { promise_reg }) => {
@@ -44686,10 +44756,10 @@ impl InterpreterCore {
                         self.suspend_top_level_await(promise_handle, promise_reg, effective_label)?;
                         // Suspension marker, not program data: the resumed
                         // completion carries the real label.
-                        return Ok(LabeledReturn {
+                        return Ok(DispatchOutcome::Complete(LabeledReturn {
                             value: Value::Undefined,
                             label: Label::Public,
-                        });
+                        }));
                     }
 
                     if promise_state.is_settled() {
@@ -44726,10 +44796,10 @@ impl InterpreterCore {
 
                         // Return special value to indicate suspension
                         // The interpreter loop should exit and return control to the event loop
-                        return Ok(LabeledReturn {
+                        return Ok(DispatchOutcome::Complete(LabeledReturn {
                             value: Value::Undefined,
                             label: Label::Public,
-                        });
+                        }));
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
@@ -44738,7 +44808,7 @@ impl InterpreterCore {
                     if let Some(completion) =
                         self.complete_current_async_frame(Ok(return_value), return_label)?
                     {
-                        return Ok(completion);
+                        return Ok(DispatchOutcome::Complete(completion));
                     }
                     continue;
                 }
@@ -44748,7 +44818,7 @@ impl InterpreterCore {
                     if let Some(completion) =
                         self.complete_current_async_frame(Err(error_value), error_label)?
                     {
-                        return Ok(completion);
+                        return Ok(DispatchOutcome::Complete(completion));
                     }
                     continue;
                 }

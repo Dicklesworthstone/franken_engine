@@ -290,11 +290,20 @@ impl AsyncModuleScheduler {
         task: &ModuleTask,
         reason: JsValue,
         label: Label,
-    ) -> Result<ModulePromiseUpdate, AsyncModuleSchedulerError> {
+    ) -> Result<Option<ModulePromiseUpdate>, AsyncModuleSchedulerError> {
         self.validate_in_flight(task)?;
-        let update = self
-            .bridge
-            .reject_module(&task.module_specifier, reason, label)?;
+        let has_top_level_await = self.bridge.evaluator().states()[&task.module_specifier]
+            .has_top_level_await;
+        let update = if has_top_level_await {
+            Some(
+                self.bridge
+                    .reject_module(&task.module_specifier, reason, label)?,
+            )
+        } else {
+            self.bridge
+                .reject_synchronous_module(&task.module_specifier, reason, label)?;
+            None
+        };
         self.in_flight.remove(&task.module_specifier);
         self.purge_runtime_terminal_modules();
         Ok(update)
@@ -493,6 +502,43 @@ mod tests {
         assert_eq!(
             scheduler.bridge().evaluator().states()["sync.mjs"].phase,
             AsyncModulePhase::Settled
+        );
+        assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn synchronous_rejection_rejects_dependent_tla_promise() {
+        let mut scheduler = AsyncModuleScheduler::default();
+        scheduler.register_module("root.mjs", false, &[]).unwrap();
+        let child_promise = scheduler
+            .register_module("child.mjs", true, &["root.mjs".into()])
+            .unwrap()
+            .unwrap();
+        let root = scheduler.next_task().unwrap().expect("root ready");
+        let update = scheduler
+            .reject_task(
+                &root,
+                JsValue::Str("sync throw".into()),
+                Label::Secret,
+            )
+            .unwrap();
+        assert!(update.is_none());
+        assert_eq!(
+            scheduler.bridge().evaluator().states()["root.mjs"].phase,
+            AsyncModulePhase::Rejected
+        );
+        assert_eq!(
+            scheduler.bridge().evaluator().states()["child.mjs"].phase,
+            AsyncModulePhase::Rejected
+        );
+        assert!(
+            scheduler
+                .bridge()
+                .promise_store()
+                .get(child_promise)
+                .unwrap()
+                .state
+                .is_rejected()
         );
         assert!(scheduler.next_task().unwrap().is_none());
     }

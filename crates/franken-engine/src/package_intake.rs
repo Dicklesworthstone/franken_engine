@@ -29,11 +29,11 @@
 //!    sequences, and whether the three modes agree (extensionless imports
 //!    resolve under `BunCompat` but fail closed under `Native`/`NodeCompat`).
 //!
-//! **Honest boundaries (v1).** Only ES `import` declarations are followed as
-//! graph edges; CommonJS `require(...)` and dynamic `import(...)` are *not* yet
-//! followed as edges (they still surface in each module's per-file footprint as
-//! ambient-authority findings — they are never silently dropped). External
-//! (bare / npm) specifiers are reported, never analyzed. Re-export sources
+//! **Honest boundaries (v1).** ES `import` declarations and top-level static
+//! CommonJS `require("literal")` calls are followed as graph edges. Non-literal
+//! `require(...)`, nested/deferred CommonJS loads, and dynamic `import(...)` are
+//! bounded surfaces rather than silently treated as covered. External (bare / npm)
+//! specifiers are reported, never analyzed. Re-export sources
 //! (`export … from "x"`) are carried inside the export clause and are not split
 //! out as edges in v1. Every such boundary is reflected in the report's
 //! `completeness` + `completeness_notes`, never hidden — most real npm packages
@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::ast::{ExportKind, ParseGoal, Statement};
+use crate::ast::{ExportKind, Expression, ParseGoal, Statement};
 use crate::authority_footprint::{
     AnalysisCompleteness, AuthorityFootprintReport, CheckFindingKind, SourceLocation,
     analyze_authority_footprint,
@@ -72,8 +72,8 @@ pub const PACKAGE_INTAKE_SCHEMA_VERSION: &str = "franken-engine.package-intake.v
 /// graph and fail-closes on anything it cannot analyze. It is never a
 /// noninterference proof and never claims to have covered external packages,
 /// CommonJS/dynamic edges, or unanalyzable modules.
-pub const PACKAGE_INTAKE_DISCLAIMER: &str = "inferred package authority footprint over the SUPPORTED ES-module graph reachable from the entry; \
-not a proof of noninterference for arbitrary JS/TS. External packages, CommonJS/dynamic edges, and unanalyzable modules are reported, never silently covered.";
+pub const PACKAGE_INTAKE_DISCLAIMER: &str = "inferred package authority footprint over the SUPPORTED static module graph reachable from the entry; \
+not a proof of noninterference for arbitrary JS/TS. External packages, dynamic CommonJS/dynamic-import edges, and unanalyzable modules are reported, never silently covered.";
 
 // Deterministic identity for the analysis passes. `onboard` is a static,
 // side-effect-free analysis, so these are fixed (never wall-clock or
@@ -515,17 +515,59 @@ impl PackageIntakeReport {
 // ES-module extraction
 // ---------------------------------------------------------------------------
 
-/// An ES `import` declaration projected to (specifier, location).
+/// A statically analyzable module edge projected to resolver style + source site.
 struct ImportEdge {
     specifier: String,
+    style: ImportStyle,
     location: SourceLocation,
 }
 
-/// What a single file contributes to the graph: its detected syntax and the ES
-/// import declarations it carries (the graph edges to follow).
+/// What a single file contributes to the graph: detected syntax, static edges,
+/// and dynamic top-level CommonJS edges that cannot be followed safely.
 struct ExtractedModule {
     syntax: ModuleSyntax,
     imports: Vec<ImportEdge>,
+    dynamic_require_count: usize,
+}
+
+/// Collect a direct top-level CommonJS load.  This intentionally does not scan
+/// arbitrary source text: only a parsed bare `require(...)` call qualifies.
+fn collect_top_level_require(
+    expression: &Expression,
+    fallback_span: &crate::ast::SourceSpan,
+    imports: &mut Vec<ImportEdge>,
+    dynamic_require_count: &mut usize,
+) {
+    let expression = match expression {
+        Expression::Assignment { right, .. } => right.as_ref(),
+        other => other,
+    };
+    let Expression::Call {
+        callee,
+        arguments,
+        span,
+    } = expression
+    else {
+        return;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name) if name == "require") {
+        return;
+    }
+    let location = SourceLocation::from(span.clone().unwrap_or_else(|| fallback_span.clone()));
+    match arguments.as_slice() {
+        [Expression::StringLiteral(specifier)] => {
+            if let Some(specifier) = specifier.as_str() {
+                imports.push(ImportEdge {
+                    specifier: specifier.to_string(),
+                    style: ImportStyle::Require,
+                    location,
+                });
+            } else {
+                *dynamic_require_count = dynamic_require_count.saturating_add(1);
+            }
+        }
+        _ => *dynamic_require_count = dynamic_require_count.saturating_add(1),
+    }
 }
 
 /// Parse a source file (after TS normalization) and extract its ES `import`
@@ -536,6 +578,7 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
     let empty = || ExtractedModule {
         syntax: ModuleSyntax::CommonJs,
         imports: Vec::new(),
+        dynamic_require_count: 0,
     };
     let prepared = match prepare_source_entry_for_public_entrypoints(
         source,
@@ -559,6 +602,7 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
     };
 
     let mut imports = Vec::new();
+    let mut dynamic_require_count = 0usize;
     let mut has_module_syntax = false;
     for statement in &tree.body {
         match statement {
@@ -572,6 +616,7 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
                 };
                 imports.push(ImportEdge {
                     specifier: specifier.to_string(),
+                    style: ImportStyle::Import,
                     location: SourceLocation::from(decl.span),
                 });
             }
@@ -590,6 +635,24 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
                 }
                 has_module_syntax = true;
             }
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    if let Some(initializer) = &declarator.initializer {
+                        collect_top_level_require(
+                            initializer,
+                            &declarator.span,
+                            &mut imports,
+                            &mut dynamic_require_count,
+                        );
+                    }
+                }
+            }
+            Statement::Expression(statement) => collect_top_level_require(
+                &statement.expression,
+                &statement.span,
+                &mut imports,
+                &mut dynamic_require_count,
+            ),
             _ => {}
         }
     }
@@ -600,6 +663,7 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
             ModuleSyntax::CommonJs
         },
         imports,
+        dynamic_require_count,
     }
 }
 
@@ -770,10 +834,8 @@ pub fn onboard_package(
         let mut definition = ModuleDefinition::new(module.syntax, source.clone())
             .with_provenance("frankenctl-onboard");
         for edge in &module.imports {
-            definition = definition.with_dependency(ModuleDependency::new(
-                edge.specifier.clone(),
-                ImportStyle::Import,
-            ));
+            definition = definition
+                .with_dependency(ModuleDependency::new(edge.specifier.clone(), edge.style));
         }
         // Registration only fails for empty/outside-root keys; skip those files.
         if resolver
@@ -819,7 +881,7 @@ pub fn onboard_package(
             let mut outcomes = Vec::with_capacity(RESOLUTION_MODES.len());
             let mut resolved_targets: Vec<Option<String>> = Vec::new();
             for &mode in &RESOLUTION_MODES {
-                let request = ModuleRequest::new(edge.specifier.clone(), ImportStyle::Import)
+                let request = ModuleRequest::new(edge.specifier.clone(), edge.style)
                     .with_referrer(referrer.clone())
                     .with_compatibility_mode(mode);
                 match resolver.resolve(&request, &context, &AllowAllPolicy) {
@@ -889,6 +951,20 @@ pub fn onboard_package(
         });
     }
     modules.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let dynamic_require_modules: Vec<(String, usize)> = reached
+        .iter()
+        .filter_map(|module| {
+            extracted.get(module).and_then(|extracted| {
+                (extracted.dynamic_require_count > 0)
+                    .then(|| (module.clone(), extracted.dynamic_require_count))
+            })
+        })
+        .collect();
+    let dynamic_require_count: usize = dynamic_require_modules
+        .iter()
+        .map(|(_, count)| *count)
+        .sum();
 
     // 4. Aggregate the five artifacts from the per-module reports.
     let mut capability_index: BTreeMap<String, (Option<RuntimeCapability>, BTreeSet<EdgeSite>)> =
@@ -1014,6 +1090,16 @@ pub fn onboard_package(
             "file walk truncated at {MAX_PACKAGE_FILES} files; the package is larger than the intake bound"
         ));
     }
+    if dynamic_require_count > 0 {
+        let details = dynamic_require_modules
+            .iter()
+            .map(|(module, count)| format!("{module} ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        completeness_notes.push(format!(
+            "{dynamic_require_count} non-literal top-level require() call(s) cannot be followed statically: {details}"
+        ));
+    }
     let bounded_modules: Vec<&str> = modules
         .iter()
         .filter(|m| m.analysis.analysis_completeness != AnalysisCompleteness::Complete)
@@ -1067,6 +1153,7 @@ pub fn onboard_package(
         ));
     }
     let completeness = if truncated
+        || dynamic_require_count > 0
         || !bounded_modules.is_empty()
         || !unresolved_edges.is_empty()
         || !mode_fragile_edges.is_empty()
@@ -1207,6 +1294,77 @@ mod tests {
         for outcome in &edge.outcomes {
             assert_eq!(outcome.resolved_path.as_deref(), Some("math.js"));
         }
+    }
+
+    #[test]
+    fn commonjs_literal_require_is_followed_as_a_real_graph_edge() {
+        let pkg = TempPackage::new("commonjs_literal_require_graph");
+        pkg.write(
+            "index.cjs",
+            "const dep = require(\"./dep.cjs\");\nmodule.exports = dep;\n",
+        );
+        pkg.write("dep.cjs", "module.exports = { value: 42 };\n");
+
+        let report = onboard_package(&pkg.root, "index.cjs", "demo-pkg", ParseGoal::Script);
+
+        assert!(report.analyzable);
+        assert_eq!(report.manifest_proposal.module_count, 2);
+        assert!(
+            report
+                .manifest_proposal
+                .modules
+                .contains(&"dep.cjs".to_string())
+        );
+        let edge = report
+            .module_resolution_report
+            .edges
+            .iter()
+            .find(|edge| edge.specifier == "./dep.cjs")
+            .expect("literal require edge must be resolved");
+        assert!(edge.modes_agree);
+        assert!(
+            edge.outcomes
+                .iter()
+                .all(|outcome| { outcome.resolved_path.as_deref() == Some("dep.cjs") })
+        );
+    }
+
+    #[test]
+    fn commonjs_bare_literal_require_is_reported_as_external_dependency() {
+        let pkg = TempPackage::new("commonjs_external_require");
+        pkg.write("index.cjs", "const fs = require(\"node:fs\");\n");
+
+        let report = onboard_package(&pkg.root, "index.cjs", "demo-pkg", ParseGoal::Script);
+
+        assert!(report.external_dependencies.iter().any(|dependency| {
+            dependency.specifier == "node:fs"
+                && dependency
+                    .sites
+                    .iter()
+                    .any(|site| site.module == "index.cjs")
+        }));
+    }
+
+    #[test]
+    fn dynamic_commonjs_require_bounds_coverage_without_inventing_an_edge() {
+        let pkg = TempPackage::new("commonjs_dynamic_require");
+        pkg.write(
+            "index.cjs",
+            "const target = './dep.cjs';\nconst dep = require(target);\nmodule.exports = dep;\n",
+        );
+        pkg.write("dep.cjs", "module.exports = 42;\n");
+
+        let report = onboard_package(&pkg.root, "index.cjs", "demo-pkg", ParseGoal::Script);
+
+        assert_eq!(report.completeness, PackageIntakeCompleteness::Bounded);
+        assert_eq!(report.manifest_proposal.module_count, 1);
+        assert!(report.module_resolution_report.edges.is_empty());
+        assert!(
+            report
+                .completeness_notes
+                .iter()
+                .any(|note| { note.contains("top-level require()") && note.contains("index.cjs") })
+        );
     }
 
     #[test]

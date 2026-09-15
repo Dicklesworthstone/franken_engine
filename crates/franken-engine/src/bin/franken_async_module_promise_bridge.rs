@@ -148,7 +148,7 @@ fn run_scenario(scenario: Scenario) -> Result<ScenarioOutput, String> {
         dependency_ready: dependency_ready.into_iter().collect(),
         module_phases,
         witness_event_count: bridge.evaluator().witness_events().len(),
-        pending_microtasks: bridge.microtasks().len(),
+        pending_microtasks: bridge.microtasks().pending_count(),
     })
 }
 

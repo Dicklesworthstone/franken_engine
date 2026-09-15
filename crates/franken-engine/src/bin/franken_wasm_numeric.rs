@@ -32,11 +32,32 @@ struct Response {
     execution: WasmNumericExecution,
 }
 
+fn decode_module_hex(
+    module_hex: &str,
+    limits: &WasmNumericLimits,
+) -> Result<Vec<u8>, String> {
+    let module_hex = module_hex.trim();
+    if module_hex.len() % 2 != 0 {
+        return Err("module_hex must contain an even number of hexadecimal digits".to_string());
+    }
+    let max_hex_digits = limits
+        .max_module_bytes
+        .checked_mul(2)
+        .unwrap_or(usize::MAX);
+    if module_hex.len() > max_hex_digits {
+        return Err(format!(
+            "module_hex represents {} bytes; limit is {}",
+            module_hex.len() / 2,
+            limits.max_module_bytes
+        ));
+    }
+    hex::decode(module_hex).map_err(|error| format!("module_hex is not valid hexadecimal: {error}"))
+}
+
 fn run(request: Request) -> Result<Response, String> {
-    let module_bytes = hex::decode(request.module_hex.trim())
-        .map_err(|error| format!("module_hex is not valid hexadecimal: {error}"))?;
-    let vm = WasmNumericVm::parse(&module_bytes, request.limits.unwrap_or_default())
-        .map_err(|error| error.to_string())?;
+    let limits = request.limits.unwrap_or_default();
+    let module_bytes = decode_module_hex(&request.module_hex, &limits)?;
+    let vm = WasmNumericVm::parse(&module_bytes, limits).map_err(|error| error.to_string())?;
     let available_exports = vm.export_names().map(str::to_string).collect();
     let execution = vm
         .call_export(&request.export, &request.arguments)
@@ -101,12 +122,28 @@ mod tests {
     #[test]
     fn invalid_hex_fails_closed() {
         let error = run(Request {
-            module_hex: "xyz".to_string(),
+            module_hex: "xy".to_string(),
             export: "add".to_string(),
             arguments: Vec::new(),
             limits: None,
         })
         .expect_err("invalid hex must fail");
         assert!(error.contains("not valid hexadecimal"));
+    }
+
+    #[test]
+    fn odd_hex_fails_before_decode() {
+        let error = decode_module_hex("abc", &WasmNumericLimits::default()).unwrap_err();
+        assert!(error.contains("even number"));
+    }
+
+    #[test]
+    fn module_size_limit_fails_before_decode_allocation() {
+        let limits = WasmNumericLimits {
+            max_module_bytes: 2,
+            ..WasmNumericLimits::default()
+        };
+        let error = decode_module_hex("000102", &limits).unwrap_err();
+        assert!(error.contains("3 bytes; limit is 2"));
     }
 }

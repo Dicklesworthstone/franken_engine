@@ -1,7 +1,7 @@
 //! BRIDGE-15.1/15.3 coexistence proof for the declarative Array family.
 //!
 //! The semantic bodies remain on the legacy receiver-aware interpreter seam for
-//! this migration stage.  These tests pin the table/glue invariants and prove a
+//! this migration stage. These tests pin the table/glue invariants and prove a
 //! representative cross-section still executes through the shipped HybridRouter.
 
 use std::collections::BTreeSet;
@@ -104,20 +104,13 @@ fn family_method_set_is_stable_and_unique() {
 }
 
 #[test]
-fn iterator_object_residual_is_exact_not_family_wide() {
-    let partial: BTreeSet<_> = array_prototype::ROWS
+fn family_gap_ledger_matches_shipped_array_semantics() {
+    let unresolved: Vec<_> = array_prototype::ROWS
         .iter()
-        .filter(|row| matches!(&row.gap_status, GapStatus::Partial(_)))
+        .filter(|row| !matches!(&row.gap_status, GapStatus::Resolved))
         .map(|row| row.name)
         .collect();
-    assert_eq!(
-        partial,
-        BTreeSet::from([
-            "Array.prototype.entries",
-            "Array.prototype.keys",
-            "Array.prototype.values",
-        ])
-    );
+    assert!(unresolved.is_empty(), "unexpected Array semantic gaps: {unresolved:?}");
 }
 
 #[test]
@@ -174,4 +167,32 @@ fn e2e_callback_and_reduce_methods_still_serve() {
     assert_eq!(ev("[1,2,3].every(x=>x>0);"), "true");
     assert_eq!(ev("[1,2,3].reduce((a,b)=>a+b,0);"), "6");
     assert_eq!(ev("[1,2,3].reduceRight((a,b)=>a-b,0);"), "-6");
+}
+
+#[test]
+fn e2e_array_iterator_methods_are_lazy_and_stateful() {
+    assert_eq!(
+        ev("let a=[1,2]; let it=a.values(); a[0]=8; let x=it.next().value; a[1]=9; x + ':' + it.next().value + ':' + it.next().done;"),
+        "8:9:true"
+    );
+    assert_eq!(
+        ev("let calls=0,a=[1]; Object.defineProperty(a,'0',{get(){calls+=1;throw 7;}}); let it=a.keys(); it.next().value + ':' + it.next().done + ':' + calls;"),
+        "0:true:0"
+    );
+    assert_eq!(
+        ev("let a=[1,2]; let it=a.entries(); let first=it.next().value; a[1]=9; let second=it.next().value; first.join(':') + ':' + second.join(':') + ':' + (first===second);"),
+        "0:1:1:9:false"
+    );
+}
+
+#[test]
+fn e2e_array_iterator_reads_live_length_and_stays_done_after_exhaustion() {
+    assert_eq!(
+        ev("let a=[1]; let it=a.values(); let first=it.next().value; a.push(2); first + ':' + it.next().value + ':' + it.next().done;"),
+        "1:2:true"
+    );
+    assert_eq!(
+        ev("let a=[]; let it=a.values(); let done=it.next().done; a.push(7); done + ':' + it.next().done;"),
+        "true:true"
+    );
 }

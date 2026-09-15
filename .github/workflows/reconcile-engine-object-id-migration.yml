@@ -1,4 +1,4 @@
-name: EngineObjectId Migration Reconciliation
+name: Recursive Generator Consumer Diagnostic
 
 on:
   push:
@@ -6,91 +6,42 @@ on:
       - main
     paths:
       - .github/workflows/reconcile-engine-object-id-migration.yml
-  workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: engine-object-id-migration-reconciliation
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  reconcile:
-    name: Apply cfg hygiene, format, test, and publish
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
-      - name: Checkout full main history
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@nightly
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
         with:
-          components: rustfmt,clippy
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: engine-object-id-migration-reconciliation
-
-      - name: Reconcile latest main with bounded fast-forward retries
+          shared-key: native-iterator-standalone
+          cache-on-failure: true
+      - name: Instrument exact recursive-consumer result
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "franken-engine-identity-bot"
-          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
-
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git reset --hard origin/main
-
-            python3 - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
-          text = path.read_text()
-          old = '    const ALL: [Self; 9] = ['
-          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
-          if new not in text:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
-              text = text.replace(old, new, 1)
-              path.write_text(text)
+          p=Path('crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs')
+          s=p.read_text()
+          old='''                assert!(matches!(\n                    core.execute(&module),\n                    Err(InterpreterError::StackOverflow { max: 8, .. })\n                ));'''
+          new='''                let outcome = core.execute(&module);\n                assert!(\n                    matches!(outcome, Err(InterpreterError::StackOverflow { max: 8, .. })),\n                    "unexpected recursive iterator-consumer outcome: {outcome:?}"\n                );'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one assertion block, found {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
           PY
-
-            rustfmt --edition 2024 \
-              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
-              crates/franken-engine/tests/engine_object_id_migration_cli.rs
-            cargo test --no-default-features -p frankenengine-engine \
-              --bin franken_engine_object_id_migration
-            cargo test --no-default-features -p frankenengine-engine \
-              --test engine_object_id_migration_cli
-            cargo clippy --no-default-features -p frankenengine-engine \
-              --bin franken_engine_object_id_migration -- -D warnings
-            git diff --check
-
-            if git diff --quiet; then
-              echo "EngineObjectId migration binary was already reconciled"
-              exit 0
-            fi
-
-            git add \
-              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
-              crates/franken-engine/tests/engine_object_id_migration_cli.rs
-            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
-
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
-          done
-
-          echo "unable to publish identity migration reconciliation after bounded retries" >&2
-          exit 1
+          cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression iterator_consumers_refuse_recursive_generators_without_native_stack_abort -- --nocapture

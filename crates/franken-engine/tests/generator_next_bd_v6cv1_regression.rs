@@ -485,3 +485,290 @@ delegation_case!(
     r#"let source = {[Symbol.iterator]: function() { return {next: function() { return {value: 1, done: false}; }, throw: function() { return {value: arguments.length, done: true}; }}; }}; function* g() { return yield* source; } let it = g(); it.next(); it.throw().value;"#,
     "1"
 );
+
+fn delegation_config() -> frankenengine_engine::baseline_interpreter::InterpreterConfig {
+    use frankenengine_engine::baseline_interpreter::InterpreterConfig;
+    use frankenengine_engine::capability::RuntimeCapability;
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = std::collections::BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]);
+    config
+}
+
+fn delegation_program(source: &str) -> frankenengine_engine::ir_contract::Ir3Module {
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser_api_stability::parse_script;
+    let tree = parse_script(source).expect("delegation program parses");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "delegation-containment.js");
+    lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new("delegation", "delegation", "delegation"),
+    )
+    .expect("delegation program lowers")
+    .ir3
+}
+
+#[test]
+fn delegate_suspension_completion_and_callback_memory_match_eager_accounting() {
+    use frankenengine_engine::baseline_interpreter::InterpreterCore;
+    for source in [
+        "function* g(){yield* 'abc';} let it=g();it.next();7;",
+        "function* g(){yield* 'abc';} let it=g();it.next();it.return(2);7;",
+        "function* a(){yield* [1,2];} function* b(){yield* a();} let it=b();it.next();7;",
+        "function* a(){yield* [1,2];} function* b(){yield* a();} let it=b();it.next();it.return(3);7;",
+        "let xs={[Symbol.iterator](){return {next(){return {value:1,done:false};}};}};function* g(){yield* xs;}let it=g();it.next();7;",
+        "let xs={[Symbol.iterator](){return {next(){return {value:1,done:true};}};}};function* g(){return yield* xs;}g().next();7;",
+        "let xs={[Symbol.iterator](){return {next(){return {get done(){return false;},get value(){return 3;}};}};}};function* g(){yield* xs;}g().next();7;",
+        "function* g(){try{yield* [1,2];}catch(e){yield e;}}let it=g();it.next();it.throw(5);7;",
+    ] {
+        let module = delegation_program(source);
+        let mut core = InterpreterCore::new(delegation_config(), "delegation-memory");
+        let result = core.execute(&module).expect(source);
+        assert_eq!(result.value.to_string(), "7", "{source}");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "{source}"
+        );
+        let repeated = core
+            .execute(&module)
+            .expect("repeat must discard stale delegated activations");
+        assert_eq!(repeated.value.to_string(), "7", "repeat: {source}");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "repeat: {source}"
+        );
+    }
+}
+
+fn labeled_delegation_core(
+    source_label: frankenengine_engine::ifc_artifacts::Label,
+    resume: Option<(&str, frankenengine_engine::ifc_artifacts::Label)>,
+) -> frankenengine_engine::baseline_interpreter::InterpreterCore {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, Value};
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ir_contract::{
+        Ir3FunctionDesc, Ir3Instruction as I, Ir3Module, RegRange,
+    };
+    let mut module = Ir3Module::new(
+        ContentHash::compute(b"labeled-delegation"),
+        "labeled-delegation.js",
+    );
+    module.constant_pool = vec!["next".into(), "value".into(), "return".into()];
+    module.instructions = vec![
+        I::CreateGenerator {
+            dst: 1,
+            function_index: 1,
+            capture_count: 0,
+        },
+        I::Call {
+            callee: 1,
+            args: RegRange {
+                start: 10,
+                count: 1,
+            },
+            dst: 2,
+        },
+        I::LoadStr {
+            dst: 3,
+            pool_index: 0,
+        },
+        I::GetProperty {
+            obj: 2,
+            key: 3,
+            dst: 4,
+        },
+        I::CallMethod {
+            receiver: 2,
+            callee: 4,
+            args: RegRange {
+                start: 12,
+                count: 0,
+            },
+            dst: 5,
+        },
+    ];
+    if let Some((method, _)) = &resume {
+        module.instructions.extend([
+            I::LoadStr {
+                dst: 3,
+                pool_index: if *method == "return" { 2 } else { 0 },
+            },
+            I::GetProperty {
+                obj: 2,
+                key: 3,
+                dst: 4,
+            },
+            I::CallMethod {
+                receiver: 2,
+                callee: 4,
+                args: RegRange {
+                    start: 11,
+                    count: 1,
+                },
+                dst: 5,
+            },
+        ]);
+    }
+    module.instructions.extend([
+        I::LoadStr {
+            dst: 6,
+            pool_index: 1,
+        },
+        I::GetProperty {
+            obj: 5,
+            key: 6,
+            dst: 0,
+        },
+        I::Halt,
+    ]);
+    let entry = module.instructions.len() as u32;
+    module.instructions.extend([
+        I::Yield {
+            value: 0,
+            delegate: true,
+            resume_dst: 1,
+        },
+        I::Return { value: 1 },
+    ]);
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 16,
+            name: Some("main".into()),
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            entry,
+            arity: 1,
+            frame_size: 2,
+            name: Some("delegate".into()),
+            is_generator: true,
+            rest_param_index: None,
+        },
+    ];
+    let mut core = InterpreterCore::new(delegation_config(), "delegation-labels");
+    core.seed_register(10, Value::str("ab"))
+        .expect("seed iterable");
+    core.set_register_label(10, source_label.clone())
+        .expect("source provenance");
+    let expected_label = if let Some((_, label)) = &resume {
+        core.seed_register(11, Value::Int(9))
+            .expect("seed resume value");
+        core.set_register_label(11, label.clone())
+            .expect("resume provenance");
+        source_label.join(label)
+    } else {
+        source_label
+    };
+    let result = core.execute(&module).expect("labeled delegation executes");
+    let expected = match resume.as_ref().map(|(method, _)| *method) {
+        None => Value::str("a"),
+        Some("return") => Value::Int(9),
+        Some(_) => Value::str("b"),
+    };
+    assert_eq!(result.value, expected);
+    assert_eq!(
+        core.get_register_label(0).expect("result label"),
+        &expected_label
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+    core
+}
+
+#[test]
+fn delegate_source_provenance_survives_suspension_including_custom_labels() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    for label in [
+        Label::Public,
+        Label::Secret,
+        Label::Custom {
+            name: "delegated-secret".repeat(100),
+            level: 8,
+        },
+    ] {
+        labeled_delegation_core(label, None);
+    }
+}
+
+#[test]
+fn delegate_next_provenance_is_retained_even_when_delegate_ignores_argument() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    labeled_delegation_core(Label::Public, Some(("next", Label::Secret)));
+}
+
+#[test]
+fn delegate_missing_return_transports_exact_argument_provenance() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    labeled_delegation_core(Label::Internal, Some(("return", Label::Secret)));
+}
+
+#[test]
+fn delegate_recursive_generators_respect_shared_call_depth_budget() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    let mut config = delegation_config();
+    config.max_call_depth = 8;
+    let mut core = InterpreterCore::new(config, "delegation-depth");
+    let module = delegation_program("function* g(){yield* g();}g().next();");
+    assert!(matches!(
+        core.execute(&module),
+        Err(InterpreterError::StackOverflow { max: 8, .. })
+    ));
+}
+
+#[test]
+fn delegate_infinite_iteration_respects_shared_instruction_budget() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    let mut config = delegation_config();
+    config.instruction_budget = 2000;
+    let mut core = InterpreterCore::new(config, "delegation-fuel");
+    let module = delegation_program(
+        "function* a(){while(true){yield 1;}}function* b(){yield* a();}for(let x of b()){}",
+    );
+    assert!(matches!(
+        core.execute(&module),
+        Err(InterpreterError::BudgetExhausted { budget: 2000, .. })
+    ));
+}
+
+#[test]
+fn delegate_iteration_traces_are_deterministic_without_unobserved_getter_reads() {
+    use frankenengine_engine::baseline_interpreter::InterpreterCore;
+    use frankenengine_engine::iterator_protocol::{IterationKind, IterationOperation};
+    let module = delegation_program(
+        "let xs={[Symbol.iterator](){return {next(){return {done:false,get value(){throw 7;}};}};}};function* g(){yield* xs;}g().next();9;",
+    );
+    let mut first = InterpreterCore::new(delegation_config(), "delegation-replay");
+    let mut second = InterpreterCore::new(delegation_config(), "delegation-replay");
+    let a = first
+        .execute(&module)
+        .expect("yielding result must not observe value getter");
+    let b = second
+        .execute(&module)
+        .expect("replay result must not observe value getter");
+    assert_eq!(a.value.to_string(), "9");
+    assert_eq!(a.iteration_traces, b.iteration_traces);
+    let trace = a
+        .iteration_traces
+        .iter()
+        .find(|trace| trace.kind == IterationKind::YieldDelegate)
+        .expect("delegation trace");
+    assert_eq!(trace.values_produced, 1);
+    assert!(!trace.completed);
+    assert!(
+        !trace
+            .events
+            .iter()
+            .any(|event| matches!(event.operation, IterationOperation::IteratorValue { .. }))
+    );
+}

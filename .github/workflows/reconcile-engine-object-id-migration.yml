@@ -1,4 +1,4 @@
-name: React Runtime Graph Verification Integration
+name: EngineObjectId Migration Reconciliation
 
 on:
   push:
@@ -6,53 +6,91 @@ on:
       - main
     paths:
       - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
+
 jobs:
-  implement:
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
-      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
+          components: rustfmt,clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          shared-key: react-runtime-graph-verification
-          cache-on-failure: true
-      - name: Wire deterministic React graph receipts into compatibility validation
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
         shell: bash
         run: |
           set -euo pipefail
-          echo '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' | base64 -d | gzip -d > /tmp/react_graph_patch.py
-          python3 /tmp/react_graph_patch.py
-          rustfmt --edition 2024 crates/franken-engine/src/react_ecosystem_compatibility.rs crates/franken-engine/tests/react_ecosystem_compatibility_integration.rs
-          cargo test --no-default-features -p frankenengine-engine --test react_ecosystem_compatibility_integration validator_emits_ssr_module_graph_receipt_for_server_pattern -- --nocapture
-          cargo test --no-default-features -p frankenengine-engine --test react_ecosystem_compatibility_integration validator_emits_both_graph_receipts_for_hybrid_pattern -- --nocapture
-          cargo test --no-default-features -p frankenengine-engine react_ecosystem_compatibility::tests --lib -- --nocapture
-          cargo check --no-default-features -p frankenengine-engine --lib
-          git diff --check
-          git config user.name 'Jeff Emanuel'
-          git config user.email '35050222+Dicklesworthstone@users.noreply.github.com'
-          git add crates/franken-engine/src/react_ecosystem_compatibility.rs crates/franken-engine/tests/react_ecosystem_compatibility_integration.rs
-          git commit -m 'feat(react): verify runtime module graphs in ecosystem gate'
-          git fetch origin main
-          if [[ "$(git rev-parse HEAD^)" != "$(git rev-parse origin/main)" ]]; then
-            git rebase origin/main
-            cargo test --no-default-features -p frankenengine-engine --test react_ecosystem_compatibility_integration validator_emits_ssr_module_graph_receipt_for_server_pattern -- --nocapture
-            cargo test --no-default-features -p frankenengine-engine --test react_ecosystem_compatibility_integration validator_emits_both_graph_receipts_for_hybrid_pattern -- --nocapture
-            cargo check --no-default-features -p frankenengine-engine --lib
-          fi
-          git push origin HEAD:main
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+          PY
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

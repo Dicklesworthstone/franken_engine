@@ -1,4 +1,4 @@
-name: RegExp Stateful Test Source Publication
+name: EngineObjectId Migration Reconciliation
 
 on:
   push:
@@ -6,49 +6,91 @@ on:
       - main
     paths:
       - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
+
 jobs:
-  implement:
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
-      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
+          components: rustfmt,clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          shared-key: regexp-stateful-test
-      - name: Publish RegExp lastIndex semantics
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
         shell: bash
         run: |
           set -euo pipefail
-          echo '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' | base64 -d | gzip -d > /tmp/regexp_state_patch.py
-          python3 /tmp/regexp_state_patch.py
-          rustfmt --edition 2024 crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/tests/regexp_eval_bd_wni4m_regression.rs
-          cargo test --no-default-features -p frankenengine-engine --test regexp_eval_bd_wni4m_regression -- --nocapture
-          cargo check --no-default-features -p frankenengine-engine --lib
-          git diff --check
-          git config user.name 'Jeff Emanuel'
-          git config user.email '35050222+Dicklesworthstone@users.noreply.github.com'
-          git add crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/tests/regexp_eval_bd_wni4m_regression.rs
-          git commit -m 'feat(regexp): honor global and sticky lastIndex in test'
-          git fetch origin main
-          if [[ "$(git rev-parse HEAD^)" != "$(git rev-parse origin/main)" ]]; then
-            git rebase origin/main
-            cargo test --no-default-features -p frankenengine-engine --test regexp_eval_bd_wni4m_regression -- --nocapture
-            cargo check --no-default-features -p frankenengine-engine --lib
-          fi
-          git push origin HEAD:main
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+          PY
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

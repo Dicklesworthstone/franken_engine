@@ -6098,6 +6098,10 @@ enum DispatchOutcome {
         source: u32,
         resume_dst: u32,
     },
+    ReentrantInstruction {
+        instruction_ip: usize,
+        profile_start: Option<std::time::Instant>,
+    },
 }
 
 /// One fully accounted argument carrier owned by `ApplyHostCall` while it
@@ -41033,6 +41037,374 @@ impl InterpreterCore {
         }
     }
 
+    /// Run iterator and hostcall operations after releasing the bytecode
+    /// dispatch frame. These paths can resume generators through for-of,
+    /// destructuring, spread, and user-defined iterator methods.
+    #[inline(never)]
+    fn finish_reentrant_instruction(
+        &mut self,
+        module: &Ir3Module,
+        instruction_ip: usize,
+        profile_start: Option<std::time::Instant>,
+    ) -> Result<(), InterpreterError> {
+        let instruction = module.instructions.get(instruction_ip).ok_or(
+            InterpreterError::InstructionOutOfBounds {
+                ip: instruction_ip,
+                count: module.instructions.len(),
+            },
+        )?;
+        match *instruction {
+            Ir3Instruction::ForInInit { src, dst } => {
+                let result_label = self.unary_operation_label(src)?;
+                let value = self.read_reg(src)?;
+                let iterator = self.init_for_in_iterator(Some(module), value)?;
+                // Carry the iterable's IFC label onto the iterator register
+                // so the keys it yields stay tainted.
+                self.write_reg_with_label(dst, iterator, result_label)?;
+                self.ip += 1;
+            }
+            Ir3Instruction::ForInNext {
+                iterator,
+                value_dst,
+                done_target,
+            } => {
+                let iterator_reg = iterator;
+                let result_label = self.unary_operation_label(iterator_reg)?;
+                let iterator = self.read_reg(iterator_reg)?;
+                if let Some(value) = self.advance_for_in_iterator(iterator)? {
+                    // Each bound key derives from the iterable; carry its
+                    // IFC label onto the loop variable (sibling of the
+                    // reduce/array-from callback-lane fix, bd-ooaka.1).
+                    self.write_reg_with_label(value_dst, value, result_label)?;
+                    self.ip += 1;
+                } else {
+                    self.ip = done_target as usize;
+                }
+            }
+            Ir3Instruction::ForOfInit { src, dst } => {
+                let result_label = self.unary_operation_label(src)?;
+                let value = self.read_reg(src)?;
+                let iterator = self.init_for_of_iterator(Some(module), value)?;
+                // Carry the iterable's IFC label onto the iterator register.
+                self.write_reg_with_label(dst, iterator, result_label)?;
+                self.ip += 1;
+            }
+            Ir3Instruction::ForOfNext {
+                iterator,
+                value_dst,
+                done_target,
+            } => {
+                let iterator_reg = iterator;
+                let result_label = self.unary_operation_label(iterator_reg)?;
+                let iterator = self.read_reg(iterator_reg)?;
+                self.clear_pending_hostcall_result_label();
+                match self.advance_for_of_iterator(Some(module), iterator) {
+                    Ok(Some(value)) => {
+                        // Each bound element derives from the iterable; carry
+                        // its label onto the loop variable so a
+                        // `for (const x of secret) egress(x)` cannot launder
+                        // the taint (sibling of bd-ooaka.1).
+                        let result_label = result_label.join(
+                            &self
+                                .take_pending_hostcall_result_label()
+                                .unwrap_or(Label::Public),
+                        );
+                        self.write_reg_with_label(value_dst, value, result_label)?;
+                        self.ip += 1;
+                    }
+                    Ok(None) => {
+                        self.clear_pending_hostcall_result_label();
+                        self.ip = done_target as usize;
+                    }
+                    Err(err) => {
+                        // A throw from the iterator's `next()` (or `@@iterator`)
+                        // must be catchable by an enclosing try/catch
+                        // (bd-bg9l1.27.7). `invoke_inline_method_call` ran the
+                        // method in isolation and re-armed `pending_exception`
+                        // with the thrown value; route it into the in-loop
+                        // unwinding exactly like the `Throw` instruction, instead
+                        // of letting `?` escape the loop. Non-throw errors (e.g.
+                        // a missing `next` TypeError) leave `pending_exception`
+                        // unset and propagate unchanged.
+                        let Some((thrown, thrown_label)) = self.take_pending_exception_slot()
+                        else {
+                            return Err(err);
+                        };
+                        // The isolated iterator call already re-armed this
+                        // exception. Route that one owned completion without
+                        // suspending a duplicate that a catch could revive.
+                        self.pending_finally_entry = None;
+                        self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
+                        if let Some(frame) = self.pop_exception_target_frame()? {
+                            self.select_exception_target(Some(module), frame);
+                        } else if self.nearest_async_call_depth().is_some() {
+                            let (thrown, thrown_label) = self
+                                .take_pending_exception_slot()
+                                .expect("iterator throw remained pending for async rejection");
+                            if !self.reject_nearest_async_boundary(thrown, thrown_label)? {
+                                return Err(InterpreterError::InternalError {
+                                    details:
+                                        "async boundary disappeared while routing iterator throw"
+                                            .to_string(),
+                                });
+                            }
+                            return Ok(());
+                        } else {
+                            self.clear_suspended_abrupt_completions();
+                            self.clear_finally_frames();
+                            self.pending_finally_entry = None;
+                            return Err(InterpreterError::UncaughtException {
+                                value: self.uncaught_exception_description(
+                                    self.pending_exception.as_ref().expect(
+                                        "iterator throw remained pending for uncaught propagation",
+                                    ),
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Ir3Instruction::IteratorClose { iterator, reason } => {
+                let label = self.clone_register_label_with_temporary_budget(iterator)?;
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                let iterator = self.read_reg(iterator)?;
+                // A canonical throw-close handler owns the original throw
+                // in its active finalizer frame. Retain the pending-slot
+                // fallback for hand-authored legacy IR that reaches this
+                // instruction without `EnterFinally`.
+                let frame_owns_original_throw = reason == IteratorCloseReason::Throw
+                    && self.finally_frames.last().is_some_and(|frame| {
+                        matches!(
+                            frame.completion.as_ref(),
+                            Some(AbruptCompletion::Exception(_, _))
+                        )
+                    });
+                let suspended_original_throw = reason == IteratorCloseReason::Throw
+                    && !frame_owns_original_throw
+                    && self.pending_exception.is_some();
+                if suspended_original_throw {
+                    self.suspend_current_abrupt_completion()?;
+                }
+                // A non-canonical pending completion still needs the legacy
+                // suspension path. Canonical source-finally completions stay
+                // isolated in `finally_frames` across the callback snapshot.
+                let suspended_inherited_completion = matches!(
+                    reason,
+                    IteratorCloseReason::Break | IteratorCloseReason::Continue
+                ) && (self.pending_exception.is_some()
+                    || self.pending_return.is_some());
+                if suspended_inherited_completion {
+                    self.suspend_current_abrupt_completion()?;
+                }
+                match self.close_iterator(module, iterator, reason) {
+                    Ok(()) => {
+                        if suspended_original_throw {
+                            self.restore_suspended_abrupt_completion();
+                        }
+                        if suspended_inherited_completion {
+                            self.restore_suspended_abrupt_completion();
+                        }
+                        self.ip += 1;
+                    }
+                    Err(err) => {
+                        // IteratorClose(iterator, throwCompletion) preserves
+                        // the original throw even when `return` itself throws
+                        // or returns a non-object. Suppress only ordinary JS
+                        // close failures; engine/resource faults still escape.
+                        let explicit_throw =
+                            matches!(&err, InterpreterError::UncaughtException { .. })
+                                && self.pending_exception.is_some();
+                        if reason == IteratorCloseReason::Throw
+                            && (explicit_throw || Self::js_catchable_error_name(&err).is_some())
+                            && (frame_owns_original_throw || suspended_original_throw)
+                        {
+                            self.clear_pending_abrupt_slots();
+                            if suspended_original_throw {
+                                self.restore_suspended_abrupt_completion();
+                            }
+                            self.ip += 1;
+                            return Ok(());
+                        }
+                        if frame_owns_original_throw || suspended_original_throw {
+                            // Resource/engine faults are not suppressible JS
+                            // completions. Keep the owned frame (or restore
+                            // the legacy pending completion) while the engine
+                            // fault propagates.
+                            self.clear_pending_abrupt_slots();
+                            if suspended_original_throw {
+                                self.restore_suspended_abrupt_completion();
+                            }
+                            return Err(err);
+                        }
+                        match self.route_iterator_close_failure(module, err)? {
+                            None => return Ok(()),
+                            Some(err) => return Err(err),
+                        }
+                    }
+                }
+            }
+            Ir3Instruction::ArraySlice { array, start, dst } => {
+                let result_label = self.binary_operation_label(array, start)?;
+                let array_value = self.read_reg(array)?;
+                let start_value = self.read_reg(start)?;
+                match self.slice_array_suffix(Some(module), array_value, start_value) {
+                    Ok(result) => {
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                    }
+                    Err(error) => {
+                        if let Some(error) = self.route_iterator_close_failure(module, error)? {
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            Ir3Instruction::SpreadIntoArray { array, iterable } => {
+                match self.spread_into_array_transaction(module, array, iterable) {
+                    Ok(()) => self.ip += 1,
+                    Err(error) => {
+                        // Guest throws from @@iterator, next, done, or
+                        // value cross an isolated callback boundary. Route
+                        // their original value through the surrounding
+                        // catch/finally/async boundary; resource refusals
+                        // remain uncatchable interpreter failures.
+                        if let Some(error) = self.route_iterator_close_failure(module, error)? {
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            Ir3Instruction::HostCall {
+                ref capability,
+                args,
+                dst,
+            } => {
+                // Apply shared capability gate logic
+                check_hostcall_capability_gate(self, &capability.0, self.ip as u32)?;
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("cap:{}", capability_gate_key(&capability.0))),
+                );
+
+                // bd-n2mjy: capture the join of arg labels BEFORE dispatch so
+                // hostcalls that mutate their arg slots don't strip the
+                // input taint we owe to the dst register.
+                let args_label = if capability.0 == "builtin:ApplyHostCall"
+                    || capability.0.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
+                {
+                    self.join_arg_range_with_object_mutation_label(args)?
+                } else {
+                    self.join_arg_range_label(args)?
+                };
+
+                self.clear_pending_hostcall_result_label();
+                let dispatch = hostcall_registry_row(&capability.0)
+                    .map(|row| row.dispatch)
+                    .ok_or_else(|| InterpreterError::CapabilityDenied {
+                        capability: recordable_capability_tag(&capability.0).into_owned(),
+                    })?;
+                let result = match dispatch {
+                    HostcallDispatchBinding::Promise => {
+                        self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
+                    }
+                    HostcallDispatchBinding::ModuleRequire => {
+                        self.dispatch_require_hostcall(args, Some(module))?
+                    }
+                    HostcallDispatchBinding::ModuleImport => {
+                        self.dispatch_import_hostcall(&capability.0, args, Some(module))?
+                    }
+                    HostcallDispatchBinding::Number => {
+                        self.dispatch_number_hostcall(&capability.0, args)?
+                    }
+                    HostcallDispatchBinding::Console => {
+                        self.dispatch_console_hostcall(&capability.0, args)?
+                    }
+                    HostcallDispatchBinding::Timer => {
+                        self.dispatch_timer_hostcall(&capability.0, args)?
+                    }
+                    HostcallDispatchBinding::ProcessSpawn => {
+                        self.dispatch_process_spawn_hostcall(args)?
+                    }
+                    HostcallDispatchBinding::Builtin => {
+                        // bd-8enww.4.10: a `builtin:` hostcall can run a user
+                        // callback whose explicit `throw` escapes its isolated
+                        // lane as `UncaughtException` with the thrown value
+                        // preserved — e.g. `Array.from(xs, x => { throw v })` via
+                        // the `builtin:ArrayFrom` mapper mini-lane, or an
+                        // array-literal `[…].some(x => { throw v })` via the
+                        // `builtin:ArrayPrototypeSome` fast-path. Route it into
+                        // THIS frame's catch handler exactly like the `Call` /
+                        // `CallMethod` builtin arms, rather than letting `?` escape
+                        // an enclosing `try`/`catch` — the AC#3 catchability
+                        // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
+                        // (Non-throw hostcall errors are a no-op through the
+                        // router and propagate unchanged.)
+                        match self.dispatch_builtin_hostcall(&capability.0, args, Some(module)) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                match self.route_isolated_explicit_throw(module, err)? {
+                                    None => {
+                                        // IFC (bd-8enww.4.8 throw-path mirror): the
+                                        // escaping value is seeded from the arg
+                                        // registers (which include the receiver array /
+                                        // source as arg 0), so join their labels onto
+                                        // the re-armed exception label — mirrors the
+                                        // success-path `dst` join below so a Secret
+                                        // receiver/arg cannot launder to a Public catch
+                                        // binding now that the mini-lane preserves the
+                                        // original thrown value.
+                                        self.join_pending_exception_label(&args_label)?;
+                                        return Ok(());
+                                    }
+                                    Some(err) => return Err(err),
+                                }
+                            }
+                        }
+                    }
+                    HostcallDispatchBinding::ClientRequest => {
+                        // bd-3894s slice (2b): `http.request(url[, opts])` builds a
+                        // writable `ClientRequest` object here WITHOUT egressing —
+                        // the body is accumulated via `req.write`/`req.end` and the
+                        // deferred egress fires from `.end()`. The capability gate
+                        // above already authorized NetworkEgress at creation time
+                        // (`net:client_request` maps to NetworkEgress), so the
+                        // deferred `.end()` egress is pre-authorized at the engine
+                        // capability layer; the per-endpoint SSRF policy still
+                        // applies at `.end()` via the sandboxed provider.
+                        self.dispatch_client_request_create(args)?
+                    }
+                    HostcallDispatchBinding::HostIo => {
+                        // bd-f5b04.2.7: when a sandboxed host-I/O provider is
+                        // installed, dispatch the (already-authorized) fs hostcall
+                        // through the algebraic-effects stack to perform a real,
+                        // recorded host effect; otherwise it returns undefined.
+                        // bd-656a2: the http leg routes `net:request` (emitted by
+                        // the JS http.get/http.request lowering) through the SAME
+                        // seam — it performs+records a real NetworkSend host effect
+                        // via the sandboxed provider's network mechanism. The gate
+                        // above (`check_hostcall_capability_gate`) has already
+                        // authorized it against the granted NetworkEgress capability.
+                        self.dispatch_host_io_hostcall(&capability.0, args)?
+                    }
+                    HostcallDispatchBinding::Internal
+                    | HostcallDispatchBinding::DeterministicNoop => Value::Undefined,
+                };
+                let runtime_result_label = self.take_pending_hostcall_result_label();
+                let result_label = hostcall_result_contract(&capability.0)
+                    .result_label(&args_label, runtime_result_label.as_ref());
+                self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            _ => unreachable!("non-reentrant opcode crossed the iterator/hostcall boundary"),
+        }
+        if let (Some(profiler), Some(profile_start)) = (&mut self.profiling_data, profile_start) {
+            profiler.record_instruction(instruction);
+            profiler.record_instruction_time(instruction, profile_start.elapsed());
+        }
+        Ok(())
+    }
+
     fn run_loop_labeled_with_compact_tier1(
         &mut self,
         module: &Ir3Module,
@@ -41069,6 +41441,12 @@ impl InterpreterCore {
                 Ok(DispatchOutcome::GeneratorDelegate { source, resume_dst }) => {
                     self.finish_generator_delegate_dispatch(module, source, resume_dst)
                 }
+                Ok(DispatchOutcome::ReentrantInstruction {
+                    instruction_ip,
+                    profile_start,
+                }) => self
+                    .finish_reentrant_instruction(module, instruction_ip, profile_start)
+                    .map(|()| None),
                 Err(error) => Err(error),
             };
             match result {
@@ -41292,191 +41670,15 @@ impl InterpreterCore {
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
-                Ir3Instruction::ForInInit { src, dst } => {
-                    let result_label = self.unary_operation_label(src)?;
-                    let value = self.read_reg(src)?;
-                    let iterator = self.init_for_in_iterator(Some(module), value)?;
-                    // Carry the iterable's IFC label onto the iterator register
-                    // so the keys it yields stay tainted.
-                    self.write_reg_with_label(dst, iterator, result_label)?;
-                    self.ip += 1;
-                }
-                Ir3Instruction::ForInNext {
-                    iterator,
-                    value_dst,
-                    done_target,
-                } => {
-                    let iterator_reg = iterator;
-                    let result_label = self.unary_operation_label(iterator_reg)?;
-                    let iterator = self.read_reg(iterator_reg)?;
-                    if let Some(value) = self.advance_for_in_iterator(iterator)? {
-                        // Each bound key derives from the iterable; carry its
-                        // IFC label onto the loop variable (sibling of the
-                        // reduce/array-from callback-lane fix, bd-ooaka.1).
-                        self.write_reg_with_label(value_dst, value, result_label)?;
-                        self.ip += 1;
-                    } else {
-                        self.ip = done_target as usize;
-                    }
-                }
-                Ir3Instruction::ForOfInit { src, dst } => {
-                    let result_label = self.unary_operation_label(src)?;
-                    let value = self.read_reg(src)?;
-                    let iterator = self.init_for_of_iterator(Some(module), value)?;
-                    // Carry the iterable's IFC label onto the iterator register.
-                    self.write_reg_with_label(dst, iterator, result_label)?;
-                    self.ip += 1;
-                }
-                Ir3Instruction::ForOfNext {
-                    iterator,
-                    value_dst,
-                    done_target,
-                } => {
-                    let iterator_reg = iterator;
-                    let result_label = self.unary_operation_label(iterator_reg)?;
-                    let iterator = self.read_reg(iterator_reg)?;
-                    self.clear_pending_hostcall_result_label();
-                    match self.advance_for_of_iterator(Some(module), iterator) {
-                        Ok(Some(value)) => {
-                            // Each bound element derives from the iterable; carry
-                            // its label onto the loop variable so a
-                            // `for (const x of secret) egress(x)` cannot launder
-                            // the taint (sibling of bd-ooaka.1).
-                            let result_label = result_label.join(
-                                &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
-                            );
-                            self.write_reg_with_label(value_dst, value, result_label)?;
-                            self.ip += 1;
-                        }
-                        Ok(None) => {
-                            self.clear_pending_hostcall_result_label();
-                            self.ip = done_target as usize;
-                        }
-                        Err(err) => {
-                            // A throw from the iterator's `next()` (or `@@iterator`)
-                            // must be catchable by an enclosing try/catch
-                            // (bd-bg9l1.27.7). `invoke_inline_method_call` ran the
-                            // method in isolation and re-armed `pending_exception`
-                            // with the thrown value; route it into the in-loop
-                            // unwinding exactly like the `Throw` instruction, instead
-                            // of letting `?` escape the loop. Non-throw errors (e.g.
-                            // a missing `next` TypeError) leave `pending_exception`
-                            // unset and propagate unchanged.
-                            let Some((thrown, thrown_label)) = self.take_pending_exception_slot()
-                            else {
-                                return Err(err);
-                            };
-                            // The isolated iterator call already re-armed this
-                            // exception. Route that one owned completion without
-                            // suspending a duplicate that a catch could revive.
-                            self.pending_finally_entry = None;
-                            self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
-                            if let Some(frame) = self.pop_exception_target_frame()? {
-                                self.select_exception_target(Some(module), frame);
-                            } else if self.nearest_async_call_depth().is_some() {
-                                let (thrown, thrown_label) = self
-                                    .take_pending_exception_slot()
-                                    .expect("iterator throw remained pending for async rejection");
-                                if !self.reject_nearest_async_boundary(thrown, thrown_label)? {
-                                    return Err(InterpreterError::InternalError {
-                                        details: "async boundary disappeared while routing iterator throw"
-                                            .to_string(),
-                                    });
-                                }
-                                continue;
-                            } else {
-                                self.clear_suspended_abrupt_completions();
-                                self.clear_finally_frames();
-                                self.pending_finally_entry = None;
-                                return Err(InterpreterError::UncaughtException {
-                                    value: self.uncaught_exception_description(
-                                        self.pending_exception.as_ref().expect(
-                                            "iterator throw remained pending for uncaught propagation",
-                                        ),
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                }
-                Ir3Instruction::IteratorClose { iterator, reason } => {
-                    let label = self.clone_register_label_with_temporary_budget(iterator)?;
-                    self.replace_pending_hostcall_result_label(Some(label))?;
-                    let iterator = self.read_reg(iterator)?;
-                    // A canonical throw-close handler owns the original throw
-                    // in its active finalizer frame. Retain the pending-slot
-                    // fallback for hand-authored legacy IR that reaches this
-                    // instruction without `EnterFinally`.
-                    let frame_owns_original_throw = reason == IteratorCloseReason::Throw
-                        && self.finally_frames.last().is_some_and(|frame| {
-                            matches!(
-                                frame.completion.as_ref(),
-                                Some(AbruptCompletion::Exception(_, _))
-                            )
-                        });
-                    let suspended_original_throw = reason == IteratorCloseReason::Throw
-                        && !frame_owns_original_throw
-                        && self.pending_exception.is_some();
-                    if suspended_original_throw {
-                        self.suspend_current_abrupt_completion()?;
-                    }
-                    // A non-canonical pending completion still needs the legacy
-                    // suspension path. Canonical source-finally completions stay
-                    // isolated in `finally_frames` across the callback snapshot.
-                    let suspended_inherited_completion = matches!(
-                        reason,
-                        IteratorCloseReason::Break | IteratorCloseReason::Continue
-                    ) && (self.pending_exception.is_some()
-                        || self.pending_return.is_some());
-                    if suspended_inherited_completion {
-                        self.suspend_current_abrupt_completion()?;
-                    }
-                    match self.close_iterator(module, iterator, reason) {
-                        Ok(()) => {
-                            if suspended_original_throw {
-                                self.restore_suspended_abrupt_completion();
-                            }
-                            if suspended_inherited_completion {
-                                self.restore_suspended_abrupt_completion();
-                            }
-                            self.ip += 1;
-                        }
-                        Err(err) => {
-                            // IteratorClose(iterator, throwCompletion) preserves
-                            // the original throw even when `return` itself throws
-                            // or returns a non-object. Suppress only ordinary JS
-                            // close failures; engine/resource faults still escape.
-                            let explicit_throw =
-                                matches!(&err, InterpreterError::UncaughtException { .. })
-                                    && self.pending_exception.is_some();
-                            if reason == IteratorCloseReason::Throw
-                                && (explicit_throw || Self::js_catchable_error_name(&err).is_some())
-                                && (frame_owns_original_throw || suspended_original_throw)
-                            {
-                                self.clear_pending_abrupt_slots();
-                                if suspended_original_throw {
-                                    self.restore_suspended_abrupt_completion();
-                                }
-                                self.ip += 1;
-                                continue;
-                            }
-                            if frame_owns_original_throw || suspended_original_throw {
-                                // Resource/engine faults are not suppressible JS
-                                // completions. Keep the owned frame (or restore
-                                // the legacy pending completion) while the engine
-                                // fault propagates.
-                                self.clear_pending_abrupt_slots();
-                                if suspended_original_throw {
-                                    self.restore_suspended_abrupt_completion();
-                                }
-                                return Err(err);
-                            }
-                            match self.route_iterator_close_failure(module, err)? {
-                                None => continue,
-                                Some(err) => return Err(err),
-                            }
-                        }
-                    }
+                Ir3Instruction::ForInInit { .. }
+                    | Ir3Instruction::ForInNext { .. }
+                    | Ir3Instruction::ForOfInit { .. }
+                    | Ir3Instruction::ForOfNext { .. }
+                    | Ir3Instruction::IteratorClose { .. } => {
+                    return Ok(DispatchOutcome::ReentrantInstruction {
+                        instruction_ip: self.ip,
+                        profile_start,
+                    });
                 }
                 Ir3Instruction::Move { dst, src } => {
                     let result_label = self.unary_operation_label(src)?;
@@ -42566,128 +42768,11 @@ impl InterpreterCore {
                         }
                     }
                 }
-                Ir3Instruction::HostCall {
-                    capability,
-                    args,
-                    dst,
-                } => {
-                    // Apply shared capability gate logic
-                    check_hostcall_capability_gate(self, &capability.0, self.ip as u32)?;
-
-                    self.emit_witness(
-                        WitnessEventKind::HostcallDispatched,
-                        Some(&format!("cap:{}", capability_gate_key(&capability.0))),
-                    );
-
-                    // bd-n2mjy: capture the join of arg labels BEFORE dispatch so
-                    // hostcalls that mutate their arg slots don't strip the
-                    // input taint we owe to the dst register.
-                    let args_label = if capability.0 == "builtin:ApplyHostCall"
-                        || capability.0.starts_with(APPLY_HOSTCALL_TARGET_PREFIX)
-                    {
-                        self.join_arg_range_with_object_mutation_label(args)?
-                    } else {
-                        self.join_arg_range_label(args)?
-                    };
-
-                    self.clear_pending_hostcall_result_label();
-                    let dispatch = hostcall_registry_row(&capability.0)
-                        .map(|row| row.dispatch)
-                        .ok_or_else(|| InterpreterError::CapabilityDenied {
-                            capability: recordable_capability_tag(&capability.0).into_owned(),
-                        })?;
-                    let result = match dispatch {
-                        HostcallDispatchBinding::Promise => {
-                            self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
-                        }
-                        HostcallDispatchBinding::ModuleRequire => {
-                            self.dispatch_require_hostcall(args, Some(module))?
-                        }
-                        HostcallDispatchBinding::ModuleImport => {
-                            self.dispatch_import_hostcall(&capability.0, args, Some(module))?
-                        }
-                        HostcallDispatchBinding::Number => {
-                            self.dispatch_number_hostcall(&capability.0, args)?
-                        }
-                        HostcallDispatchBinding::Console => {
-                            self.dispatch_console_hostcall(&capability.0, args)?
-                        }
-                        HostcallDispatchBinding::Timer => {
-                            self.dispatch_timer_hostcall(&capability.0, args)?
-                        }
-                        HostcallDispatchBinding::ProcessSpawn => {
-                            self.dispatch_process_spawn_hostcall(args)?
-                        }
-                        HostcallDispatchBinding::Builtin => {
-                            // bd-8enww.4.10: a `builtin:` hostcall can run a user
-                            // callback whose explicit `throw` escapes its isolated
-                            // lane as `UncaughtException` with the thrown value
-                            // preserved — e.g. `Array.from(xs, x => { throw v })` via
-                            // the `builtin:ArrayFrom` mapper mini-lane, or an
-                            // array-literal `[…].some(x => { throw v })` via the
-                            // `builtin:ArrayPrototypeSome` fast-path. Route it into
-                            // THIS frame's catch handler exactly like the `Call` /
-                            // `CallMethod` builtin arms, rather than letting `?` escape
-                            // an enclosing `try`/`catch` — the AC#3 catchability
-                            // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
-                            // (Non-throw hostcall errors are a no-op through the
-                            // router and propagate unchanged.)
-                            match self.dispatch_builtin_hostcall(&capability.0, args, Some(module))
-                            {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    match self.route_isolated_explicit_throw(module, err)? {
-                                        None => {
-                                            // IFC (bd-8enww.4.8 throw-path mirror): the
-                                            // escaping value is seeded from the arg
-                                            // registers (which include the receiver array /
-                                            // source as arg 0), so join their labels onto
-                                            // the re-armed exception label — mirrors the
-                                            // success-path `dst` join below so a Secret
-                                            // receiver/arg cannot launder to a Public catch
-                                            // binding now that the mini-lane preserves the
-                                            // original thrown value.
-                                            self.join_pending_exception_label(&args_label)?;
-                                            continue;
-                                        }
-                                        Some(err) => return Err(err),
-                                    }
-                                }
-                            }
-                        }
-                        HostcallDispatchBinding::ClientRequest => {
-                            // bd-3894s slice (2b): `http.request(url[, opts])` builds a
-                            // writable `ClientRequest` object here WITHOUT egressing —
-                            // the body is accumulated via `req.write`/`req.end` and the
-                            // deferred egress fires from `.end()`. The capability gate
-                            // above already authorized NetworkEgress at creation time
-                            // (`net:client_request` maps to NetworkEgress), so the
-                            // deferred `.end()` egress is pre-authorized at the engine
-                            // capability layer; the per-endpoint SSRF policy still
-                            // applies at `.end()` via the sandboxed provider.
-                            self.dispatch_client_request_create(args)?
-                        }
-                        HostcallDispatchBinding::HostIo => {
-                            // bd-f5b04.2.7: when a sandboxed host-I/O provider is
-                            // installed, dispatch the (already-authorized) fs hostcall
-                            // through the algebraic-effects stack to perform a real,
-                            // recorded host effect; otherwise it returns undefined.
-                            // bd-656a2: the http leg routes `net:request` (emitted by
-                            // the JS http.get/http.request lowering) through the SAME
-                            // seam — it performs+records a real NetworkSend host effect
-                            // via the sandboxed provider's network mechanism. The gate
-                            // above (`check_hostcall_capability_gate`) has already
-                            // authorized it against the granted NetworkEgress capability.
-                            self.dispatch_host_io_hostcall(&capability.0, args)?
-                        }
-                        HostcallDispatchBinding::Internal
-                        | HostcallDispatchBinding::DeterministicNoop => Value::Undefined,
-                    };
-                    let runtime_result_label = self.take_pending_hostcall_result_label();
-                    let result_label = hostcall_result_contract(&capability.0)
-                        .result_label(&args_label, runtime_result_label.as_ref());
-                    self.write_reg_with_label(dst, result, result_label)?;
-                    self.ip += 1;
+                Ir3Instruction::HostCall { .. } => {
+                    return Ok(DispatchOutcome::ReentrantInstruction {
+                        instruction_ip: self.ip,
+                        profile_start,
+                    });
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
                     self.pending_async_module_import = None;
@@ -43422,36 +43507,12 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
-                Ir3Instruction::ArraySlice { array, start, dst } => {
-                    let result_label = self.binary_operation_label(array, start)?;
-                    let array_value = self.read_reg(array)?;
-                    let start_value = self.read_reg(start)?;
-                    match self.slice_array_suffix(Some(module), array_value, start_value) {
-                        Ok(result) => {
-                            self.write_reg_with_label(dst, result, result_label)?;
-                            self.ip += 1;
-                        }
-                        Err(error) => {
-                            if let Some(error) = self.route_iterator_close_failure(module, error)? {
-                                return Err(error);
-                            }
-                        }
-                    }
-                }
-                Ir3Instruction::SpreadIntoArray { array, iterable } => {
-                    match self.spread_into_array_transaction(module, array, iterable) {
-                        Ok(()) => self.ip += 1,
-                        Err(error) => {
-                            // Guest throws from @@iterator, next, done, or
-                            // value cross an isolated callback boundary. Route
-                            // their original value through the surrounding
-                            // catch/finally/async boundary; resource refusals
-                            // remain uncatchable interpreter failures.
-                            if let Some(error) = self.route_iterator_close_failure(module, error)? {
-                                return Err(error);
-                            }
-                        }
-                    }
+                Ir3Instruction::ArraySlice { .. }
+                    | Ir3Instruction::SpreadIntoArray { .. } => {
+                    return Ok(DispatchOutcome::ReentrantInstruction {
+                        instruction_ip: self.ip,
+                        profile_start,
+                    });
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
                     let input_label = self.binary_operation_label(target, source)?;
@@ -58236,9 +58297,7 @@ impl InterpreterCore {
             got: "missing module context".to_string(),
         })?;
         let foreign_module = self.foreign_closure_module(callee, caller_module)?;
-        if foreign_module.is_some() {
-            self.check_module_reentrant_call_depth()?;
-        }
+        self.check_module_reentrant_call_depth()?;
         let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count = u32::try_from(argument_count).map_err(|_| InterpreterError::TypeError {
             expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
@@ -58404,10 +58463,11 @@ impl InterpreterCore {
         let is_foreign_call = foreign_module.is_some();
         let foreign_async_call = is_foreign_call && matches!(&callee, Value::AsyncFunction(_));
         let foreign_async_index = foreign_async_call.then_some(self.async_functions.len());
-        if is_foreign_call {
-            self.check_module_reentrant_call_depth()?;
-        }
-        let foreign_hidden_call_depth = self.effective_call_depth();
+        self.check_module_reentrant_call_depth()?;
+        // Isolating a same-module callback hides caller frames just as surely
+        // as entering a foreign module. Preserve them in the shared depth
+        // budget before clearing the visible call stack.
+        let hidden_call_depth = self.effective_call_depth();
         let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count =
             u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
@@ -58549,19 +58609,17 @@ impl InterpreterCore {
                 &mut remaining_label_transport_bytes,
                 "Function.prototype.call/apply argument register",
             )?;
+            let previous_reentrant_depth = self.module_reentrant_call_depth;
+            let previous_foreign_call_depth = self.active_foreign_module_call_depth;
+            self.module_reentrant_call_depth = hidden_call_depth;
             if is_foreign_call {
-                let previous_reentrant_depth = self.module_reentrant_call_depth;
-                let previous_foreign_call_depth = self.active_foreign_module_call_depth;
-                self.module_reentrant_call_depth = foreign_hidden_call_depth;
                 self.active_foreign_module_call_depth =
                     previous_foreign_call_depth.saturating_add(1);
-                let result = self.run_loop(&wrapper);
-                self.module_reentrant_call_depth = previous_reentrant_depth;
-                self.active_foreign_module_call_depth = previous_foreign_call_depth;
-                result
-            } else {
-                self.run_loop(&wrapper)
             }
+            let result = self.run_loop(&wrapper);
+            self.module_reentrant_call_depth = previous_reentrant_depth;
+            self.active_foreign_module_call_depth = previous_foreign_call_depth;
+            result
         })();
         let mut isolated_async_result_label = None;
         let mut isolated_async_execution_rehomed = false;
@@ -58704,10 +58762,11 @@ impl InterpreterCore {
             let _ = self.foreign_closure_module(new_target, caller_module)?;
         }
         let is_foreign_construct = foreign_module.is_some();
-        if is_foreign_construct {
-            self.check_module_reentrant_call_depth()?;
-        }
-        let foreign_hidden_call_depth = self.effective_call_depth();
+        self.check_module_reentrant_call_depth()?;
+        // Isolating a same-module callback hides caller frames just as surely
+        // as entering a foreign module. Preserve them in the shared depth
+        // budget before clearing the visible call stack.
+        let hidden_call_depth = self.effective_call_depth();
         let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count =
             u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
@@ -58862,19 +58921,17 @@ impl InterpreterCore {
                 &mut remaining_label_transport_bytes,
                 "Reflect.construct argument register",
             )?;
+            let previous_reentrant_depth = self.module_reentrant_call_depth;
+            let previous_foreign_call_depth = self.active_foreign_module_call_depth;
+            self.module_reentrant_call_depth = hidden_call_depth;
             if is_foreign_construct {
-                let previous_reentrant_depth = self.module_reentrant_call_depth;
-                let previous_foreign_call_depth = self.active_foreign_module_call_depth;
-                self.module_reentrant_call_depth = foreign_hidden_call_depth;
                 self.active_foreign_module_call_depth =
                     previous_foreign_call_depth.saturating_add(1);
-                let result = self.run_loop(&wrapper);
-                self.module_reentrant_call_depth = previous_reentrant_depth;
-                self.active_foreign_module_call_depth = previous_foreign_call_depth;
-                result
-            } else {
-                self.run_loop(&wrapper)
             }
+            let result = self.run_loop(&wrapper);
+            self.module_reentrant_call_depth = previous_reentrant_depth;
+            self.active_foreign_module_call_depth = previous_foreign_call_depth;
+            result
         })();
         let result_label = if result.is_ok() {
             self.clone_register_label_with_temporary_budget(0)
@@ -64954,6 +65011,86 @@ impl InterpreterCore {
         }
     }
 
+    #[inline(never)]
+    fn dispatch_destructure_iterator_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        match cap {
+            "builtin:DestructureIteratorInit" => {
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one destructuring iterable".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                let value = self.read_reg(args.start)?;
+                let label = self.join_arg_range_label(args)?;
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                let init = self.prepare_for_of_state(module, &value)?;
+                self.init_iterator_from_state(value, init, IterationKind::Destructuring)
+            }
+            "builtin:DestructureIteratorNext" | "builtin:DestructureIteratorElide" => {
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one destructuring iterator".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                let iterator = self.read_reg(args.start)?;
+                let label = self.join_arg_range_label(args)?;
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                let handle = self.expect_iterator_handle(iterator.clone())?;
+                match self.iterator_state_mut(handle)? {
+                    RuntimeIteratorState::ForOf(state) if state.done || state.closed => {
+                        // The iterator record remains exhausted: later pattern
+                        // elements neither call next nor emit fictitious steps.
+                        return Ok(Value::Undefined);
+                    }
+                    RuntimeIteratorState::ForOf(_) => {}
+                    RuntimeIteratorState::ForIn(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "destructuring for-of iterator".to_string(),
+                            got: "for-in iterator".to_string(),
+                        });
+                    }
+                }
+                Ok(self
+                    .advance_for_of_iterator_with_value_read(
+                        module,
+                        iterator,
+                        cap == "builtin:DestructureIteratorNext",
+                    )?
+                    .unwrap_or(Value::Undefined))
+            }
+            "builtin:DestructureIteratorDone" => {
+                // The second operand is the just-observed step value. It is
+                // not inspected, but carries the step's callback/done-getter
+                // provenance into the branch through the JoinInputs contract.
+                if args.count != 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterator and observed step".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                let handle = self.expect_iterator_handle(self.read_reg(args.start)?)?;
+                match self.iterator_state_mut(handle)? {
+                    RuntimeIteratorState::ForOf(state) => {
+                        Ok(Value::Bool(state.done || state.closed))
+                    }
+                    RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
+                        expected: "destructuring for-of iterator".to_string(),
+                        got: "for-in iterator".to_string(),
+                    }),
+                }
+            }
+            _ => unreachable!("non-iterator intrinsic crossed the destructuring boundary"),
+        }
+    }
+
+    #[inline(never)]
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
@@ -64966,7 +65103,15 @@ impl InterpreterCore {
         self.clear_pending_hostcall_result_label();
         self.builtin_dispatch_hit_unknown_member = false;
         let args_hash = self.hostcall_arguments_hash(args);
-        let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
+        let outcome = match cap {
+            "builtin:DestructureIteratorInit"
+            | "builtin:DestructureIteratorNext"
+            | "builtin:DestructureIteratorElide"
+            | "builtin:DestructureIteratorDone" => {
+                self.dispatch_destructure_iterator_hostcall(cap, args, module)
+            }
+            _ => self.dispatch_builtin_hostcall_inner(cap, args, module),
+        };
         // ApplyHostCall and callback-running builtins can complete nested
         // hostcalls. Record the outer builtin in completion order so its
         // deterministic timestamp cannot precede an already-retained inner
@@ -66203,6 +66348,7 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
+    #[inline(never)]
     fn dispatch_builtin_hostcall_inner(
         &mut self,
         cap: &str,
@@ -66237,65 +66383,6 @@ impl InterpreterCore {
         }
 
         match cap {
-            "builtin:DestructureIteratorInit" => {
-                if args.count != 1 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "one destructuring iterable".to_string(),
-                        got: format!("{} arguments", args.count),
-                    });
-                }
-                let value = self.read_reg(args.start)?;
-                let label = self.join_arg_range_label(args)?;
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                let init = self.prepare_for_of_state(module, &value)?;
-                self.init_iterator_from_state(value, init, IterationKind::Destructuring)
-            }
-            "builtin:DestructureIteratorNext" | "builtin:DestructureIteratorElide" => {
-                if args.count != 1 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "one destructuring iterator".to_string(),
-                        got: format!("{} arguments", args.count),
-                    });
-                }
-                let iterator = self.read_reg(args.start)?;
-                let label = self.join_arg_range_label(args)?;
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                let handle = self.expect_iterator_handle(iterator.clone())?;
-                match self.iterator_state_mut(handle)? {
-                    RuntimeIteratorState::ForOf(state) if state.done || state.closed => {
-                        // The iterator record remains exhausted: later pattern
-                        // elements neither call next nor emit fictitious steps.
-                        return Ok(Value::Undefined);
-                    }
-                    RuntimeIteratorState::ForOf(_) => {}
-                    RuntimeIteratorState::ForIn(_) => return Err(InterpreterError::TypeError {
-                        expected: "destructuring for-of iterator".to_string(),
-                        got: "for-in iterator".to_string(),
-                    }),
-                }
-                Ok(self.advance_for_of_iterator_with_value_read(
-                    module, iterator, cap == "builtin:DestructureIteratorNext",
-                )?.unwrap_or(Value::Undefined))
-            }
-            "builtin:DestructureIteratorDone" => {
-                // The second operand is the just-observed step value. It is
-                // not inspected, but carries the step's callback/done-getter
-                // provenance into the branch through the JoinInputs contract.
-                if args.count != 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "iterator and observed step".to_string(),
-                        got: format!("{} arguments", args.count),
-                    });
-                }
-                let handle = self.expect_iterator_handle(self.read_reg(args.start)?)?;
-                match self.iterator_state_mut(handle)? {
-                    RuntimeIteratorState::ForOf(state) => Ok(Value::Bool(state.done || state.closed)),
-                    RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
-                        expected: "destructuring for-of iterator".to_string(),
-                        got: "for-in iterator".to_string(),
-                    }),
-                }
-            }
             "builtin:ToPropertyKey" => {
                 if args.count != 1 {
                     return Err(InterpreterError::TypeError {

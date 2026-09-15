@@ -853,3 +853,83 @@ fn generator_builtin_handoffs_keep_instruction_budget_accounting() {
         })
     ));
 }
+
+#[test]
+fn iterator_consumers_refuse_recursive_generators_without_native_stack_abort() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    let programs = [
+        "function* g(){for(let x of g()){yield x;}}g().next();",
+        "function* g(){yield [...g()];}g().next();",
+        "function* g(){let [x]=g();yield x;}g().next();",
+    ]
+    .map(delegation_program);
+    std::thread::Builder::new()
+        .name("iterator-consumer-small-stack".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            for module in programs {
+                let mut config = delegation_config();
+                config.max_call_depth = 8;
+                let mut core = InterpreterCore::new(config, "iterator-consumer-small-stack");
+                assert!(matches!(
+                    core.execute(&module),
+                    Err(InterpreterError::StackOverflow { max: 8, .. })
+                ));
+            }
+        })
+        .expect("embedding thread")
+        .join()
+        .expect("iterator consumers must not retain bytecode-dispatch frames");
+}
+
+#[test]
+fn nested_iterator_consumers_preserve_values_close_and_completion_order() {
+    for source in [
+        "function* g(n){if(n===0){yield 42;return;}for(let x of g(n-1)){yield x;}}g(4).next().value;",
+        "function* g(n){if(n===0){yield 42;return;}yield [...g(n-1)][0];}g(4).next().value;",
+        "function* g(n){if(n===0){yield 42;return;}let [x]=g(n-1);yield x;}g(4).next().value;",
+    ] {
+        assert_eq!(eval(source), "42", "{source}");
+    }
+    assert_eq!(
+        eval(
+            "let trace='';function* a(){try{yield 1;}finally{trace+='a';}}function* b(){try{for(let x of a()){yield x;}}finally{trace+='b';}}for(let x of b()){break;}trace;"
+        ),
+        "ab"
+    );
+}
+
+#[test]
+fn same_module_call_and_apply_cannot_hide_live_frames_from_depth_budget() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    let programs = [
+        "function f(){return f.call(null);}f();",
+        "function f(){return f.apply(null,[]);}f();",
+    ]
+    .map(delegation_program);
+    let recovery = delegation_program("function f(n){return n===0?42:f.call(null,n-1);}f(3);");
+    std::thread::Builder::new()
+        .name("isolated-call-depth".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            for module in programs {
+                let mut config = delegation_config();
+                config.max_call_depth = 8;
+                let mut core = InterpreterCore::new(config, "isolated-call-depth");
+                assert!(matches!(
+                    core.execute(&module),
+                    Err(InterpreterError::StackOverflow { max: 8, .. })
+                ));
+                assert_eq!(
+                    core.execute(&recovery)
+                        .expect("caller depth must be restored")
+                        .value
+                        .to_string(),
+                    "42"
+                );
+            }
+        })
+        .expect("embedding thread")
+        .join()
+        .expect("isolated callbacks must preserve caller depth");
+}

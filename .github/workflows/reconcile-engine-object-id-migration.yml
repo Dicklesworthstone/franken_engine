@@ -2,71 +2,95 @@ name: EngineObjectId Migration Reconciliation
 
 on:
   push:
-    branches: [main]
-    paths: [.github/workflows/reconcile-engine-object-id-migration.yml]
+    branches:
+      - main
+    paths:
+      - .github/workflows/reconcile-engine-object-id-migration.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: engine-object-id-migration-reconciliation
+  cancel-in-progress: false
+
 jobs:
-  depth-repair:
-    if: >-
-      contains(github.event.head_commit.message, 'work(runtime): verify shared callback depth')
+  reconcile:
+    name: Apply cfg hygiene, format, test, and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout full main history
+        uses: actions/checkout@v4
         with:
-          ref: 8ef701b2eac4772d270ad9686cc349b2e7fb9d44
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@nightly
+          fetch-depth: 0
+          ref: main
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt,clippy
-      - name: Prepare exact source and locked native harness
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-object-id-migration-reconciliation
+
+      - name: Reconcile latest main with bounded fast-forward retries
+        shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import base64,hashlib,json,os,pathlib,subprocess,urllib.request
-          expected='0a8d3f24333a6e2b257cf5d0f2aacbf4914e2a2c'
-          url='https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/'+expected
-          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-          with urllib.request.urlopen(req,timeout=90) as r:data=base64.b64decode(json.load(r)['content'])
-          assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==expected
-          old=b"blob('1a972d53d115db90fb3dc54cd0a112b3ab6b2611')"
-          new=b"blob('10586faaa1cd23c4b645ab1c43de32105ad25874')"
-          assert data.count(old)==1
-          script=pathlib.Path(os.environ['RUNNER_TEMP'])/'depth-driver.py'
-          script.write_bytes(data.replace(old,new))
-          subprocess.run(['python3',str(script),'prepare'],check=True)
+          git config user.name "franken-engine-identity-bot"
+          git config user.email "35050222+Dicklesworthstone@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/franken-engine/src/bin/franken_engine_object_id_migration.rs')
+          text = path.read_text()
+          old = '    const ALL: [Self; 9] = ['
+          new = '    #[cfg(test)]\n    const ALL: [Self; 9] = ['
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one DomainName::ALL declaration, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+              path.write_text(text)
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: depth-repair-prepared
-          path: |
-            ${{ runner.temp }}/depth-repair/files.json
-            ${{ runner.temp }}/depth-repair/repair.patch
-          retention-days: 2
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          shared-key: native-iterator-standalone
-          cache-on-failure: true
-      - name: Execute unchanged stack abort and small-stack regression probes
-        run: python3 "$RUNNER_TEMP/depth-driver.py" test
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: depth-repair-native-results
-          path: |
-            ${{ runner.temp }}/depth-repair/*.log
-            ${{ runner.temp }}/depth-repair/status.json
-          retention-days: 2
+
+            rustfmt --edition 2024 \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            cargo test --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration
+            cargo test --no-default-features -p frankenengine-engine \
+              --test engine_object_id_migration_cli
+            cargo clippy --no-default-features -p frankenengine-engine \
+              --bin franken_engine_object_id_migration -- -D warnings
+            git diff --check
+
+            if git diff --quiet; then
+              echo "EngineObjectId migration binary was already reconciled"
+              exit 0
+            fi
+
+            git add \
+              crates/franken-engine/src/bin/franken_engine_object_id_migration.rs \
+              crates/franken-engine/tests/engine_object_id_migration_cli.rs
+            git commit -m "style(identity): reconcile migration binary and tests (bd-2y7)"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "main advanced during identity reconciliation attempt ${attempt}; retrying" >&2
+          done
+
+          echo "unable to publish identity migration reconciliation after bounded retries" >&2
+          exit 1

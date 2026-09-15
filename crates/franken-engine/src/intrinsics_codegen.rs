@@ -126,7 +126,12 @@ impl PrototypeInstallationIndex {
         constructor: &str,
         property: &str,
     ) -> Option<&GeneratedPrototypeInstallation> {
-        self.entries.get(&(constructor, property))
+        self.entries
+            .iter()
+            .find(|((candidate_constructor, candidate_property), _)| {
+                *candidate_constructor == constructor && *candidate_property == property
+            })
+            .map(|(_, installation)| installation)
     }
 
     pub fn len(&self) -> usize {
@@ -441,7 +446,7 @@ mod tests {
         assert!(push.writable);
         assert!(!push.enumerable);
         assert!(push.configurable);
-        assert!(matches!(push.dispatch_target, DispatchTarget::Manual { .. }));
+        assert!(matches!(&push.dispatch_target, DispatchTarget::Manual { .. }));
     }
 
     #[test]

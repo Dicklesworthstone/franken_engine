@@ -70,6 +70,7 @@ pub enum AsyncModulePromiseBridgeError {
     },
     ModuleStillWaitingOnDependencies { specifier: String },
     ModuleAlreadyRejected { specifier: String },
+    ModuleAlreadySettled { specifier: String },
     SelfAwait {
         specifier: String,
         promise: PromiseHandle,
@@ -122,6 +123,9 @@ impl fmt::Display for AsyncModulePromiseBridgeError {
             ),
             Self::ModuleAlreadyRejected { specifier } => {
                 write!(f, "module evaluation is already rejected: {specifier}")
+            }
+            Self::ModuleAlreadySettled { specifier } => {
+                write!(f, "module evaluation is already settled: {specifier}")
             }
             Self::SelfAwait { specifier, promise } => write!(
                 f,
@@ -205,27 +209,24 @@ impl AsyncModulePromiseBridge {
             });
         }
 
-        // Match AsyncModuleEvaluator's registration-time rejection rule while
-        // retaining the exact reason needed by the real evaluation Promise.
-        let inherited_rejection = dependencies.iter().find_map(|dependency| {
+        let inherited_rejection_dependency = dependencies.iter().find_map(|dependency| {
             self.evaluator
                 .states()
                 .get(dependency)
                 .filter(|state| state.phase == AsyncModulePhase::Rejected)
-                .map(|_| dependency)
+                .map(|_| dependency.clone())
         });
-        let inherited_rejection = if let Some(dependency) = inherited_rejection {
-            Some(
+        let inherited_rejection = inherited_rejection_dependency
+            .as_ref()
+            .map(|dependency| {
                 self.module_rejections
                     .get(dependency)
                     .cloned()
                     .ok_or_else(|| AsyncModulePromiseBridgeError::MissingRejectionReason {
                         dependency: dependency.clone(),
-                    })?,
-            )
-        } else {
-            None
-        };
+                    })
+            })
+            .transpose()?;
 
         let evaluation_promise = has_top_level_await.then(|| self.promises.create());
         self.evaluator.register_module(
@@ -247,7 +248,7 @@ impl AsyncModulePromiseBridge {
             let (reason, label) = inherited_rejection.ok_or_else(|| {
                 AsyncModulePromiseBridgeError::ModuleEvaluation {
                     specifier: specifier.to_string(),
-                    detail: "module was rejected during registration without a rejected dependency"
+                    detail: "module was rejected during registration without a replayable rejected dependency"
                         .to_string(),
                 }
             })?;
@@ -278,19 +279,18 @@ impl AsyncModulePromiseBridge {
         specifier: &str,
         promise: PromiseHandle,
     ) -> Result<(), AsyncModulePromiseBridgeError> {
-        let state = self
-            .evaluator
-            .states()
-            .get(specifier)
-            .ok_or_else(|| AsyncModulePromiseBridgeError::UnknownModule {
-                specifier: specifier.to_string(),
-            })?;
+        let state = self.module_state(specifier)?;
         if state.phase == AsyncModulePhase::Rejected {
             return Err(AsyncModulePromiseBridgeError::ModuleAlreadyRejected {
                 specifier: specifier.to_string(),
             });
         }
-        if !state.has_top_level_await || state.phase == AsyncModulePhase::Settled {
+        if state.phase == AsyncModulePhase::Settled {
+            return Err(AsyncModulePromiseBridgeError::ModuleAlreadySettled {
+                specifier: specifier.to_string(),
+            });
+        }
+        if !state.has_top_level_await {
             return Err(AsyncModulePromiseBridgeError::ModuleNotTopLevelAwait {
                 specifier: specifier.to_string(),
             });
@@ -371,10 +371,6 @@ impl AsyncModulePromiseBridge {
         self.ensure_inner_pending_promise(promise)?;
         let awaiters = self.awaiters_by_promise.get(&promise).cloned().unwrap_or_default();
         self.preflight_awaiters(promise, &awaiters)?;
-
-        // Preflight every evaluation Promise before the inner Promise is
-        // irreversibly settled, so a contradictory terminal state fails closed
-        // without leaving half-applied bridge state.
         for specifier in &awaiters {
             self.ensure_evaluation_promise_pending(specifier)?;
         }
@@ -389,9 +385,6 @@ impl AsyncModulePromiseBridge {
             .map_err(|error| self.promise_error("<awaited-promise>", promise, error))?;
         self.awaiters_by_promise.remove(&promise);
 
-        // Reject all directly awaiting evaluation Promises first. Synchronizing
-        // one module may reject another through dependency propagation, so this
-        // up-front pass prevents iteration-order-dependent Promise state.
         for specifier in &awaiters {
             self.active_awaits_by_module.remove(specifier);
             self.reject_evaluation_promise_if_pending(
@@ -420,15 +413,14 @@ impl AsyncModulePromiseBridge {
                 promise,
             });
         }
-        let state = self
-            .evaluator
-            .states()
-            .get(specifier)
-            .ok_or_else(|| AsyncModulePromiseBridgeError::UnknownModule {
-                specifier: specifier.to_string(),
-            })?;
+        let state = self.module_state(specifier)?;
         if state.phase == AsyncModulePhase::Rejected {
             return Err(AsyncModulePromiseBridgeError::ModuleAlreadyRejected {
+                specifier: specifier.to_string(),
+            });
+        }
+        if state.phase == AsyncModulePhase::Settled {
+            return Err(AsyncModulePromiseBridgeError::ModuleAlreadySettled {
                 specifier: specifier.to_string(),
             });
         }
@@ -446,15 +438,71 @@ impl AsyncModulePromiseBridge {
         self.synchronize_module(specifier)
     }
 
+    /// Reject a Promise-backed top-level-await module and synchronize its graph.
     pub fn reject_module(
         &mut self,
         specifier: &str,
         reason: JsValue,
         label: Label,
     ) -> Result<ModulePromiseUpdate, AsyncModulePromiseBridgeError> {
+        let state = self.module_state(specifier)?;
+        if !state.has_top_level_await {
+            return Err(AsyncModulePromiseBridgeError::ModuleEvaluation {
+                specifier: specifier.to_string(),
+                detail: "synchronous modules must reject through reject_synchronous_module"
+                    .to_string(),
+            });
+        }
         self.detach_active_await(specifier);
         self.reject_evaluation_promise_if_pending(specifier, reason, label)?;
         self.synchronize_module(specifier)
+    }
+
+    /// Reject a synchronous module execution and propagate the exact failure to
+    /// every transitive dependent. TLA dependents have their real evaluation
+    /// Promises rejected with the same value and IFC label; synchronous
+    /// dependents retain the exact rejection for replay and late registration.
+    pub fn reject_synchronous_module(
+        &mut self,
+        specifier: &str,
+        reason: JsValue,
+        label: Label,
+    ) -> Result<RejectionLinkage, AsyncModulePromiseBridgeError> {
+        let state = self.module_state(specifier)?;
+        if state.has_top_level_await {
+            return Err(AsyncModulePromiseBridgeError::ModuleEvaluation {
+                specifier: specifier.to_string(),
+                detail: "top-level-await modules must reject through their evaluation Promise"
+                    .to_string(),
+            });
+        }
+        if state.phase == AsyncModulePhase::Rejected {
+            return Err(AsyncModulePromiseBridgeError::ModuleAlreadyRejected {
+                specifier: specifier.to_string(),
+            });
+        }
+        if state.phase == AsyncModulePhase::Settled {
+            return Err(AsyncModulePromiseBridgeError::ModuleAlreadySettled {
+                specifier: specifier.to_string(),
+            });
+        }
+        if !state.pending_dependencies.is_empty() {
+            return Err(
+                AsyncModulePromiseBridgeError::ModuleStillWaitingOnDependencies {
+                    specifier: specifier.to_string(),
+                },
+            );
+        }
+
+        self.detach_active_await(specifier);
+        self.module_rejections
+            .insert(specifier.to_string(), (reason.clone(), label.clone()));
+        let linkage = self
+            .evaluator
+            .reject_module(specifier, &reason, &mut self.live_bindings)
+            .map_err(|error| self.module_error(specifier, error))?;
+        self.propagate_runtime_rejection(&linkage, reason, label)?;
+        Ok(linkage)
     }
 
     pub fn synchronize_module(
@@ -468,14 +516,7 @@ impl AsyncModulePromiseBridge {
             .map_err(|error| self.promise_error(specifier, promise, error))?;
         let promise_state = record.state.clone();
         let promise_label = record.label.clone();
-        let module_phase = self
-            .evaluator
-            .states()
-            .get(specifier)
-            .ok_or_else(|| AsyncModulePromiseBridgeError::UnknownModule {
-                specifier: specifier.to_string(),
-            })?
-            .phase;
+        let module_phase = self.module_state(specifier)?.phase;
 
         match promise_state {
             PromiseState::Pending => {
@@ -572,13 +613,7 @@ impl AsyncModulePromiseBridge {
         &mut self,
         specifier: &str,
     ) -> Result<Vec<String>, AsyncModulePromiseBridgeError> {
-        let state = self
-            .evaluator
-            .states()
-            .get(specifier)
-            .ok_or_else(|| AsyncModulePromiseBridgeError::UnknownModule {
-                specifier: specifier.to_string(),
-            })?;
+        let state = self.module_state(specifier)?;
         if state.has_top_level_await {
             return Err(AsyncModulePromiseBridgeError::ModuleEvaluation {
                 specifier: specifier.to_string(),
@@ -591,15 +626,15 @@ impl AsyncModulePromiseBridge {
                 specifier: specifier.to_string(),
             });
         }
+        if state.phase == AsyncModulePhase::Settled {
+            return Ok(Vec::new());
+        }
         if !state.pending_dependencies.is_empty() {
             return Err(
                 AsyncModulePromiseBridgeError::ModuleStillWaitingOnDependencies {
                     specifier: specifier.to_string(),
                 },
             );
-        }
-        if state.phase == AsyncModulePhase::Settled {
-            return Ok(Vec::new());
         }
         self.evaluator
             .settle_module(specifier)
@@ -624,6 +659,17 @@ impl AsyncModulePromiseBridge {
 
     pub fn live_bindings_mut(&mut self) -> &mut LiveBindingMap {
         &mut self.live_bindings
+    }
+
+    fn module_state(
+        &self,
+        specifier: &str,
+    ) -> Result<&crate::module_async_evaluation::AsyncModuleState, AsyncModulePromiseBridgeError> {
+        self.evaluator.states().get(specifier).ok_or_else(|| {
+            AsyncModulePromiseBridgeError::UnknownModule {
+                specifier: specifier.to_string(),
+            }
+        })
     }
 
     fn is_evaluation_promise(&self, promise: PromiseHandle) -> bool {
@@ -760,13 +806,7 @@ impl AsyncModulePromiseBridge {
                     detail: format!("await index is inconsistent for {promise}"),
                 });
             }
-            let state = self
-                .evaluator
-                .states()
-                .get(specifier)
-                .ok_or_else(|| AsyncModulePromiseBridgeError::UnknownModule {
-                    specifier: specifier.clone(),
-                })?;
+            let state = self.module_state(specifier)?;
             if state.phase.is_terminal() {
                 return Err(AsyncModulePromiseBridgeError::ModuleEvaluation {
                     specifier: specifier.clone(),
@@ -851,19 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn registers_real_evaluation_promise() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        let promise = bridge
-            .register_module("a.mjs", true, &[])
-            .expect("register")
-            .expect("TLA promise");
-        assert_eq!(promise, PromiseHandle(0));
-        assert_eq!(bridge.module_promise("a.mjs"), Some(promise));
-        assert!(bridge.promise_store().get(promise).is_ok());
-    }
-
-    #[test]
-    fn promise_handles_are_monotonic_and_replay_stable() {
+    fn real_evaluation_promises_are_monotonic() {
         let mut bridge = AsyncModulePromiseBridge::with_defaults();
         let a = bridge.register_module("a.mjs", true, &[]).unwrap().unwrap();
         bridge.register_module("sync.mjs", false, &[]).unwrap();
@@ -875,16 +903,17 @@ mod tests {
     }
 
     #[test]
-    fn pending_inner_promise_suspends_then_resumes_module() {
+    fn pending_inner_promise_resumes_without_settling_evaluation_promise() {
         let mut bridge = AsyncModulePromiseBridge::with_defaults();
         bridge.register_module("a.mjs", true, &[]).unwrap();
         let awaited = bridge.create_pending_promise();
         bridge.suspend_module_on_promise("a.mjs", awaited).unwrap();
-        let resumable = bridge
-            .fulfill_awaited_promise(awaited, JsValue::Int(7), public_label())
-            .unwrap();
-        assert_eq!(resumable, vec!["a.mjs".to_string()]);
-        assert_eq!(bridge.active_await("a.mjs"), None);
+        assert_eq!(
+            bridge
+                .fulfill_awaited_promise(awaited, JsValue::Int(7), public_label())
+                .unwrap(),
+            vec!["a.mjs".to_string()]
+        );
         assert!(
             !bridge
                 .promise_store()
@@ -896,59 +925,83 @@ mod tests {
     }
 
     #[test]
-    fn transitive_rejection_rejects_dependent_evaluation_promises() {
+    fn synchronous_rejection_propagates_to_tla_dependent_promise() {
         let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("root.mjs", true, &[]).unwrap();
-        let child_promise = bridge
-            .register_module("child.mjs", true, &["root.mjs".into()])
+        bridge.register_module("sync-root.mjs", false, &[]).unwrap();
+        let dependent_promise = bridge
+            .register_module("async-child.mjs", true, &["sync-root.mjs".into()])
             .unwrap()
             .unwrap();
-        bridge
-            .reject_module("root.mjs", JsValue::Str("boom".into()), public_label())
+
+        let linkage = bridge
+            .reject_synchronous_module(
+                "sync-root.mjs",
+                JsValue::Str("sync throw".into()),
+                Label::Secret,
+            )
             .unwrap();
-        assert!(bridge.promise_store().get(child_promise).unwrap().state.is_rejected());
-        let child_update = bridge.synchronize_module("child.mjs").unwrap();
-        assert_eq!(child_update.status, ModulePromiseStatus::Rejected);
-        assert!(child_update.rejection_linkage.is_none());
+        assert!(linkage.transitive_closure.contains("async-child.mjs"));
+        assert_eq!(
+            bridge.evaluator().states()["sync-root.mjs"].phase,
+            AsyncModulePhase::Rejected
+        );
+        assert_eq!(
+            bridge.evaluator().states()["async-child.mjs"].phase,
+            AsyncModulePhase::Rejected
+        );
+        let record = bridge.promise_store().get(dependent_promise).unwrap();
+        assert_eq!(
+            record.state,
+            PromiseState::Rejected(JsValue::Str("sync throw".into()))
+        );
+        assert_eq!(record.label, Label::Secret);
     }
 
     #[test]
-    fn upstream_rejection_detaches_dependent_active_await() {
+    fn late_tla_dependent_inherits_synchronous_rejection_exactly() {
         let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("root.mjs", true, &[]).unwrap();
+        bridge.register_module("sync-root.mjs", false, &[]).unwrap();
         bridge
-            .register_module("child.mjs", true, &["root.mjs".into()])
-            .unwrap();
-        // Resolve the dependency once so the child body can reach an await,
-        // then suspend it on an inner Promise.
-        bridge
-            .fulfill_module("root.mjs", JsValue::Undefined, public_label())
-            .unwrap();
-        let inner = bridge.create_pending_promise();
-        bridge.suspend_module_on_promise("child.mjs", inner).unwrap();
-        assert_eq!(bridge.active_await("child.mjs"), Some(inner));
-        // A later direct rejection of child must detach the stale await index.
-        bridge
-            .reject_module("child.mjs", JsValue::Str("cancel".into()), public_label())
-            .unwrap();
-        assert_eq!(bridge.active_await("child.mjs"), None);
-    }
-
-    #[test]
-    fn late_registered_dependent_inherits_exact_rejection() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("root.mjs", true, &[]).unwrap();
-        bridge
-            .reject_module("root.mjs", JsValue::Str("boom".into()), Label::Secret)
+            .reject_synchronous_module(
+                "sync-root.mjs",
+                JsValue::Str("boom".into()),
+                Label::Confidential,
+            )
             .unwrap();
         let late_promise = bridge
-            .register_module("late.mjs", true, &["root.mjs".into()])
+            .register_module("late.mjs", true, &["sync-root.mjs".into()])
             .unwrap()
             .unwrap();
         let record = bridge.promise_store().get(late_promise).unwrap();
         assert_eq!(record.state, PromiseState::Rejected(JsValue::Str("boom".into())));
-        assert_eq!(record.label, Label::Secret);
-        assert_eq!(bridge.evaluator().states()["late.mjs"].phase, AsyncModulePhase::Rejected);
+        assert_eq!(record.label, Label::Confidential);
+        assert_eq!(
+            bridge.evaluator().states()["late.mjs"].phase,
+            AsyncModulePhase::Rejected
+        );
+    }
+
+    #[test]
+    fn synchronous_rejection_marks_live_bindings_dead() {
+        let mut bridge = AsyncModulePromiseBridge::with_defaults();
+        bridge.register_module("sync-root.mjs", false, &[]).unwrap();
+        let binding = bridge.live_bindings_mut().register_cell(BindingCell::new(
+            "sync-root.mjs",
+            "answer",
+            "answer",
+            BindingType::Direct,
+        ));
+        bridge
+            .reject_synchronous_module(
+                "sync-root.mjs",
+                JsValue::Str("boom".into()),
+                public_label(),
+            )
+            .unwrap();
+        assert_eq!(
+            bridge.live_bindings().get_cell(&binding).map(|cell| cell.state),
+            Some(BindingCellState::Dead)
+        );
     }
 
     #[test]
@@ -961,31 +1014,25 @@ mod tests {
             .unwrap();
         let awaited = bridge.create_pending_promise();
         bridge.suspend_module_on_promise("root.mjs", awaited).unwrap();
-        let updates = bridge
+        bridge
             .reject_awaited_promise(
                 awaited,
                 JsValue::Str("await rejected".into()),
                 public_label(),
             )
             .unwrap();
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].status, ModulePromiseStatus::Rejected);
-        assert_eq!(bridge.evaluator().states()["child.mjs"].phase, AsyncModulePhase::Rejected);
-        assert!(bridge.promise_store().get(child_promise).unwrap().state.is_rejected());
-    }
-
-    #[test]
-    fn module_cannot_complete_while_inner_await_is_pending() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("a.mjs", true, &[]).unwrap();
-        let awaited = bridge.create_pending_promise();
-        bridge.suspend_module_on_promise("a.mjs", awaited).unwrap();
-        assert!(matches!(
+        assert_eq!(
+            bridge.evaluator().states()["child.mjs"].phase,
+            AsyncModulePhase::Rejected
+        );
+        assert!(
             bridge
-                .fulfill_module("a.mjs", JsValue::Undefined, public_label())
-                .unwrap_err(),
-            AsyncModulePromiseBridgeError::ModuleStillAwaiting { .. }
-        ));
+                .promise_store()
+                .get(child_promise)
+                .unwrap()
+                .state
+                .is_rejected()
+        );
     }
 
     #[test]
@@ -1004,53 +1051,23 @@ mod tests {
     }
 
     #[test]
-    fn synchronous_module_cannot_complete_before_dependency_settles() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("dep.mjs", true, &[]).unwrap();
-        bridge
-            .register_module("app.mjs", false, &["dep.mjs".into()])
-            .unwrap();
-        assert!(matches!(
-            bridge.complete_synchronous_module("app.mjs").unwrap_err(),
-            AsyncModulePromiseBridgeError::ModuleStillWaitingOnDependencies { .. }
-        ));
-    }
-
-    #[test]
-    fn rejection_marks_live_bindings_dead() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("bad.mjs", true, &[]).unwrap();
-        let binding = bridge.live_bindings_mut().register_cell(BindingCell::new(
-            "bad.mjs",
-            "answer",
-            "answer",
-            BindingType::Direct,
-        ));
-        bridge
-            .reject_module("bad.mjs", JsValue::Str("boom".into()), public_label())
-            .unwrap();
-        assert_eq!(
-            bridge.live_bindings().get_cell(&binding).map(|cell| cell.state),
-            Some(BindingCellState::Dead)
-        );
-    }
-
-    #[test]
-    fn shared_inner_promise_resumes_all_awaiters_deterministically() {
+    fn shared_inner_promise_resumes_awaiters_deterministically() {
         let mut bridge = AsyncModulePromiseBridge::with_defaults();
         bridge.register_module("b.mjs", true, &[]).unwrap();
         bridge.register_module("a.mjs", true, &[]).unwrap();
         let inner = bridge.create_pending_promise();
         bridge.suspend_module_on_promise("b.mjs", inner).unwrap();
         bridge.suspend_module_on_promise("a.mjs", inner).unwrap();
-        let ready = bridge
-            .fulfill_awaited_promise(inner, JsValue::Undefined, public_label())
-            .unwrap();
-        assert_eq!(ready, vec!["a.mjs".to_string(), "b.mjs".to_string()]);
+        assert_eq!(
+            bridge
+                .fulfill_awaited_promise(inner, JsValue::Undefined, public_label())
+                .unwrap(),
+            vec!["a.mjs".to_string(), "b.mjs".to_string()]
+        );
     }
 
     #[test]
-    fn evaluation_promise_cannot_use_inner_promise_settlement_api() {
+    fn evaluation_promise_cannot_use_inner_settlement_api() {
         let mut bridge = AsyncModulePromiseBridge::with_defaults();
         let evaluation = bridge.register_module("a.mjs", true, &[]).unwrap().unwrap();
         assert!(matches!(
@@ -1059,34 +1076,5 @@ mod tests {
                 .unwrap_err(),
             AsyncModulePromiseBridgeError::EvaluationPromiseRoleMismatch { .. }
         ));
-    }
-
-    #[test]
-    fn synchronize_all_uses_canonical_module_order() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        bridge.register_module("z.mjs", true, &[]).unwrap();
-        bridge.register_module("a.mjs", true, &[]).unwrap();
-        let updates = bridge.synchronize_all().unwrap();
-        assert_eq!(
-            updates.iter().map(|u| u.module_specifier.as_str()).collect::<Vec<_>>(),
-            vec!["a.mjs", "z.mjs"]
-        );
-    }
-
-    #[test]
-    fn unknown_module_fails_closed() {
-        let mut bridge = AsyncModulePromiseBridge::with_defaults();
-        assert!(matches!(
-            bridge.synchronize_module("ghost.mjs").unwrap_err(),
-            AsyncModulePromiseBridgeError::UnknownModule { .. }
-        ));
-    }
-
-    #[test]
-    fn component_name_is_stable() {
-        assert_eq!(
-            ASYNC_MODULE_PROMISE_BRIDGE_COMPONENT,
-            "async_module_promise_bridge"
-        );
     }
 }

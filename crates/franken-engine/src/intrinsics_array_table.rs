@@ -37,14 +37,14 @@ macro_rules! array_row {
 }
 
 /// ES2020 Array prototype methods plus the post-ES2020 methods already exposed
-/// by the production runtime.  Keeping the extensions here matters: the table
-/// is a migration source of truth for the *shipped* seam, not merely a spec-era
+/// by the production runtime. Keeping the extensions here matters: the table is
+/// a migration source of truth for the *shipped* seam, not merely a spec-era
 /// checklist.
 pub const ROWS: &[IntrinsicRow] = &[
     array_row!("at", Arity::Range { min: 0, max: 1 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("concat", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("copyWithin", Arity::Range { min: 2, max: 3 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("entries", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Partial("stateful ArrayIterator object / .next() semantics remain to be unified with the live VM iterator store")),
+    array_row!("entries", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
     array_row!("every", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
     array_row!("fill", Arity::Range { min: 1, max: 3 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("filter", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
@@ -56,7 +56,7 @@ pub const ROWS: &[IntrinsicRow] = &[
     array_row!("includes", Arity::Range { min: 1, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("indexOf", Arity::Range { min: 1, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("join", Arity::Range { min: 0, max: 1 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("keys", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Partial("stateful ArrayIterator object / .next() semantics remain to be unified with the live VM iterator store")),
+    array_row!("keys", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
     array_row!("lastIndexOf", Arity::Range { min: 1, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("map", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
     array_row!("pop", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
@@ -70,7 +70,7 @@ pub const ROWS: &[IntrinsicRow] = &[
     array_row!("sort", Arity::Range { min: 0, max: 1 }, IfcPropagation::Custom("array_sort_ifc"), GapStatus::Resolved),
     array_row!("splice", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
     array_row!("unshift", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("values", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Partial("stateful ArrayIterator object / .next() semantics remain to be unified with the live VM iterator store")),
+    array_row!("values", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
     array_row!("toReversed", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
     array_row!("toSorted", Arity::Range { min: 0, max: 1 }, IfcPropagation::Custom("array_sort_ifc"), GapStatus::Resolved),
     array_row!("toSpliced", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
@@ -112,20 +112,13 @@ mod tests {
     }
 
     #[test]
-    fn only_live_iterator_methods_remain_partial() {
-        let partial: BTreeSet<_> = ROWS
+    fn shipped_array_family_has_no_semantic_gap_rows() {
+        let unresolved: Vec<_> = ROWS
             .iter()
-            .filter(|row| matches!(&row.gap_status, GapStatus::Partial(_)))
+            .filter(|row| !matches!(&row.gap_status, GapStatus::Resolved))
             .map(|row| row.name)
             .collect();
-        assert_eq!(
-            partial,
-            BTreeSet::from([
-                "Array.prototype.entries",
-                "Array.prototype.keys",
-                "Array.prototype.values",
-            ])
-        );
+        assert!(unresolved.is_empty(), "unexpected Array semantic gap rows: {unresolved:?}");
     }
 
     #[test]

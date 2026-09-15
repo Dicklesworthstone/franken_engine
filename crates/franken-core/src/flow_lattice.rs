@@ -9,9 +9,11 @@
 //!
 //! `Public < Internal < Confidential < Secret < TopSecret`
 //!
-//! ## Clearance Hierarchy
+//! ## Clearance Permission Hierarchy
 //!
-//! `OpenSink < RestrictedSink < AuditedSink < SealedSink < NeverSink`
+//! `NeverSink < RestrictedSink < AuditedSink < SealedSink < OpenSink`
+//!
+//! This is the order of accepted data sensitivity, not the legacy enum order.
 //!
 //! Plan reference: Section 10.2 item 4, 9I.7, bd-1fm.
 
@@ -32,8 +34,12 @@ const UNSPECIFIED_DECISION_ID: &str = "flow-lattice:decision:unspecified";
 
 /// Sink clearance level: determines what data sensitivity a sink may receive.
 ///
-/// Ordered: `OpenSink < RestrictedSink < AuditedSink < SealedSink < NeverSink`.
+/// Permission order: `NeverSink < RestrictedSink < AuditedSink < SealedSink < OpenSink`.
 /// NeverSink can receive only `Public`; anything more sensitive requires declassification.
+///
+/// `Ord` and [`Self::level`] retain the legacy declaration order for stable
+/// canonicalization. They are not permission comparisons. Use
+/// [`Self::max_label_level`], [`Self::meet`], or [`Self::join`] for authority.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Clearance {
     /// Can receive any data (e.g., stdout with redaction).
@@ -49,7 +55,7 @@ pub enum Clearance {
 }
 
 impl Clearance {
-    /// Numeric level for lattice ordering.
+    /// Legacy ordinal, retained for compatibility; not a permission rank.
     pub fn level(&self) -> u32 {
         match self {
             Self::OpenSink => 0,
@@ -71,23 +77,22 @@ impl Clearance {
         }
     }
 
-    /// Whether this clearance can receive the provided label.
-    pub fn can_receive_label(&self, label: &Label) -> bool {
-        label.level() <= self.max_label_level()
-    }
-
-    /// Meet (greatest lower bound) for clearance narrowing.
+    /// Intersect permissions: receive a label only when both operands can.
+    ///
+    /// This is the greatest lower bound in permission order, not enum order.
     pub fn meet(&self, other: &Self) -> Self {
-        if self.level() <= other.level() {
+        if self.max_label_level() <= other.max_label_level() {
             self.clone()
         } else {
             other.clone()
         }
     }
 
-    /// Join (least upper bound) for clearance widening.
+    /// Union permissions: receive a label when either operand can.
+    ///
+    /// This is the least upper bound in permission order, not enum order.
     pub fn join(&self, other: &Self) -> Self {
-        if self.level() >= other.level() {
+        if self.max_label_level() >= other.max_label_level() {
             self.clone()
         } else {
             other.clone()
@@ -1076,26 +1081,26 @@ mod tests {
     }
 
     #[test]
-    fn clearance_meet_returns_lower() {
+    fn clearance_meet_narrows_permissions() {
         assert_eq!(
             Clearance::NeverSink.meet(&Clearance::AuditedSink),
-            Clearance::AuditedSink
+            Clearance::NeverSink
         );
         assert_eq!(
             Clearance::OpenSink.meet(&Clearance::SealedSink),
-            Clearance::OpenSink
+            Clearance::SealedSink
         );
     }
 
     #[test]
-    fn clearance_join_returns_higher() {
+    fn clearance_join_widens_permissions() {
         assert_eq!(
             Clearance::OpenSink.join(&Clearance::SealedSink),
-            Clearance::SealedSink
+            Clearance::OpenSink
         );
         assert_eq!(
             Clearance::NeverSink.join(&Clearance::RestrictedSink),
-            Clearance::NeverSink
+            Clearance::RestrictedSink
         );
     }
 
@@ -1111,6 +1116,112 @@ mod tests {
             assert_eq!(c.join(&c), c);
             assert_eq!(c.meet(&c), c);
         }
+    }
+
+    #[test]
+    fn clearance_composition_matches_flow_permissions() {
+        let clearances = [
+            Clearance::OpenSink,
+            Clearance::RestrictedSink,
+            Clearance::AuditedSink,
+            Clearance::SealedSink,
+            Clearance::NeverSink,
+        ];
+        let labels = [
+            LabelClass::Public,
+            LabelClass::Internal,
+            LabelClass::Confidential,
+            LabelClass::Secret,
+            LabelClass::TopSecret,
+        ];
+        for a in &clearances {
+            for b in &clearances {
+                let meet = a.meet(b);
+                let join = a.join(b);
+                for label in &labels {
+                    assert_eq!(
+                        label.can_flow_to(&meet),
+                        label.can_flow_to(a) && label.can_flow_to(b),
+                        "intersection widened {a:?}, {b:?} for {label:?}"
+                    );
+                    assert_eq!(
+                        label.can_flow_to(&join),
+                        label.can_flow_to(a) || label.can_flow_to(b),
+                        "union lost permissions for {a:?}, {b:?}, {label:?}"
+                    );
+                }
+                for level in [0, 1, 2, 3, 4, 5, u32::MAX] {
+                    let custom = Label::Custom {
+                        name: "clearance-regression".into(),
+                        level,
+                    };
+                    assert_eq!(
+                        meet.can_receive_label(&custom),
+                        a.can_receive_label(&custom) && b.can_receive_label(&custom)
+                    );
+                    assert_eq!(
+                        join.can_receive_label(&custom),
+                        a.can_receive_label(&custom) || b.can_receive_label(&custom)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clearance_composition_obeys_permission_lattice_laws() {
+        let clearances = [
+            Clearance::OpenSink,
+            Clearance::RestrictedSink,
+            Clearance::AuditedSink,
+            Clearance::SealedSink,
+            Clearance::NeverSink,
+        ];
+        for a in &clearances {
+            assert_eq!(a.meet(&Clearance::OpenSink), *a);
+            assert_eq!(a.join(&Clearance::NeverSink), *a);
+            assert_eq!(a.meet(&Clearance::NeverSink), Clearance::NeverSink);
+            assert_eq!(a.join(&Clearance::OpenSink), Clearance::OpenSink);
+            for b in &clearances {
+                assert_eq!(a.meet(b), b.meet(a));
+                assert_eq!(a.join(b), b.join(a));
+                assert_eq!(a.meet(&a.join(b)), *a);
+                assert_eq!(a.join(&a.meet(b)), *a);
+                for c in &clearances {
+                    assert_eq!(a.meet(b).meet(c), a.meet(&b.meet(c)));
+                    assert_eq!(a.join(b).join(c), a.join(&b.join(c)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrowed_network_clearance_preserves_declassification_boundary() {
+        let mut lattice = Ir2FlowLattice::new("narrowed-egress");
+        let logging = lattice.assign_sink_clearance(&SinkKind::LoggingRedacted);
+        let network = lattice.assign_sink_clearance(&SinkKind::NetworkEgress);
+        let narrowed = logging.meet(&network);
+        let secret = lattice.assign_source_label(&DataSource::EnvironmentVariable);
+        assert_eq!(narrowed, Clearance::NeverSink);
+        assert!(lattice.check_flow(&secret, &narrowed, "blocked").is_blocked());
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "explicit-egress".into(),
+                source_label: secret.clone(),
+                target_clearance: network,
+                decision_contract_id: "egress-policy".into(),
+                declassification_route_ref: Some("approved-route".into()),
+                requires_operator_approval: true,
+                max_uses: 1,
+                use_count: 0,
+            })
+            .unwrap();
+        assert_eq!(
+            lattice.check_flow(&secret, &narrowed, "requires-receipt"),
+            FlowCheckResult::RequiresDeclassification {
+                obligation_id: "explicit-egress".into()
+            }
+        );
     }
 
     // -----------------------------------------------------------------------

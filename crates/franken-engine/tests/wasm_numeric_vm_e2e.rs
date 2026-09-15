@@ -6,6 +6,8 @@ use std::process::{Command, Output, Stdio};
 use serde_json::Value;
 
 const ADD_I32_HEX: &str = "0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b";
+const CALL_ADD_I32_HEX: &str = "0061736d0100000001070160027f7f017f03030200000707010361646400010a11020700200020016a0b07002000200110000b";
+const RECURSIVE_VOID_HEX: &str = "0061736d01000000010401600000030201000707010372656300000a0601040010000b";
 const DIV_I32_HEX: &str = "0061736d0100000001070160027f7f017f030201000707010364697600000a09010700200020016d0b";
 const IF_I32_HEX: &str = "0061736d0100000001070160027f7f017f030201000707010361646400000a0901070020002001040b";
 
@@ -47,6 +49,31 @@ fn parameterized_i32_add_executes_through_process_boundary() {
 }
 
 #[test]
+fn direct_local_function_call_executes_with_shared_meter() {
+    let json = successful_json(&format!(
+        r#"{{"module_hex":"{CALL_ADD_I32_HEX}","export":"add","arguments":[{{"I32":19}},{{"I32":23}}]}}"#
+    ));
+    assert_eq!(json["execution"]["results"], serde_json::json!([{"I32":42}]));
+    assert_eq!(json["execution"]["max_call_depth"], 2);
+    assert!(json["execution"]["instructions_executed"].as_u64().unwrap_or(0) >= 8);
+}
+
+#[test]
+fn recursive_call_hits_deterministic_call_depth_limit() {
+    let output = run_vm(&format!(
+        r#"{{
+            "module_hex":"{RECURSIVE_VOID_HEX}",
+            "export":"rec",
+            "limits":{{"max_call_depth":4}}
+        }}"#
+    ));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("call depth exceeds limit 4"), "unexpected stderr: {stderr}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn integer_divide_by_zero_traps_at_process_boundary() {
     let output = run_vm(&format!(
         r#"{{"module_hex":"{DIV_I32_HEX}","export":"div","arguments":[{{"I32":7}},{{"I32":0}}]}}"#
@@ -64,14 +91,7 @@ fn instruction_budget_exhaustion_fails_closed() {
             "module_hex":"{ADD_I32_HEX}",
             "export":"add",
             "arguments":[{{"I32":1}},{{"I32":2}}],
-            "limits":{{
-                "max_module_bytes":16777216,
-                "max_functions":65536,
-                "max_locals_per_call":65536,
-                "max_stack_values":65536,
-                "max_call_depth":256,
-                "max_instructions":2
-            }}
+            "limits":{{"max_instructions":2}}
         }}"#
     ));
     assert!(!output.status.success());
@@ -101,7 +121,14 @@ fn argument_type_mismatch_fails_closed() {
 
 #[test]
 fn malformed_hex_is_rejected_before_execution() {
-    let output = run_vm(r#"{"module_hex":"xyz","export":"add"}"#);
+    let output = run_vm(r#"{"module_hex":"xy","export":"add"}"#);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("not valid hexadecimal"));
+}
+
+#[test]
+fn oversized_hex_is_rejected_before_decode_allocation() {
+    let output = run_vm(r#"{"module_hex":"000102","export":"add","limits":{"max_module_bytes":2}}"#);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("3 bytes; limit is 2"));
 }

@@ -5,10 +5,6 @@ use std::io::{self, Read};
 
 use serde::{Deserialize, Serialize};
 
-// The bridge is intentionally shared from the engine source file while its
-// public-library wiring is kept separate from this executable surface. These
-// re-exports preserve the bridge's `crate::...` paths when compiled as this
-// binary crate.
 pub use frankenengine_engine::esm_loader;
 pub use frankenengine_engine::ifc_artifacts;
 pub use frankenengine_engine::module_async_evaluation;
@@ -23,6 +19,7 @@ use async_module_promise_bridge::{AsyncModulePromiseBridge, ModulePromiseUpdate}
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::module_async_evaluation::{AsyncEvalConfig, AsyncModulePhase};
 use frankenengine_engine::object_model::JsValue;
+use frankenengine_engine::promise_model::PromiseHandle;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +27,8 @@ struct Scenario {
     #[serde(default)]
     config: Option<AsyncEvalConfig>,
     modules: Vec<ScenarioModule>,
+    #[serde(default)]
+    pending_promises: Vec<String>,
     #[serde(default)]
     settlements: Vec<Settlement>,
 }
@@ -59,6 +58,22 @@ enum Settlement {
         #[serde(default = "public_label")]
         label: Label,
     },
+    SuspendOnPromise {
+        module: String,
+        promise: String,
+    },
+    FulfillAwaited {
+        promise: String,
+        value: JsValue,
+        #[serde(default = "public_label")]
+        label: Label,
+    },
+    RejectAwaited {
+        promise: String,
+        reason: JsValue,
+        #[serde(default = "public_label")]
+        label: Label,
+    },
     CompleteSynchronous { module: String },
     Synchronize { module: String },
     SynchronizeAll,
@@ -68,13 +83,26 @@ enum Settlement {
 struct ScenarioOutput {
     updates: Vec<ModulePromiseUpdate>,
     dependency_ready: Vec<String>,
+    continuation_ready: Vec<String>,
+    named_promises: BTreeMap<String, PromiseHandle>,
     module_phases: BTreeMap<String, AsyncModulePhase>,
+    active_awaits: BTreeMap<String, PromiseHandle>,
     witness_event_count: usize,
     pending_microtasks: usize,
 }
 
 fn public_label() -> Label {
     Label::Public
+}
+
+fn named_promise(
+    promises: &BTreeMap<String, PromiseHandle>,
+    name: &str,
+) -> Result<PromiseHandle, String> {
+    promises
+        .get(name)
+        .copied()
+        .ok_or_else(|| format!("unknown named Promise: {name}"))
 }
 
 fn run_scenario(scenario: Scenario) -> Result<ScenarioOutput, String> {
@@ -89,8 +117,20 @@ fn run_scenario(scenario: Scenario) -> Result<ScenarioOutput, String> {
             .map_err(|error| error.to_string())?;
     }
 
+    let mut named_promises = BTreeMap::new();
+    for name in scenario.pending_promises {
+        if name.trim().is_empty() {
+            return Err("pending Promise name cannot be empty".to_string());
+        }
+        if named_promises.contains_key(&name) {
+            return Err(format!("duplicate pending Promise name: {name}"));
+        }
+        named_promises.insert(name, bridge.create_pending_promise());
+    }
+
     let mut updates = Vec::new();
     let mut dependency_ready = BTreeSet::new();
+    let mut continuation_ready = BTreeSet::new();
     for settlement in scenario.settlements {
         match settlement {
             Settlement::Fulfill {
@@ -113,6 +153,36 @@ fn run_scenario(scenario: Scenario) -> Result<ScenarioOutput, String> {
                     .reject_module(module.as_str(), reason, label)
                     .map_err(|error| error.to_string())?;
                 updates.push(update);
+            }
+            Settlement::SuspendOnPromise { module, promise } => {
+                let handle = named_promise(&named_promises, &promise)?;
+                bridge
+                    .suspend_module_on_promise(module.as_str(), handle)
+                    .map_err(|error| error.to_string())?;
+            }
+            Settlement::FulfillAwaited {
+                promise,
+                value,
+                label,
+            } => {
+                let handle = named_promise(&named_promises, &promise)?;
+                continuation_ready.extend(
+                    bridge
+                        .fulfill_awaited_promise(handle, value, label)
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+            Settlement::RejectAwaited {
+                promise,
+                reason,
+                label,
+            } => {
+                let handle = named_promise(&named_promises, &promise)?;
+                updates.extend(
+                    bridge
+                        .reject_awaited_promise(handle, reason, label)
+                        .map_err(|error| error.to_string())?,
+                );
             }
             Settlement::CompleteSynchronous { module } => {
                 dependency_ready.extend(
@@ -143,10 +213,23 @@ fn run_scenario(scenario: Scenario) -> Result<ScenarioOutput, String> {
         .iter()
         .map(|(specifier, state)| (specifier.clone(), state.phase))
         .collect();
+    let active_awaits = bridge
+        .evaluator()
+        .states()
+        .keys()
+        .filter_map(|specifier| {
+            bridge
+                .active_await(specifier)
+                .map(|promise| (specifier.clone(), promise))
+        })
+        .collect();
     Ok(ScenarioOutput {
         updates,
         dependency_ready: dependency_ready.into_iter().collect(),
+        continuation_ready: continuation_ready.into_iter().collect(),
+        named_promises,
         module_phases,
+        active_awaits,
         witness_event_count: bridge.evaluator().witness_events().len(),
         pending_microtasks: bridge.microtasks().pending_count(),
     })
@@ -208,15 +291,41 @@ mod tests {
     }
 
     #[test]
-    fn scenario_rejection_propagates_to_dependents() {
+    fn scenario_pending_await_returns_continuation_ready() {
+        let scenario: Scenario = serde_json::from_str(
+            r#"{
+                "modules": [
+                    {"specifier":"app.mjs","has_top_level_await":true}
+                ],
+                "pending_promises": ["fetch-result"],
+                "settlements": [
+                    {"kind":"suspend_on_promise","module":"app.mjs","promise":"fetch-result"},
+                    {"kind":"fulfill_awaited","promise":"fetch-result","value":{"Int":42}}
+                ]
+            }"#,
+        )
+        .expect("scenario");
+        let output = run_scenario(scenario).expect("run");
+        assert_eq!(output.continuation_ready, vec!["app.mjs".to_string()]);
+        assert!(output.active_awaits.is_empty());
+        assert_eq!(
+            output.module_phases.get("app.mjs"),
+            Some(&AsyncModulePhase::Suspended)
+        );
+    }
+
+    #[test]
+    fn scenario_await_rejection_propagates_to_dependents() {
         let scenario: Scenario = serde_json::from_str(
             r#"{
                 "modules": [
                     {"specifier":"root.mjs","has_top_level_await":true},
                     {"specifier":"child.mjs","has_top_level_await":true,"dependencies":["root.mjs"]}
                 ],
+                "pending_promises": ["inner"],
                 "settlements": [
-                    {"kind":"reject","module":"root.mjs","reason":{"Str":"boom"}}
+                    {"kind":"suspend_on_promise","module":"root.mjs","promise":"inner"},
+                    {"kind":"reject_awaited","promise":"inner","reason":{"Str":"boom"}}
                 ]
             }"#,
         )
@@ -245,5 +354,20 @@ mod tests {
         .expect("scenario");
         let error = run_scenario(scenario).expect_err("duplicate must fail");
         assert!(error.contains("already registered"));
+    }
+
+    #[test]
+    fn unknown_named_promise_fails_closed() {
+        let scenario: Scenario = serde_json::from_str(
+            r#"{
+                "modules": [{"specifier":"app.mjs","has_top_level_await":true}],
+                "settlements": [
+                    {"kind":"suspend_on_promise","module":"app.mjs","promise":"missing"}
+                ]
+            }"#,
+        )
+        .expect("scenario");
+        let error = run_scenario(scenario).expect_err("unknown promise must fail");
+        assert!(error.contains("unknown named Promise"));
     }
 }

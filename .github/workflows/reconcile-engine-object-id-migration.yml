@@ -41,8 +41,11 @@ jobs:
           req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OpenAI File Downloader, XaiImageApiFetch/1.0'})
           with urllib.request.urlopen(req,timeout=90) as r:data=base64.b64decode(json.load(r)['content'])
           assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==expected
+          old=b"blob('1a972d53d115db90fb3dc54cd0a112b3ab6b2611')"
+          new=b"blob('10586faaa1cd23c4b645ab1c43de32105ad25874')"
+          assert data.count(old)==1
           script=pathlib.Path(os.environ['RUNNER_TEMP'])/'depth-driver.py'
-          script.write_bytes(data)
+          script.write_bytes(data.replace(old,new))
           subprocess.run(['python3',str(script),'prepare'],check=True)
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

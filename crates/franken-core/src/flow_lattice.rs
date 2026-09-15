@@ -77,6 +77,11 @@ impl Clearance {
         }
     }
 
+    /// Whether this clearance can receive the provided label.
+    pub fn can_receive_label(&self, label: &Label) -> bool {
+        label.level() <= self.max_label_level()
+    }
+
     /// Intersect permissions: receive a label only when both operands can.
     ///
     /// This is the greatest lower bound in permission order, not enum order.
@@ -1638,11 +1643,8 @@ mod tests {
 
         assert_eq!(lattice.events().len(), 2);
         assert_eq!(lattice.events()[0].outcome, "legal_by_lattice");
+        assert_eq!(lattice.events()[1].error_code.as_deref(), Some("FLOW_BLOCKED"));
         assert_eq!(lattice.events()[1].outcome, "blocked");
-        assert_eq!(
-            lattice.events()[1].error_code.as_deref(),
-            Some("FLOW_BLOCKED")
-        );
     }
 
     #[test]

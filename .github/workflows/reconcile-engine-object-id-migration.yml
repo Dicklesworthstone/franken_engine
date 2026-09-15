@@ -38,10 +38,16 @@ jobs:
           from pathlib import Path
           p=Path('crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs')
           s=p.read_text()
+          marker='fn iterator_consumers_refuse_recursive_generators_without_native_stack_abort() {'
+          start=s.index(marker)
+          end=s.find('\n#[test]', start + len(marker))
+          if end < 0:
+              end=len(s)
+          block=s[start:end]
           old='''                assert!(matches!(\n                    core.execute(&module),\n                    Err(InterpreterError::StackOverflow { max: 8, .. })\n                ));'''
-          new='''                let outcome = core.execute(&module);\n                assert!(\n                    matches!(outcome, Err(InterpreterError::StackOverflow { max: 8, .. })),\n                    "unexpected recursive iterator-consumer outcome: {outcome:?}"\n                );'''
-          if s.count(old) != 1:
-              raise SystemExit(f'expected one assertion block, found {s.count(old)}')
-          p.write_text(s.replace(old,new,1))
+          new='''                let outcome = core.execute(&module);\n                assert!(\n                    matches!(outcome, Err(InterpreterError::StackOverflow { max: 8, .. })),\n                    "unexpected recursive iterator-consumer outcome for {source}: {outcome:?}"\n                );'''
+          if block.count(old) != 1:
+              raise SystemExit(f'expected one assertion in target test, found {block.count(old)}')
+          p.write_text(s[:start] + block.replace(old,new,1) + s[end:])
           PY
           cargo test --no-default-features -p frankenengine-engine --test generator_next_bd_v6cv1_regression iterator_consumers_refuse_recursive_generators_without_native_stack_abort -- --nocapture

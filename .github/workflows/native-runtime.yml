@@ -1,0 +1,53 @@
+name: Native Runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-core/**'
+      - '.github/workflows/native-runtime.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture exact native-runtime source inputs
+        run: |
+          git rev-parse HEAD > native-runtime-revision.txt
+          git archive --format=tar.gz --output=native-runtime-sources.tar.gz HEAD AGENTS.md .beads/issues.jsonl docs/plans docs/adr crates/franken-core crates/franken-engine/src crates/franken-engine/tests crates/franken-engine/Cargo.toml crates/franken-extension-host Cargo.toml Cargo.lock .cargo
+      - name: Retain reproducible source inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-runtime-sources
+          path: |
+            native-runtime-sources.tar.gz
+            native-runtime-revision.txt
+          retention-days: 7
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+      - name: Run native-core unit tests
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-core --lib -- --nocapture > native-runtime-tests.log 2>&1 || status=$?
+          tail -n 160 native-runtime-tests.log
+          exit "$status"
+      - name: Retain complete test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-runtime-validation
+          path: native-runtime-*.log
+          retention-days: 7

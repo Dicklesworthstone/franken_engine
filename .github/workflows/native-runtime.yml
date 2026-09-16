@@ -7,6 +7,7 @@ on:
       - 'crates/franken-core/**'
       - 'crates/franken-engine/src/baseline_interpreter*'
       - 'crates/franken-engine/src/baseline_interpreter/**'
+      - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
@@ -54,24 +55,32 @@ jobs:
           name: native-runtime-validation
           path: native-runtime-*.log
           retention-days: 7
-  # One-time transport for an interpreter file larger than the connector's
-  # contents limit. This only creates immutable blobs; main is updated through
-  # the GitHub connector after reviewing the candidate and running its tests.
-  # Remove after the candidate has been committed.
+  # Immutable-blob transport only. This job cannot update a branch; the
+  # reviewed candidate is committed through the GitHub connector separately.
   candidate:
-    if: github.event_name == 'push' && github.event.before == '109d56d07653c2cbdda75fa10238bdbeaffb21a1'
+    if: github.event_name == 'push' && github.event.before == '5afd288a6ddb32e540306f29b9cee954f42efd0d'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     permissions:
       contents: write
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v4
-      - name: Materialize verified runtime candidate
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal --component rustfmt
+      - name: Materialize exact return-semantics candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
           root = pathlib.Path('candidate-output')
           root.mkdir()
           api = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
@@ -85,39 +94,75 @@ jobs:
               })
               with urllib.request.urlopen(req, timeout=60) as response:
                   return json.load(response)
-          raw = base64.b64decode(request('/git/blobs/dd6b6b4febc95a1ea642513af1b95788aedfdcf0')['content'])
-          encoded = base64.b64encode(raw).decode()
-          corrections = [[446, 446, 'gf'], [5095, 5095, 'q'], [6476, 6477, '36'], [7135, 7135, 'UV'], [14531, 14532, ''], [15535, 15536, '']]
-          for start, end, replacement in reversed(corrections):
-              encoded = encoded[:start] + replacement + encoded[end:]
-          raw = base64.b64decode(encoded, validate=True)
-          (root / 'candidate.raw').write_bytes(raw)
-          assert hashlib.sha256(raw).hexdigest() == '6f7e44824c32568533493fcbfc165679ed221e0e5d3504be22bf1bd7f7630423', 'candidate transport checksum mismatch'
-          patch = gzip.decompress(raw)
+          patch = base64.b64decode(request('/git/blobs/5233760d4486f85ad8f5a0c4112b67f4428a48ff')['content'])
+          assert hashlib.sha256(patch).hexdigest() == 'd29b1b754c2b878286a116e5bcd8b0e799e14655ad3c7e671be028aaf36626b0'
           (root / 'candidate.patch').write_bytes(patch)
-          paths = [
-              'crates/franken-engine/src/baseline_interpreter.rs',
-              'crates/franken-engine/src/baseline_interpreter/async_generator.rs',
-              'crates/franken-engine/tests/async_generator_execution.rs',
-          ]
-          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:' + paths[0]], text=True).strip()
-          assert actual == 'e51ff0ac1dea56a636e2b7b50ab7bab8706f78e6', 'interpreter base changed'
+          bases = {
+              'crates/franken-engine/src/lowering_pipeline.rs': 'd54b1387cd9c1db71c9dffffd18a01debe9f6a8d',
+              'crates/franken-engine/tests/async_generator_execution.rs': 'dec4a27b6209efca0161c62cefb34820d108a363',
+          }
+          for path, expected in bases.items():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected, 'candidate base changed'
           stats = subprocess.check_output(['git', 'apply', '--numstat', str(root / 'candidate.patch')], text=True)
-          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(paths), 'unexpected patch paths'
+          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(bases)
           subprocess.run(['git', 'apply', '--check', str(root / 'candidate.patch')], check=True)
           subprocess.run(['git', 'apply', str(root / 'candidate.patch')], check=True)
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', 'crates/franken-engine/tests/async_generator_execution.rs'], check=True)
           result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
-          for path in paths:
-              file = pathlib.Path(path)
-              assert file.is_file() and not file.is_symlink()
-              content = file.read_bytes()
+          for path in bases:
+              content = pathlib.Path(path).read_bytes()
               sha = request('/git/blobs', {'content': base64.b64encode(content).decode(), 'encoding': 'base64'})['sha']
               expected = hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
               assert sha == expected
               result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
           (root / 'result.json').write_text(json.dumps(result, indent=2))
           PY
-      - name: Retain candidate transport and blob identities
+      - name: Select native runtime dependency closure for focused integration tests
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+          src = pathlib.Path('crates/franken-engine/src')
+          root = (src / 'lib.rs').read_text()
+          names = set(re.findall(r'^pub mod (\w+);', root, re.M))
+          todo = ['lib', 'baseline_interpreter', 'parser', 'lowering_pipeline', 'ir_contract']
+          seen = set()
+          def production(text):
+              return re.split(r'#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+', text)[0]
+          while todo:
+              name = todo.pop()
+              if name in seen:
+                  continue
+              seen.add(name)
+              path = src / (name + '.rs')
+              text = production(path.read_text() if path.exists() else (src / name / 'mod.rs').read_text())
+              for child in (src / name).rglob('*.rs'):
+                  if child.name != 'mod.rs':
+                      text += '\n' + production(child.read_text())
+              dependencies = set(re.findall(r'(?:crate|frankenengine_engine)::(\w+)', text)) & names
+              if name == 'lib':
+                  dependencies |= set(re.findall(r'\b(\w+)::', text)) & names
+              for group in re.findall(r'use crate::\{([^;]+)\};', text):
+                  dependencies |= set(re.findall(r'\b(\w+)::', group)) & names
+              todo.extend(dependencies - seen)
+          # Only the temporary crate root selects modules. Production module
+          # files and every assertion in the integration suite remain intact.
+          selected = re.sub(r'^pub mod (\w+);', lambda m: m[0] if m[1] in seen else '#[cfg(any())]\n' + m[0], root, flags=re.M)
+          (src / 'runtime_validation_lib.rs').write_text(selected)
+          manifest_path = src.parent / 'Cargo.toml'
+          manifest = manifest_path.read_text().replace('[package]\n', '[package]\nautobins = false\n', 1)
+          manifest = manifest.replace('path = "src/lib.rs"', 'path = "src/runtime_validation_lib.rs"', 1)
+          manifest = re.sub(r'\[\[bin\]\][\s\S]*?(?=\n\[|\Z)', '', manifest)
+          manifest_path.write_text(manifest)
+          pathlib.Path('candidate-output/runtime-modules.txt').write_text('\n'.join(sorted(seen)))
+          print('Focused runtime module count:', len(seen))
+          PY
+      - name: Run async generator source regressions in both execution profiles
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test async_generator_execution -- --nocapture > candidate-output/tests.log 2>&1 || status=$?
+          tail -n 180 candidate-output/tests.log
+          exit "$status"
+      - name: Retain candidate identity and complete validation output
         if: always()
         uses: actions/upload-artifact@v4
         with:

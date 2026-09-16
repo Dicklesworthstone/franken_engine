@@ -8,6 +8,9 @@
 //! Plan references: Section 10.11 item 13, 9G.5 (policy controller
 //! with expected-loss actions), Top-10 #2 (guardplane), #8 (budgets).
 
+mod decision_input;
+pub use decision_input::DecisionInputError;
+
 pub mod operator_safety_copilot;
 /// Service endpoint contracts adapted from `/dp/fastapi_rust` (ADR-0002).
 /// Gated so `--no-default-features` needs no sibling checkout (bd-ndpm2).
@@ -117,6 +120,19 @@ impl LossMatrix {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Compute expected loss with checked, deterministic fixed-point arithmetic.
+    ///
+    /// The posterior must sum to exactly one million. Every positive-mass
+    /// state must have an explicit cost for this action, including zero costs.
+    /// Contributions are summed in i128 and rounded toward zero only once.
+    pub fn expected_loss(
+        &self,
+        action: &str,
+        posterior: &Posterior,
+    ) -> Result<i64, DecisionInputError> {
+        decision_input::expected_loss(self, action, posterior)
+    }
 }
 
 impl Default for LossMatrix {
@@ -153,6 +169,14 @@ impl Posterior {
     /// All states in deterministic order.
     pub fn states(&self) -> impl Iterator<Item = &str> {
         self.probabilities.keys().map(String::as_str)
+    }
+
+    /// Validate nonnegative probabilities and exactly one million total mass.
+    ///
+    /// Constructors and deserialization retain their existing shape; every
+    /// decision and evidence calculation also validates at the use boundary.
+    pub fn validate(&self) -> Result<(), DecisionInputError> {
+        decision_input::validate_posterior(self)
     }
 }
 
@@ -210,7 +234,7 @@ pub enum PolicyControllerError {
     NoLossEntries,
     /// Safe default action is not in the action set.
     SafeDefaultNotInActionSet { safe_default: String },
-    /// Evidence emission failed.
+    /// Evidence emission failed, including inputs that cannot support valid evidence.
     EvidenceEmissionFailed { reason: String },
 }
 
@@ -346,37 +370,38 @@ impl PolicyController {
 
     /// Compute expected loss for a single action under the posterior.
     ///
-    /// `E[L(a)] = sum_s P(s) * L(s, a)`, using fixed-point millionths.
-    fn expected_loss(&self, action: &str, posterior: &Posterior) -> i64 {
-        let mut total: i64 = 0;
-        for state in posterior.states() {
-            let prob = posterior.probability(state);
-            let loss = self.loss_matrix.get(state, action).unwrap_or(0);
-            // Both are in millionths; result in millionths^2, divide by 1M.
-            total += (prob as i128 * loss as i128 / 1_000_000) as i64;
-        }
-        total
+    /// `E[L(a)] = sum_s P(s) * L(s, a)`, using checked fixed-point millionths.
+    fn expected_loss(
+        &self,
+        action: &str,
+        posterior: &Posterior,
+    ) -> Result<i64, PolicyControllerError> {
+        self.loss_matrix
+            .expected_loss(action, posterior)
+            .map_err(PolicyControllerError::from)
     }
 
     /// Select the best action given the current posterior.
     ///
     /// Returns the action with minimum expected loss that is not blocked
-    /// by any guardrail.  Falls back to safe default if all actions blocked.
+    /// by any guardrail. Falls back to safe default if all actions blocked.
+    /// Invalid posteriors or missing costs fail before changing decision history.
     pub fn select_action(
         &mut self,
         posterior: &Posterior,
         _epoch: SecurityEpoch,
         _trace_id: &str,
     ) -> Result<ActionSelection, PolicyControllerError> {
-        self.decision_count = self.decision_count.saturating_add(1);
-        let decision_id = format!("{}-{:06}", self.config.controller_id, self.decision_count);
+        let next_count = self.decision_count.saturating_add(1);
+        let decision_id = format!("{}-{:06}", self.config.controller_id, next_count);
 
-        // Compute expected loss for each action.
+        // Compute expected loss for each action, including guardrail-blocked
+        // actions: the evidence must account for the entire candidate set.
         let mut candidates: Vec<(String, i64, bool, Option<String>)> = Vec::new();
         let mut guardrail_rejections: Vec<(String, String)> = Vec::new();
 
         for action in &self.config.action_set {
-            let el = self.expected_loss(action, posterior);
+            let el = self.expected_loss(action, posterior)?;
             let mut blocked = false;
             let mut block_reason = None;
 
@@ -401,8 +426,8 @@ impl PolicyController {
         let (action, expected_loss, is_safe_default) = match best {
             Some((action, el, _, _)) => (action.clone(), *el, false),
             None => {
-                // All blocked — use safe default.
-                let el = self.expected_loss(&self.config.safe_default, posterior);
+                // All blocked — use safe default, but never invent its cost.
+                let el = self.expected_loss(&self.config.safe_default, posterior)?;
                 (self.config.safe_default.clone(), el, true)
             }
         };
@@ -414,6 +439,7 @@ impl PolicyController {
             guardrail_rejections,
             decision_id,
         };
+        self.decision_count = next_count;
         self.decisions.push(selection.clone());
         Ok(selection)
     }
@@ -435,9 +461,13 @@ impl PolicyController {
             &self.evidence_signing_authority,
         );
 
-        // Add candidates.
+        // Add candidates using exactly the same checked arithmetic as selection.
         for action in &self.config.action_set {
-            let el = self.expected_loss(action, posterior);
+            let el = self.expected_loss(action, posterior).map_err(|error| {
+                LedgerError::SchemaValidationFailed {
+                    reason: error.to_string(),
+                }
+            })?;
             let is_rejected = selection
                 .guardrail_rejections
                 .iter()
@@ -1202,31 +1232,30 @@ mod tests {
         let mut new_matrix = LossMatrix::new();
         new_matrix.set("s", "low", 1);
         ctrl.update_loss_matrix(new_matrix);
-        // Old entries are gone — expected loss for "medium" in state "normal" should be 0
+        // Removed entries cannot be treated as zero-cost actions.
         let mut probs = BTreeMap::new();
         probs.insert("normal".to_string(), 1_000_000);
         let p = Posterior::new(probs);
-        let sel = ctrl
+        let error = ctrl
             .select_action(&p, SecurityEpoch::from_raw(1), "t")
-            .expect("operation should succeed for valid inputs");
-        // All actions have 0 expected loss except if they have entries in new matrix
-        // "low" has loss 1 for state "s" which isn't in posterior, so all are 0
-        // Ties go to first in action_set order (deterministic)
-        assert_eq!(sel.expected_loss, 0);
+            .expect_err("replacement no longer models the observed state");
+        assert!(error.to_string().contains("missing loss"));
+        assert_eq!(ctrl.decision_count(), 0);
+        assert!(ctrl.decisions().is_empty());
     }
 
     // ── Enrichment batch 2: edge cases & boundary conditions ────
 
     #[test]
-    fn empty_posterior_gives_zero_expected_loss() {
+    fn empty_posterior_is_rejected_without_recording_a_decision() {
         let mut ctrl = monitoring_controller();
         let posterior = Posterior::new(BTreeMap::new());
-        let sel = ctrl
+        let error = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("operation should succeed for valid inputs");
-        assert_eq!(sel.expected_loss, 0);
-        // With zero expected loss for all, picks first in action_set order
-        assert_eq!(sel.action, "low");
+            .expect_err("empty posterior is not a probability distribution");
+        assert!(error.to_string().contains("invalid posterior"));
+        assert_eq!(ctrl.decision_count(), 0);
+        assert!(ctrl.decisions().is_empty());
     }
 
     #[test]
@@ -1248,7 +1277,9 @@ mod tests {
 
     #[test]
     fn single_action_set_always_selected() {
-        let matrix = LossMatrix::new();
+        let mut matrix = LossMatrix::new();
+        matrix.set("normal", "only", 0);
+        matrix.set("anomalous", "only", 0);
         let config = ControllerConfig {
             controller_id: "c".to_string(),
             domain: "d".to_string(),

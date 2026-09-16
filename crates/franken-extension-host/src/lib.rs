@@ -5,7 +5,10 @@ pub mod host_effect_journal;
 pub mod host_io;
 pub mod process_spawn;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+mod decision_crypto;
+pub use decision_crypto::DecisionPublicKeyError;
+
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -588,6 +591,10 @@ pub fn verify_manifest_signature(
     trust_chain_ref: &str,
     publisher_signature: &[u8],
 ) -> bool {
+    // Reject malformed envelopes before decoding or hashing a caller's data.
+    if trust_chain_ref.len() != 64 || publisher_signature.len() != 64 {
+        return false;
+    }
     // Parse trust_chain_ref as hex-encoded Ed25519 public key (32 bytes)
     let public_key_bytes = match hex_to_bytes(trust_chain_ref) {
         Some(bytes) if bytes.len() == 32 => bytes,
@@ -600,7 +607,7 @@ pub fn verify_manifest_signature(
         Err(_) => return false,
     };
 
-    let verifying_key = match VerifyingKey::from_bytes(&public_key_array) {
+    let verifying_key = match decision_crypto::checked_verifying_key(&public_key_array) {
         Ok(key) => key,
         Err(_) => return false,
     };
@@ -611,11 +618,7 @@ pub fn verify_manifest_signature(
         Err(_) => return false,
     };
 
-    // Verify signature against content hash
-    if publisher_signature.len() != 64 {
-        return false;
-    }
-
+    // Verify signature against content hash.
     let signature_array: [u8; 64] = match publisher_signature.try_into() {
         Ok(array) => array,
         Err(_) => return false,
@@ -627,7 +630,7 @@ pub fn verify_manifest_signature(
     let domain_separated_payload = domain_separated_manifest_payload(&content_hash);
 
     verifying_key
-        .verify(&domain_separated_payload, &signature)
+        .verify_strict(&domain_separated_payload, &signature)
         .is_ok()
 }
 
@@ -4298,7 +4301,10 @@ impl DecisionContract for RateLimitContract {
 }
 
 /// Ed25519 private key used for deterministic decision receipt signing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Debug output is redacted. Serialization intentionally exports secret key
+/// material for trusted configuration only; it must never enter public evidence.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionSigningKey {
     bytes: [u8; 32],
 }
@@ -4351,7 +4357,8 @@ impl DecisionSigningKey {
 }
 
 /// Ed25519 public key for verifying decision receipts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Imported keys must have a canonical encoding and must not have low order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct DecisionPublicKey {
     bytes: [u8; 32],
 }
@@ -4361,10 +4368,10 @@ impl DecisionPublicKey {
         if signature.len() != 64 {
             return false;
         }
-        if let Ok(verifying_key) = VerifyingKey::from_bytes(&self.bytes) {
+        if let Ok(verifying_key) = decision_crypto::checked_verifying_key(&self.bytes) {
             if let Ok(sig_array) = <&[u8; 64]>::try_from(signature) {
                 let sig = Signature::from_bytes(sig_array);
-                verifying_key.verify(payload, &sig).is_ok()
+                verifying_key.verify_strict(payload, &sig).is_ok()
             } else {
                 false
             }

@@ -764,13 +764,17 @@ impl SandboxedHostIo {
         self
     }
 
-    /// Set the shared timeout for each network effect, including connection,
-    /// TLS handshake, request writes and response reads. A byte arriving before
+    /// Set the shared timeout for each network effect, including DNS waiting,
+    /// connection attempts, TLS handshake, request writes and response reads. A byte arriving before
     /// a socket timeout does not grant the peer a fresh timeout interval.
     ///
-    /// The synchronous OS resolver is not interruptible through `ToSocketAddrs`;
-    /// its elapsed time is charged, but it may itself exceed this duration.
-    /// Configuring DNS/endpoint policy remains the product layer's responsibility.
+    /// An OS lookup may continue after the caller times out, but at most eight
+    /// lookups are in flight across all provider instances. A stuck lookup keeps
+    /// its slot; overload fails without spawning more workers. Numeric endpoints
+    /// bypass DNS. Address failover happens only before sending any request and
+    /// shares this deadline; TLS/HTTP failures never trigger another connection.
+    /// Endpoint authorization (including every resolved destination and DNS
+    /// rebinding defense) remains the product layer's responsibility.
     ///
     /// # Errors
     /// Zero or an unrepresentable deadline is rejected as `InvalidInput`.
@@ -2446,15 +2450,20 @@ impl SandboxedHostIo {
     /// builder). A fully received length-delimited or chunked message needs no
     /// TLS close notification; a close-delimited body requires a clean TLS EOF.
     fn network_request_tls(&self, endpoint: &str, payload: &[u8], cap: u64) -> HostIoOutcome {
-        // Verification identity: the host part of `host:port`. (IPv6 endpoints
-        // in bracket form are not produced by the engine's wire builder.)
-        let host = endpoint.rsplit_once(':').map_or(endpoint, |(h, _)| h);
-        let server_name =
-            rustls_pki_types::ServerName::try_from(host.to_string()).map_err(|err| {
-                HostIoError::Io {
-                    detail: format!("invalid TLS server name {host}: {err}"),
-                }
-            })?;
+        // Authenticate the requested DNS name, never whichever IP happened to
+        // connect. Numeric IPv4/IPv6 endpoints use the IP subjectAlternativeName
+        // without SNI; the brackets and numeric scope are transport syntax only.
+        let server_name = match endpoint.parse::<std::net::SocketAddr>() {
+            Ok(address) => rustls_pki_types::ServerName::from(address.ip()),
+            Err(_) => {
+                let host = endpoint.rsplit_once(':').map_or(endpoint, |(host, _)| host);
+                rustls_pki_types::ServerName::try_from(host.to_string()).map_err(|err| {
+                    HostIoError::Io {
+                        detail: format!("invalid TLS server name {host}: {err}"),
+                    }
+                })?
+            }
+        };
         let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
         let config = rustls::ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()

@@ -503,3 +503,196 @@ fn timeout_configuration_rejects_zero_and_overflow_without_bypassing_capabilitie
         std::io::ErrorKind::WouldBlock
     );
 }
+
+struct NamedExchange {
+    exchange: Exchange,
+    observed: std::io::Result<(Vec<u8>, Option<String>)>,
+}
+
+fn named_exchange(
+    listen: &str,
+    hostname: Option<&str>,
+    certificate: Option<&str>,
+) -> NamedExchange {
+    use std::time::Instant;
+    let directory = tempfile::tempdir().unwrap();
+    let mut provider = SandboxedHostIo::with_root(directory.path())
+        .unwrap()
+        .with_network_timeout(Duration::from_secs(3))
+        .unwrap();
+    let listener = TcpListener::bind(listen).expect("loopback family must be available");
+    let address = listener.local_addr().unwrap();
+    let endpoint = hostname.map_or_else(
+        || address.to_string(),
+        |host| format!("{host}:{}", address.port()),
+    );
+    let tls_config = certificate.map(|name| {
+        let certified = rcgen::generate_simple_self_signed(vec![name.to_string()]).unwrap();
+        provider = provider
+            .clone()
+            .with_extra_tls_roots_pem(certified.cert.pem().as_bytes())
+            .unwrap();
+        let key = rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+        Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![certified.cert.der().clone()], key)
+            .unwrap(),
+        )
+    });
+    listener.set_nonblocking(true).unwrap();
+    let (stop, stopped) = mpsc::sync_channel(1);
+    let server = std::thread::spawn(move || -> std::io::Result<(Vec<u8>, Option<String>)> {
+        let guard = Instant::now() + Duration::from_secs(5);
+        let mut tcp = loop {
+            match listener.accept() {
+                Ok((tcp, _)) => break tcp,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if stopped.try_recv().is_ok() || Instant::now() >= guard {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "no connection accepted",
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        tcp.set_nonblocking(false)?;
+        tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
+        tcp.set_write_timeout(Some(Duration::from_secs(5)))?;
+        fn reply<S: Read + Write>(stream: &mut S) -> std::io::Result<Vec<u8>> {
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte)?;
+                request.push(byte[0]);
+                if request.len() > 4096 {
+                    return Err(std::io::Error::other("oversized test request"));
+                }
+            }
+            stream.write_all(FIXED)?;
+            stream.flush()?;
+            Ok(request)
+        }
+        if let Some(config) = tls_config {
+            let connection =
+                rustls::ServerConnection::new(config).map_err(std::io::Error::other)?;
+            let mut tls = rustls::StreamOwned::new(connection, tcp);
+            let request = reply(&mut tls)?;
+            Ok((request, tls.conn.server_name().map(str::to_owned)))
+        } else {
+            Ok((reply(&mut tcp)?, None))
+        }
+    });
+    let payload = format!("GET /family HTTP/1.1\r\nHost: {endpoint}\r\n\r\n").into_bytes();
+    let request = HostIoRequest::NetworkRequest {
+        endpoint,
+        payload,
+        max_len: 4096,
+        use_tls: certificate.is_some(),
+    };
+    let journal = InMemoryHostEffectJournal::recording();
+    journal.begin_execution().unwrap();
+    let reservation = journal.reserve_host_io(&request).unwrap();
+    let outcome = provider.perform(&request, &[HostIoCapability::NetworkSend]);
+    let _ = stop.send(());
+    let observed = server.join().expect("real named loopback server joins");
+    journal
+        .complete_host_io(reservation, &request, &outcome)
+        .unwrap();
+    NamedExchange {
+        exchange: Exchange {
+            outcome,
+            request,
+            entries: journal.finish_execution().unwrap(),
+        },
+        observed,
+    }
+}
+
+#[test]
+fn hostname_resolution_reaches_an_ipv4_only_server_over_tcp_and_tls() {
+    for certificate in [None, Some("localhost")] {
+        let named = named_exchange("127.0.0.1:0", Some("localhost"), certificate);
+        assert_eq!(
+            named.exchange.outcome,
+            Ok(HostIoResponse::NetworkRequest {
+                response: FIXED.to_vec()
+            })
+        );
+        let (observed, sni) = named.observed.unwrap();
+        let HostIoRequest::NetworkRequest { payload, .. } = &named.exchange.request else {
+            unreachable!()
+        };
+        assert_eq!(&observed, payload);
+        assert_eq!(sni.as_deref(), certificate);
+    }
+}
+
+#[test]
+fn ipv6_literal_tcp_and_tls_use_exact_ip_identity_without_sni() {
+    for certificate in [None, Some("::1")] {
+        let named = named_exchange("[::1]:0", None, certificate);
+        assert_eq!(
+            named.exchange.outcome,
+            Ok(HostIoResponse::NetworkRequest {
+                response: FIXED.to_vec()
+            })
+        );
+        let (observed, sni) = named.observed.unwrap();
+        let HostIoRequest::NetworkRequest { payload, .. } = &named.exchange.request else {
+            unreachable!()
+        };
+        assert_eq!(&observed, payload);
+        assert_eq!(sni, None);
+    }
+}
+
+#[test]
+fn hostname_tls_cannot_authenticate_only_the_resolved_address() {
+    let named = named_exchange("127.0.0.1:0", Some("localhost"), Some("127.0.0.1"));
+    assert!(matches!(
+        named.exchange.outcome,
+        Err(HostIoError::Io { .. })
+    ));
+    assert!(
+        named.observed.is_err(),
+        "a mismatched certificate must not receive the HTTP request"
+    );
+}
+
+#[test]
+fn ipv6_tls_rejects_a_trusted_certificate_for_another_ip() {
+    let named = named_exchange("[::1]:0", None, Some("127.0.0.1"));
+    assert!(matches!(
+        named.exchange.outcome,
+        Err(HostIoError::Io { .. })
+    ));
+    assert!(
+        named.observed.is_err(),
+        "IP certificate verification must not be disabled"
+    );
+}
+
+#[test]
+fn named_endpoint_replay_reuses_exact_outcome_after_the_server_is_gone() {
+    let named = named_exchange("127.0.0.1:0", Some("localhost"), Some("localhost"));
+    assert!(named.exchange.outcome.is_ok());
+    let encoded = serde_json::to_vec(&named.exchange.entries).unwrap();
+    let replay = InMemoryHostEffectJournal::replaying(serde_json::from_slice(&encoded).unwrap());
+    replay.begin_execution().unwrap();
+    assert_eq!(
+        replay.replay_host_io(&named.exchange.request),
+        Some(named.exchange.outcome)
+    );
+    assert_eq!(
+        serde_json::to_vec(&replay.finish_execution().unwrap()).unwrap(),
+        encoded
+    );
+}

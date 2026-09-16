@@ -48,11 +48,47 @@ pub(super) struct DeadlineTcpStream {
 }
 
 impl DeadlineTcpStream {
+    /// Resolve once, then try the bounded address list in resolver order. Each
+    /// remaining address gets a share of the remaining connection budget, so a
+    /// blackholed first address cannot consume every later address's chance.
     pub(super) fn connect_endpoint(endpoint: &str, deadline: NetworkDeadline) -> io::Result<Self> {
         let addresses = resolver::resolve_endpoint(endpoint, deadline)?;
-        // Resolver admission guarantees at least one address. Connection
-        // failover is separate from lookup admission and never repeats DNS.
-        Self::connect(&addresses[0], deadline)
+        if addresses.len() == 1 {
+            return Self::connect(&addresses[0], deadline);
+        }
+        Self::connect_addresses(&addresses, deadline, TcpStream::connect_timeout)
+    }
+
+    fn connect_addresses<F>(
+        addresses: &[SocketAddr],
+        deadline: NetworkDeadline,
+        mut dial: F,
+    ) -> io::Result<Self>
+    where
+        F: FnMut(&SocketAddr, Duration) -> io::Result<TcpStream>,
+    {
+        let mut last_error = io::Error::new(io::ErrorKind::NotFound, "no connection addresses");
+        for (index, address) in addresses.iter().enumerate() {
+            let attempts_left = u32::try_from(addresses.len() - index).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "too many connection addresses")
+            })?;
+            let timeout = deadline.remaining()? / attempts_left;
+            if timeout.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "network effect deadline exceeded",
+                ));
+            }
+            let result = dial(address, timeout);
+            // A late connect, successful or not, cannot restart the operation's
+            // clock. Failover occurs only here, before any guest request bytes.
+            deadline.remaining()?;
+            match result {
+                Ok(stream) => return Ok(Self { stream, deadline }),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
     }
 
     pub(super) fn connect(address: &SocketAddr, deadline: NetworkDeadline) -> io::Result<Self> {
@@ -172,5 +208,101 @@ mod tests {
             listener.accept().unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+    #[test]
+    fn refused_first_address_falls_back_without_repeating_payload() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap();
+        let refused = "127.0.0.1:0".parse().unwrap();
+        let deadline = NetworkDeadline::new(Duration::from_secs(5)).unwrap();
+        let mut connected = DeadlineTcpStream::connect_addresses(
+            &[refused, live],
+            deadline,
+            TcpStream::connect_timeout,
+        )
+        .unwrap();
+        assert_eq!(connected.deadline.end, deadline.end);
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        connected.write_all(b"exactly once").unwrap();
+        connected.shutdown(Shutdown::Write).unwrap();
+        let mut observed = Vec::new();
+        peer.read_to_end(&mut observed).unwrap();
+        assert_eq!(observed, b"exactly once");
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn connection_attempts_share_the_remaining_budget_and_stop_at_success() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap();
+        let first = "127.0.0.1:0".parse().unwrap();
+        let deadline = NetworkDeadline::new(Duration::from_secs(6)).unwrap();
+        let mut calls = Vec::new();
+        let mut timeouts = Vec::new();
+        let stream = DeadlineTcpStream::connect_addresses(
+            &[first, live, first],
+            deadline,
+            |address, timeout| {
+                calls.push(*address);
+                timeouts.push(timeout);
+                if *address == first {
+                    Err(io::Error::new(
+                        io::ErrorKind::ConnectionRefused,
+                        "injected first dial refusal",
+                    ))
+                } else {
+                    TcpStream::connect_timeout(address, timeout)
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, vec![first, live]);
+        assert!(timeouts[0] <= Duration::from_secs(2));
+        assert!(timeouts[1] <= Duration::from_secs(3));
+        assert_eq!(
+            stream.deadline.end, deadline.end,
+            "DNS/dial budget is not renewed for I/O"
+        );
+    }
+
+    #[test]
+    fn exhausted_deadline_stops_before_trying_any_destination() {
+        let address = "127.0.0.1:80".parse().unwrap();
+        let error = DeadlineTcpStream::connect_addresses(
+            &[address, address],
+            NetworkDeadline {
+                end: Instant::now(),
+            },
+            |_, _| panic!("deadline exhaustion must precede the first socket"),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn empty_and_failed_address_lists_return_errors_without_a_stream() {
+        let deadline = NetworkDeadline::new(Duration::from_secs(5)).unwrap();
+        let error = DeadlineTcpStream::connect_addresses(&[], deadline, |_, _| {
+            panic!("empty list must not dial")
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        let address = "127.0.0.1:0".parse().unwrap();
+        let mut attempts = 0;
+        let error = DeadlineTcpStream::connect_addresses(&[address, address], deadline, |_, _| {
+            attempts += 1;
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "injected refusal",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(attempts, 2);
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
     }
 }

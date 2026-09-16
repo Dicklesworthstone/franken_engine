@@ -9,14 +9,16 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 mod http_response;
+mod network_deadline;
 pub use http_response::{ParsedHttpResponse, parse_http_response};
+use network_deadline::{DeadlineTcpStream, NetworkDeadline};
 
 /// Capability a guest must hold for the host to perform a given I/O request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -476,10 +478,11 @@ pub const SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST: u64 = 1024 * 1024;
 /// cannot multiply authority by making the provider cross interpreter lanes.
 pub const SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Per-operation network timeout for [`SandboxedHostIo`] connect/read/write.
-/// Bounds how long a single guest network effect may block so a slow or
-/// unreachable endpoint fails closed deterministically instead of hanging the
-/// runtime (a hung effect would also stall replay/transcript determinism).
+/// Default shared deadline for a network effect's connect/read/write and TLS
+/// handshake. Progress never restarts this budget. The synchronous system DNS
+/// resolver cannot be interrupted here; any time it spends is charged once it
+/// returns. Product policy must provide bounded resolution when it needs a
+/// whole-operation deadline including DNS.
 pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A real, sandboxed [`HostIoProvider`] that performs genuine filesystem reads
@@ -650,6 +653,7 @@ pub struct SandboxedHostIo {
     #[cfg(unix)]
     root_fd: std::sync::Arc<OwnedFd>,
     max_bytes: u64,
+    network_timeout: Duration,
     random_bytes_remaining: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Trust anchors for `use_tls` round trips: the compiled-in webpki (Mozilla)
     /// roots by default, plus any operator-supplied extras added via
@@ -707,6 +711,7 @@ impl SandboxedHostIo {
             #[cfg(unix)]
             root_fd: std::sync::Arc::new(root_fd),
             max_bytes,
+            network_timeout: SANDBOXED_HOST_IO_NETWORK_TIMEOUT,
             random_bytes_remaining: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
                 SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES,
             )),
@@ -729,6 +734,22 @@ impl SandboxedHostIo {
     fn with_read_race_hook(mut self, hook: std::sync::Arc<ResolutionRaceHook>) -> Self {
         self.read_race_hook = Some(hook);
         self
+    }
+
+    /// Set the shared timeout for each network effect, including connection,
+    /// TLS handshake, request writes and response reads. A byte arriving before
+    /// a socket timeout does not grant the peer a fresh timeout interval.
+    ///
+    /// The synchronous OS resolver is not interruptible through `ToSocketAddrs`;
+    /// its elapsed time is charged, but it may itself exceed this duration.
+    /// Configuring DNS/endpoint policy remains the product layer's responsibility.
+    ///
+    /// # Errors
+    /// Zero or an unrepresentable deadline is rejected as `InvalidInput`.
+    pub fn with_network_timeout(mut self, timeout: Duration) -> std::io::Result<Self> {
+        NetworkDeadline::new(timeout)?;
+        self.network_timeout = timeout;
+        Ok(self)
     }
 
     /// Append PEM-encoded certificates to the TLS trust anchors used for
@@ -2203,14 +2224,10 @@ impl SandboxedHostIo {
         Ok(HostIoResponse::FsMeta { result })
     }
 
-    /// Open a time-bounded TCP connection to `endpoint`.
-    ///
-    /// This performs **no** SSRF / egress-policy check — endpoint authorization
-    /// is the product layer's responsibility and must happen before the request
-    /// reaches this provider (see the type-level SECURITY INVARIANT). The
-    /// connection carries a bounded connect/read/write timeout so a slow or
-    /// unreachable peer fails closed instead of hanging.
-    fn connect(&self, endpoint: &str) -> Result<TcpStream, HostIoError> {
+    /// Connect without renewing the operation's budget on individual I/O calls.
+    /// Endpoint authorization and bounded DNS remain the product's policy; this
+    /// mechanism does not broaden authority or retry a partially sent request.
+    fn connect(&self, endpoint: &str) -> Result<DeadlineTcpStream, HostIoError> {
         if endpoint.is_empty() {
             return Err(HostIoError::SandboxViolation {
                 detail: "empty network endpoint".to_string(),
@@ -2221,8 +2238,10 @@ impl SandboxedHostIo {
                 detail: "network endpoint contains a NUL byte".to_string(),
             });
         }
-        // Resolve to a concrete socket address so a bounded connect timeout can
-        // be applied (`TcpStream::connect` itself takes no timeout).
+        let deadline =
+            NetworkDeadline::new(self.network_timeout).map_err(|err| HostIoError::Io {
+                detail: format!("network deadline for {endpoint}: {err}"),
+            })?;
         let addr = endpoint
             .to_socket_addrs()
             .map_err(|err| HostIoError::Io {
@@ -2232,22 +2251,9 @@ impl SandboxedHostIo {
             .ok_or_else(|| HostIoError::Io {
                 detail: format!("resolve {endpoint}: no addresses"),
             })?;
-        let stream = TcpStream::connect_timeout(&addr, SANDBOXED_HOST_IO_NETWORK_TIMEOUT).map_err(
-            |err| HostIoError::Io {
-                detail: format!("connect {endpoint}: {err}"),
-            },
-        )?;
-        stream
-            .set_read_timeout(Some(SANDBOXED_HOST_IO_NETWORK_TIMEOUT))
-            .map_err(|err| HostIoError::Io {
-                detail: format!("set read timeout {endpoint}: {err}"),
-            })?;
-        stream
-            .set_write_timeout(Some(SANDBOXED_HOST_IO_NETWORK_TIMEOUT))
-            .map_err(|err| HostIoError::Io {
-                detail: format!("set write timeout {endpoint}: {err}"),
-            })?;
-        Ok(stream)
+        DeadlineTcpStream::connect(&addr, deadline).map_err(|err| HostIoError::Io {
+            detail: format!("connect {endpoint}: {err}"),
+        })
     }
 
     fn network_send(&self, endpoint: &str, payload: &[u8]) -> HostIoOutcome {

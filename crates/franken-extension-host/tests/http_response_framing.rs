@@ -49,6 +49,23 @@ fn serve<S: Read + Write>(
     (request, released)
 }
 
+fn install_loopback_tls(provider: SandboxedHostIo) -> (SandboxedHostIo, Arc<rustls::ServerConfig>) {
+    let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
+        .expect("generate loopback TLS certificate");
+    let provider = provider
+        .with_extra_tls_roots_pem(certified.cert.pem().as_bytes())
+        .expect("install explicit test trust anchor");
+    let key = rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+    let crypto = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ServerConfig::builder_with_provider(crypto)
+        .with_safe_default_protocol_versions()
+        .expect("TLS versions")
+        .with_no_client_auth()
+        .with_single_cert(vec![certified.cert.der().clone()], key)
+        .expect("TLS server certificate");
+    (provider, Arc::new(config))
+}
+
 fn exchange(
     response: &[u8],
     use_tls: bool,
@@ -60,21 +77,9 @@ fn exchange(
     let directory = tempfile::tempdir().expect("sandbox directory");
     let mut provider = SandboxedHostIo::with_root(directory.path()).expect("real provider");
     let tls_config = if use_tls {
-        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
-            .expect("generate loopback TLS certificate");
-        provider = provider
-            .with_extra_tls_roots_pem(certified.cert.pem().as_bytes())
-            .expect("install explicit test trust anchor");
-        let key = rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
-        let crypto = Arc::new(rustls::crypto::ring::default_provider());
-        Some(Arc::new(
-            rustls::ServerConfig::builder_with_provider(crypto)
-                .with_safe_default_protocol_versions()
-                .expect("TLS versions")
-                .with_no_client_auth()
-                .with_single_cert(vec![certified.cert.der().clone()], key)
-                .expect("TLS server certificate"),
-        ))
+        let (configured, config) = install_loopback_tls(provider);
+        provider = configured;
+        Some(config)
     } else {
         None
     };
@@ -279,4 +284,222 @@ fn raw_successes_and_truncation_errors_replay_after_the_live_server_is_gone() {
         assert_eq!(outcome, recorded.outcome);
         assert_eq!(replay.finish_execution().unwrap(), recorded.entries);
     }
+}
+
+// Progress arrives more often than the configured timeout. A per-syscall
+// timeout would accept the entire response; the shared deadline must not.
+fn trickle<S: Read + Write>(stream: &mut S, http: bool, stop: &mpsc::Receiver<()>) -> usize {
+    if http {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 256];
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).expect("read test request");
+            assert_ne!(count, 0);
+            request.extend_from_slice(&buffer[..count]);
+            assert!(request.len() <= 4096);
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+    }
+    let mut sent = 0;
+    for byte in 0..64_u8 {
+        if stream
+            .write_all(&[byte])
+            .and_then(|()| stream.flush())
+            .is_err()
+        {
+            break;
+        }
+        sent += 1;
+        match stop.recv_timeout(Duration::from_millis(100)) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+    sent
+}
+
+fn deadline_trickle_exchange(http: bool, use_tls: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut provider = SandboxedHostIo::with_root(directory.path())
+        .unwrap()
+        .with_network_timeout(Duration::from_secs(1))
+        .unwrap();
+    let tls_config = if use_tls {
+        let (configured, config) = install_loopback_tls(provider);
+        provider = configured;
+        Some(config)
+    } else {
+        None
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let (stop, stopped) = mpsc::sync_channel(1);
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        if let Some(config) = tls_config {
+            let conn = rustls::ServerConnection::new(config).unwrap();
+            let mut stream = rustls::StreamOwned::new(conn, stream);
+            trickle(&mut stream, http, &stopped)
+        } else {
+            trickle(&mut stream, http, &stopped)
+        }
+    });
+    let request = if http {
+        HostIoRequest::NetworkRequest {
+            endpoint,
+            payload: b"GET / HTTP/1.1\r\nHost: loopback\r\n\r\n".to_vec(),
+            max_len: 4096,
+            use_tls,
+        }
+    } else {
+        HostIoRequest::NetworkRecv {
+            endpoint,
+            max_len: 4096,
+        }
+    };
+    let journal = InMemoryHostEffectJournal::recording();
+    journal.begin_execution().unwrap();
+    let reservation = journal.reserve_host_io(&request).unwrap();
+    let outcome = provider.perform(&request, &[request.required_capability()]);
+    let _ = stop.send(());
+    let sent = server.join().unwrap();
+    assert!(
+        sent > 0 && sent < 64,
+        "deadline must interrupt a genuinely progressing peer, sent={sent}"
+    );
+    assert!(
+        matches!(outcome, Err(HostIoError::Io { .. })),
+        "partial bytes are not successful output: {outcome:?}"
+    );
+    journal
+        .complete_host_io(reservation, &request, &outcome)
+        .unwrap();
+    let entries = journal.finish_execution().unwrap();
+    let replay = InMemoryHostEffectJournal::replaying(entries.clone());
+    replay.begin_execution().unwrap();
+    assert_eq!(replay.replay_host_io(&request), Some(outcome));
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+
+    // The budget belongs to an individual effect, not to the provider's
+    // lifetime. A fresh request through a clone gets its own deadline.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let next_server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (_sender, receiver) = mpsc::channel();
+        serve(&mut stream, FIXED, false, &receiver);
+    });
+    let next = HostIoRequest::NetworkRequest {
+        endpoint,
+        payload: b"GET / HTTP/1.1\r\nHost: loopback\r\n\r\n".to_vec(),
+        max_len: 4096,
+        use_tls: false,
+    };
+    assert_eq!(
+        provider
+            .clone()
+            .perform(&next, &[HostIoCapability::NetworkSend]),
+        Ok(HostIoResponse::NetworkRequest {
+            response: FIXED.to_vec()
+        })
+    );
+    next_server.join().unwrap();
+}
+
+#[test]
+fn tcp_response_progress_does_not_renew_the_deadline_and_timeout_replays() {
+    deadline_trickle_exchange(true, false);
+}
+
+#[test]
+fn tls_response_progress_does_not_renew_the_deadline_and_timeout_replays() {
+    deadline_trickle_exchange(true, true);
+}
+
+#[test]
+fn raw_network_receive_progress_does_not_renew_the_deadline() {
+    deadline_trickle_exchange(false, false);
+}
+
+#[test]
+fn tls_handshake_is_bounded_before_any_http_request_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = SandboxedHostIo::with_root(directory.path())
+        .unwrap()
+        .with_network_timeout(Duration::from_secs(1))
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let (release, receive) = mpsc::sync_channel(1);
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut hello = [0_u8; 1024];
+        let count = stream.read(&mut hello).unwrap();
+        assert!(count > 0, "real TLS client hello must cross the socket");
+        // Deliberately never produce a ServerHello. The peer must time out
+        // before our deadlock guard closes the connection.
+        receive.recv_timeout(Duration::from_secs(5)).is_ok()
+    });
+    let request = HostIoRequest::NetworkRequest {
+        endpoint,
+        payload: b"GET / HTTP/1.1\r\nHost: loopback\r\n\r\n".to_vec(),
+        max_len: 4096,
+        use_tls: true,
+    };
+    let outcome = provider.perform(&request, &[HostIoCapability::NetworkSend]);
+    let _ = release.send(());
+    assert!(
+        server.join().unwrap(),
+        "handshake waited for server closure"
+    );
+    assert!(matches!(outcome, Err(HostIoError::Io { .. })));
+}
+
+#[test]
+fn timeout_configuration_rejects_zero_and_overflow_without_bypassing_capabilities() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = SandboxedHostIo::with_root(directory.path()).unwrap();
+    for timeout in [Duration::ZERO, Duration::MAX] {
+        let error = provider.clone().with_network_timeout(timeout).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    let provider = provider
+        .with_network_timeout(Duration::from_secs(1))
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let request = HostIoRequest::NetworkRequest {
+        endpoint: listener.local_addr().unwrap().to_string(),
+        payload: b"GET / HTTP/1.1\r\nHost: loopback\r\n\r\n".to_vec(),
+        max_len: 4096,
+        use_tls: false,
+    };
+    assert_eq!(
+        provider.perform(&request, &[]),
+        Err(HostIoError::CapabilityMissing {
+            capability: HostIoCapability::NetworkSend,
+        })
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }

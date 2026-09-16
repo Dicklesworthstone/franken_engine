@@ -59,7 +59,7 @@ jobs:
   # the GitHub connector after reviewing the candidate and running its tests.
   # Remove after the candidate has been committed.
   candidate:
-    if: github.event_name == 'push' && github.event.before == 'e6dc49d6d494e2fca36a31228f79142f8b675a9e'
+    if: github.event_name == 'push' && github.event.before == '109d56d07653c2cbdda75fa10238bdbeaffb21a1'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -86,6 +86,11 @@ jobs:
               with urllib.request.urlopen(req, timeout=60) as response:
                   return json.load(response)
           raw = base64.b64decode(request('/git/blobs/dd6b6b4febc95a1ea642513af1b95788aedfdcf0')['content'])
+          encoded = base64.b64encode(raw).decode()
+          corrections = [[446, 446, 'gf'], [5095, 5095, 'q'], [6476, 6477, '36'], [7135, 7135, 'UV'], [14531, 14532, ''], [15535, 15536, '']]
+          for start, end, replacement in reversed(corrections):
+              encoded = encoded[:start] + replacement + encoded[end:]
+          raw = base64.b64decode(encoded, validate=True)
           (root / 'candidate.raw').write_bytes(raw)
           assert hashlib.sha256(raw).hexdigest() == '6f7e44824c32568533493fcbfc165679ed221e0e5d3504be22bf1bd7f7630423', 'candidate transport checksum mismatch'
           patch = gzip.decompress(raw)

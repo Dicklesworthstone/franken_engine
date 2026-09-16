@@ -8,6 +8,9 @@ use super::*;
 use crate::object_model::JsValue;
 use crate::promise_model::PromiseHandle;
 
+mod delegation;
+use delegation::{AsyncDelegateStage, AsyncDelegateState};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AsyncGeneratorPhase {
     SuspendedStart,
@@ -33,14 +36,21 @@ pub(super) struct AsyncGeneratorObject {
     pub(super) requests: VecDeque<AsyncGeneratorRequest>,
     /// Body-level `await` transfers its operand here before saving the frame.
     pub(super) awaited: Option<LabeledReturn>,
+    pub(super) awaited_kind: AwaitKind,
+    pub(super) delegation: Option<AsyncDelegateState>,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum AwaitKind {
+pub(super) enum AwaitKind {
     Body,
     Yield,
     ReturnArgument,
     ReturnResult,
+    DelegateResult,
+    DelegateSyncValue,
+    DelegateYield,
+    DelegateClose,
+    DelegateMissingReturn,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +87,8 @@ impl InterpreterCore {
             phase: AsyncGeneratorPhase::SuspendedStart,
             requests: VecDeque::new(),
             awaited: None,
+            awaited_kind: AwaitKind::Body,
+            delegation: None,
         }) {
             Ok(id) => Ok(id),
             Err(error) => {
@@ -245,9 +257,23 @@ impl InterpreterCore {
         match outcome {
             Ok((result, result_label)) => {
                 if let Some(awaited) = self.async_generators[id as usize].awaited.take() {
+                    if matches!(
+                        self.async_generators[id as usize].awaited_kind,
+                        AwaitKind::DelegateYield
+                    ) {
+                        // Async yield* forwards IteratorValue unchanged. Unlike
+                        // ordinary `yield`, it does not implicitly Await it;
+                        // the AsyncFromSync adapter already unwraps sync values.
+                        return self.settle_async_generator_request(
+                            id,
+                            Ok(awaited.value),
+                            false,
+                            awaited.label,
+                        );
+                    }
                     return self.await_async_generator_value(
                         id,
-                        AwaitKind::Body,
+                        self.async_generators[id as usize].awaited_kind,
                         awaited.value,
                         awaited.label,
                     );
@@ -306,6 +332,7 @@ impl InterpreterCore {
             label = self.join_owned_label_with_temporary_budget(label, context)?;
         }
         let previous = self.async_generators_memory_bytes();
+        self.async_generators[id as usize].awaited_kind = AwaitKind::Body;
         self.async_generators[id as usize].awaited = Some(LabeledReturn {
             value,
             label: label.clone(),
@@ -409,6 +436,54 @@ impl InterpreterCore {
             }
             self.async_generators[id as usize].phase = AsyncGeneratorPhase::Executing;
             match (context.kind, result) {
+                (AwaitKind::DelegateSyncValue, Ok(value)) => {
+                    let done = self.async_generators[id as usize]
+                        .delegation
+                        .expect("awaited sync delegate")
+                        .done;
+                    let result = self.generator_result_object(value, done)?;
+                    self.await_async_generator_value(id, AwaitKind::DelegateResult, result, label)?;
+                }
+                (
+                    AwaitKind::DelegateResult
+                    | AwaitKind::DelegateClose
+                    | AwaitKind::DelegateMissingReturn,
+                    Ok(value),
+                ) => {
+                    self.async_generators[id as usize]
+                        .delegation
+                        .as_mut()
+                        .expect("awaited delegate")
+                        .stage = match context.kind {
+                        AwaitKind::DelegateClose => AsyncDelegateStage::CloseResult,
+                        AwaitKind::DelegateMissingReturn => AsyncDelegateStage::MissingReturn,
+                        _ => AsyncDelegateStage::Result,
+                    };
+                    self.step_async_generator(module, id, GeneratorResumeKind::Next, value, label)?;
+                }
+                (AwaitKind::DelegateYield, _) => {
+                    return Err(InterpreterError::InternalError {
+                        details: "raw delegated yield must not enter an await reaction".into(),
+                    });
+                }
+                (
+                    AwaitKind::DelegateResult
+                    | AwaitKind::DelegateSyncValue
+                    | AwaitKind::DelegateClose
+                    | AwaitKind::DelegateMissingReturn,
+                    Err(reason),
+                ) => {
+                    // Await failure belongs to this yield* expression, not a
+                    // caller-issued .throw. Do not forward it to the delegate.
+                    self.abandon_suspended_async_delegation(id)?;
+                    self.step_async_generator(
+                        module,
+                        id,
+                        GeneratorResumeKind::Throw,
+                        reason,
+                        label,
+                    )?;
+                }
                 (AwaitKind::Body, Ok(value)) => {
                     self.step_async_generator(module, id, GeneratorResumeKind::Next, value, label)?
                 }
@@ -479,6 +554,7 @@ impl InterpreterCore {
         let generator = &mut self.async_generators[id as usize];
         generator.phase = AsyncGeneratorPhase::Completed;
         generator.awaited = None;
+        generator.delegation = None;
         let backing = &mut self.generators[generator.generator_id as usize];
         backing.phase = GeneratorPhase::Completed;
         backing.invocation = None;
@@ -535,6 +611,12 @@ impl InterpreterCore {
 
     pub(super) fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(std::mem::size_of::<AwaitKind>() as u64)
+            .saturating_add(if generator.delegation.is_some() {
+                std::mem::size_of::<AsyncDelegateState>() as u64
+            } else {
+                0
+            })
             .saturating_add(Self::saturating_sum(
                 generator
                     .requests

@@ -40934,6 +40934,9 @@ impl InterpreterCore {
         value: u32,
         resume_dst: u32,
     ) -> Result<Option<LabeledReturn>, InterpreterError> {
+        if let Some(id) = self.async_generator_runtime.active {
+            return self.finish_async_generator_delegate_dispatch(module, id, value, resume_dst);
+        }
         match self.step_generator_delegation(module, value, resume_dst) {
             Ok(GeneratorDelegationStep::Yield(result)) => {
                 // Re-enter this same opcode on the next resume;
@@ -46559,6 +46562,16 @@ impl InterpreterCore {
         init: RuntimeForOfInit,
         kind: IterationKind,
     ) -> Result<Value, InterpreterError> {
+        self.init_iterator_from_state_with_symbol(value, init, kind, IteratorSymbolKind::Iterator)
+    }
+
+    fn init_iterator_from_state_with_symbol(
+        &mut self,
+        value: Value,
+        init: RuntimeForOfInit,
+        kind: IterationKind,
+        symbol_kind: IteratorSymbolKind,
+    ) -> Result<Value, InterpreterError> {
         let iterable_ref = self.iteration_ref_for_value(&value);
         let trace_index = self.start_iteration_trace(
             kind,
@@ -46568,7 +46581,7 @@ impl InterpreterCore {
             make_get_iterator_event(
                 record_id,
                 step_index,
-                IteratorSymbolKind::Iterator,
+                symbol_kind,
                 iterable_ref,
             )
         });
@@ -95143,6 +95156,8 @@ mod async_runtime_tests_current {
             result_promise: 7,
         };
         let generator = AsyncGeneratorObject {
+            awaited_kind: async_generator::AwaitKind::Body,
+            delegation: None,
             generator_id: 0,
             requests: VecDeque::new(),
             awaited: Some(LabeledReturn {
@@ -128402,6 +128417,8 @@ mod tests {
                 phase: GeneratorPhase::Completed,
             }).unwrap();
             let async_gen_id = core.push_async_generator_object(AsyncGeneratorObject {
+                awaited_kind: async_generator::AwaitKind::Body,
+                delegation: None,
                 generator_id: backing,
                 requests: VecDeque::new(),
                 awaited: None,

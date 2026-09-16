@@ -260,3 +260,152 @@ fn rejection_during_finally_return_reaches_outer_catch() {
         &["sync", "caught 7", "first 7 false", "second 8 true"],
     );
 }
+
+#[test]
+fn nested_async_yield_star_preserves_sent_and_completion_values() {
+    assert_output(
+        r#"const log=console.log;async function* inner(){const sent=yield Promise.resolve(1);log('sent',sent);return 3;}async function* outer(){const value=yield* inner();log('delegated',value);yield 4;return 5;}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.next(2).then(r=>log('two',r.value,r.done));g.next().then(r=>log('three',r.value,r.done));log('sync');"#,
+        &[
+            "sync",
+            "sent 2",
+            "one 1 false",
+            "delegated 3",
+            "two 4 false",
+            "three 5 true",
+        ],
+    );
+}
+
+#[test]
+fn async_delegation_prefers_async_method_and_caches_next() {
+    assert_output(
+        r#"const log=console.log;let count=0;const iterator={get next(){log('get-next');return function(value){log('step',++count,value,this===iterator);return Promise.resolve({value:count*10,done:count>1});};}};const source={[Symbol.asyncIterator](){log('async');return iterator;},[Symbol.iterator](){throw 'sync must not run';}};async function* outer(){return yield* source;}const g=outer();g.next(99).then(r=>log('one',r.value,r.done));g.next(7).then(r=>log('two',r.value,r.done));log('sync');"#,
+        &[
+            "async",
+            "get-next",
+            "step 1 undefined true",
+            "sync",
+            "step 2 7 true",
+            "one 10 false",
+            "two 20 true",
+        ],
+    );
+}
+
+#[test]
+fn async_delegated_return_can_yield_before_finishing() {
+    assert_output(
+        r#"const log=console.log;let n=0;const source={[Symbol.asyncIterator](){return this;},next(value){log('next',value);return Promise.resolve({value:++n,done:n>1});},return(value){log('return',value);return Promise.resolve({value:9,done:false});}};async function* outer(){try{return yield* source;}finally{log('finally');}}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.return(Promise.resolve(42)).then(r=>log('two',r.value,r.done));g.next(8).then(r=>log('three',r.value,r.done));log('sync');"#,
+        &[
+            "next undefined",
+            "sync",
+            "one 1 false",
+            "return 42",
+            "next 8",
+            "two 9 false",
+            "finally",
+            "three 2 true",
+        ],
+    );
+}
+
+#[test]
+fn async_delegated_throw_reaches_the_inner_iterator() {
+    assert_output(
+        r#"const log=console.log;let n=0;const source={[Symbol.asyncIterator](){return this;},next(value){return Promise.resolve({value:++n,done:n>1});},throw(value){log('throw',value);return Promise.resolve({value:value+1,done:false});}};async function* outer(){return yield* source;}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.throw(7).then(r=>log('two',r.value,r.done));g.next().then(r=>log('three',r.value,r.done));log('sync');"#,
+        &[
+            "sync",
+            "throw 7",
+            "one 1 false",
+            "two 8 false",
+            "three 2 true",
+        ],
+    );
+}
+
+#[test]
+fn missing_async_throw_awaits_close_without_observing_result_properties() {
+    assert_output(
+        r#"const log=console.log;const source={[Symbol.asyncIterator](){return this;},next(){return Promise.resolve({value:1,done:false});},return(){log('close',arguments.length);return Promise.resolve({get done(){throw 'read done';},get value(){throw 'read value';}});}};async function* outer(){try{yield* source;}catch(e){log('caught',e.name);yield 2;}finally{log('finally');}}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.throw(7).then(r=>log('two',r.value,r.done));g.next().then(r=>log('three',r.value,r.done));log('sync');"#,
+        &[
+            "sync",
+            "close 0",
+            "one 1 false",
+            "caught TypeError",
+            "finally",
+            "two 2 false",
+            "three undefined true",
+        ],
+    );
+}
+
+#[test]
+fn async_cleanup_rejection_replaces_missing_throw_error() {
+    assert_output(
+        r#"const log=console.log;const source={[Symbol.asyncIterator](){return this;},next(){return Promise.resolve({value:1,done:false});},return(){log('close');return Promise.reject(88);}};async function* outer(){try{yield* source;}catch(e){log('caught',e);yield 2;}}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.throw(7).then(r=>log('two',r.value,r.done));log('sync');"#,
+        &["sync", "close", "one 1 false", "caught 88", "two 2 false"],
+    );
+}
+
+#[test]
+fn async_delegate_rejects_primitive_iteration_results_inside_body() {
+    assert_output(
+        r#"const log=console.log;const source={[Symbol.asyncIterator](){return this;},next(){return Promise.resolve(4);}};async function* outer(){try{yield* source;}catch(e){log('caught',e.name);yield 2;}return 3;}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.next().then(r=>log('two',r.value,r.done));log('sync');"#,
+        &["sync", "caught TypeError", "one 2 false", "two 3 true"],
+    );
+}
+
+#[test]
+fn async_delegate_forwards_promise_values_without_awaiting_them() {
+    assert_output(
+        r#"const log=console.log;const p=Promise.reject(17);const source={[Symbol.asyncIterator](){return this;},next(){return Promise.resolve({value:p,done:false});},throw(){log('wrong-throw');return Promise.resolve({value:999,done:true});}};async function* outer(){try{yield* source;}catch(e){log('wrong-catch',e);yield 18;}}outer().next().then(r=>{log('promise',r.value===p,r.done);r.value.catch(e=>log('rejected',e));});log('sync');"#,
+        &["sync", "promise true false", "rejected 17"],
+    );
+}
+
+#[test]
+fn async_yield_star_adapts_sync_iterators_and_awaits_done_values() {
+    assert_output(
+        r#"const log=console.log;function* inner(){const sent=yield Promise.resolve(1);log('sent',sent);return Promise.resolve(3);}async function* outer(){const value=yield* inner();log('delegated',value,typeof value);return value+1;}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.next(2).then(r=>log('two',r.value,r.done));log('sync');"#,
+        &[
+            "sync",
+            "sent 2",
+            "one 1 false",
+            "delegated 3 number",
+            "two 4 true",
+        ],
+    );
+}
+
+#[test]
+fn true_async_delegate_completion_value_is_not_prematurely_unwrapped() {
+    assert_output(
+        r#"const log=console.log;const source={[Symbol.asyncIterator](){return this;},next(){return Promise.resolve({value:Promise.resolve(42),done:true});}};async function* outer(){const value=yield* source;log('promise',typeof value.then);return value;}outer().next().then(r=>log('done',r.value,r.done));log('sync');"#,
+        &["sync", "promise function", "done 42 true"],
+    );
+}
+
+#[test]
+fn noncallable_async_iterator_does_not_fall_back_to_sync() {
+    assert_output(
+        r#"const log=console.log;const source={[Symbol.asyncIterator]:1,[Symbol.iterator](){log('wrong-sync');return [1][Symbol.iterator]();}};async function* outer(){try{yield* source;}catch(e){log('caught',e.name);yield 2;}}outer().next().then(r=>log('done',r.value,r.done));log('sync');"#,
+        &["caught TypeError", "sync", "done 2 false"],
+    );
+}
+
+#[test]
+fn async_delegate_observes_done_before_value_once() {
+    assert_output(
+        r#"const log=console.log;let n=0;const source={[Symbol.asyncIterator](){return this;},next(){const i=++n;return Promise.resolve({get done(){log('done-get',i);return i>1;},get value(){log('value-get',i);return Promise.resolve(i);}});}};async function* outer(){const v=yield* source;log('final-type',typeof v.then);return v;}const g=outer();g.next().then(r=>log('one',typeof r.value.then,r.done));g.next().then(r=>log('two',r.value,r.done));log('sync');"#,
+        &[
+            "sync",
+            "done-get 1",
+            "value-get 1",
+            "one function false",
+            "done-get 2",
+            "value-get 2",
+            "final-type function",
+            "two 2 true",
+        ],
+    );
+}

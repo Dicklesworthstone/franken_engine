@@ -27,7 +27,7 @@ jobs:
       - name: Capture exact native-runtime source inputs
         run: |
           git rev-parse HEAD > native-runtime-revision.txt
-          git archive --format=tar.gz --output=native-runtime-sources.tar.gz HEAD AGENTS.md .beads/issues.jsonl docs/plans docs/adr crates/franken-core crates/franken-engine/src crates/franken-engine/tests crates/franken-engine/Cargo.toml crates/franken-extension-host Cargo.toml Cargo.lock .cargo
+          git archive --format=tar.gz --output=native-runtime-sources.tar.gz HEAD
       - name: Retain reproducible source inputs
         uses: actions/upload-artifact@v4
         with:
@@ -38,6 +38,28 @@ jobs:
           retention-days: 7
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+      # One-time recovery of the missing local Rust toolchain and public
+      # dependency sources. No credentials or Cargo configuration are included.
+      # Remove this export when the editing environment supplies Cargo itself.
+      - name: Prepare offline execution inputs
+        if: github.event_name == 'push' && github.event.before == 'e1e2bb7abb38c0889cbc9a9769eba0853f95343b'
+        run: |
+          status=0
+          cargo +nightly fetch --locked > native-runtime-fetch.log 2>&1 || status=$?
+          tail -n 80 native-runtime-fetch.log
+          exit "$status"
+      - name: Archive offline execution inputs
+        if: github.event_name == 'push' && github.event.before == 'e1e2bb7abb38c0889cbc9a9769eba0853f95343b'
+        run: |
+          tar -czf native-runtime-build-inputs.tar.gz -C "$HOME" .rustup/toolchains/nightly-x86_64-unknown-linux-gnu .cargo/registry .cargo/git
+      - name: Retain offline execution inputs
+        if: github.event_name == 'push' && github.event.before == 'e1e2bb7abb38c0889cbc9a9769eba0853f95343b'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-runtime-build-inputs
+          path: native-runtime-build-inputs.tar.gz
+          compression-level: 0
+          retention-days: 1
       - name: Run native-core unit tests
         run: |
           status=0

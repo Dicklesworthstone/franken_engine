@@ -44,17 +44,32 @@ jobs:
           cargo +nightly test --locked -p frankenengine-extension-host --test host_effect_journal_admission -- --nocapture > journal-provider-tests.log 2>&1 || status=$?
           tail -n 80 journal-provider-tests.log
           exit "$status"
+      - name: Run shared HTTP response parser tests
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-extension-host --lib host_io::http_response:: -- --nocapture > journal-http-unit-tests.log 2>&1 || status=$?
+          tail -n 100 journal-http-unit-tests.log
+          exit "$status"
+      - name: Exercise real TCP and TLS response framing
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-extension-host --test http_response_framing -- --nocapture > journal-http-provider-tests.log 2>&1 || status=$?
+          tail -n 100 journal-http-provider-tests.log
+          exit "$status"
       - name: Check extension-host library and tests
         run: |
           status=0
+          cargo +nightly check --locked -p frankenengine-extension-host --all-targets > journal-check.log 2>&1 || status=$?
+          tail -n 100 journal-check.log
+          test "$status" -eq 0 || exit "$status"
           cargo +nightly clippy --locked -p frankenengine-extension-host --all-targets -- -D warnings > journal-clippy.log 2>&1 || status=$?
           tail -n 120 journal-clippy.log
           exit "$status"
       - name: Check touched Rust formatting
         if: always()
         run: |
-          rustfmt +nightly --edition 2024 crates/franken-extension-host/src/host_effect_journal.rs crates/franken-extension-host/tests/host_effect_journal_admission.rs
-          git diff --exit-code -- crates/franken-extension-host/src/host_effect_journal.rs crates/franken-extension-host/src/host_effect_journal/budget.rs crates/franken-extension-host/tests/host_effect_journal_admission.rs
+          rustfmt +nightly --edition 2024 crates/franken-extension-host/src/host_effect_journal.rs crates/franken-extension-host/src/host_io.rs crates/franken-extension-host/tests/host_effect_journal_admission.rs crates/franken-extension-host/tests/http_response_framing.rs
+          git diff --exit-code -- crates/franken-extension-host/src/host_effect_journal.rs crates/franken-extension-host/src/host_effect_journal/budget.rs crates/franken-extension-host/src/host_io.rs crates/franken-extension-host/src/host_io crates/franken-extension-host/tests/host_effect_journal_admission.rs crates/franken-extension-host/tests/http_response_framing.rs
       - name: Retain exact validation output and formatted sources
         if: always()
         uses: actions/upload-artifact@v4
@@ -64,113 +79,8 @@ jobs:
             journal-*.log
             crates/franken-extension-host/src/host_effect_journal.rs
             crates/franken-extension-host/src/host_effect_journal/budget.rs
+            crates/franken-extension-host/src/host_io.rs
+            crates/franken-extension-host/src/host_io/
             crates/franken-extension-host/tests/host_effect_journal_admission.rs
-          retention-days: 7
-  # One-time validation and blob transport for the saved large-file patch.
-  # This job never moves refs; remove it after the code is committed.
-  http-candidate:
-    if: github.event_name == 'push' && github.event.before == '4c23a39a213420555003b6eb55a7d6ab1dcbb855'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    env:
-      CARGO_BUILD_JOBS: '2'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-      CARGO_TERM_COLOR: never
-    steps:
-      - uses: actions/checkout@v4
-      - name: Apply exact saved HTTP candidate without changing refs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir candidate-output
-          python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
-          parts = ['e0e342f2c879c06692b5d5e02c425cb9e58721bd', '38c97eec13de946e243207d4309f2320bfa219c1', '8e1ce94d20d72a45010a383f1baa956872d6b30f']
-          api = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
-          raw = bytearray()
-          for sha in parts:
-              req = urllib.request.Request(api + '/git/blobs/' + sha, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                  'Accept': 'application/vnd.github+json',
-                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
-              })
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  raw.extend(base64.b64decode(json.load(response)['content']))
-          assert hashlib.sha256(raw).hexdigest() == '7ed8282a8548bfdc42a7017bf7b06d6b5c757d238c3f656a252b3ab7355d7d60'
-          patch = gzip.decompress(raw)
-          assert hashlib.sha256(patch).hexdigest() == '05e0a524cbc4152b89e6998b57375fa39406dc04bda38d0544de293636df4270'
-          path = pathlib.Path('candidate-output/http.patch')
-          path.write_bytes(patch)
-          files = [
-              'crates/franken-engine/src/baseline_interpreter.rs',
-              'crates/franken-extension-host/src/host_io.rs',
-              'crates/franken-extension-host/src/host_io/http_response.rs',
-              'crates/franken-extension-host/tests/http_response_framing.rs',
-          ]
-          stats = subprocess.check_output(['git', 'apply', '--numstat', str(path)], text=True)
-          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(files + ['.github/workflows/host-effect-journal.yml'])
-          subprocess.run(['git', 'apply', '--index', '--exclude=.github/workflows/host-effect-journal.yml', str(path)], check=True)
-          pathlib.Path('candidate-output/files.json').write_text(json.dumps(files))
-          pathlib.Path('candidate-output/base.txt').write_text(os.environ['GITHUB_SHA'])
-          PY
-      - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
-      - name: Format candidate sources
-        run: |
-          rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-engine/src/baseline_interpreter.rs crates/franken-extension-host/src/host_io.rs crates/franken-extension-host/src/host_io/http_response.rs crates/franken-extension-host/tests/http_response_framing.rs
-          git diff HEAD --stat
-      - name: Compile and exercise real HTTP framing and journal regression tests
-        run: |
-          set -o pipefail
-          cargo +nightly test --locked -p frankenengine-extension-host --lib host_io::http_response:: -- --nocapture 2>&1 | tee candidate-output/parser.log
-          cargo +nightly test --locked -p frankenengine-extension-host --test http_response_framing -- --nocapture 2>&1 | tee candidate-output/transport.log
-          cargo +nightly test --locked -p frankenengine-extension-host --lib host_effect_journal:: -- --nocapture 2>&1 | tee candidate-output/journal.log
-          cargo +nightly test --locked -p frankenengine-extension-host --test host_effect_journal_admission -- --nocapture 2>&1 | tee candidate-output/admission.log
-      - name: Check candidate extension-host compilation and strict lint
-        run: |
-          set -o pipefail
-          cargo +nightly check --locked -p frankenengine-extension-host --all-targets 2>&1 | tee candidate-output/check.log
-          cargo +nightly clippy --locked -p frankenengine-extension-host --all-targets -- -D warnings 2>&1 | tee candidate-output/clippy.log
-      - name: Store exact candidate blobs for connector-controlled commits
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
-          root = pathlib.Path('candidate-output')
-          files_path = root / 'files.json'
-          if not files_path.exists():
-              raise SystemExit('candidate did not apply')
-          result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
-          for path in json.loads(files_path.read_text()):
-              file = pathlib.Path(path)
-              assert file.is_file() and not file.is_symlink()
-              content = file.read_bytes()
-              body = json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode()
-              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=body, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                  'Accept': 'application/vnd.github+json',
-                  'Content-Type': 'application/json',
-                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
-              })
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  sha = json.load(response)['sha']
-              assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
-              result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
-              dest = root / 'source' / path
-              dest.parent.mkdir(parents=True, exist_ok=True)
-              dest.write_bytes(content)
-          (root / 'result.json').write_text(json.dumps(result, indent=2))
-          subprocess.run(['git', 'diff', 'HEAD', '--output=candidate-output/final.patch', '--'] + json.loads(files_path.read_text()), check=True)
-          PY
-      - name: Retain candidate and exact test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: http-candidate-validation
-          path: candidate-output/
+            crates/franken-extension-host/tests/http_response_framing.rs
           retention-days: 7

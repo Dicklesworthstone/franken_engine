@@ -73,9 +73,9 @@ use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
 mod async_generator;
-use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
+use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
 
 use frankenengine_core::object_model::{
     BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
@@ -2308,7 +2308,8 @@ fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
 /// first-class values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BuiltinFunctionKind {    Require,
+pub enum BuiltinFunctionKind {
+    Require,
     FunctionConstructor,
     GeneratedFunction,
     IteratorNext,
@@ -4308,10 +4309,15 @@ impl BuiltinFunction {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
-            BuiltinFunctionKind::IteratorNext | BuiltinFunctionKind::GeneratorNext
+            BuiltinFunctionKind::IteratorNext
+            | BuiltinFunctionKind::GeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorNext => "next",
-            BuiltinFunctionKind::GeneratorReturn | BuiltinFunctionKind::AsyncGeneratorReturn => "return",
-            BuiltinFunctionKind::GeneratorThrow | BuiltinFunctionKind::AsyncGeneratorThrow => "throw",
+            BuiltinFunctionKind::GeneratorReturn | BuiltinFunctionKind::AsyncGeneratorReturn => {
+                "return"
+            }
+            BuiltinFunctionKind::GeneratorThrow | BuiltinFunctionKind::AsyncGeneratorThrow => {
+                "throw"
+            }
             BuiltinFunctionKind::AsyncGeneratorIteratorSelf => "@@asyncIterator",
             BuiltinFunctionKind::IteratorSelf => "@@iterator",
             BuiltinFunctionKind::ConsoleLog => "log",
@@ -5801,7 +5807,8 @@ impl ContainedCodegenGrant {
 
 /// State of a generator object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-enum GeneratorPhase {    /// Created but not yet started (initial .next() call).
+enum GeneratorPhase {
+    /// Created but not yet started (initial .next() call).
     SuspendedStart,
     /// Suspended at a yield point.
     SuspendedYield,
@@ -13165,6 +13172,13 @@ impl InterpreterCore {
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
         };
+        // Only these methods change response framing. Retain the semantic
+        // context without cloning the already-owned request payload.
+        let response_method = match method.as_str() {
+            "HEAD" => "HEAD",
+            "CONNECT" => "CONNECT",
+            _ => "GET",
+        };
         let effect = create_network_effect(url, method, headers, body);
         // Build a Full handler stack backed by the provider (+ recorder) for this
         // dispatch. Full grants all capabilities so the stack's gate never
@@ -13212,7 +13226,7 @@ impl InterpreterCore {
             }
         };
         match result.downcast::<Vec<u8>>() {
-            Ok(bytes) => self.build_net_response_value(&bytes),
+            Ok(bytes) => self.build_net_response_value(&bytes, response_method),
             Err(_) => Ok(Value::Undefined),
         }
     }
@@ -28382,48 +28396,73 @@ impl InterpreterCore {
     /// round trip read back into the JS response object `http.get`/`fetch` returns.
     /// The shape is a pragmatic blend of Node's `IncomingMessage` and the WHATWG
     /// `Response`: `{ status, statusText, ok, headers, body }`, where:
-    /// - `status` is the numeric status code (0 if the response is unparseable),
+    /// - `status` is the final numeric status code, after informational replies,
     /// - `statusText` is the reason phrase,
     /// - `ok` is `true` for a 2xx status (WHATWG `Response.ok` semantics),
     /// - `headers` is a plain object of lower-cased header name -> value (the
     ///   lower-casing matches `fetch` `Headers` / Node's `res.headers`; the last
     ///   value wins on a duplicate name, which is `alloc_object_with_properties`'s
     ///   natural overwrite behavior),
-    /// - `body` is the response body decoded as a UTF-8 (lossy) string.
+    /// - `body` is the transfer-decoded body as a UTF-8 (lossy) string. Chunk
+    ///   boundaries are removed before UTF-8 decoding, so a multi-byte scalar
+    ///   split between chunks is not replaced by multiple U+FFFD characters.
     ///
-    /// Header/body framing is split at the first CRLFCRLF. A response with no
-    /// header terminator (a malformed or empty reply) yields `status: 0`, empty
-    /// headers, and an empty body rather than erroring — the egress still happened
-    /// and is recorded; the guest simply sees a non-OK response.
-    fn build_net_response_value(&mut self, raw: &[u8]) -> Result<Value, InterpreterError> {
-        let (head, body): (&[u8], &[u8]) = match raw.windows(4).position(|w| w == b"\r\n\r\n") {
-            Some(idx) => (&raw[..idx], &raw[idx + 4..]),
-            None => (raw, &[][..]),
+    /// The live reader and recorded/custom-provider outcome parser share one
+    /// framing implementation. Invalid or incomplete outcomes produce no
+    /// response object, just as provider I/O failure does; no status-0 response
+    /// is fabricated. The raw effect outcome remains available for diagnosis.
+    fn build_net_response_value(
+        &mut self,
+        raw: &[u8],
+        method: &str,
+    ) -> Result<Value, InterpreterError> {
+        use frankenengine_extension_host::host_io::{
+            SANDBOXED_HOST_IO_MAX_BYTES, parse_http_response,
         };
-        let head_str = String::from_utf8_lossy(head);
-        let mut lines = head_str.split("\r\n");
-        let status_line = lines.next().unwrap_or("");
-        // "HTTP/1.1 200 OK" -> version / code / reason. `splitn(3, ' ')` keeps a
-        // multi-word reason phrase (e.g. "404 Not Found") intact.
-        let mut status_parts = status_line.splitn(3, ' ');
-        let _version = status_parts.next().unwrap_or("");
-        let status: i64 = status_parts
-            .next()
-            .and_then(|code| code.trim().parse::<i64>().ok())
-            .unwrap_or(0);
-        let status_text = status_parts.next().unwrap_or("").trim().to_string();
+
+        let raw_bytes = u64::try_from(raw.len()).unwrap_or(u64::MAX);
+        if raw_bytes > SANDBOXED_HOST_IO_MAX_BYTES {
+            return Ok(Value::Undefined);
+        }
+        let parsed = match parse_http_response(raw, method) {
+            Ok(parsed) => parsed,
+            Err(_) => return Ok(Value::Undefined),
+        };
+        // Parsing above borrows input and allocates no payload. Admit the
+        // temporary decoded bytes, worst-case lossy UTF-8 expansion, strings
+        // and field vectors before constructing the guest-visible objects.
+        let field_vectors = parsed
+            .header_count()
+            .saturating_mul(
+                std::mem::size_of::<(String, Value)>()
+                    .saturating_add(std::mem::size_of::<(&str, Value)>()),
+            )
+            .saturating_mul(2);
+        self.check_temporary_memory_budget(
+            raw_bytes
+                .saturating_mul(8)
+                .saturating_add(u64::try_from(field_vectors).unwrap_or(u64::MAX)),
+        )?;
+        let body = parsed
+            .body_bytes()
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!("validated HTTP response decoding failed: {error}"),
+            })?;
+        let status = i64::from(parsed.status);
+        let status_text = String::from_utf8_lossy(parsed.status_text)
+            .trim()
+            .to_string();
 
         // Collect header name/value pairs (lower-cased names, trimmed values).
         // Hold the owned strings so the `&str` keys handed to
         // `alloc_object_with_properties` stay valid for the call.
-        let header_pairs: Vec<(String, Value)> = lines
-            .filter_map(|line| {
-                if line.is_empty() {
-                    return None;
-                }
-                line.split_once(':').map(|(name, value)| {
-                    (name.trim().to_ascii_lowercase(), Value::str(value.trim()))
-                })
+        let header_pairs: Vec<(String, Value)> = parsed
+            .headers()
+            .map(|(name, value)| {
+                (
+                    String::from_utf8_lossy(name).to_ascii_lowercase(),
+                    Value::str(String::from_utf8_lossy(value).as_ref()),
+                )
             })
             .collect();
         let header_props: Vec<(&str, Value)> = header_pairs
@@ -28432,7 +28471,7 @@ impl InterpreterCore {
             .collect();
         let headers_id = self.alloc_object_with_properties(&header_props)?;
 
-        let body_str = String::from_utf8_lossy(body).into_owned();
+        let body_str = String::from_utf8_lossy(body.as_ref()).into_owned();
         let ok = (200..300).contains(&status);
         // bd-3894s slice (2d): tag the response `IncomingMessage` so `res.on('data'|
         // 'end'|'error', …)` resolves to the shared `EventEmitter.prototype.on` via
@@ -29241,11 +29280,13 @@ impl InterpreterCore {
         let mutation_result = (|| {
             // Length, not the highest populated index, owns the insertion
             // point: preceding elisions still occupy array positions.
-            let mut next_index = u32::try_from(self.array_like_length(array_id)?).map_err(|_| {
-                InterpreterError::RangeError {
-                    message: "array spread target length exceeds the array index range".to_string(),
-                }
-            })?;
+            let mut next_index =
+                u32::try_from(self.array_like_length(array_id)?).map_err(|_| {
+                    InterpreterError::RangeError {
+                        message: "array spread target length exceeds the array index range"
+                            .to_string(),
+                    }
+                })?;
 
             match iterable_value {
                 Value::Object(iterable_id) => {
@@ -29268,10 +29309,8 @@ impl InterpreterCore {
                         _ => None,
                     };
                     if matches!(intrinsic_kind, Some(BuiltinFunctionKind::TypedArrayValues)) {
-                        let (_, view) = self.typed_array_receiver_view(
-                            Value::Object(iterable_id),
-                            "values",
-                        )?;
+                        let (_, view) =
+                            self.typed_array_receiver_view(Value::Object(iterable_id), "values")?;
                         for index in 0..view.length {
                             let value = self.with_array_buffer_bytes(view.buffer, |bytes| {
                                 Self::read_typed_array_element_bytes(&view, bytes, index)
@@ -29279,7 +29318,10 @@ impl InterpreterCore {
                             self.append_spread_array_element(array_id, &mut next_index, value)?;
                         }
                     } else if matches!(intrinsic_kind, Some(BuiltinFunctionKind::ArrayValues))
-                        && self.heap.get(iterable_id.0 as usize).is_some_and(|object| object.is_array)
+                        && self
+                            .heap
+                            .get(iterable_id.0 as usize)
+                            .is_some_and(|object| object.is_array)
                     {
                         // Stream the intrinsic instead of allocating an eager
                         // snapshot of every element. The live length and Get
@@ -29320,8 +29362,11 @@ impl InterpreterCore {
                                 )?
                             };
                             self.append_spread_array_element(array_id, &mut next_index, value)?;
-                            index = index.checked_add(1).ok_or_else(|| InterpreterError::RangeError {
-                                message: "array spread exceeds the array index range".to_string(),
+                            index = index.checked_add(1).ok_or_else(|| {
+                                InterpreterError::RangeError {
+                                    message: "array spread exceeds the array index range"
+                                        .to_string(),
+                                }
                             })?;
                         }
                     } else {
@@ -33608,12 +33653,20 @@ impl InterpreterCore {
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
-                module, builtin.kind, args, receiver, receiver_register,
+                module,
+                builtin.kind,
+                args,
+                receiver,
+                receiver_register,
             ),
             BuiltinFunctionKind::GeneratorNext
             | BuiltinFunctionKind::GeneratorReturn
             | BuiltinFunctionKind::GeneratorThrow => self.dispatch_generator_resume(
-                module, builtin.kind, args, receiver, receiver_register,
+                module,
+                builtin.kind,
+                args,
+                receiver,
+                receiver_register,
             ),
             BuiltinFunctionKind::FunctionPrototypeCall
             | BuiltinFunctionKind::FunctionPrototypeApply => self.forward_function_invocation(
@@ -40089,9 +40142,9 @@ impl InterpreterCore {
 
     fn take_generator_delegation(&mut self) -> Option<GeneratorDelegation> {
         let delegation = self.generator_delegation.take()?;
-        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
-            Self::estimate_generator_delegation_bytes(&delegation),
-        );
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_generator_delegation_bytes(&delegation));
         Some(delegation)
     }
 
@@ -40109,9 +40162,12 @@ impl InterpreterCore {
             let label = self.unary_operation_label(source_reg)?;
             self.replace_pending_hostcall_result_label(Some(label.clone()))?;
             let init = self.prepare_for_of_state(Some(module), &source)?;
-            let iterator = self.init_iterator_from_state(source, init, IterationKind::YieldDelegate)?;
+            let iterator =
+                self.init_iterator_from_state(source, init, IterationKind::YieldDelegate)?;
             let label = label.join(
-                &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+                &self
+                    .take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
             );
             self.replace_generator_delegation(GeneratorDelegation {
                 iterator: self.expect_iterator_handle(iterator)?,
@@ -40122,7 +40178,10 @@ impl InterpreterCore {
         }
 
         self.check_temporary_memory_budget(self.generator_delegation_memory_bytes())?;
-        let delegation = self.generator_delegation.as_ref().expect("delegation initialized");
+        let delegation = self
+            .generator_delegation
+            .as_ref()
+            .expect("delegation initialized");
         let (handle, kind, started, mut label) = (
             delegation.iterator,
             delegation.resume_kind,
@@ -40175,7 +40234,11 @@ impl InterpreterCore {
                         Some(object_id) => self.optional_callable_property(
                             Some(module),
                             object_id,
-                            if kind == GeneratorResumeKind::Return { "return" } else { "throw" },
+                            if kind == GeneratorResumeKind::Return {
+                                "return"
+                            } else {
+                                "throw"
+                            },
                             receiver.clone(),
                         )?,
                         None => None,
@@ -40196,15 +40259,23 @@ impl InterpreterCore {
                 });
             }
             label = label.join(
-                self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public),
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
             );
             if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                 state.done = true;
             }
             self.record_iterator_close_event(
-                trace_index, CloseReason::Return, false, IterationCompletion::Normal,
+                trace_index,
+                CloseReason::Return,
+                false,
+                IterationCompletion::Normal,
             );
-            return Ok(GeneratorDelegationStep::Return(LabeledReturn { value: argument, label }));
+            return Ok(GeneratorDelegationStep::Return(LabeledReturn {
+                value: argument,
+                label,
+            }));
         }
 
         let result = if native_next {
@@ -40213,7 +40284,9 @@ impl InterpreterCore {
             self.generator_result_object(value.unwrap_or(Value::Undefined), done)?
         } else {
             let lookup_label = label.join(
-                self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public),
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
             );
             let (result, callback_label) = self.invoke_inline_method_call_with_argument_label(
                 Some(module),
@@ -40232,7 +40305,10 @@ impl InterpreterCore {
                 // No IteratorValue observation on a non-done delegated
                 // result: the recipient, not yield*, performs that Get.
                 self.record_iteration_next_result_impl(
-                    trace_index, (!done).then_some(Value::Undefined), false, false,
+                    trace_index,
+                    (!done).then_some(Value::Undefined),
+                    false,
+                    false,
                 );
             } else {
                 self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
@@ -40252,7 +40328,9 @@ impl InterpreterCore {
         if done {
             let value = self.iterator_result_value(module, &result)?;
             label = label.join(
-                &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+                &self
+                    .take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
             );
             if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                 state.done = true;
@@ -40273,7 +40351,9 @@ impl InterpreterCore {
         }
 
         label = label.join(
-            &self.take_pending_hostcall_result_label().unwrap_or(Label::Public),
+            &self
+                .take_pending_hostcall_result_label()
+                .unwrap_or(Label::Public),
         );
         self.replace_generator_delegation(GeneratorDelegation {
             iterator: handle,
@@ -40281,7 +40361,10 @@ impl InterpreterCore {
             resume_kind: GeneratorResumeKind::Next,
             started: true,
         })?;
-        Ok(GeneratorDelegationStep::Yield(LabeledReturn { value: result, label }))
+        Ok(GeneratorDelegationStep::Yield(LabeledReturn {
+            value: result,
+            label,
+        }))
     }
 
     /// Step a generator by swapping its complete isolated activation into the
@@ -40439,10 +40522,8 @@ impl InterpreterCore {
             generator.phase = GeneratorPhase::Executing;
         }
 
-        let caller_async_generator = std::mem::replace(
-            &mut self.async_generator_runtime.active,
-            async_generator,
-        );
+        let caller_async_generator =
+            std::mem::replace(&mut self.async_generator_runtime.active, async_generator);
         let caller_generator_yielded = std::mem::replace(&mut self.generator_yielded, false);
         let caller_generator_resume_dst = self.generator_resume_dst.take();
         let caller_generator_result_label =
@@ -40462,8 +40543,7 @@ impl InterpreterCore {
         let setup_result = (|| -> Result<(), InterpreterError> {
             self.sync_estimated_memory_bytes()?;
             if phase == GeneratorPhase::SuspendedYield
-                && (resume_kind == GeneratorResumeKind::Next
-                    || self.generator_delegation.is_some())
+                && (resume_kind == GeneratorResumeKind::Next || self.generator_delegation.is_some())
                 && let Some(resume_dst) = resume_dst
             {
                 let completion = resume_completion.take().expect("one generator resumption");
@@ -41454,7 +41534,6 @@ impl InterpreterCore {
         compact_tier1: Option<&CompactTier1Program>,
         checkpoint_guard: &mut Option<CheckpointGuard>,
     ) -> Result<DispatchOutcome, InterpreterError> {
-
         loop {
             // Retire the handoff even on EOF, implicit return, or budget refusal.
             // Only this iteration's adjacent InitBinding may consume it.
@@ -41609,10 +41688,10 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ForInInit { .. }
-                    | Ir3Instruction::ForInNext { .. }
-                    | Ir3Instruction::ForOfInit { .. }
-                    | Ir3Instruction::ForOfNext { .. }
-                    | Ir3Instruction::IteratorClose { .. } => {
+                | Ir3Instruction::ForInNext { .. }
+                | Ir3Instruction::ForOfInit { .. }
+                | Ir3Instruction::ForOfNext { .. }
+                | Ir3Instruction::IteratorClose { .. } => {
                     return Ok(DispatchOutcome::ReentrantInstruction {
                         instruction_ip: self.ip,
                         profile_start,
@@ -41991,7 +42070,9 @@ impl InterpreterCore {
                                 argument_labels,
                                 this_value: Value::Undefined,
                                 this_label: Label::Public,
-                                inline_context_label: self.active_inline_callback_context_label.clone(),
+                                inline_context_label: self
+                                    .active_inline_callback_context_label
+                                    .clone(),
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             },
@@ -42526,7 +42607,8 @@ impl InterpreterCore {
                         self.mark_inline_callback_started();
                         let (arguments, argument_labels) =
                             self.capture_generator_arguments(args)?;
-                        let receiver_label = self.clone_register_label_with_temporary_budget(receiver)?;
+                        let receiver_label =
+                            self.clone_register_label_with_temporary_budget(receiver)?;
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
@@ -42539,7 +42621,9 @@ impl InterpreterCore {
                                 argument_labels,
                                 this_value: receiver_val.clone(),
                                 this_label: receiver_label,
-                                inline_context_label: self.active_inline_callback_context_label.clone(),
+                                inline_context_label: self
+                                    .active_inline_callback_context_label
+                                    .clone(),
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             },
@@ -42704,7 +42788,9 @@ impl InterpreterCore {
                             .take_pending_return_slot()
                             .expect("Return installed a pending completion before direct return");
                         match self.complete_return(pending_return.value, pending_return.label) {
-                            Ok(Some(completion)) => return Ok(DispatchOutcome::Complete(completion)),
+                            Ok(Some(completion)) => {
+                                return Ok(DispatchOutcome::Complete(completion));
+                            }
                             Ok(None) => {}
                             Err(error) => {
                                 match self.route_isolated_explicit_throw(module, error)? {
@@ -42765,11 +42851,7 @@ impl InterpreterCore {
                         .unwrap_or_else(|| format!("__export_{name_pool_index}"));
                     let value = self.read_reg(src)?;
                     let label = self.get_register_label(src)?.clone();
-                    self.register_module_export_exact_labeled(
-                        JsString::from(name),
-                        value,
-                        label,
-                    )?;
+                    self.register_module_export_exact_labeled(JsString::from(name), value, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -42939,34 +43021,60 @@ impl InterpreterCore {
                                     0,
                                 )?
                             } else {
-                                property_key.as_str().and_then(Self::function_prototype_property)
+                                property_key
+                                    .as_str()
+                                    .and_then(Self::function_prototype_property)
                                     .unwrap_or(Value::Undefined)
                             }
                         }
-                        Value::GeneratorFunction(_) | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_) => property_key.as_str()
+                        Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_) => property_key
+                            .as_str()
                             .and_then(Self::function_prototype_property)
                             .unwrap_or(Value::Undefined),
                         Value::Generator(_) => match property_key {
                             RuntimePropertyKey::String(ref key) => match key.as_str() {
-                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::GeneratorNext)),
-                                Some("return") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::GeneratorReturn)),
-                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::GeneratorThrow)),
+                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                    BuiltinFunctionKind::GeneratorNext,
+                                )),
+                                Some("return") => Value::BuiltinFunction(
+                                    BuiltinFunction::new_kind(BuiltinFunctionKind::GeneratorReturn),
+                                ),
+                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                    BuiltinFunctionKind::GeneratorThrow,
+                                )),
                                 _ => Value::Undefined,
                             },
-                            RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::Iterator.id() =>
-                                Value::BuiltinFunction(BuiltinFunction::generator_iterator_self()),
+                            RuntimePropertyKey::Symbol(symbol)
+                                if symbol == WellKnownSymbol::Iterator.id() =>
+                            {
+                                Value::BuiltinFunction(BuiltinFunction::generator_iterator_self())
+                            }
                             _ => Value::Undefined,
                         },
                         Value::AsyncGeneratorObject(_) => match property_key {
                             RuntimePropertyKey::String(ref key) => match key.as_str() {
-                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorNext)),
-                                Some("return") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorReturn)),
-                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorThrow)),
+                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                    BuiltinFunctionKind::AsyncGeneratorNext,
+                                )),
+                                Some("return") => {
+                                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                        BuiltinFunctionKind::AsyncGeneratorReturn,
+                                    ))
+                                }
+                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                    BuiltinFunctionKind::AsyncGeneratorThrow,
+                                )),
                                 _ => Value::Undefined,
                             },
-                            RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::AsyncIterator.id() =>
-                                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorIteratorSelf)),
+                            RuntimePropertyKey::Symbol(symbol)
+                                if symbol == WellKnownSymbol::AsyncIterator.id() =>
+                            {
+                                Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                    BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
+                                ))
+                            }
                             _ => Value::Undefined,
                         },
                         Value::Promise(_) => property_key
@@ -43028,14 +43136,15 @@ impl InterpreterCore {
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
                     self.write_reg_with_label(dst, prop, result_label)?;
-                    self.pending_cyclic_import_binding = pending_cyclic_import.map(
-                        |(module_specifier, export_name)| PendingCyclicImportBinding {
-                            source_register: dst,
-                            expected_init_ip: self.ip.saturating_add(1),
-                            module_specifier,
-                            export_name,
-                        },
-                    );
+                    self.pending_cyclic_import_binding =
+                        pending_cyclic_import.map(|(module_specifier, export_name)| {
+                            PendingCyclicImportBinding {
+                                source_register: dst,
+                                expected_init_ip: self.ip.saturating_add(1),
+                                module_specifier,
+                                export_name,
+                            }
+                        });
                     self.ip += 1;
                 }
                 Ir3Instruction::SetProperty { obj, key, val } => {
@@ -43465,8 +43574,7 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
-                Ir3Instruction::ArraySlice { .. }
-                    | Ir3Instruction::SpreadIntoArray { .. } => {
+                Ir3Instruction::ArraySlice { .. } | Ir3Instruction::SpreadIntoArray { .. } => {
                     return Ok(DispatchOutcome::ReentrantInstruction {
                         instruction_ip: self.ip,
                         profile_start,
@@ -43485,10 +43593,16 @@ impl InterpreterCore {
                     self.clear_pending_hostcall_result_label();
                     self.join_object_mutation_label(target_id, &input_label)?;
                     let result = self.copy_data_properties(
-                        Some(module), target_id, source_val, &BTreeSet::new(), false,
+                        Some(module),
+                        target_id,
+                        source_val,
+                        &BTreeSet::new(),
+                        false,
                     );
-                    let callback_label = self.pending_hostcall_result_label
-                        .clone().unwrap_or(Label::Public);
+                    let callback_label = self
+                        .pending_hostcall_result_label
+                        .clone()
+                        .unwrap_or(Label::Public);
                     self.clear_pending_hostcall_result_label();
                     match result {
                         Ok(()) => {
@@ -44346,7 +44460,9 @@ impl InterpreterCore {
                                 match self
                                     .complete_return(pending_return.value, pending_return.label)
                                 {
-                                    Ok(Some(completion)) => return Ok(DispatchOutcome::Complete(completion)),
+                                    Ok(Some(completion)) => {
+                                        return Ok(DispatchOutcome::Complete(completion));
+                                    }
                                     Ok(None) => {}
                                     Err(error) => {
                                         match self.route_isolated_explicit_throw(module, error)? {
@@ -45060,10 +45176,8 @@ impl InterpreterCore {
                         && pending.source_register == src
                         && pending.expected_init_ip == self.ip
                         && let Some((binding, _)) = previous.as_ref()
-                        && let Some(record) = self
-                            .module_state
-                            .modules
-                            .get_mut(&pending.module_specifier)
+                        && let Some(record) =
+                            self.module_state.modules.get_mut(&pending.module_specifier)
                     {
                         let watchers = record
                             .pending_import_bindings
@@ -46573,17 +46687,10 @@ impl InterpreterCore {
         symbol_kind: IteratorSymbolKind,
     ) -> Result<Value, InterpreterError> {
         let iterable_ref = self.iteration_ref_for_value(&value);
-        let trace_index = self.start_iteration_trace(
-            kind,
-            format!("iterable:{}|{}", value.type_name(), value),
-        );
+        let trace_index =
+            self.start_iteration_trace(kind, format!("iterable:{}|{}", value.type_name(), value));
         self.record_iteration_event(trace_index, |record_id, step_index| {
-            make_get_iterator_event(
-                record_id,
-                step_index,
-                symbol_kind,
-                iterable_ref,
-            )
+            make_get_iterator_event(record_id, step_index, symbol_kind, iterable_ref)
         });
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: init.values,
@@ -46660,12 +46767,18 @@ impl InterpreterCore {
                     })?;
                     (
                         state.trace_index,
-                        ForOfStep::Custom { receiver, next_method },
+                        ForOfStep::Custom {
+                            receiver,
+                            next_method,
+                        },
                     )
                 } else if let Some(iterator) = state.array.clone() {
                     (
                         state.trace_index,
-                        ForOfStep::Array { iterator, index: state.next_index },
+                        ForOfStep::Array {
+                            iterator,
+                            index: state.next_index,
+                        },
                     )
                 } else if let Some(iterator) = state.typed_array.clone() {
                     if state.next_index >= iterator.view.length {
@@ -46698,13 +46811,21 @@ impl InterpreterCore {
                 return Ok(None);
             }
             ForOfStep::Value(value) => {
-                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
+                self.record_iteration_next_result_impl(
+                    trace_index,
+                    Some(value.clone()),
+                    false,
+                    read_value,
+                );
                 return Ok(Some(value));
             }
             ForOfStep::Array { iterator, index } => {
                 let receiver = Value::Object(iterator.object_id);
                 let length = self.iterator_protocol_property(
-                    module, iterator.object_id, &RuntimePropertyKey::String(JsString::from("length")), receiver.clone(),
+                    module,
+                    iterator.object_id,
+                    &RuntimePropertyKey::String(JsString::from("length")),
+                    receiver.clone(),
                 )?;
                 if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
                     return Err(InterpreterError::TypeError {
@@ -46728,18 +46849,29 @@ impl InterpreterCore {
                 // Advance before the indexed Get, as ArrayIterator.next does.
                 // A throwing getter must not make a later next retry that key.
                 if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
-                    state.next_index = index.checked_add(1).ok_or_else(|| InterpreterError::RangeError {
-                        message: "array iterator index exceeds the platform range".to_string(),
-                    })?;
+                    state.next_index =
+                        index
+                            .checked_add(1)
+                            .ok_or_else(|| InterpreterError::RangeError {
+                                message: "array iterator index exceeds the platform range"
+                                    .to_string(),
+                            })?;
                 }
-                let index_value = Value::Int(i64::try_from(index).map_err(|_| InterpreterError::RangeError {
-                    message: "array iterator index exceeds the integer range".to_string(),
-                })?);
+                let index_value =
+                    Value::Int(
+                        i64::try_from(index).map_err(|_| InterpreterError::RangeError {
+                            message: "array iterator index exceeds the integer range".to_string(),
+                        })?,
+                    );
                 let value = match iterator.kind {
                     RuntimeTypedArrayIteratorKind::Keys => index_value,
-                    RuntimeTypedArrayIteratorKind::Values | RuntimeTypedArrayIteratorKind::Entries => {
+                    RuntimeTypedArrayIteratorKind::Values
+                    | RuntimeTypedArrayIteratorKind::Entries => {
                         let element = self.iterator_protocol_property(
-                            module, iterator.object_id, &RuntimePropertyKey::String(JsString::from(index.to_string())), receiver,
+                            module,
+                            iterator.object_id,
+                            &RuntimePropertyKey::String(JsString::from(index.to_string())),
+                            receiver,
                         )?;
                         if iterator.kind == RuntimeTypedArrayIteratorKind::Entries {
                             Value::Object(self.alloc_array_from_values(&[index_value, element])?)
@@ -46748,13 +46880,21 @@ impl InterpreterCore {
                         }
                     }
                 };
-                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
+                self.record_iteration_next_result_impl(
+                    trace_index,
+                    Some(value.clone()),
+                    false,
+                    read_value,
+                );
                 return Ok(Some(value));
             }
             ForOfStep::TypedArray { iterator, index } => {
                 let storage_label = self.binary_storage_label(iterator.view.buffer);
-                let label = self.pending_hostcall_result_label.as_ref()
-                    .unwrap_or(&Label::Public).join(&storage_label);
+                let label = self
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public)
+                    .join(&storage_label);
                 self.replace_pending_hostcall_result_label(Some(label))?;
                 let element = self.with_array_buffer_bytes(iterator.view.buffer, |bytes| {
                     Self::read_typed_array_element_bytes(&iterator.view, bytes, index)
@@ -46778,7 +46918,12 @@ impl InterpreterCore {
                     }
                     RuntimeTypedArrayIteratorKind::Values => element,
                 };
-                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
+                self.record_iteration_next_result_impl(
+                    trace_index,
+                    Some(value.clone()),
+                    false,
+                    read_value,
+                );
                 return Ok(Some(value));
             }
             ForOfStep::IntervalTick { delay_ms, value } => {
@@ -46788,7 +46933,12 @@ impl InterpreterCore {
                 self.event_loop
                     .clock
                     .advance_to(now.saturating_add(delay_ms));
-                self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
+                self.record_iteration_next_result_impl(
+                    trace_index,
+                    Some(value.clone()),
+                    false,
+                    read_value,
+                );
                 return Ok(Some(value));
             }
             ForOfStep::Custom {
@@ -46826,7 +46976,12 @@ impl InterpreterCore {
             } else {
                 Value::Undefined
             };
-            self.record_iteration_next_result_impl(trace_index, Some(value.clone()), false, read_value);
+            self.record_iteration_next_result_impl(
+                trace_index,
+                Some(value.clone()),
+                false,
+                read_value,
+            );
             Ok(Some(value))
         }
     }
@@ -47952,7 +48107,9 @@ impl InterpreterCore {
             }
         };
         let close_reason = if reason == IteratorCloseReason::Break
-            && self.iteration_traces.get(trace_index)
+            && self
+                .iteration_traces
+                .get(trace_index)
                 .is_some_and(|trace| trace.kind == IterationKind::Destructuring)
         {
             CloseReason::DestructuringExhausted
@@ -49422,7 +49579,10 @@ impl InterpreterCore {
         trap_name: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         match self.prototype_chain_get_with_receiver(
-            module, handler_id, trap_name, Value::Object(handler_id),
+            module,
+            handler_id,
+            trap_name,
+            Value::Object(handler_id),
         )? {
             Value::Undefined | Value::Null => Ok(None),
             trap @ (Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)) => {
@@ -52079,8 +52239,17 @@ impl InterpreterCore {
                     } => {
                         // Check if this is an async function resumption
                         if handler.is_none() {
-                            if let Some(context) = self.async_generator_runtime.continuations.remove(&result_promise.0) {
-                                self.resume_async_generator_task(context, Ok(argument.clone()), task_label.clone(), module)?;
+                            if let Some(context) = self
+                                .async_generator_runtime
+                                .continuations
+                                .remove(&result_promise.0)
+                            {
+                                self.resume_async_generator_task(
+                                    context,
+                                    Ok(argument.clone()),
+                                    task_label.clone(),
+                                    module,
+                                )?;
                                 return Ok(());
                             }
                             // Check if there's an async resumption context for this promise
@@ -52168,8 +52337,17 @@ impl InterpreterCore {
                         result_promise,
                         label: task_label,
                     } => {
-                        if let Some(context) = self.async_generator_runtime.continuations.remove(&result_promise.0) {
-                            self.resume_async_generator_task(context, Err(reason.clone()), task_label.clone(), module)?;
+                        if let Some(context) = self
+                            .async_generator_runtime
+                            .continuations
+                            .remove(&result_promise.0)
+                        {
+                            self.resume_async_generator_task(
+                                context,
+                                Err(reason.clone()),
+                                task_label.clone(),
+                                module,
+                            )?;
                             return Ok(());
                         }
                         if let Some(resumption_context) =
@@ -57373,7 +57551,10 @@ impl InterpreterCore {
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: Vec::new(),
             next_index: 0,
-            array: array_id.map(|object_id| RuntimeArrayIterator { object_id, kind: projection }),
+            array: array_id.map(|object_id| RuntimeArrayIterator {
+                object_id,
+                kind: projection,
+            }),
             typed_array: None,
             iterator_receiver: None,
             next_method: None,
@@ -59464,10 +59645,17 @@ impl InterpreterCore {
         match value {
             Value::Accessor { get: Some(get), .. } => {
                 let (value, label) = self.invoke_inline_method_call_with_argument_label(
-                    module, get.as_ref().clone(), receiver, Vec::new(), None,
+                    module,
+                    get.as_ref().clone(),
+                    receiver,
+                    Vec::new(),
+                    None,
                 )?;
-                let label = self.pending_hostcall_result_label.as_ref()
-                    .unwrap_or(&Label::Public).join(&label);
+                let label = self
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public)
+                    .join(&label);
                 self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
             }
@@ -66398,10 +66586,12 @@ impl InterpreterCore {
                 let label = self.join_arg_range_with_object_mutation_label(args)?;
                 let mut exclusion_bytes = 0u64;
                 for offset in 1..args.count {
-                    let register = args.start.checked_add(offset)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start, max: self.config.max_registers,
-                        })?;
+                    let register = args.start.checked_add(offset).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
                     exclusion_bytes = exclusion_bytes
                         .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
                         .saturating_add(Self::estimate_value_bytes(&self.read_reg(register)?));
@@ -66409,10 +66599,12 @@ impl InterpreterCore {
                 self.check_temporary_memory_budget(exclusion_bytes)?;
                 let mut excluded = BTreeSet::new();
                 for offset in 1..args.count {
-                    let register = args.start.checked_add(offset)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start, max: self.config.max_registers,
-                        })?;
+                    let register = args.start.checked_add(offset).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
                     let value = self.read_reg(register)?;
                     if !matches!(value, Value::Str(_) | Value::Symbol(_)) {
                         return Err(InterpreterError::TypeError {
@@ -66429,13 +66621,18 @@ impl InterpreterCore {
                     let target = self.alloc_object_with_prototype(None)?;
                     self.join_object_mutation_label(target, &label)?;
                     self.copy_data_properties(module, target, source, &excluded, false)?;
-                    let label = label.join(self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public));
+                    let label = label.join(
+                        self.pending_hostcall_result_label
+                            .as_ref()
+                            .unwrap_or(&Label::Public),
+                    );
                     self.join_object_mutation_label(target, &label)?;
                     self.replace_pending_hostcall_result_label(Some(label))?;
                     Ok(Value::Object(target))
                 })();
                 drop(excluded);
-                self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(exclusion_bytes);
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(exclusion_bytes);
                 result
             }
             "builtin:String" => {
@@ -70709,11 +70906,14 @@ impl InterpreterCore {
             "builtin:FunctionPrototypeCall" => {
                 let function = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.forward_function_invocation(
-                    module, function, (args.count > 0).then_some(args.start),
+                    module,
+                    function,
+                    (args.count > 0).then_some(args.start),
                     RegRange {
                         start: args.start.saturating_add(u32::from(args.count > 0)),
                         count: args.count.saturating_sub(1),
-                    }, false,
+                    },
+                    false,
                 )
             }
 
@@ -70883,11 +71083,14 @@ impl InterpreterCore {
             "builtin:FunctionPrototypeApply" => {
                 let function = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.forward_function_invocation(
-                    module, function, (args.count > 0).then_some(args.start),
+                    module,
+                    function,
+                    (args.count > 0).then_some(args.start),
                     RegRange {
                         start: args.start.saturating_add(u32::from(args.count > 0)),
                         count: args.count.saturating_sub(1),
-                    }, true,
+                    },
+                    true,
                 )
             }
 
@@ -77475,12 +77678,20 @@ impl InterpreterCore {
                 MEMORY_ESTIMATE_ITERATOR_BASE_BYTES
                     .saturating_add(value_slots)
                     .saturating_add(values)
-                    .saturating_add(state.array.as_ref().map_or(0, |_| {
-                        std::mem::size_of::<RuntimeArrayIterator>() as u64
-                    }))
+                    .saturating_add(
+                        state
+                            .array
+                            .as_ref()
+                            .map_or(0, |_| std::mem::size_of::<RuntimeArrayIterator>() as u64),
+                    )
                     .saturating_add(next_method)
-                    .saturating_add(state.iterator_receiver.as_ref()
-                        .map(Self::estimate_value_bytes).unwrap_or(0))
+                    .saturating_add(
+                        state
+                            .iterator_receiver
+                            .as_ref()
+                            .map(Self::estimate_value_bytes)
+                            .unwrap_or(0),
+                    )
                     .saturating_add(timers_interval)
             }
         }
@@ -77513,7 +77724,8 @@ impl InterpreterCore {
     }
 
     fn generator_delegation_memory_bytes(&self) -> u64 {
-        self.generator_delegation.as_ref()
+        self.generator_delegation
+            .as_ref()
             .map(Self::estimate_generator_delegation_bytes)
             .unwrap_or(0)
     }
@@ -77553,7 +77765,9 @@ impl InterpreterCore {
         Self::estimate_value_vec_bytes(&execution.registers)
             .saturating_add(Self::estimate_label_vec_bytes(&execution.register_labels))
             .saturating_add(
-                execution.delegation.as_ref()
+                execution
+                    .delegation
+                    .as_ref()
                     .map(Self::estimate_generator_delegation_bytes)
                     .unwrap_or(0),
             )
@@ -80390,7 +80604,7 @@ impl InterpreterCore {
         Some(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)))
     }
 
-/// Return the ordinary-property backing object for a builtin function that
+    /// Return the ordinary-property backing object for a builtin function that
     /// also acts as a mutable JavaScript object. `Date` aliases share one object
     /// so writes to `Date.now` remain visible through every reference
     /// (bd-1piai); every EventEmitter once wrapper owns a distinct object so
@@ -82938,45 +83152,115 @@ mod active_builtin_regressions {
         let array = core.alloc_array_from_values(&[Value::Int(10)]).unwrap();
         core.write_reg(0, Value::Object(array)).unwrap();
         let one = RegRange { start: 0, count: 1 };
-        let iterator = core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None).unwrap();
+        let iterator = core
+            .dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None)
+            .unwrap();
         core.write_reg(0, iterator).unwrap();
-        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Int(10));
-        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Undefined);
+        assert_eq!(
+            core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None)
+                .unwrap(),
+            Value::Int(10)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None)
+                .unwrap(),
+            Value::Undefined
+        );
         let event_count = core.iteration_traces[0].events.len();
-        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Undefined);
+        assert_eq!(
+            core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None)
+                .unwrap(),
+            Value::Undefined
+        );
         assert_eq!(core.iteration_traces[0].events.len(), event_count);
         assert_eq!(core.iteration_traces[0].kind, IterationKind::Destructuring);
         core.write_reg(1, Value::Undefined).unwrap();
-        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorDone", RegRange { start: 0, count: 2 }, None).unwrap(), Value::Bool(true));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:DestructureIteratorDone",
+                RegRange { start: 0, count: 2 },
+                None
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
     }
 
     #[test]
     fn destructuring_iterator_elision_advances_without_claiming_a_value_read() {
         let mut core = test_core();
-        let array = core.alloc_array_from_values(&[Value::Int(10), Value::Int(20)]).unwrap();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(10), Value::Int(20)])
+            .unwrap();
         core.write_reg(0, Value::Object(array)).unwrap();
         let one = RegRange { start: 0, count: 1 };
-        let iterator = core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None).unwrap();
+        let iterator = core
+            .dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None)
+            .unwrap();
         core.write_reg(0, iterator).unwrap();
-        core.dispatch_builtin_hostcall("builtin:DestructureIteratorElide", one, None).unwrap();
+        core.dispatch_builtin_hostcall("builtin:DestructureIteratorElide", one, None)
+            .unwrap();
         let trace = &core.iteration_traces[0];
         assert_eq!(trace.values_produced, 1);
-        assert!(trace.events.iter().any(|event| matches!(event.operation,
-            IterationOperation::IteratorNext { result: IteratorResult { value: IteratorValue::Unobserved, done: false } })));
-        assert!(!trace.events.iter().any(|event| matches!(event.operation, IterationOperation::IteratorValue { .. })));
-        assert_eq!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None).unwrap(), Value::Int(20));
+        assert!(trace.events.iter().any(|event| matches!(
+            event.operation,
+            IterationOperation::IteratorNext {
+                result: IteratorResult {
+                    value: IteratorValue::Unobserved,
+                    done: false
+                }
+            }
+        )));
+        assert!(
+            !trace
+                .events
+                .iter()
+                .any(|event| matches!(event.operation, IterationOperation::IteratorValue { .. }))
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None)
+                .unwrap(),
+            Value::Int(20)
+        );
     }
 
     #[test]
     fn destructuring_iterator_intrinsics_reject_invalid_carriers_and_arities() {
         let mut core = test_core();
-        for cap in ["builtin:DestructureIteratorInit", "builtin:DestructureIteratorNext", "builtin:DestructureIteratorElide", "builtin:DestructureIteratorDone"] {
-            assert!(matches!(core.dispatch_builtin_hostcall(cap, RegRange { start: 0, count: 0 }, None), Err(InterpreterError::TypeError { .. })));
+        for cap in [
+            "builtin:DestructureIteratorInit",
+            "builtin:DestructureIteratorNext",
+            "builtin:DestructureIteratorElide",
+            "builtin:DestructureIteratorDone",
+        ] {
+            assert!(matches!(
+                core.dispatch_builtin_hostcall(cap, RegRange { start: 0, count: 0 }, None),
+                Err(InterpreterError::TypeError { .. })
+            ));
         }
-        for value in [Value::Null, Value::Undefined, Value::Int(7), Value::Bool(false)] {
+        for value in [
+            Value::Null,
+            Value::Undefined,
+            Value::Int(7),
+            Value::Bool(false),
+        ] {
             core.write_reg(0, value).unwrap();
-            assert!(matches!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", RegRange { start: 0, count: 1 }, None), Err(InterpreterError::TypeError { .. })));
-            assert!(matches!(core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", RegRange { start: 0, count: 1 }, None), Err(InterpreterError::TypeError { .. })));
+            assert!(matches!(
+                core.dispatch_builtin_hostcall(
+                    "builtin:DestructureIteratorInit",
+                    RegRange { start: 0, count: 1 },
+                    None
+                ),
+                Err(InterpreterError::TypeError { .. })
+            ));
+            assert!(matches!(
+                core.dispatch_builtin_hostcall(
+                    "builtin:DestructureIteratorNext",
+                    RegRange { start: 0, count: 1 },
+                    None
+                ),
+                Err(InterpreterError::TypeError { .. })
+            ));
         }
     }
 
@@ -82985,16 +83269,27 @@ mod active_builtin_regressions {
         let encoded = serde_json::to_string(&IteratorValue::Unobserved).unwrap();
         let decoded: IteratorValue = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, IteratorValue::Unobserved);
-        assert_ne!(encoded, serde_json::to_string(&IteratorValue::Undefined).unwrap());
+        assert_ne!(
+            encoded,
+            serde_json::to_string(&IteratorValue::Undefined).unwrap()
+        );
         assert_eq!(decoded.to_string(), "<unobserved>");
     }
 
     #[test]
     fn destructuring_iterator_result_reads_preserve_stored_property_taint() {
         let mut core = test_core();
-        let result = core.alloc_object_with_properties(&[("done", Value::Bool(false)), ("value", Value::Int(17))]).unwrap();
-        core.set_own_property_label(result, "value", &Label::Secret).unwrap();
-        let value = core.iterator_result_value(&halted_test_module(), &Value::Object(result)).unwrap();
+        let result = core
+            .alloc_object_with_properties(&[
+                ("done", Value::Bool(false)),
+                ("value", Value::Int(17)),
+            ])
+            .unwrap();
+        core.set_own_property_label(result, "value", &Label::Secret)
+            .unwrap();
+        let value = core
+            .iterator_result_value(&halted_test_module(), &Value::Object(result))
+            .unwrap();
         assert_eq!(value, Value::Int(17));
         assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
     }
@@ -83004,31 +83299,75 @@ mod active_builtin_regressions {
         let mut core = test_core();
         let array = core.alloc_array_from_values(&[Value::Int(1)]).unwrap();
         core.write_reg(0, Value::Object(array)).unwrap();
-        let iterator = core.dispatch_builtin_hostcall("builtin:DestructureIteratorInit", RegRange { start: 0, count: 1 }, None).unwrap();
-        core.close_iterator(&halted_test_module(), iterator, IteratorCloseReason::Break).unwrap();
-        assert!(core.iteration_traces[0].events.iter().any(|event| matches!(event.operation,
-            IterationOperation::IteratorClose { reason: CloseReason::DestructuringExhausted, .. })));
+        let iterator = core
+            .dispatch_builtin_hostcall(
+                "builtin:DestructureIteratorInit",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        core.close_iterator(&halted_test_module(), iterator, IteratorCloseReason::Break)
+            .unwrap();
+        assert!(core.iteration_traces[0].events.iter().any(|event| matches!(
+            event.operation,
+            IterationOperation::IteratorClose {
+                reason: CloseReason::DestructuringExhausted,
+                ..
+            }
+        )));
     }
 
     #[test]
     fn destructuring_iterator_elision_never_invokes_custom_value_getter() {
         let mut core = test_core();
-        let result = core.alloc_object_with_properties(&[
-            ("done", Value::Bool(false)),
-            ("value", Value::Accessor { get: Some(Box::new(Value::Function(1))), set: None }),
-        ]).unwrap();
+        let result = core
+            .alloc_object_with_properties(&[
+                ("done", Value::Bool(false)),
+                (
+                    "value",
+                    Value::Accessor {
+                        get: Some(Box::new(Value::Function(1))),
+                        set: None,
+                    },
+                ),
+            ])
+            .unwrap();
         core.scope_chain.current_mut().unwrap().bindings.insert(
-            "result".to_string(), ScopeBinding::with_state(BindingKind::Var, Value::Object(result), true),
+            "result".to_string(),
+            ScopeBinding::with_state(BindingKind::Var, Value::Object(result), true),
         );
         let mut module = iterator_return_value_module();
-        module.instructions.extend([Ir3Instruction::LoadInt { dst: 0, value: 99 }, Ir3Instruction::Throw { value: 0 }]);
-        module.function_table.push(crate::ir_contract::Ir3FunctionDesc {
-            entry: 2, arity: 0, frame_size: 1, name: Some("throwing_value_getter".to_string()), is_generator: false, rest_param_index: None,
-        });
+        module.instructions.extend([
+            Ir3Instruction::LoadInt { dst: 0, value: 99 },
+            Ir3Instruction::Throw { value: 0 },
+        ]);
+        module
+            .function_table
+            .push(crate::ir_contract::Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 1,
+                name: Some("throwing_value_getter".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            });
         let object = core.alloc_object_with_properties(&[]).unwrap();
-        let iterator = core.init_iterator_from_state(Value::Object(object), RuntimeForOfInit::from_custom(object, Value::Function(0)), IterationKind::Destructuring).unwrap();
-        assert_eq!(core.advance_for_of_iterator_with_value_read(Some(&module), iterator.clone(), false).unwrap(), Some(Value::Undefined));
-        assert!(matches!(core.advance_for_of_iterator_with_value_read(Some(&module), iterator, true), Err(InterpreterError::UncaughtException { .. })));
+        let iterator = core
+            .init_iterator_from_state(
+                Value::Object(object),
+                RuntimeForOfInit::from_custom(object, Value::Function(0)),
+                IterationKind::Destructuring,
+            )
+            .unwrap();
+        assert_eq!(
+            core.advance_for_of_iterator_with_value_read(Some(&module), iterator.clone(), false)
+                .unwrap(),
+            Some(Value::Undefined)
+        );
+        assert!(matches!(
+            core.advance_for_of_iterator_with_value_read(Some(&module), iterator, true),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
     }
 
     #[test]
@@ -88608,7 +88947,8 @@ mod async_runtime_tests_current {
     #[test]
     fn cyclic_module_import_publication_preserves_taint_and_is_atomic() {
         let mut core = test_interpreter();
-        let module = lower_module_graph_entry_bd_yn3lv(Path::new("cycle.mjs"), "export const x = 1;");
+        let module =
+            lower_module_graph_entry_bd_yn3lv(Path::new("cycle.mjs"), "export const x = 1;");
         core.ensure_module_record(&module, "cycle.mjs")
             .expect("create cycle record");
         core.current_module_specifier = Some("cycle.mjs".to_string());
@@ -88683,7 +89023,9 @@ mod async_runtime_tests_current {
     #[test]
     fn cyclic_module_import_initializes_the_importers_shared_binding() {
         // Retain the generated module graph for diagnosis without deleting files.
-        let root = tempfile::tempdir().expect("cyclic module graph root").keep();
+        let root = tempfile::tempdir()
+            .expect("cyclic module graph root")
+            .keep();
         let entry = root.join("entry.mjs");
         let left = root.join("left.mjs");
         let right = root.join("right.mjs");
@@ -91255,7 +91597,10 @@ mod async_runtime_tests_current {
     fn build_net_response_value_tags_incoming_message_bd_3894s() {
         let mut core = test_interpreter();
         let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-        let Value::Object(id) = core.build_net_response_value(raw).expect("parse response") else {
+        let Value::Object(id) = core
+            .build_net_response_value(raw, "GET")
+            .expect("parse response")
+        else {
             panic!("expected a response object");
         };
         let response = core.heap.get(id.0 as usize).expect("response object");
@@ -105688,7 +106033,10 @@ mod async_runtime_tests_current {
         let mut core = test_interpreter();
         let raw =
             b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nX-Trace: abc\r\n\r\nmissing";
-        let Value::Object(id) = core.build_net_response_value(raw).expect("parse response") else {
+        let Value::Object(id) = core
+            .build_net_response_value(raw, "GET")
+            .expect("parse response")
+        else {
             panic!("expected a response object");
         };
         let response = core.heap.get(id.0 as usize).expect("response object");
@@ -105722,19 +106070,87 @@ mod async_runtime_tests_current {
         assert_eq!(headers.properties.get("x-trace"), Some(&Value::str("abc")));
     }
 
-    /// bd-3894s slice (4): a malformed/empty reply (no CRLFCRLF header terminator)
-    /// yields a non-OK `status: 0` response rather than erroring — the egress still
-    /// happened and is recorded; the guest simply sees a failed response.
+    /// Empty or malformed recorded/provider outcomes must not fabricate a
+    /// response object. Failure leaves guest heap state unchanged.
     #[test]
     fn build_net_response_value_handles_empty_reply_bd_3894s() {
         let mut core = test_interpreter();
-        let Value::Object(id) = core.build_net_response_value(b"").expect("parse empty") else {
-            panic!("expected a response object");
+        let before = core.heap.len();
+        assert_eq!(
+            core.build_net_response_value(b"", "GET").unwrap(),
+            Value::Undefined
+        );
+        assert_eq!(core.heap.len(), before);
+    }
+
+    #[test]
+    fn build_net_response_value_decodes_chunks_after_final_status() {
+        let raw = b"HTTP/1.1 103 Early Hints\r\nX-Source: interim\r\n\r\nHTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\nX-Source: final\r\n\r\n3\r\none\r\n3\r\ntwo\r\n0\r\nX-Source: trailer\r\n\r\n";
+        let mut core = test_interpreter();
+        let Value::Object(id) = core.build_net_response_value(raw, "GET").unwrap() else {
+            panic!("complete chunked reply must produce a response");
         };
-        let response = core.heap.get(id.0 as usize).expect("response object");
-        assert_eq!(response.properties.get("status"), Some(&Value::Int(0)));
-        assert_eq!(response.properties.get("ok"), Some(&Value::Bool(false)));
-        assert_eq!(response.properties.get("body"), Some(&Value::str("")));
+        let response = &core.heap[id.0 as usize];
+        assert_eq!(response.properties.get("status"), Some(&Value::Int(201)));
+        assert_eq!(response.properties.get("body"), Some(&Value::str("onetwo")));
+        assert_eq!(response.properties.get("ok"), Some(&Value::Bool(true)));
+        let Some(Value::Object(headers)) = response.properties.get("headers") else {
+            panic!("response must contain headers");
+        };
+        assert_eq!(
+            core.heap[headers.0 as usize].properties.get("x-source"),
+            Some(&Value::str("final"))
+        );
+    }
+
+    #[test]
+    fn build_net_response_value_decodes_split_utf8_only_after_dechunking() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\n\xc3\r\n1\r\n\xa9\r\n0\r\n\r\n";
+        let mut core = test_interpreter();
+        let Value::Object(id) = core.build_net_response_value(raw, "GET").unwrap() else {
+            panic!("complete reply must produce a response");
+        };
+        assert_eq!(
+            core.heap[id.0 as usize].properties.get("body"),
+            Some(&Value::str("é"))
+        );
+    }
+
+    #[test]
+    fn build_net_response_value_preserves_head_method_semantics() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n";
+        let mut core = test_interpreter();
+        let Value::Object(id) = core.build_net_response_value(raw, "HEAD").unwrap() else {
+            panic!("HEAD reply must produce a bodyless response");
+        };
+        assert_eq!(
+            core.heap[id.0 as usize].properties.get("body"),
+            Some(&Value::str(""))
+        );
+        let before = core.heap.len();
+        assert_eq!(
+            core.build_net_response_value(raw, "GET").unwrap(),
+            Value::Undefined
+        );
+        assert_eq!(core.heap.len(), before);
+    }
+
+    #[test]
+    fn build_net_response_value_rejects_malformed_recorded_outcomes_before_allocation() {
+        let mut core = test_interpreter();
+        for raw in [
+            &b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nshort"[..],
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nbody\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nextra",
+        ] {
+            let before = core.heap.len();
+            assert_eq!(
+                core.build_net_response_value(raw, "GET").unwrap(),
+                Value::Undefined
+            );
+            assert_eq!(core.heap.len(), before);
+        }
     }
 
     /// bd-rul7k: `decode_fs_read_result` honors the dependency-free single-arg
@@ -113273,10 +113689,7 @@ mod function_prototype_call_apply_tests_current {
         ));
         let invocation = activation.invocation.as_ref().expect("retained invocation");
         assert_eq!(invocation.function_index, 1);
-        assert_eq!(
-            invocation.closure_index,
-            Some(async_generator_closure_id)
-        );
+        assert_eq!(invocation.closure_index, Some(async_generator_closure_id));
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -128293,7 +128706,10 @@ mod tests {
 
             assert_eq!(core.async_generators.len(), 1);
             let created_gen = &core.async_generators[0];
-            let invocation = core.generators[created_gen.generator_id as usize].invocation.as_ref().unwrap();
+            let invocation = core.generators[created_gen.generator_id as usize]
+                .invocation
+                .as_ref()
+                .unwrap();
             assert_eq!(invocation.function_index, 0);
             assert_eq!(invocation.closure_index, Some(0));
             assert!(matches!(
@@ -128380,14 +128796,20 @@ mod tests {
 
             // First async generator
             let gen1 = &core.async_generators[0];
-            let invocation = core.generators[gen1.generator_id as usize].invocation.as_ref().unwrap();
+            let invocation = core.generators[gen1.generator_id as usize]
+                .invocation
+                .as_ref()
+                .unwrap();
             assert_eq!(invocation.function_index, 0);
             assert_eq!(invocation.closure_index, Some(0));
             assert!(matches!(gen1.phase, AsyncGeneratorPhase::SuspendedStart));
 
             // Second async generator
             let gen2 = &core.async_generators[1];
-            let invocation = core.generators[gen2.generator_id as usize].invocation.as_ref().unwrap();
+            let invocation = core.generators[gen2.generator_id as usize]
+                .invocation
+                .as_ref()
+                .unwrap();
             assert_eq!(invocation.function_index, 1);
             assert_eq!(invocation.closure_index, Some(1));
             assert!(matches!(gen2.phase, AsyncGeneratorPhase::SuspendedStart));
@@ -128409,24 +128831,34 @@ mod tests {
         #[test]
         fn async_generator_next_returns_promise() {
             let mut core = test_interpreter();
-            let backing = core.push_generator_object(GeneratorObject {
-                owner_module: Arc::new(test_module(vec![])),
-                invocation: None,
-                execution: None,
-                resume_dst: None,
-                phase: GeneratorPhase::Completed,
-            }).unwrap();
-            let async_gen_id = core.push_async_generator_object(AsyncGeneratorObject {
-                awaited_kind: async_generator::AwaitKind::Body,
-                delegation: None,
-                generator_id: backing,
-                requests: VecDeque::new(),
-                awaited: None,
-                phase: AsyncGeneratorPhase::Completed,
-            }).unwrap();
+            let backing = core
+                .push_generator_object(GeneratorObject {
+                    owner_module: Arc::new(test_module(vec![])),
+                    invocation: None,
+                    execution: None,
+                    resume_dst: None,
+                    phase: GeneratorPhase::Completed,
+                })
+                .unwrap();
+            let async_gen_id = core
+                .push_async_generator_object(AsyncGeneratorObject {
+                    awaited_kind: async_generator::AwaitKind::Body,
+                    delegation: None,
+                    generator_id: backing,
+                    requests: VecDeque::new(),
+                    awaited: None,
+                    phase: AsyncGeneratorPhase::Completed,
+                })
+                .unwrap();
 
             let result = core
-                .enqueue_async_generator_request(&test_module(vec![]), async_gen_id, GeneratorResumeKind::Next, Value::Undefined, Label::Public)
+                .enqueue_async_generator_request(
+                    &test_module(vec![]),
+                    async_gen_id,
+                    GeneratorResumeKind::Next,
+                    Value::Undefined,
+                    Label::Public,
+                )
                 .expect("operation should succeed for valid inputs");
 
             match result {
@@ -128438,34 +128870,74 @@ mod tests {
         #[test]
         fn async_generator_next_executes_suspended_body() {
             let mut core = test_interpreter();
-            let module = test_module_with_functions(vec![
-                Ir3Instruction::LoadInt { dst: 0, value: 41 },
-                Ir3Instruction::Yield { value: 0, delegate: false, resume_dst: 1 },
-                Ir3Instruction::LoadInt { dst: 0, value: 42 },
-                Ir3Instruction::Return { value: 0 },
-            ], vec![Ir3FunctionDesc {
-                entry: 0, arity: 0, frame_size: 2,
-                name: Some("async-generator-body".into()),
-                is_generator: true, rest_param_index: None,
-            }]);
-            let id = core.create_async_generator(Arc::new(module.clone()), GeneratorInvocation {
-                function_index: 0,
-                closure_index: None,
-                arguments: Vec::new(), argument_labels: Vec::new(),
-                this_value: Value::Undefined, this_label: Label::Public,
-                inline_context_label: None, module_specifier: None,
-                generated_function_artifact: None,
-            }).unwrap();
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                    Ir3Instruction::Yield {
+                        value: 0,
+                        delegate: false,
+                        resume_dst: 1,
+                    },
+                    Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 2,
+                    name: Some("async-generator-body".into()),
+                    is_generator: true,
+                    rest_param_index: None,
+                }],
+            );
+            let id = core
+                .create_async_generator(
+                    Arc::new(module.clone()),
+                    GeneratorInvocation {
+                        function_index: 0,
+                        closure_index: None,
+                        arguments: Vec::new(),
+                        argument_labels: Vec::new(),
+                        this_value: Value::Undefined,
+                        this_label: Label::Public,
+                        inline_context_label: None,
+                        module_specifier: None,
+                        generated_function_artifact: None,
+                    },
+                )
+                .unwrap();
             for (expected, done) in [(41, false), (42, true)] {
-                let Value::Promise(promise) = core.enqueue_async_generator_request(
-                    &module, id, GeneratorResumeKind::Next, Value::Undefined, Label::Public,
-                ).unwrap() else { panic!("next must return a Promise"); };
+                let Value::Promise(promise) = core
+                    .enqueue_async_generator_request(
+                        &module,
+                        id,
+                        GeneratorResumeKind::Next,
+                        Value::Undefined,
+                        Label::Public,
+                    )
+                    .unwrap()
+                else {
+                    panic!("next must return a Promise");
+                };
                 core.drain_microtasks(Some(&module)).unwrap();
-                let crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Object(object)) =
-                    core.promise_store.get(crate::promise_model::PromiseHandle(promise)).unwrap().state
-                else { panic!("next must fulfill with an iterator result"); };
-                assert_eq!(core.heap[object.0 as usize].properties.get("value"), Some(&Value::Int(expected)));
-                assert_eq!(core.heap[object.0 as usize].properties.get("done"), Some(&Value::Bool(done)));
+                let crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Object(object),
+                ) = core
+                    .promise_store
+                    .get(crate::promise_model::PromiseHandle(promise))
+                    .unwrap()
+                    .state
+                else {
+                    panic!("next must fulfill with an iterator result");
+                };
+                assert_eq!(
+                    core.heap[object.0 as usize].properties.get("value"),
+                    Some(&Value::Int(expected))
+                );
+                assert_eq!(
+                    core.heap[object.0 as usize].properties.get("done"),
+                    Some(&Value::Bool(done))
+                );
             }
         }
 

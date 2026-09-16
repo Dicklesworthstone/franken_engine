@@ -1,4 +1,4 @@
-//! One absolute budget for the socket portion of a host network effect.
+//! One absolute budget for DNS and the socket portion of a host network effect.
 //!
 //! A per-read timeout alone lets a slow peer retain the interpreter forever by
 //! delivering occasional bytes. Keeping the deadline underneath rustls also
@@ -8,7 +8,9 @@ use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-#[derive(Debug)]
+mod resolver;
+
+#[derive(Debug, Clone, Copy)]
 pub(super) struct NetworkDeadline {
     end: Instant,
 }
@@ -46,6 +48,13 @@ pub(super) struct DeadlineTcpStream {
 }
 
 impl DeadlineTcpStream {
+    pub(super) fn connect_endpoint(endpoint: &str, deadline: NetworkDeadline) -> io::Result<Self> {
+        let addresses = resolver::resolve_endpoint(endpoint, deadline)?;
+        // Resolver admission guarantees at least one address. Connection
+        // failover is separate from lookup admission and never repeats DNS.
+        Self::connect(&addresses[0], deadline)
+    }
+
     pub(super) fn connect(address: &SocketAddr, deadline: NetworkDeadline) -> io::Result<Self> {
         let stream = TcpStream::connect_timeout(address, deadline.remaining()?)?;
         // A late success must not start a fresh budget for the request body.

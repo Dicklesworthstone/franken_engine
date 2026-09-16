@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::net::{Shutdown, ToSocketAddrs};
+use std::net::Shutdown;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
@@ -2271,8 +2271,9 @@ impl SandboxedHostIo {
     }
 
     /// Connect without renewing the operation's budget on individual I/O calls.
-    /// Endpoint authorization and bounded DNS remain the product's policy; this
-    /// mechanism does not broaden authority or retry a partially sent request.
+    /// DNS admission and caller waiting are bounded by the same deadline.
+    /// Endpoint authorization remains the product's policy; this mechanism
+    /// does not broaden authority or retry a partially sent request.
     fn connect(&self, endpoint: &str) -> Result<DeadlineTcpStream, HostIoError> {
         if endpoint.is_empty() {
             return Err(HostIoError::SandboxViolation {
@@ -2288,17 +2289,8 @@ impl SandboxedHostIo {
             NetworkDeadline::new(self.network_timeout).map_err(|err| HostIoError::Io {
                 detail: format!("network deadline for {endpoint}: {err}"),
             })?;
-        let addr = endpoint
-            .to_socket_addrs()
-            .map_err(|err| HostIoError::Io {
-                detail: format!("resolve {endpoint}: {err}"),
-            })?
-            .next()
-            .ok_or_else(|| HostIoError::Io {
-                detail: format!("resolve {endpoint}: no addresses"),
-            })?;
-        DeadlineTcpStream::connect(&addr, deadline).map_err(|err| HostIoError::Io {
-            detail: format!("connect {endpoint}: {err}"),
+        DeadlineTcpStream::connect_endpoint(endpoint, deadline).map_err(|err| HostIoError::Io {
+            detail: format!("resolve/connect {endpoint}: {err}"),
         })
     }
 

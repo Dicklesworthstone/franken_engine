@@ -25003,6 +25003,7 @@ fn global_function_call_capability(
         // coercion hostcall (`Number("42")`===42, `Number(true)`===1). Slot-0
         // value argument, no receiver (bd-1trl5).
         "Number" => Some("builtin:Number"),
+        "Boolean" => Some("builtin:Boolean"),
         _ => None,
     }
 }

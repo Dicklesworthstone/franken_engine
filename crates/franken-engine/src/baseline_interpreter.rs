@@ -75,9 +75,11 @@ use zeroize::Zeroizing;
 mod async_generator;
 mod json_parse;
 mod json_stringify;
+mod primitive_conversion;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
+use primitive_conversion::PrimitiveConversion;
 
 use frankenengine_core::object_model::{
     BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
@@ -66482,17 +66484,7 @@ impl InterpreterCore {
                 result
             }
             "builtin:String" => {
-                // ECMA ToString conversion for the callable `String` global.
-                // With no argument it returns the empty string; additional
-                // arguments are ignored. `new String` remains a separate boxed
-                // constructor surface and is not routed here (bd-wgezf).
-                let converted = match self.builtin_arg(args, 0)? {
-                    Some(Value::Str(value)) => value,
-                    Some(Value::Symbol(symbol)) => self.symbol_to_string(symbol),
-                    Some(value) => JsString::from(self.value_to_string(&value)),
-                    None => JsString::from(""),
-                };
-                Ok(Value::Str(converted))
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::String)
             }
             "builtin:Url" => self.construct_url(args),
             "builtin:UrlSearchParams" => self.construct_url_search_params(args),
@@ -68215,81 +68207,13 @@ impl InterpreterCore {
             "builtin:JsonStringify" => self.json_stringify_builtin(module, args),
             "builtin:JsonParse" => self.json_parse_builtin(module, args),
             "builtin:isNaN" => {
-                // isNaN global function - tests if value is NaN
-                if args.count == 0 {
-                    return Ok(Value::Bool(true)); // isNaN() with no args returns true
-                }
-
-                let arg = self.read_reg(args.start)?;
-                let is_nan = match arg {
-                    Value::Float(f) => f.inner().is_nan(),
-                    Value::Int(_) => false, // Integers are never NaN
-                    Value::Str(s) => {
-                        // Try to convert string to number
-                        match s.parse::<f64>() {
-                            Ok(num) => num.is_nan(),
-                            Err(_) => true, // Invalid number strings are NaN
-                        }
-                    }
-                    Value::Bool(_b) => {
-                        // Booleans convert to numbers: true->1, false->0
-                        false // Neither 1 nor 0 is NaN
-                    }
-                    Value::Null => false, // null converts to 0, which is not NaN
-                    Value::Undefined => true, // undefined converts to NaN
-                    _ => true,            // Objects and other complex types typically become NaN
-                };
-
-                Ok(Value::Bool(is_nan))
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::IsNaN)
             }
             "builtin:isFinite" => {
-                // isFinite global function - tests if value is finite number
-                if args.count == 0 {
-                    return Ok(Value::Bool(false)); // isFinite() with no args returns false
-                }
-
-                let arg = self.read_reg(args.start)?;
-                let is_finite = match arg {
-                    Value::Float(f) => {
-                        let val = f.inner();
-                        val.is_finite() // Not NaN, not infinity
-                    }
-                    Value::Int(_) => true, // Integers are always finite
-                    Value::Str(s) => {
-                        // Try to convert string to number
-                        match s.parse::<f64>() {
-                            Ok(num) => num.is_finite(),
-                            Err(_) => false, // Invalid number strings are not finite
-                        }
-                    }
-                    Value::Bool(_b) => {
-                        // Booleans convert to numbers: true->1, false->0
-                        true // Both 1 and 0 are finite
-                    }
-                    Value::Null => true, // null converts to 0, which is finite
-                    Value::Undefined => false, // undefined converts to NaN, which is not finite
-                    _ => false,          // Objects and other complex types typically become NaN
-                };
-
-                Ok(Value::Bool(is_finite))
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::IsFinite)
             }
             "builtin:parseInt" => {
-                // parseInt global function - parses string and returns integer
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN))); // parseInt() with no args returns NaN
-                }
-
-                let string_val = self.read_reg(args.start)?;
-                let radix_arg = if args.count >= 2 {
-                    Some(self.read_reg(args.start + 1)?)
-                } else {
-                    None
-                };
-
-                match Self::parse_int_with_sign_and_radix(&string_val, radix_arg.as_ref()) {
-                    Some(result) => Ok(Value::Int(result)),
-                    None => Ok(Value::Float(Float64::new(f64::NAN))),
-                }
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseInt)
             }
             // Removed duplicate parseFloat implementation; canonicalized in `builtin:parseFloat` below
             "builtin:NumberIsNaN" => {
@@ -69398,56 +69322,10 @@ impl InterpreterCore {
                 }
             }
             "builtin:Number" => {
-                // Number(value) constructor/converter implementation
-                let value = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Int(0)
-                };
-
-                match value {
-                    Value::Int(i) => Ok(Value::Int(i)),
-                    Value::Float(f) => Ok(Value::Float(f)),
-                    Value::Bool(true) => Ok(Value::Int(1)),
-                    Value::Bool(false) => Ok(Value::Int(0)),
-                    Value::Null => Ok(Value::Int(0)),
-                    Value::Undefined => Ok(Value::Float(Float64::new(f64::NAN))),
-                    Value::Str(s) => {
-                        if s.is_empty() {
-                            Ok(Value::Int(0))
-                        } else if let Ok(i) = s.parse::<i64>() {
-                            Ok(Value::Int(i))
-                        } else if let Ok(f) = s.parse::<f64>() {
-                            Ok(Value::Float(Float64::new(f)))
-                        } else {
-                            Ok(Value::Float(Float64::new(f64::NAN)))
-                        }
-                    }
-                    _ => Ok(Value::Float(Float64::new(f64::NAN))),
-                }
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::Number)
             }
             "builtin:Boolean" => {
-                // Boolean(value) constructor/converter implementation
-                let value = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Ok(Value::Bool(false));
-                };
-
-                let result = match value {
-                    Value::Bool(b) => b,
-                    Value::Int(i) => i != 0,
-                    Value::Float(f) => {
-                        let v = f.inner();
-                        !v.is_nan() && v != 0.0
-                    }
-                    Value::Str(s) => !s.is_empty(),
-                    Value::Null | Value::Undefined => false,
-                    Value::Object(_) => true, // Objects are truthy
-                    _ => true,
-                };
-
-                Ok(Value::Bool(result))
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::Boolean)
             }
             "builtin:StringPrototypeMatch" => {
                 if args.count == 0 {
@@ -71565,28 +71443,14 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_integer))
             }
 
-            "builtin:NumberParseFloat" => self.parse_float_with_scientific_notation(args),
+            "builtin:NumberParseFloat" => {
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseFloat)
+            }
 
             // StringPrototypeRepeat: Removed duplicate dispatch arm (use first occurrence instead)
             "builtin:NumberParseInt" => {
-                // Number.parseInt(string, radix) implementation
-                if args.count == 0 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let string_val = self.read_reg(args.start)?;
-                let radix_arg = if args.count >= 2 {
-                    Some(self.read_reg(args.start + 1)?)
-                } else {
-                    None
-                };
-
-                match Self::parse_int_with_sign_and_radix(&string_val, radix_arg.as_ref()) {
-                    Some(result) => Ok(Value::Int(result)),
-                    None => Ok(Value::Float(f64::NAN.into())),
-                }
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseInt)
             }
-
             "builtin:ArrayPrototypeFilter" => {
                 // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
                 if args.count < 2 {
@@ -73913,9 +73777,13 @@ impl InterpreterCore {
             }
 
             // Removed duplicate parseFloat - keep single canonical implementation on `builtin:parseFloat` and alias.
-            "builtin:parseFloat" => self.parse_float_with_scientific_notation(args),
+            "builtin:parseFloat" => {
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseFloat)
+            }
             // Removed duplicate ParseInt - implementation at line 8385 (builtin:parseInt) is identical
-            "builtin:ParseFloat" => self.parse_float_with_scientific_notation(args),
+            "builtin:ParseFloat" => {
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseFloat)
+            }
 
             // Removed duplicate IsNaN - implementation at line 8326 has better JS compliance and explicit type conversion rules
 
@@ -74003,21 +73871,6 @@ impl InterpreterCore {
         Ok(Value::Float(Float64::new(normalized)))
     }
 
-    fn coerce_finite_radix_or_default(value: Value, default: i32) -> i32 {
-        match value {
-            Value::Int(n) => n as i32,
-            Value::Float(f) => {
-                let radix = f.inner();
-                if radix.is_finite() {
-                    radix as i32
-                } else {
-                    default
-                }
-            }
-            _ => default,
-        }
-    }
-
     fn optional_number_hostcall_integer_arg(
         &self,
         args: RegRange,
@@ -74059,189 +73912,6 @@ impl InterpreterCore {
             Some(other) => JsString::from(self.value_to_string(&other)),
             None => JsString::from("undefined"),
         })
-    }
-
-    /// Parse integers with shared parseInt sign and radix handling.
-    fn parse_int_with_sign_and_radix(input: &Value, radix_arg: Option<&Value>) -> Option<i64> {
-        let input = Self::value_to_primitive_string(input);
-        let trimmed = input.trim_start();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let radix = if let Some(radix_value) = radix_arg {
-            Self::coerce_finite_radix_or_default(radix_value.clone(), 10)
-        } else {
-            10
-        };
-
-        if radix != 0 && (radix < 2 || radix > 36) {
-            return None;
-        }
-
-        let mut sign = 1i64;
-        let mut parse_start = 0usize;
-        if trimmed.starts_with('-') {
-            sign = -1;
-            parse_start = 1;
-        } else if trimmed.starts_with('+') {
-            parse_start = 1;
-        }
-
-        let mut actual_radix = radix;
-        let remaining = &trimmed[parse_start..];
-        if radix == 16 || radix == 0 {
-            if remaining.starts_with("0x") || remaining.starts_with("0X") {
-                actual_radix = 16;
-                parse_start += 2;
-            } else if radix == 0 {
-                actual_radix = 10;
-            }
-        }
-
-        if parse_start >= trimmed.len() {
-            return None;
-        }
-
-        let mut found = false;
-        let mut result = 0i64;
-        for c in trimmed[parse_start..].chars() {
-            let digit = if c.is_ascii_digit() {
-                (c as i64) - ('0' as i64)
-            } else if c.is_ascii_alphabetic() {
-                (c.to_ascii_lowercase() as i64) - ('a' as i64) + 10
-            } else {
-                break;
-            };
-
-            if digit >= actual_radix as i64 || digit < 0 {
-                break;
-            }
-
-            found = true;
-            result = result
-                .saturating_mul(actual_radix as i64)
-                .saturating_add(digit);
-        }
-
-        if found { Some(sign * result) } else { None }
-    }
-
-    fn parse_float_with_scientific_notation(
-        &self,
-        args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let input = if args.count == 0 {
-            Value::Undefined
-        } else {
-            self.read_reg(args.start)?
-        };
-
-        let input_str = match &input {
-            Value::Int(n) => return Ok(Value::Int(*n)),
-            Value::Float(f) => return Ok(Value::Float(*f)),
-            Value::Bool(true) => "1".to_string(),
-            Value::Bool(false) => "0".to_string(),
-            other => Self::value_to_primitive_string(other),
-        };
-
-        let trimmed = input_str.trim();
-        if trimmed.is_empty() {
-            return Ok(Value::Float(Float64::new(f64::NAN)));
-        }
-
-        // Handle Infinity and -Infinity literals first
-        if trimmed.starts_with("Infinity") {
-            return Ok(Value::Float(Float64::new(f64::INFINITY)));
-        }
-        if trimmed.starts_with("-Infinity") {
-            return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
-        }
-        if trimmed.starts_with("+Infinity") {
-            return Ok(Value::Float(Float64::new(f64::INFINITY)));
-        }
-
-        // Parse number with scientific notation support
-        let mut result_str = String::new();
-        let mut has_dot = false;
-        let mut has_exponent = false;
-        let mut chars = trimmed.chars().peekable();
-        let mut prev_char = '\0';
-
-        // Handle sign
-        if let Some(&first_char) = chars.peek() {
-            if first_char == '+' || first_char == '-' {
-                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(
-                    chars
-                        .next()
-                        .expect("operation should succeed for valid inputs"),
-                );
-                prev_char = first_char;
-            }
-        }
-
-        // Parse main number part with exponent support
-        while let Some(&c) = chars.peek() {
-            if c.is_ascii_digit() {
-                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(
-                    chars
-                        .next()
-                        .expect("operation should succeed for valid inputs"),
-                );
-            } else if c == '.' && !has_dot && !has_exponent {
-                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(
-                    chars
-                        .next()
-                        .expect("operation should succeed for valid inputs"),
-                );
-                has_dot = true;
-            } else if (c == 'e' || c == 'E') && !has_exponent {
-                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(
-                    chars
-                        .next()
-                        .expect("operation should succeed for valid inputs"),
-                );
-                has_exponent = true;
-            } else if has_exponent
-                && (c == '+' || c == '-')
-                && (prev_char == 'e' || prev_char == 'E')
-            {
-                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(
-                    chars
-                        .next()
-                        .expect("operation should succeed for valid inputs"),
-                );
-            } else {
-                break;
-            }
-
-            prev_char = c;
-        }
-
-        // Validate result string is not empty or just signs
-        if result_str.is_empty() || result_str == "+" || result_str == "-" {
-            return Ok(Value::Float(Float64::new(f64::NAN)));
-        }
-
-        if let Ok(parsed) = result_str.parse::<f64>() {
-            // Return Int if it's a finite whole number within i64 range
-            if parsed.is_finite()
-                && parsed.fract() == 0.0
-                && parsed >= i64::MIN as f64
-                && parsed <= i64::MAX as f64
-            {
-                Ok(Value::Int(parsed as i64))
-            } else {
-                Ok(Value::Float(Float64::new(parsed)))
-            }
-        } else {
-            Ok(Value::Float(Float64::new(f64::NAN)))
-        }
     }
 
     fn weakmap_object_key(key: Value) -> Option<String> {
@@ -130189,12 +129859,8 @@ mod tests {
             ]))
             .expect("operation should succeed for valid inputs");
 
-        // Should parse up to valid part and return NaN for invalid "1e"
-        if let Value::Float(f) = core.registers[10] {
-            assert!(f.inner().is_nan());
-        } else {
-            panic!("Expected NaN for invalid exponent");
-        }
+        // The incomplete exponent is not part of the longest decimal prefix.
+        assert_eq!(core.registers[10], Value::Int(1));
 
         // Test parseFloat("123abc") should stop at 'a' and return 123. Fresh core.
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");

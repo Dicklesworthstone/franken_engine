@@ -78,3 +78,80 @@ jobs:
             crates/franken-extension-host/tests/host_effect_journal_admission.rs
             crates/franken-extension-host/tests/http_response_framing.rs
           retention-days: 7
+  # One-time verified patch transport for the connector's large-file limit.
+  # Produces immutable blobs only; remove after connector-controlled landing.
+  dns-candidate:
+    if: github.event_name == 'push' && github.event.before == 'a5f987f2814cce904d1438ef8b3b58823147326c'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact DNS candidate without changing refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          root = pathlib.Path('dns-output'); root.mkdir()
+          url = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/2860ea1967ee8c7631cc362da98974424b556600'
+          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              raw = base64.b64decode(json.load(response)['content'])
+          assert hashlib.sha256(raw).hexdigest() == '1687c2afd0897d36125fe7c6a612b42d9a070b29b8dd61fcf949aacad1a58e63'
+          patch = root / 'candidate.patch'; patch.write_bytes(gzip.decompress(raw))
+          files = ['crates/franken-extension-host/src/host_io.rs', 'crates/franken-extension-host/src/host_io/network_deadline.rs', 'crates/franken-extension-host/src/host_io/network_deadline/resolver.rs']
+          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
+          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(files)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          (root / 'files.json').write_text(json.dumps(files))
+          (root / 'base.txt').write_text(os.environ['GITHUB_SHA'])
+          PY
+      - name: Install Rust and format the candidate
+        run: |
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+          rustfmt +nightly --edition 2024 crates/franken-extension-host/src/host_io.rs
+      - name: Exercise bounded resolver and real host transports
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-extension-host --lib -- --nocapture 2>&1 | tee dns-output/unit-tests.log
+          cargo +nightly test --locked -p frankenengine-extension-host --test http_response_framing --test host_effect_journal_admission -- --nocapture 2>&1 | tee dns-output/integration-tests.log
+      - name: Check and lint every host target
+        run: |
+          set -o pipefail
+          cargo +nightly check --locked -p frankenengine-extension-host --all-targets 2>&1 | tee dns-output/check.log
+          cargo +nightly clippy --locked -p frankenengine-extension-host --all-targets -- -D warnings 2>&1 | tee dns-output/clippy.log
+      - name: Store exact candidate blobs without changing refs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          root = pathlib.Path('dns-output')
+          result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
+          for path in json.loads((root / 'files.json').read_text()):
+              f = pathlib.Path(path); assert f.is_file() and not f.is_symlink()
+              content = f.read_bytes()
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  sha = json.load(response)['sha']
+              assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
+              result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+              dest = root / 'source' / path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(content)
+          (root / 'result.json').write_text(json.dumps(result, indent=2))
+          print(json.dumps(result))
+          PY
+      - name: Retain exact candidate and validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dns-candidate-validation
+          path: dns-output/
+          retention-days: 7

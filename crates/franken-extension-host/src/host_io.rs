@@ -15,6 +15,8 @@ use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(all(test, unix))]
+mod fd_admission_tests;
 mod http_response;
 mod network_deadline;
 pub use http_response::{ParsedHttpResponse, parse_http_response};
@@ -467,6 +469,12 @@ pub fn capability_granted(granted: &[HostIoCapability], required: HostIoCapabili
 /// per-blob cap.
 pub const SANDBOXED_HOST_IO_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Maximum simultaneously retained guest file handles per provider. Clones
+/// share this quota; closing a handle releases capacity but never recycles its
+/// guest-visible number. Root descriptors and transient path-walk descriptors
+/// are not part of this limit, so this is not a process-wide descriptor bound.
+pub const SANDBOXED_HOST_IO_MAX_OPEN_FILES: usize = 1024;
+
 /// Maximum entropy returned by one guest request. This is intentionally much
 /// smaller than the generic host-I/O cap: crypto APIs normally request tens of
 /// bytes, while an attacker-controlled allocation must remain bounded before a
@@ -631,15 +639,17 @@ struct SandboxFdEntry {
 #[derive(Debug)]
 struct SandboxFdTable {
     next_fd: u64,
+    max_open_files: usize,
     entries: std::collections::BTreeMap<u64, SandboxFdEntry>,
 }
 
 impl SandboxFdTable {
-    fn new() -> Self {
+    fn new(max_open_files: usize) -> Self {
         Self {
             // 0/1/2 are the conventional stdio descriptors Node never hands
             // out from fs.openSync.
             next_fd: 3,
+            max_open_files,
             entries: std::collections::BTreeMap::new(),
         }
     }
@@ -687,6 +697,22 @@ impl SandboxedHostIo {
     /// Returns the underlying [`std::io::Error`] if the root cannot be created or
     /// canonicalized.
     pub fn with_root_and_limit(root: impl Into<PathBuf>, max_bytes: u64) -> std::io::Result<Self> {
+        Self::with_root_and_limits(root, max_bytes, SANDBOXED_HOST_IO_MAX_OPEN_FILES)
+    }
+
+    /// Create a provider with explicit per-operation bytes and retained guest
+    /// file-handle limits. All clones share the same handle table and quota.
+    /// Zero handles is valid: it denies numeric-fd opens without disabling
+    /// one-shot reads or writes. The quota is checked before an open can create
+    /// or truncate a file; failed opens do not consume quota or handle numbers.
+    ///
+    /// # Errors
+    /// Returns the underlying I/O error if the sandbox root cannot be prepared.
+    pub fn with_root_and_limits(
+        root: impl Into<PathBuf>,
+        max_bytes: u64,
+        max_open_files: usize,
+    ) -> std::io::Result<Self> {
         let root = root.into();
         std::fs::create_dir_all(&root)?;
         // Canonicalize once so symlink-escape checks compare real paths.
@@ -720,7 +746,9 @@ impl SandboxedHostIo {
             mutation_race_hook: None,
             #[cfg(all(test, unix))]
             read_race_hook: None,
-            fd_table: std::sync::Arc::new(std::sync::Mutex::new(SandboxFdTable::new())),
+            fd_table: std::sync::Arc::new(std::sync::Mutex::new(SandboxFdTable::new(
+                max_open_files,
+            ))),
         })
     }
 
@@ -1472,10 +1500,13 @@ impl SandboxedHostIo {
     /// sandboxed operation, open it under the requested Node flag string, and
     /// hand back a monotonic numeric fd. Supported flags: `r`, `r+`, `w`,
     /// `w+`, `a`, `a+`. Unknown flags fail with `ERR_INVALID_ARG_VALUE`
-    /// before any filesystem effect.
+    /// before any filesystem effect. Retained-handle capacity and sequence
+    /// exhaustion return `EMFILE` before opening, creating or truncating. The
+    /// table lock keeps admission atomic across clones. Nonblocking opens
+    /// ensure a FIFO cannot wait for a peer before the regular-file check.
     ///
     /// # Errors
-    /// `EBADF`-family and containment failures surface as [`HostIoError`].
+    /// `EMFILE`, invalid flags and containment failures surface as [`HostIoError`].
     pub fn open_fd(&self, raw: &str, flags: &str) -> Result<u64, HostIoError> {
         #[cfg(not(unix))]
         {
@@ -1522,6 +1553,25 @@ impl SandboxedHostIo {
                     });
                 }
             };
+            // Admission must precede even O_TRUNC/O_CREAT. Holding the table
+            // through insertion prevents concurrent clones from spending the
+            // final slot twice. Ordinary regular-file I/O ignores NONBLOCK;
+            // a FIFO must not block here before metadata can reject it.
+            let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
+                detail: "sandbox fd table lock poisoned".to_string(),
+            })?;
+            if table.entries.len() >= table.max_open_files {
+                return Err(HostIoError::Fs {
+                    code: "EMFILE".to_string(),
+                    detail: "sandbox guest file-handle limit reached".to_string(),
+                });
+            }
+            let fd = table.next_fd;
+            let next_fd = fd.checked_add(1).ok_or_else(|| HostIoError::Fs {
+                code: "EMFILE".to_string(),
+                detail: "sandbox guest file-handle sequence exhausted".to_string(),
+            })?;
+            let base_flags = base_flags | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
             let file = if writable {
                 let target = self.mutation_target(raw, false)?;
                 Self::open_mutation_file(&target, base_flags, raw, "open")?
@@ -1550,11 +1600,7 @@ impl SandboxedHostIo {
                     detail: format!("not a regular file: {raw}"),
                 });
             }
-            let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
-                detail: "sandbox fd table lock poisoned".to_string(),
-            })?;
-            let fd = table.next_fd;
-            table.next_fd = table.next_fd.saturating_add(1);
+            table.next_fd = next_fd;
             table.entries.insert(
                 fd,
                 SandboxFdEntry {

@@ -6007,7 +6007,9 @@ fn try_parse_binary(
                         .as_bytes()
                         .last()
                         .is_none_or(|&c| is_operator_context_byte(c));
-                if !lhs.is_empty() && !rhs.is_empty() && !unary_sign {
+                let exponent_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                    && is_decimal_exponent_sign(bytes, i);
+                if !lhs.is_empty() && !rhs.is_empty() && !unary_sign && !exponent_sign {
                     best_op = Some(op);
                     best_pos = i;
                     best_len = len;
@@ -6035,6 +6037,31 @@ fn try_parse_binary(
         left: Box::new(left),
         right: Box::new(right),
     }))
+}
+
+/// A sign in a decimal exponent belongs to its numeric token, not an
+/// additive expression. Inspect only the contiguous mantissa and its boundary:
+/// `value - 1`, `name1e - 2` and `0x1e-2` are still subtraction expressions.
+fn is_decimal_exponent_sign(bytes: &[u8], index: usize) -> bool {
+    if index < 2
+        || !matches!(bytes[index - 1], b'e' | b'E')
+        || !bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    let end = index - 1;
+    let mut start = end;
+    while start > 0 && matches!(bytes[start - 1], b'0'..=b'9' | b'.' | b'_') {
+        start -= 1;
+    }
+    if start == end
+        || (start > 0
+            && (bytes[start - 1] >= 0x80 || is_identifier_continue(bytes[start - 1] as char)))
+    {
+        return false;
+    }
+    let mantissa = &bytes[start..end];
+    mantissa.iter().any(u8::is_ascii_digit) && mantissa.iter().filter(|&&c| c == b'.').count() <= 1
 }
 
 /// Match a binary operator at byte position `i`. Returns (operator, byte_length).

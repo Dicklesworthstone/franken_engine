@@ -17133,6 +17133,13 @@ fn builtin_prototype_capability(
     expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<String> {
+    // BigInt has an intrinsic prototype but is not a constructor. Do not
+    // register it in the construct/extends or optimized instanceof routes.
+    if matches!(expression, Expression::Identifier(name) if name == "BigInt")
+        && !is_lexically_shadowed(binding_lookup, "BigInt")
+    {
+        return Some("builtin:proto:BigInt".to_string());
+    }
     builtin_constructor_name(expression, binding_lookup).map(|name| format!("builtin:proto:{name}"))
 }
 

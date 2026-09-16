@@ -219,6 +219,9 @@ fn internal_builtin_meta_tag(tag: &str) -> bool {
     else {
         return false;
     };
+    if name == "BigInt" {
+        return kind == "proto";
+    }
     matches!(kind, "proto" | "instanceof")
         && matches!(
             name,

@@ -74,6 +74,7 @@ use zeroize::Zeroizing;
 
 mod async_generator;
 mod json_parse;
+mod json_stringify;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
@@ -775,6 +776,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Array" => Some("Array"),
         "Map" => Some("Map"),
         "Set" => Some("Set"),
+        "BigInt" => Some("BigInt"),
         "Error" => Some("Error"),
         "TypeError" => Some("TypeError"),
         "RangeError" => Some("RangeError"),
@@ -60085,191 +60087,6 @@ impl InterpreterCore {
         }
     }
 
-    /// Recursively serialize a value as JSON (`JSON.stringify`). Returns `None`
-    /// for values JSON omits (undefined / functions / cyclic references) — the
-    /// caller maps a top-level `None` to "undefined", an object member is
-    /// dropped, and an array element becomes `null`. Objects serialize their own
-    /// string-keyed properties (skipping engine-internal `__`-prefixed metadata
-    /// such as Symbol fields); arrays serialize their dense `0..length` slots.
-    /// (bd-9a8cz.3 — was a `"{}"` stub for every object.)
-    /// Quote a string value as a JSON string token. Lone surrogates are
-    /// emitted as `\uXXXX` escapes per ES2019 well-formed JSON.stringify
-    /// (bd-neika), so `JSON.parse(JSON.stringify(v))` round-trips exactly.
-    /// The backslash is escaped before the quote: the reverse order
-    /// re-escaped the backslash inserted for `"` and emitted invalid JSON.
-    fn json_quote_js_string(s: &JsString) -> String {
-        let mut out = String::with_capacity(s.len().saturating_add(2));
-        out.push('"');
-        for decoded in char::decode_utf16(s.encode_utf16()) {
-            match decoded {
-                Ok('"') => out.push_str("\\\""),
-                Ok('\\') => out.push_str("\\\\"),
-                Ok('\u{0008}') => out.push_str("\\b"),
-                Ok('\u{000c}') => out.push_str("\\f"),
-                Ok('\n') => out.push_str("\\n"),
-                Ok('\r') => out.push_str("\\r"),
-                Ok('\t') => out.push_str("\\t"),
-                Ok(c) if c <= '\u{001f}' => out.push_str(&format!("\\u{:04x}", c as u32)),
-                Ok(c) => out.push(c),
-                Err(err) => {
-                    out.push_str(&format!("\\u{:04x}", err.unpaired_surrogate()));
-                }
-            }
-        }
-        out.push('"');
-        out
-    }
-
-    fn json_stringify_value(
-        &mut self,
-        module: Option<&Ir3Module>,
-        value: &Value,
-        visited: &mut Vec<ObjectId>,
-    ) -> Result<Option<String>, InterpreterError> {
-        let rendered = match value {
-            Value::Undefined => return Ok(None),
-            Value::Symbol(_) => return Ok(None),
-            Value::Null => "null".to_string(),
-            Value::Bool(b) => {
-                if *b {
-                    "true".to_string()
-                } else {
-                    "false".to_string()
-                }
-            }
-            Value::Int(n) => n.to_string(),
-            Value::BigInt(n) => n.to_string(),
-            Value::Float(f) => {
-                let val = f.inner();
-                if val.is_nan() || val.is_infinite() {
-                    "null".to_string()
-                } else {
-                    ryu_js::Buffer::new().format(val).to_string()
-                }
-            }
-            Value::Str(s) => Self::json_quote_js_string(s),
-            Value::Object(id) => {
-                if visited.contains(id) {
-                    // Cyclic reference: ES throws TypeError; omit to stay safe
-                    // rather than recurse forever.
-                    return Ok(None);
-                }
-                if self.active_proxy_record(*id)?.is_some() {
-                    // bd-9trje: a Proxy serializes its enumerable own String keys
-                    // through the ownKeys + getOwnPropertyDescriptor traps, reading
-                    // each value via [[Get]] (get trap / target).
-                    visited.push(*id);
-                    let keys = self.proxy_own_enumerable_string_keys(module, *id)?;
-                    let mut members = Vec::new();
-                    for key in keys {
-                        let val = self.proxy_aware_get_runtime_property(
-                            module,
-                            *id,
-                            &RuntimePropertyKey::String(key.clone()),
-                            Value::Object(*id),
-                            0,
-                        )?;
-                        if let Some(rendered_val) =
-                            self.json_stringify_value(module, &val, visited)?
-                        {
-                            members.push(format!(
-                                "{}:{rendered_val}",
-                                Self::json_quote_js_string(&key)
-                            ));
-                        }
-                    }
-                    visited.pop();
-                    format!("{{{}}}", members.join(","))
-                } else {
-                    let Some(object) = self.heap.get(id.0 as usize).cloned() else {
-                        return Ok(None);
-                    };
-                    visited.push(*id);
-                    let rendered = if object.is_array {
-                        let len = object
-                            .properties
-                            .get("length")
-                            .and_then(|v| match v {
-                                Value::Int(n) if *n >= 0 => Some(*n as usize),
-                                _ => None,
-                            })
-                            .or_else(|| object.cached_dense_length.map(|l| l as usize))
-                            .unwrap_or(0);
-                        let mut items = Vec::with_capacity(len);
-                        for i in 0..len {
-                            let element = object.properties.get(&i.to_string()).cloned();
-                            let rendered_item = match element {
-                                Some(v) => self
-                                    .json_stringify_value(module, &v, visited)?
-                                    .unwrap_or_else(|| "null".to_string()),
-                                None => "null".to_string(),
-                            };
-                            items.push(rendered_item);
-                        }
-                        format!("[{}]", items.join(","))
-                    } else {
-                        let mut members = Vec::new();
-                        // DISC-013 / bd-n8eta: consume HeapObject's canonical
-                        // [[OwnPropertyKeys]] sequence rather than iterating a
-                        // lookup carrier directly. This keeps JSON.stringify
-                        // aligned with Object.keys: array indices first, then
-                        // ordinary strings in creation order, with Symbols
-                        // excluded from JSON object members.
-                        for key in
-                            object
-                                .own_runtime_property_keys()
-                                .into_iter()
-                                .filter_map(|key| match key {
-                                    RuntimePropertyKey::String(key) => Some(key),
-                                    RuntimePropertyKey::Symbol(_) => None,
-                                })
-                        {
-                            // Engine-internal metadata (e.g. Symbol __type/__key)
-                            // is not a real enumerable JS property.
-                            if key.as_str().is_some_and(|key| key.starts_with("__"))
-                                || !self.writable_own_runtime_property_visible(*id, &key)
-                            {
-                                continue;
-                            }
-                            let Some(val) = object.own_runtime_property_value(
-                                &RuntimePropertyKey::String(key.clone()),
-                            ) else {
-                                continue;
-                            };
-                            if let Some(rendered_val) =
-                                self.json_stringify_value(module, &val, visited)?
-                            {
-                                members.push(format!(
-                                    "{}:{rendered_val}",
-                                    Self::json_quote_js_string(&key)
-                                ));
-                            }
-                        }
-                        format!("{{{}}}", members.join(","))
-                    };
-                    visited.pop();
-                    rendered
-                }
-            }
-            // Functions have no JSON representation (omitted).
-            Value::Function(_)
-            | Value::Closure(_)
-            | Value::GeneratorFunction(_)
-            | Value::AsyncFunction(_)
-            | Value::AsyncGeneratorFunction(_)
-            | Value::BuiltinFunction(_) => return Ok(None),
-            // Other object-likes: preserve the prior "{}" fallback rather than
-            // leaking internal structure.
-            Value::Iterator(_)
-            | Value::Promise(_)
-            | Value::Generator(_)
-            | Value::AsyncFunctionObject(_)
-            | Value::AsyncGeneratorObject(_)
-            | Value::Accessor { .. } => "{}".to_string(),
-        };
-        Ok(Some(rendered))
-    }
-
     fn construct_node_invalid_url_error(&mut self, input: &str) -> Result<Value, InterpreterError> {
         let prototype = self.ensure_builtin_prototype("TypeError")?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
@@ -68395,27 +68212,7 @@ impl InterpreterCore {
             }
 
             // JSON methods
-            "builtin:JsonStringify" => {
-                // JSON.stringify implementation - converts value to JSON string
-                if args.count == 0 {
-                    return Ok(Value::str("undefined"));
-                }
-
-                let value = self.read_reg(args.start)?;
-                if let Value::Object(object_id) = &value {
-                    self.join_pending_hostcall_stream_label(*object_id)?;
-                }
-                // bd-9a8cz.3: real recursive object/array serialization. Previously
-                // `Value::Object(_)` was a `"{}"` stub. `json_stringify_value`
-                // returns `None` for values JSON omits (undefined/function); at the
-                // top level that stringifies to "undefined" (preserving prior
-                // behavior).
-                let mut visited = Vec::new();
-                let json_str = self
-                    .json_stringify_value(module, &value, &mut visited)?
-                    .unwrap_or_else(|| "undefined".to_string());
-                Ok(Value::str(json_str))
-            }
+            "builtin:JsonStringify" => self.json_stringify_builtin(module, args),
             "builtin:JsonParse" => self.json_parse_builtin(module, args),
             "builtin:isNaN" => {
                 // isNaN global function - tests if value is NaN
@@ -80331,6 +80128,7 @@ impl InterpreterCore {
         }
 
         let parent = match canonical {
+            "BigInt" => Some(self.ensure_builtin_prototype("Object")?),
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" => Some(self.ensure_builtin_prototype("Error")?),
             _ => None,

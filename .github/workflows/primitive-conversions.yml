@@ -31,7 +31,8 @@ jobs:
         with:
           persist-credentials: false
       # Temporary immutable candidate transport; never writes commits or refs.
-      - name: Retrieve exact conversion patch and install regression tests
+      # The unchanged-runtime failure was reproduced in run 35145556880.
+      - name: Apply exact conversion candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -39,16 +40,14 @@ jobs:
           git rev-parse HEAD > conversion-validation/revision.txt
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
-          parts = ['45b7f3d81a82b6186b9b054b5b934ed4782fb867', '61383d60b506c6e7a3d8ec31bcfb1d94ee5766c0', '9bf9775cf96b29f6d4c475500edc414d296ddf12']
-          raw = bytearray()
-          for sha in parts:
+          def blob(sha):
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
                   'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
                   'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  data = base64.b64decode(json.load(response)['content'])
+              with urllib.request.urlopen(req, timeout=60) as response: data = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
-              raw.extend(data)
+              return data
+          raw = b''.join(blob(sha) for sha in ['45b7f3d81a82b6186b9b054b5b934ed4782fb867', '61383d60b506c6e7a3d8ec31bcfb1d94ee5766c0', '9bf9775cf96b29f6d4c475500edc414d296ddf12'])
           assert hashlib.sha256(raw).hexdigest() == '9b6592684196a6f64f25663a0ac5e26ab38b1aa4d65cde4d0edfe8e04cbc8f45'
           for path, sha in {
               'crates/franken-engine/src/baseline_interpreter.rs': '6113aaa71320d24b7da35a5e032e41ece8c3b674',
@@ -62,15 +61,22 @@ jobs:
               'crates/franken-engine/tests/primitive_conversion_execution.rs',
           ]
           root = pathlib.Path('conversion-validation')
-          patch = root / 'conversion.patch'; patch.write_bytes(gzip.decompress(raw))
-          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
-          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(paths)
-          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
-          subprocess.run(['git', 'apply', '--include=' + paths[-1], str(patch)], check=True)
+          for name, content in [('conversion.patch', gzip.decompress(raw)), ('refinement.patch', blob('d381e8bb6851a02575675c70dd4d8eba9ee14983'))]:
+              patch = root / name; patch.write_bytes(content)
+              stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
+              assert set(line.split('\t', 2)[2] for line in stats.splitlines()) <= set(paths)
+              subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+              subprocess.run(['git', 'apply', str(patch)], check=True)
           (root / 'paths.json').write_text(json.dumps(paths))
           PY
-      - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+      - name: Install Rust and format exact changed sources
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          paths = json.loads(pathlib.Path('conversion-validation/paths.json').read_text())
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
+          PY
       - name: Select existing production runtime dependency closure
         run: |
           python3 - <<'PY'
@@ -79,21 +85,6 @@ jobs:
           step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('conversion-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
-          PY
-      - name: Reproduce numeric grammar failure on unchanged runtime
-        run: |
-          status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test primitive_conversion_execution number_uses_string_numeric_grammar_and_ieee_rounding -- --exact --nocapture > conversion-validation/before.log 2>&1 || status=$?
-          tail -n 100 conversion-validation/before.log
-          test "$status" -ne 0
-          grep -q 'test result: FAILED' conversion-validation/before.log
-      - name: Apply implementation and format exact changed sources
-        run: |
-          git apply --exclude=crates/franken-engine/tests/primitive_conversion_execution.rs conversion-validation/conversion.patch
-          python3 - <<'PY'
-          import json, pathlib, subprocess
-          paths = json.loads(pathlib.Path('conversion-validation/paths.json').read_text())
-          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
           PY
       - name: Run native conversions and existing JSON UTF-16 regressions
         run: |

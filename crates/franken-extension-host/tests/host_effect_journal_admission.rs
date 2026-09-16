@@ -70,7 +70,10 @@ fn exhausted_entry_capacity_prevents_a_real_file_overwrite() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("entry capacity exceeded"));
-    assert_eq!(std::fs::read(directory.path().join("result.bin")).unwrap(), b"kept");
+    assert_eq!(
+        std::fs::read(directory.path().join("result.bin")).unwrap(),
+        b"kept"
+    );
     assert_eq!(journal.entries(), prefix);
     assert_eq!(journal.attempt_records().len(), 1);
     assert_eq!(journal.finish_execution(), Err(error));
@@ -106,21 +109,22 @@ fn oversized_real_read_outcome_is_not_a_successful_complete_trace() {
     let request = HostIoRequest::FsRead {
         path: "input.bin".to_string(),
     };
-    let error = dispatch(&journal, &provider, &request, &[HostIoCapability::FsRead])
-        .unwrap_err();
+    let error = dispatch(&journal, &provider, &request, &[HostIoCapability::FsRead]).unwrap_err();
     assert!(error.to_string().contains("byte capacity exceeded"));
     assert!(journal.entries().is_empty());
     assert!(matches!(
         journal.attempt_records().as_slice(),
         [HostEffectJournalAttemptRecord::Uncompleted { sequence: 0, .. }]
     ));
-    assert!(dispatch(
-        &journal,
-        &provider,
-        &write_request(b"must not execute after poison"),
-        &[HostIoCapability::FsWrite],
-    )
-    .is_err());
+    assert!(
+        dispatch(
+            &journal,
+            &provider,
+            &write_request(b"must not execute after poison"),
+            &[HostIoCapability::FsWrite],
+        )
+        .is_err()
+    );
     assert!(!directory.path().join("result.bin").exists());
     assert_eq!(journal.finish_execution(), Err(error));
 }
@@ -157,7 +161,11 @@ fn bounded_replay_returns_recorded_bytes_without_repeating_real_effects() {
 
     // Either an accidental replay write or a live replay read will fail the
     // assertions below: the live disk must stay different from the transcript.
-    std::fs::write(directory.path().join("result.bin"), b"changed outside replay").unwrap();
+    std::fs::write(
+        directory.path().join("result.bin"),
+        b"changed outside replay",
+    )
+    .unwrap();
     let replay = InMemoryHostEffectJournal::replaying_with_limits(
         serde_json::from_slice(&encoded).unwrap(),
         limits(2, exact_payload_limit),
@@ -165,13 +173,19 @@ fn bounded_replay_returns_recorded_bytes_without_repeating_real_effects() {
     .unwrap();
     replay.begin_execution().unwrap();
     for (request, expected) in requests.iter().zip(outcomes) {
-        assert_eq!(dispatch(&replay, &provider, request, &capabilities).unwrap(), expected);
+        assert_eq!(
+            dispatch(&replay, &provider, request, &capabilities).unwrap(),
+            expected
+        );
     }
     assert_eq!(
         std::fs::read(directory.path().join("result.bin")).unwrap(),
         b"changed outside replay"
     );
-    assert_eq!(serde_json::to_vec(&replay.finish_execution().unwrap()).unwrap(), encoded);
+    assert_eq!(
+        serde_json::to_vec(&replay.finish_execution().unwrap()).unwrap(),
+        encoded
+    );
 }
 
 #[test]

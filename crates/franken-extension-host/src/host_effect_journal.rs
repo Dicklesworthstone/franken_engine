@@ -1700,7 +1700,10 @@ mod tests {
             .complete_host_io(reservations.pop().unwrap(), &fs_request(), &fs_outcome())
             .unwrap();
         assert_eq!(*journal.attempt_prefix_len.lock().unwrap(), 32);
-        assert_eq!(journal.attempt_entries(), journal.finish_execution().unwrap());
+        assert_eq!(
+            journal.attempt_entries(),
+            journal.finish_execution().unwrap()
+        );
     }
 
     #[test]
@@ -1730,7 +1733,10 @@ mod tests {
             *outcome = fs_outcome();
         }
         assert_ne!(detached, journal.attempt_entries());
-        assert_eq!(journal.finish_execution().unwrap(), journal.attempt_entries());
+        assert_eq!(
+            journal.finish_execution().unwrap(),
+            journal.attempt_entries()
+        );
     }
 
     #[test]

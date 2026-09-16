@@ -222,7 +222,8 @@ fn internal_builtin_meta_tag(tag: &str) -> bool {
     matches!(kind, "proto" | "instanceof")
         && matches!(
             name,
-            "Array"
+            "Object"
+                | "Array"
                 | "Map"
                 | "Set"
                 | "Error"

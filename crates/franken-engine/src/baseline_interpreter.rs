@@ -73,6 +73,7 @@ use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
 mod async_generator;
+mod json_parse;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
@@ -770,6 +771,7 @@ pub(crate) fn builtin_instanceof_capability_name(tag: &str) -> Option<&'static s
 
 fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
     match name {
+        "Object" => Some("Object"),
         "Array" => Some("Array"),
         "Map" => Some("Map"),
         "Set" => Some("Set"),
@@ -9987,6 +9989,9 @@ pub struct InterpreterCore {
     /// makes every nested allocation gate see the temporary owner while still
     /// allowing exact release on every callback exit (bd-aw8td).
     simple_callback_temporary_bytes: u64,
+    /// JSON parser/reviver scratch retained on the Rust stack across guest
+    /// callbacks. A nested accounting resync must not erase this ownership.
+    json_parse_temporary_bytes: u64,
     /// Resident ownership held by nested module/callback snapshots while the
     /// corresponding active core fields are temporarily replaced.
     module_snapshot_in_flight_bytes: u64,
@@ -10943,6 +10948,7 @@ impl InterpreterCore {
             heap: SeedTrackedField::new(Vec::new()),
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
+            json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
             iterators: Vec::new(),
@@ -20547,6 +20553,17 @@ impl InterpreterCore {
             .is_none_or(|key| self.writable_own_property_visible(object_id, key))
     }
 
+    /// Enumerable own String properties in the baseline object model. Array
+    /// length is an own property, but must not enter JSON/Object.keys-style
+    /// enumeration. Reflect.ownKeys continues to use the unfiltered own keys.
+    fn ordinary_own_string_key_is_enumerable(&self, object_id: ObjectId, key: &JsString) -> bool {
+        self.heap.get(object_id.0 as usize).is_some_and(|object| {
+            object.properties.contains_exact_key(key)
+                && !(object.is_array && key.as_str() == Some("length"))
+                && self.writable_own_runtime_property_visible(object_id, key)
+        })
+    }
+
     fn join_pending_hostcall_stream_label(
         &mut self,
         object_id: ObjectId,
@@ -28527,6 +28544,7 @@ impl InterpreterCore {
         base_bytes
             .saturating_add(self.live_execution_seed_reserved_bytes())
             .saturating_add(self.simple_callback_temporary_bytes)
+            .saturating_add(self.json_parse_temporary_bytes)
     }
 
     fn prune_dead_pending_execution_seeds(&mut self) {
@@ -45873,7 +45891,11 @@ impl InterpreterCore {
     fn eval_unary_neg(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         match &value {
-            Value::Int(n) => Ok(Value::Int(n.wrapping_neg())),
+            Value::Int(0) => Ok(Value::Float(Float64::new(-0.0))),
+            Value::Int(n) => Ok(n
+                .checked_neg()
+                .map(Value::Int)
+                .unwrap_or_else(|| Value::Float(Float64::new(-(*n as f64))))),
             Value::Float(f) => Ok(Value::Float(Float64::new(-f.inner()))),
             _ => {
                 let number =
@@ -45884,6 +45906,7 @@ impl InterpreterCore {
                 // Return Int if whole number in i64 range
                 let negated = -number;
                 if negated.fract() == 0.0
+                    && !(negated == 0.0 && negated.is_sign_negative())
                     && !negated.is_nan()
                     && !negated.is_infinite()
                     && negated >= i64::MIN as f64
@@ -49068,6 +49091,12 @@ impl InterpreterCore {
             // properties; concise methods expose only `name`.
             return false;
         }
+        if let Value::Object(object_id) = receiver
+            && let RuntimePropertyKey::String(key) =
+                self.executable_property_key_from_value(property)
+        {
+            return self.ordinary_own_string_key_is_enumerable(*object_id, &key);
+        }
         self.object_own_property_contains(receiver, property)
     }
 
@@ -49945,7 +49974,7 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return Ok(self.writable_own_runtime_property_visible(object_id, key));
+            return Ok(self.ordinary_own_string_key_is_enumerable(object_id, key));
         };
         let descriptor = self.invoke_proxy_trap(
             module,
@@ -49957,7 +49986,7 @@ impl InterpreterCore {
             // Trap absent: the target governs the descriptor.
             None => self.own_string_key_is_enumerable(module, target, key, depth + 1),
             // Property reported absent.
-            Some(Value::Undefined | Value::Null) => Ok(false),
+            Some(Value::Undefined) => Ok(false),
             Some(Value::Object(descriptor_id)) => {
                 let enumerable = self.proxy_aware_get_runtime_property(
                     module,
@@ -60115,7 +60144,7 @@ impl InterpreterCore {
                 if val.is_nan() || val.is_infinite() {
                     "null".to_string()
                 } else {
-                    val.to_string()
+                    ryu_js::Buffer::new().format(val).to_string()
                 }
             }
             Value::Str(s) => Self::json_quote_js_string(s),
@@ -67471,7 +67500,7 @@ impl InterpreterCore {
                             .properties
                             .exact_keys()
                             .into_iter()
-                            .filter(|key| self.writable_own_runtime_property_visible(obj_id, key))
+                            .filter(|key| self.ordinary_own_string_key_is_enumerable(obj_id, key))
                             .map(Value::Str)
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(obj_id)?;
@@ -67519,7 +67548,7 @@ impl InterpreterCore {
                             .exact_entries()
                             .into_iter()
                             .filter(|(key, _)| {
-                                self.writable_own_runtime_property_visible(obj_id, key)
+                                self.ordinary_own_string_key_is_enumerable(obj_id, key)
                             })
                             .map(|(_, value)| value.clone())
                             .collect::<Vec<_>>();
@@ -67571,7 +67600,7 @@ impl InterpreterCore {
                             .exact_entries()
                             .into_iter()
                             .filter(|(key, _)| {
-                                self.writable_own_runtime_property_visible(obj_id, key)
+                                self.ordinary_own_string_key_is_enumerable(obj_id, key)
                             })
                             .map(|(key, value)| (key, value.clone()))
                             .collect::<Vec<_>>();
@@ -68387,44 +68416,7 @@ impl InterpreterCore {
                     .unwrap_or_else(|| "undefined".to_string());
                 Ok(Value::str(json_str))
             }
-            "builtin:JsonParse" => {
-                // Full recursive JSON values over exact UTF-16 input units,
-                // including raw lone surrogates (bd-4v2up) and units contributed
-                // by `\uXXXX` escapes (bd-neika). Invalid JSON and non-string
-                // inputs preserve the engine's simplified posture by yielding
-                // undefined instead of a SyntaxError.
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-                let json_str = match self.read_reg(args.start)? {
-                    Value::Str(text) => text,
-                    _ => return Ok(Value::Undefined),
-                };
-                let units = json_str.code_units_vec();
-                let mut pos = 0usize;
-                let heap_checkpoint = self.heap.len();
-                let memory_checkpoint = self.estimated_memory_bytes;
-                Self::json_skip_ws(&units, &mut pos);
-                match self.json_parse_value(&units, &mut pos, 0) {
-                    Ok(Some(value)) => {
-                        Self::json_skip_ws(&units, &mut pos);
-                        if pos == units.len() {
-                            Ok(value)
-                        } else {
-                            self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
-                            Ok(Value::Undefined)
-                        }
-                    }
-                    Ok(None) => {
-                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
-                        Ok(Value::Undefined)
-                    }
-                    Err(err) => {
-                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
-                        Err(err)
-                    }
-                }
-            }
+            "builtin:JsonParse" => self.json_parse_builtin(module, args),
             "builtin:isNaN" => {
                 // isNaN global function - tests if value is NaN
                 if args.count == 0 {
@@ -72439,10 +72431,10 @@ impl InterpreterCore {
                             a_val == b_val
                         }
                     }
-                    (Value::Str(a), Value::Str(b)) => a == b,
-                    (Value::Symbol(a), Value::Symbol(b)) => a == b,
-                    (Value::Object(a), Value::Object(b)) => a.0 == b.0,
-                    _ => false,
+                    (Value::Int(a), Value::Float(b)) | (Value::Float(b), Value::Int(a)) => {
+                        (*a as f64) == b.inner() && !(*a == 0 && b.inner().is_sign_negative())
+                    }
+                    _ => Self::strict_eq_values(&val1, &val2),
                 };
 
                 Ok(Value::Bool(result))
@@ -80634,7 +80626,7 @@ impl InterpreterCore {
 
     // -- JSON.parse recursive-descent parser (bd-9a8cz.4) ------------------
     // Parses the full JSON grammar into heap Values. `Option` distinguishes
-    // parse success/failure (None => invalid JSON => caller returns undefined);
+    // parse success/failure (None => invalid JSON => caller throws SyntaxError);
     // `Result` carries heap-allocation errors. The cursor operates on exact
     // UTF-16 code units so raw lone surrogates never pass through a lossy UTF-8
     // projection (bd-4v2up).
@@ -80748,7 +80740,10 @@ impl InterpreterCore {
         if token == "-0" {
             return Some(Value::Float(Float64::new(-0.0)));
         }
-        if !is_float && let Ok(value) = token.parse::<i64>() {
+        if !is_float
+            && let Ok(value) = token.parse::<i64>()
+            && (-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&value)
+        {
             return Some(Value::Int(value));
         }
         token
@@ -80764,8 +80759,9 @@ impl InterpreterCore {
         depth: usize,
     ) -> Result<Option<Value>, InterpreterError> {
         if depth > 200 {
-            return Ok(None); // guard against stack exhaustion on deep nesting
+            return Err(InterpreterError::StackOverflow { depth, max: 200 });
         }
+        self.json_charge_work()?;
         Self::json_skip_ws(units, pos);
         let Some(&unit) = units.get(*pos) else {
             return Ok(None);
@@ -80798,7 +80794,8 @@ impl InterpreterCore {
         depth: usize,
     ) -> Result<Option<Value>, InterpreterError> {
         *pos += 1; // consume '{'
-        let id = self.alloc_object_with_prototype(None)?;
+        let prototype = self.ensure_builtin_prototype("Object")?;
+        let id = self.alloc_object_with_prototype(Some(prototype))?;
         Self::json_skip_ws(units, pos);
         if units.get(*pos) == Some(&0x7D) {
             *pos += 1;
@@ -80817,10 +80814,9 @@ impl InterpreterCore {
             let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
                 return Ok(None);
             };
-            // Property keys remain UTF-8 `String`s: a lone-surrogate key
-            // routes through the lossy projection (documented bd-neika
-            // boundary); string VALUES keep exact code units.
-            self.set_object_property(id, key.to_string(), value)?;
+            // Preserve exact UTF-16 key identity, including __proto__ as an
+            // ordinary own data property and distinct unpaired surrogates.
+            self.json_store_parsed_property(id, key, value)?;
             Self::json_skip_ws(units, pos);
             match units.get(*pos) {
                 Some(0x2C) => *pos += 1,
@@ -80840,7 +80836,8 @@ impl InterpreterCore {
         depth: usize,
     ) -> Result<Option<Value>, InterpreterError> {
         *pos += 1; // consume '['
-        let id = self.alloc_array_with_prototype(None)?;
+        let prototype = self.ensure_builtin_prototype("Array")?;
+        let id = self.alloc_array_with_prototype(Some(prototype))?;
         Self::json_skip_ws(units, pos);
         if units.get(*pos) == Some(&0x5D) {
             *pos += 1;
@@ -80852,8 +80849,10 @@ impl InterpreterCore {
             let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
                 return Ok(None);
             };
-            self.set_object_property(id, len.to_string(), value)?;
-            len = len.saturating_add(1);
+            self.json_store_parsed_property(id, JsString::from(len.to_string()), value)?;
+            len = len.checked_add(1).ok_or(InterpreterError::RangeError {
+                message: "JSON array length exceeds the array-index range".to_string(),
+            })?;
             Self::json_skip_ws(units, pos);
             match units.get(*pos) {
                 Some(0x2C) => *pos += 1,
@@ -80868,7 +80867,7 @@ impl InterpreterCore {
     }
 
     fn json_finalize_array_len(&mut self, id: ObjectId, len: u32) -> Result<(), InterpreterError> {
-        self.set_object_property(id, "length".to_string(), Value::Int(i64::from(len)))?;
+        self.json_store_parsed_property(id, JsString::from("length"), Value::Int(i64::from(len)))?;
         let idx = id.0 as usize;
         self.mutate_heap(|heap| {
             if let Some(obj) = heap.get_mut(idx) {
@@ -131044,22 +131043,32 @@ mod tests {
     #[test]
     fn json_parse_rolls_back_late_invalid_allocations() {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test");
+        for name in ["Object", "Array", "SyntaxError"] {
+            core.ensure_builtin_prototype(name).unwrap();
+        }
         core.set_register(0, Value::str(r#"{"a":[1,2]} trailing"#))
             .expect("invalid JSON input should fit register zero");
         let heap_before = core.heap_size();
-        let memory_before = core.estimated_memory_bytes();
 
-        let result = core
+        let error = core
             .dispatch_builtin_hostcall_inner(
                 "builtin:JsonParse",
                 RegRange { start: 0, count: 1 },
                 None,
             )
-            .expect("invalid JSON should preserve the undefined posture");
+            .expect_err("invalid JSON must throw SyntaxError");
 
-        assert_eq!(result, Value::Undefined);
-        assert_eq!(core.heap_size(), heap_before);
-        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+        // Only the error object survives, not the partially parsed object/array.
+        assert_eq!(core.heap_size(), heap_before + 1);
+        assert_eq!(
+            core.heap[heap_before].properties.get("name"),
+            Some(&Value::str("SyntaxError"))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -131109,16 +131118,14 @@ mod tests {
             Value::Str(JsString::from_code_units(&[0x22, 0x1F, 0x22])),
         )
         .expect("raw control-unit JSON input should fit register zero");
-        assert_eq!(
+        assert!(matches!(
             core.dispatch_builtin_hostcall(
                 "builtin:JsonParse",
                 RegRange { start: 0, count: 1 },
                 None,
-            )
-            .expect("invalid JSON should preserve the undefined posture"),
-            Value::Undefined,
-            "raw JSON control units must remain invalid"
-        );
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
     }
 
     #[test]

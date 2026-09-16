@@ -209,7 +209,9 @@ fn json_parse_preserves_raw_lone_surrogate_input_units() {
          var nested = JSON.parse('{\"value\":\"' + high + '\"}'); \
          var quote = String.fromCharCode(34); \
          var control = String.fromCharCode(0x1F); \
-         nested.value === high && JSON.parse(quote + control + quote) === undefined;",
+         var invalid = false; \
+         try { JSON.parse(quote + control + quote); } catch (e) { invalid = e instanceof SyntaxError; } \
+         nested.value === high && invalid;",
     );
 }
 

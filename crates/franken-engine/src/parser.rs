@@ -2559,7 +2559,23 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 && result
                     .last()
                     .is_some_and(|prev: &LogicalLine| !prev.text.ends_with(';'));
-            if dot_continues_previous {
+            // A physical newline cannot terminate a try/catch/finally or
+            // if/else statement between its clauses. Rejoin only a matching
+            // compound statement, preserving the existing source-offset map.
+            let block_clause_continues_previous = result.last().is_some_and(|prev| {
+                let segments = split_statement_segments(&prev.text);
+                let Some((_, _, previous)) = segments.last() else {
+                    return false;
+                };
+                let previous = strip_leading_labels(previous).trim_end();
+                previous.ends_with('}')
+                    && (((starts_with_keyword(trimmed_line, "catch")
+                        || starts_with_keyword(trimmed_line, "finally"))
+                        && starts_with_keyword(previous, "try"))
+                        || (starts_with_keyword(trimmed_line, "else")
+                            && starts_with_keyword(previous, "if")))
+            });
+            if dot_continues_previous || block_clause_continues_previous {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
                 current_source_boundaries = prev.source_boundaries;
@@ -4599,6 +4615,12 @@ fn parse_primary_expression(
     }
 
     if let Some(value) = parse_i64_numeric_literal(expression) {
+        // Signed integer spellings are folded here rather than passing through
+        // UnaryNeg. Integer zero cannot retain a sign: keep -0 (also -0x0,
+        // -0o0 and -0b0) in the floating-point literal representation.
+        if value == 0 && expression.starts_with('-') {
+            return Ok(Expression::FloatLiteral((-0.0_f64).to_bits()));
+        }
         return Ok(Expression::NumericLiteral(value));
     }
 
@@ -5510,10 +5532,11 @@ fn try_parse_assignment(
                 i += 1;
                 continue;
             }
-            let left = match parse_assignment_target_expression(lhs, span, context, recursion_depth + 1) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
+            let left =
+                match parse_assignment_target_expression(lhs, span, context, recursion_depth + 1) {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e)),
+                };
             if contains_optional_chain(&left) {
                 return Some(Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
@@ -7112,10 +7135,13 @@ fn parse_array_literal(
             };
             if assignment_pattern
                 && let Expression::SpreadElement(target) = &element
-                && (index + 1 != parts.len() || matches!(target.as_ref(), Expression::Assignment { .. }))
+                && (index + 1 != parts.len()
+                    || matches!(target.as_ref(), Expression::Assignment { .. }))
             {
                 return Err(unsupported_expression_syntax_error(
-                    "assignment rest element must be last, without a default or trailing comma", span, context,
+                    "assignment rest element must be last, without a default or trailing comma",
+                    span,
+                    context,
                 ));
             }
             elements.push(Some(element));
@@ -10929,6 +10955,23 @@ mod tests {
                 _ => panic!("expected numeric expression for -7"),
             },
             _ => panic!("expected expression statement"),
+        }
+    }
+
+    #[test]
+    fn signed_zero_literals_preserve_the_number_sign_bit() {
+        for source in ["-0", "-0x0", "-0o0", "-0b0", "-0.0", "-0e0"] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap();
+            let Statement::Expression(statement) = &tree.body[0] else {
+                panic!("expected expression for {source}");
+            };
+            assert_eq!(
+                statement.expression,
+                Expression::FloatLiteral((-0.0_f64).to_bits()),
+                "lost the sign of {source}"
+            );
         }
     }
 

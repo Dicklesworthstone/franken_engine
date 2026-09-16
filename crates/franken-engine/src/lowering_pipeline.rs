@@ -3337,7 +3337,8 @@ fn lower_destructuring_to_ir1(
                             binding_lookup,
                             binding_index,
                             scope_id,
-                            left.as_identifier().expect("identifier pattern checked above"),
+                            left.as_identifier()
+                                .expect("identifier pattern checked above"),
                             target_store,
                         )?
                     }
@@ -3391,7 +3392,13 @@ fn lower_destructuring_to_ir1(
         }
         BindingPattern::ArrayPattern(elements) => {
             let iterator = DestructuringIteratorScope::begin(
-                source_bid, ops, bindings, binding_lookup, binding_index, scope_id, label_counter,
+                source_bid,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
             )?;
             for element in elements {
                 let Some(element) = element else {
@@ -3411,26 +3418,65 @@ fn lower_destructuring_to_ir1(
                 // Resolve an identifier reference before advancing, and before
                 // evaluating its default. Patterns without names still run:
                 // `[[]]`, `[{}]`, and `...[ ]` have observable iteration effects.
-                let status = name.map(|name| prepare_destructuring_target_status(
-                    ops, bindings, binding_lookup, binding_index, scope_id, name, target_store,
-                )).transpose()?.flatten();
+                let status = name
+                    .map(|name| {
+                        prepare_destructuring_target_status(
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            name,
+                            target_store,
+                        )
+                    })
+                    .transpose()?
+                    .flatten();
                 if rest {
-                    iterator.rest(ops, bindings, binding_lookup, binding_index, scope_id, label_counter)?;
+                    iterator.rest(
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
                 } else {
                     iterator.step(ops, label_counter, true);
                 }
                 if let BindingPattern::Identifier(name) = target {
-                    push_destructuring_target_store(ops, binding_lookup, name, target_store, status)?;
+                    push_destructuring_target_store(
+                        ops,
+                        binding_lookup,
+                        name,
+                        target_store,
+                        status,
+                    )?;
                     ops.push(Ir1Op::Discard);
                 } else {
                     let value_bid = alloc_internal_binding(
-                        bindings, binding_lookup, binding_index, scope_id, "destructure_element",
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "destructure_element",
                     )?;
-                    ops.push(Ir1Op::StoreBinding { binding_id: value_bid });
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: value_bid,
+                    });
                     ops.push(Ir1Op::Discard);
                     lower_destructuring_to_ir1(
-                        target, value_bid, ops, bindings, binding_lookup, binding_index,
-                        scope_id, label_counter, span_table, target_store, status,
+                        target,
+                        value_bid,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                        span_table,
+                        target_store,
+                        status,
                     )?;
                 }
             }
@@ -3714,14 +3760,16 @@ fn lower_destructuring_assignment_element_to_ir1(
         // PutValue checks the saved base and coerces the saved property-name
         // value only after GetV/default evaluation, not at reference capture.
         ops.push(Ir1Op::HostCall {
-            capability: "builtin:RequireObjectCoercible".to_string(), arg_count: 1,
+            capability: "builtin:RequireObjectCoercible".to_string(),
+            arg_count: 1,
         });
         if let Some(key_bid) = key_bid {
             ops.push(Ir1Op::LoadBinding {
                 binding_id: key_bid,
             });
             ops.push(Ir1Op::HostCall {
-                capability: "builtin:ToPropertyKey".to_string(), arg_count: 1,
+                capability: "builtin:ToPropertyKey".to_string(),
+                arg_count: 1,
             });
         }
         ops.push(Ir1Op::LoadBinding {
@@ -3733,16 +3781,34 @@ fn lower_destructuring_assignment_element_to_ir1(
         // as an Identifier would send it through dynamic global resolution.
         match target {
             Expression::ArrayLiteral(elements) => lower_array_assignment_pattern_to_ir1(
-                elements, value_bid, assignment_strictness, ops, bindings,
-                binding_lookup, binding_index, scope_id, label_counter, span_table,
+                elements,
+                value_bid,
+                assignment_strictness,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
             )?,
             Expression::ObjectLiteral(properties) => lower_object_assignment_pattern_to_ir1(
-                properties, value_bid, assignment_strictness, ops, bindings,
-                binding_lookup, binding_index, scope_id, label_counter, span_table,
+                properties,
+                value_bid,
+                assignment_strictness,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
             )?,
-            _ => return Err(LoweringPipelineError::InvariantViolation {
-                detail: "validated assignment target lost its reference",
-            }),
+            _ => {
+                return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "validated assignment target lost its reference",
+                });
+            }
         }
         return Ok(());
     }
@@ -13375,17 +13441,37 @@ fn lower_expression_to_ir1_inner(
                     ));
                 }
                 let temp_bid = alloc_internal_binding(
-                    bindings, binding_lookup, binding_index, root_scope_id, "destructure_rhs",
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "destructure_rhs",
                 )?;
                 lower_expression_to_ir1(
-                    right, ops, bindings, binding_lookup, binding_index,
-                    root_scope_id, label_counter, span_table,
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
                 )?;
-                ops.push(Ir1Op::StoreBinding { binding_id: temp_bid });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: temp_bid,
+                });
                 ops.push(Ir1Op::Discard);
                 lower_array_assignment_pattern_to_ir1(
-                    elements, temp_bid, *assignment_strictness, ops, bindings,
-                    binding_lookup, binding_index, root_scope_id, label_counter, span_table,
+                    elements,
+                    temp_bid,
+                    *assignment_strictness,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
                 )?;
                 ops.push(Ir1Op::LoadBinding {
                     binding_id: temp_bid,
@@ -13393,25 +13479,49 @@ fn lower_expression_to_ir1_inner(
             } else if let Expression::ObjectLiteral(properties) = left.as_ref() {
                 if *operator != AssignmentOperator::Assign {
                     return Err(unsupported_frontier_expression_error(
-                        "assignment_target", "FE-LOWER-ASSIGN-0002",
+                        "assignment_target",
+                        "FE-LOWER-ASSIGN-0002",
                         "lower_ir0_to_ir1.destructuring_assignment",
-                        "compound assignment to a destructuring pattern is not valid", None,
+                        "compound assignment to a destructuring pattern is not valid",
+                        None,
                     ));
                 }
                 let source_bid = alloc_internal_binding(
-                    bindings, binding_lookup, binding_index, root_scope_id, "object_assignment_rhs",
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "object_assignment_rhs",
                 )?;
                 lower_expression_to_ir1(
-                    right, ops, bindings, binding_lookup, binding_index,
-                    root_scope_id, label_counter, span_table,
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
                 )?;
-                ops.push(Ir1Op::StoreBinding { binding_id: source_bid });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_bid,
+                });
                 ops.push(Ir1Op::Discard);
                 lower_object_assignment_pattern_to_ir1(
-                    properties, source_bid, *assignment_strictness, ops, bindings,
-                    binding_lookup, binding_index, root_scope_id, label_counter, span_table,
+                    properties,
+                    source_bid,
+                    *assignment_strictness,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
                 )?;
-                ops.push(Ir1Op::LoadBinding { binding_id: source_bid });
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: source_bid,
+                });
             } else {
                 return Err(unsupported_frontier_expression_error(
                     "assignment_target",
@@ -15173,6 +15283,24 @@ fn lower_expression_to_ir1_inner(
                 });
                 ops.push(Ir1Op::GetProperty {
                     key: Ir1PropertyKey::Static(prop_name.clone().into()),
+                });
+                return Ok(());
+            }
+
+            // Read the same intrinsic prototype that native JSON allocation
+            // uses. Do not manufacture a global constructor binding, and never
+            // reinterpret a lexical shadow or an effectful computed key.
+            let prototype_name = if *computed {
+                well_formed_string_literal(property)
+            } else {
+                well_formed_static_name(property)
+            };
+            if prototype_name == Some("prototype")
+                && let Some(capability) = builtin_prototype_capability(object, binding_lookup)
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability,
+                    arg_count: 0,
                 });
                 return Ok(());
             }
@@ -17032,6 +17160,7 @@ fn builtin_constructor_name(
         return None;
     }
     match name.as_str() {
+        "Object" => Some("Object"),
         "Array" => Some("Array"),
         "Map" => Some("Map"),
         "Set" => Some("Set"),
@@ -27600,18 +27729,29 @@ fn simulate_ir2_flow_labels(
                     // methods. Treating the method value as a summarized
                     // callable keeps the CallMethod on the JoinInputs lane
                     // instead of fail-high TopSecret.
-                    (
-                        FlowValueShape::FreshAggregate,
-                        Ir1PropertyKey::Static(key),
-                    ) if matches!(
-                        key.as_str(),
-                        Some(
-                            "join" | "slice" | "every" | "some" | "map" | "filter"
-                                | "sort" | "forEach" | "reduce" | "reduceRight"
-                                | "find" | "findIndex" | "indexOf" | "lastIndexOf"
-                                | "includes" | "flat" | "flatMap"
-                        )
-                    ) =>
+                    (FlowValueShape::FreshAggregate, Ir1PropertyKey::Static(key))
+                        if matches!(
+                            key.as_str(),
+                            Some(
+                                "join"
+                                    | "slice"
+                                    | "every"
+                                    | "some"
+                                    | "map"
+                                    | "filter"
+                                    | "sort"
+                                    | "forEach"
+                                    | "reduce"
+                                    | "reduceRight"
+                                    | "find"
+                                    | "findIndex"
+                                    | "indexOf"
+                                    | "lastIndexOf"
+                                    | "includes"
+                                    | "flat"
+                                    | "flatMap"
+                            )
+                        ) =>
                     {
                         FlowValueShape::Callable
                     }

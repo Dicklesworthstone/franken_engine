@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # Temporary candidate transport; never writes a branch or changes a ref.
+      # Temporary transport for large candidate files; never moves a branch ref.
       - name: Materialize exact JSON implementation
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,10 +50,10 @@ jobs:
               'crates/franken-engine/src/baseline_interpreter.rs': 'b832d48a59ab4d8fca881cbc39ffc455c7942610',
               'crates/franken-engine/src/baseline_interpreter/json_parse.rs': 'bec08606080ddcb2fb45cc1d3b16e37155cdfb8a',
               'crates/franken-engine/tests/js_string_integration.rs': 'ab76255200a4771563b4607addc743fbfdc8fced',
-              'crates/franken-engine/tests/json_parse_execution.rs': 'e9d0921582146d92eb2924176421472e19dd4cc8',
+              'crates/franken-engine/tests/json_parse_execution.rs': '873a01d2b2d22bde56875417be2359858a93f7c6',
               'crates/franken-engine/src/lowering_pipeline.rs': '52c0e7ac30671e85380383ca46409c2b3979bfa5',
               'crates/franken-engine/src/capability.rs': '14cd4a01a2e0ad666b8471bdcad70894be3f9fff',
-              'crates/franken-engine/src/parser.rs': '0025f4dc0ddbe9ccb26a6f4a4a1f24e6fa5750cc',
+              'crates/franken-engine/src/parser.rs': '4518f283105eef47cb03bbf38fd77b1a39666539',
           }
           def blob(sha):
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
@@ -73,8 +73,8 @@ jobs:
                   assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected, path + ' changed'
               for path, sha in files.items():
                   file = pathlib.Path(path); file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(blob(sha))
-              patch = pathlib.Path('json-validation/signed-zero.patch')
-              patch.write_bytes(blob('3da049c447c777e3a90fb52f38a8ac7ca3068234'))
+              patch = pathlib.Path('json-validation/number-output.patch')
+              patch.write_bytes(blob('61186fec5b385c0f65289ceccd6167011daae404'))
               subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
               subprocess.run(['git', 'apply', str(patch)], check=True)
           pathlib.Path('json-validation/paths.json').write_text(json.dumps(list(files)))

@@ -33,6 +33,9 @@ use crate::evidence_ledger::Witness;
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
+mod snapshot;
+pub use snapshot::EmitterRestoreError;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -487,9 +490,10 @@ impl Default for EmitterConfig {
 
 /// Bounded-buffer canonical evidence emitter with chain-hash integrity.
 ///
-/// Every emitted entry is linked to its predecessor via a chain hash,
-/// making the ledger tamper-evident.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Every emitted entry is linked to its predecessor via a chain hash.
+/// Deserialization validates the complete resumable state, not just hashes.
+/// This proves self-consistency, not producer authenticity or freshness.
+#[derive(Debug, Clone, Serialize)]
 pub struct CanonicalEvidenceEmitter {
     config: EmitterConfig,
     entries: Vec<CanonicalEvidenceEntry>,
@@ -518,7 +522,7 @@ impl CanonicalEvidenceEmitter {
         }
     }
 
-    /// Set the security epoch.
+    /// Set the security epoch. Emission refuses an epoch behind the ledger.
     pub fn set_epoch(&mut self, epoch: SecurityEpoch) {
         self.epoch = epoch;
     }
@@ -553,6 +557,13 @@ impl CanonicalEvidenceEmitter {
                 detail: "evidence sequence exhausted".to_string(),
             });
         };
+
+        if self.entries.last().is_some_and(|last| self.epoch < last.epoch) {
+            self.push_event(request, "evidence_emit", "rejected", Some("epoch_regression"));
+            return Err(EvidenceEmissionError::BuildError {
+                detail: "evidence epoch is behind the retained ledger".to_string(),
+            });
+        }
 
         // Consume budget.
         cx.consume_budget(self.config.budget_cost_ms).map_err(|_| {
@@ -629,19 +640,10 @@ impl CanonicalEvidenceEmitter {
         Ok(entry_id)
     }
 
-    /// Verify the entire chain is tamper-free.
+    /// Verify entry hashes, chain links and all state needed to resume emission.
+    /// This does not authenticate the producer or prevent a fully resealed rollback.
     pub fn verify_chain_integrity(&self) -> bool {
-        let mut prev: Option<&CanonicalEvidenceEntry> = None;
-        for entry in &self.entries {
-            if !entry.verify_artifact_integrity() {
-                return false;
-            }
-            if !entry.verify_chain_link(prev) {
-                return false;
-            }
-            prev = Some(entry);
-        }
-        true
+        self.validate_integrity().is_ok()
     }
 
     /// All emitted entries.

@@ -1,0 +1,173 @@
+name: Native JSON Runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-engine/src/baseline_interpreter*'
+      - 'crates/franken-engine/src/baseline_interpreter/**'
+      - 'crates/franken-engine/tests/json_*'
+      - 'crates/franken-engine/tests/js_string_integration.rs'
+      - '.github/workflows/json-runtime.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  json:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [runtime-tests, full-engine-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Temporary large-file transport. This never changes a Git ref and is
+      # removed when the tested implementation is published through the connector.
+      - name: Apply exact saved JSON candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p json-validation
+          git rev-parse HEAD > json-validation/revision.txt
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          root = pathlib.Path('json-validation')
+          paths = [
+              'crates/franken-engine/src/baseline_interpreter.rs',
+              'crates/franken-engine/src/baseline_interpreter/json_parse.rs',
+              'crates/franken-engine/tests/js_string_integration.rs',
+              'crates/franken-engine/tests/json_parse_execution.rs',
+          ]
+          if not pathlib.Path(paths[1]).exists():
+              expected = '210386e53da790764e1075d17c19f18930ebc917'
+              actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:' + paths[0]], text=True).strip()
+              assert actual == expected, 'interpreter base changed; candidate requires review'
+              parts = ['7317ff0a029c1a1b71f3af942abdafb4e1ce16fe', '130e1034169a5461a9e0e6f17e4ffdfb40a4b716', '4ac2d38db5dbeb311d037344410dac6a0020cf1a', '8424a3948cf4901e41b772f19fbf7465ffbd747f', '726ce0c0dc513488bdbb4cf47b8929c0397cfe53']
+              raw = bytearray()
+              for sha in parts:
+                  req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                      'Accept': 'application/vnd.github+json',
+                      'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
+                  })
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      raw.extend(base64.b64decode(json.load(response)['content']))
+              assert hashlib.sha256(raw).hexdigest() == '8f43f83d270dab769f600d89b6ca7647ad6991c0eaac9d38cbef2f016cef79c0'
+              patch = gzip.decompress(raw)
+              assert hashlib.sha256(patch).hexdigest() == 'cbf99e77eaf030b677a205988a179c2ec92fcf62ae07745ce76d6045575ce6d1'
+              patch_path = root / 'candidate.patch'
+              patch_path.write_bytes(patch)
+              stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch_path)], text=True)
+              assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(paths)
+              subprocess.run(['git', 'apply', '--index', str(patch_path)], check=True)
+          (root / 'paths.json').write_text(json.dumps(paths))
+          PY
+      - name: Install Rust and format candidate
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+          rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/src/baseline_interpreter/json_parse.rs crates/franken-engine/tests/json_parse_execution.rs crates/franken-engine/tests/js_string_integration.rs
+      - name: Check complete native engine library
+        if: matrix.mode == 'full-engine-check'
+        run: |
+          set -o pipefail
+          cargo +nightly check --locked -p frankenengine-engine --no-default-features --lib 2>&1 | tee json-validation/full-engine-check.log
+      - name: Select existing production runtime dependency closure
+        if: matrix.mode == 'runtime-tests'
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+          src = pathlib.Path('crates/franken-engine/src')
+          root = (src / 'lib.rs').read_text()
+          names = set(re.findall(r'^pub mod (\w+);', root, re.M))
+          todo = ['lib', 'baseline_interpreter', 'parser', 'lowering_pipeline',
+                  'ir_contract', 'security_e2e', 'tls_x509_metadata',
+                  'crypto_kdf_zeroized', 'profiling', 'ts_normalization',
+                  'static_semantics', 'parser_api_stability']
+          seen = set()
+          def production(text):
+              return re.split(r'#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+', text)[0]
+          while todo:
+              name = todo.pop()
+              if name in seen:
+                  continue
+              seen.add(name)
+              path = src / (name + '.rs')
+              text = production(path.read_text() if path.exists() else (src / name / 'mod.rs').read_text())
+              for child in (src / name).rglob('*.rs'):
+                  if child.name != 'mod.rs':
+                      text += '\n' + production(child.read_text())
+              dependencies = set(re.findall(r'(?:crate|frankenengine_engine)::(\w+)', text)) & names
+              if name == 'lib':
+                  dependencies |= set(re.findall(r'\b(\w+)::', text)) & names
+              for group in re.findall(r'use crate::\{([^;]+)\};', text):
+                  dependencies |= set(re.findall(r'\b(\w+)::', group)) & names
+              todo.extend(dependencies - seen)
+          # Target selection only, matching native-runtime.yml. No implementation,
+          # assertion, expected output, or production feature is replaced.
+          selected = re.sub(r'^pub mod (\w+);', lambda m: m[0] if m[1] in seen else '#[cfg(any())]\n' + m[0], root, flags=re.M)
+          (src / 'runtime_validation_lib.rs').write_text(selected)
+          manifest_path = src.parent / 'Cargo.toml'
+          manifest = manifest_path.read_text().replace('[package]\n', '[package]\nautobins = false\n', 1)
+          manifest = manifest.replace('path = "src/lib.rs"', 'path = "src/runtime_validation_lib.rs"', 1)
+          manifest = re.sub(r'\[\[bin\]\][\s\S]*?(?=\n\[|\Z)', '', manifest)
+          manifest_path.write_text(manifest)
+          pathlib.Path('json-validation/runtime-modules.txt').write_text('\n'.join(sorted(seen)))
+          print('Production runtime module count:', len(seen))
+          PY
+      - name: Run JSON and UTF-16 source execution regressions
+        if: matrix.mode == 'runtime-tests'
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test json_parse_execution --test js_string_integration -- --nocapture 2>&1 | tee json-validation/source-tests.log
+      - name: Save exact candidate blobs without moving refs
+        if: always() && matrix.mode == 'runtime-tests'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          root = pathlib.Path('json-validation')
+          result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
+          for path in json.loads((root / 'paths.json').read_text()):
+              file = pathlib.Path(path)
+              assert file.is_file() and not file.is_symlink()
+              content = file.read_bytes()
+              expected = hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
+              body = json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode()
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=body, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
+              })
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  sha = json.load(response)['sha']
+              assert sha == expected
+              result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+              dest = root / 'source' / path
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(content)
+          (root / 'result.json').write_text(json.dumps(result, indent=2))
+          PY
+      - name: Retain complete validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: json-validation-${{ matrix.mode }}
+          path: json-validation/
+          retention-days: 7

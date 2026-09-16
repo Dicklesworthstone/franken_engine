@@ -3,6 +3,7 @@
 //! A missing cost is not a free action. Validate the distribution before doing
 //! arithmetic and require an explicit loss for every state with positive mass.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,73 @@ impl From<DecisionInputError> for PolicyControllerError {
     }
 }
 
+impl Posterior {
+    /// Normalize nonnegative integer weights into exactly one million units.
+    ///
+    /// This is an explicit conversion for observation counts or relative
+    /// weights; decisions never silently normalize malformed posteriors.
+    /// Fractional units go to the largest remainders, with ties resolved by
+    /// state name. Zero-weight states remain zero. Positive weights smaller
+    /// than the millionth-unit resolution may round to zero.
+    pub fn from_weights(weights: BTreeMap<String, i64>) -> Result<Self, DecisionInputError> {
+        let mut total = 0_i128;
+        for (state, &weight) in &weights {
+            if weight < 0 {
+                return Err(DecisionInputError::InvalidPosterior {
+                    reason: format!("negative weight for state '{state}'"),
+                });
+            }
+            total = total.checked_add(i128::from(weight)).ok_or_else(|| {
+                DecisionInputError::InvalidPosterior {
+                    reason: "total weight exceeds i128 range".to_string(),
+                }
+            })?;
+        }
+        if total == 0 {
+            return Err(DecisionInputError::InvalidPosterior {
+                reason: "weights must contain positive mass".to_string(),
+            });
+        }
+
+        let mut allocated = 0_i128;
+        let mut shares = Vec::with_capacity(weights.len());
+        for (state, weight) in weights {
+            // i64 weights times one million fit in i128, even when their sum
+            // exceeds i64. Each quotient is bounded by one million.
+            let numerator = i128::from(weight) * PROBABILITY_SCALE;
+            let units = numerator / total;
+            let probability = i64::try_from(units).map_err(|_| {
+                DecisionInputError::InvalidPosterior {
+                    reason: "normalized weight exceeds probability range".to_string(),
+                }
+            })?;
+            allocated += units;
+            shares.push((state, probability, numerator % total));
+        }
+        shares.sort_by(|left, right| {
+            right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0))
+        });
+        let remaining = usize::try_from(PROBABILITY_SCALE - allocated).map_err(|_| {
+            DecisionInputError::InvalidPosterior {
+                reason: "normalization remainder exceeds allocation range".to_string(),
+            }
+        })?;
+        // The sum of fractional remainders is an integer strictly below the
+        // number of nonzero remainders, so zero-weight states get no extras.
+        for (_, probability, _) in shares.iter_mut().take(remaining) {
+            *probability += 1;
+        }
+        let posterior = Self::new(
+            shares
+                .into_iter()
+                .map(|(state, probability, _)| (state, probability))
+                .collect(),
+        );
+        posterior.validate()?;
+        Ok(posterior)
+    }
+}
+
 pub(super) fn validate_posterior(posterior: &Posterior) -> Result<(), DecisionInputError> {
     let mut total = 0_i128;
     for (state, &probability) in &posterior.probabilities {
@@ -89,9 +157,11 @@ pub(super) fn expected_loss(
         if probability == 0 {
             continue;
         }
-        let loss = matrix.get(state, action).ok_or_else(|| DecisionInputError::MissingLossEntry {
-            state: state.clone(),
-            action: action.to_string(),
+        let loss = matrix.get(state, action).ok_or_else(|| {
+            DecisionInputError::MissingLossEntry {
+                state: state.clone(),
+                action: action.to_string(),
+            }
         })?;
         // Validation bounds total probability mass to 1M. Even at either i64
         // loss endpoint, the entire numerator fits in i128. Round only once:
@@ -107,8 +177,6 @@ pub(super) fn expected_loss(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
 
     fn posterior(entries: &[(&str, i64)]) -> Posterior {
@@ -117,6 +185,15 @@ mod tests {
                 .iter()
                 .map(|(state, probability)| ((*state).to_string(), *probability))
                 .collect::<BTreeMap<_, _>>(),
+        )
+    }
+
+    fn from_weights(entries: &[(&str, i64)]) -> Result<Posterior, DecisionInputError> {
+        Posterior::from_weights(
+            entries
+                .iter()
+                .map(|(state, weight)| ((*state).to_string(), *weight))
+                .collect(),
         )
     }
 
@@ -263,19 +340,124 @@ mod tests {
     #[test]
     fn input_errors_round_trip_and_preserve_controller_error_boundary() {
         for error in [
-            DecisionInputError::InvalidPosterior { reason: "mass".into() },
+            DecisionInputError::InvalidPosterior {
+                reason: "mass".into(),
+            },
             DecisionInputError::NoLossEntries,
-            DecisionInputError::MissingLossEntry { state: "s".into(), action: "a".into() },
-            DecisionInputError::ExpectedLossOutOfRange { action: "a".into() },
+            DecisionInputError::MissingLossEntry {
+                state: "s".into(),
+                action: "a".into(),
+            },
+            DecisionInputError::ExpectedLossOutOfRange {
+                action: "a".into(),
+            },
         ] {
             let json = serde_json::to_string(&error).expect("serialize input error");
-            assert_eq!(serde_json::from_str::<DecisionInputError>(&json).unwrap(), error);
+            assert_eq!(
+                serde_json::from_str::<DecisionInputError>(&json).unwrap(),
+                error
+            );
             assert!(!error.to_string().is_empty());
             let controller_error = PolicyControllerError::from(error.clone());
             if error == DecisionInputError::NoLossEntries {
                 assert_eq!(controller_error, PolicyControllerError::NoLossEntries);
             } else {
-                assert!(matches!(controller_error, PolicyControllerError::EvidenceEmissionFailed { .. }));
+                assert!(matches!(
+                    controller_error,
+                    PolicyControllerError::EvidenceEmissionFailed { .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn equal_weights_distribute_remainder_by_state_name() {
+        let normalized = from_weights(&[("c", 1), ("b", 1), ("a", 1)]).unwrap();
+        assert_eq!(
+            normalized,
+            posterior(&[("a", 333_334), ("b", 333_333), ("c", 333_333)])
+        );
+        assert_eq!(normalized.validate(), Ok(()));
+    }
+
+    #[test]
+    fn largest_remainder_takes_precedence_over_state_name() {
+        let normalized = from_weights(&[("a", 1), ("b", 1), ("z", 4)]).unwrap();
+        assert_eq!(
+            normalized,
+            posterior(&[("a", 166_667), ("b", 166_667), ("z", 666_666)])
+        );
+        let normalized = from_weights(&[("a", 1), ("z", 2)]).unwrap();
+        assert_eq!(normalized, posterior(&[("a", 333_333), ("z", 666_667)]));
+    }
+
+    #[test]
+    fn zero_weights_never_receive_rounding_mass() {
+        let normalized = from_weights(&[("zero", 0), ("a", 1), ("b", 1), ("c", 1)]).unwrap();
+        assert_eq!(normalized.probability("zero"), 0);
+        assert_eq!(normalized.states().count(), 4);
+        assert_eq!(normalized.validate(), Ok(()));
+    }
+
+    #[test]
+    fn large_weights_and_totals_do_not_overflow() {
+        let normalized = from_weights(&[("a", i64::MAX), ("b", i64::MAX), ("c", i64::MAX)])
+            .unwrap();
+        assert_eq!(
+            normalized,
+            posterior(&[("a", 333_334), ("b", 333_333), ("c", 333_333)])
+        );
+        let normalized = from_weights(&[("a", i64::MAX), ("tiny", 1)]).unwrap();
+        assert_eq!(normalized, posterior(&[("a", 1_000_000), ("tiny", 0)]));
+    }
+
+    #[test]
+    fn invalid_weights_are_rejected_without_inventing_a_distribution() {
+        let cases: &[&[(&str, i64)]] = &[
+            &[],
+            &[("a", 0)],
+            &[("a", 0), ("b", 0)],
+            &[("a", -1), ("b", 10)],
+            &[("a", i64::MIN), ("b", i64::MAX)],
+        ];
+        for case in cases {
+            assert!(matches!(
+                from_weights(case),
+                Err(DecisionInputError::InvalidPosterior { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn normalization_is_scale_invariant_and_preserves_valid_posteriors() {
+        assert_eq!(
+            from_weights(&[("a", 1), ("b", 2), ("c", 7)]),
+            from_weights(&[("a", 100), ("b", 200), ("c", 700)])
+        );
+        let original = posterior(&[("a", 123_456), ("b", 876_544), ("c", 0)]);
+        assert_eq!(
+            Posterior::from_weights(original.probabilities.clone()).unwrap(),
+            original
+        );
+        assert_eq!(
+            from_weights(&[("only", 7)]).unwrap(),
+            posterior(&[("only", 1_000_000)])
+        );
+    }
+
+    #[test]
+    fn normalization_conserves_mass_across_varying_state_counts() {
+        for count in 1..=100 {
+            let weights: BTreeMap<String, i64> = (0..count)
+                .map(|i| (format!("state-{i:03}"), i64::from(i + 1)))
+                .collect();
+            let normalized = Posterior::from_weights(weights.clone()).unwrap();
+            assert_eq!(normalized.validate(), Ok(()));
+            let total: i128 = weights.values().map(|weight| i128::from(*weight)).sum();
+            for (state, weight) in weights {
+                let ideal_numerator = i128::from(weight) * PROBABILITY_SCALE;
+                let actual_numerator = i128::from(normalized.probability(&state)) * total;
+                assert!((ideal_numerator - actual_numerator).abs() < total);
             }
         }
     }

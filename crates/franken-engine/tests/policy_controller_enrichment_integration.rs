@@ -429,13 +429,18 @@ fn decisions_preserve_order() {
 // ===========================================================================
 
 #[test]
-fn update_matrix_to_empty_still_works() {
+fn update_matrix_to_empty_rejects_without_corrupting_history() {
     let mut ctrl = make_controller();
+    let previous = ctrl
+        .select_action(&calm_posterior(), epoch(1), "before-update")
+        .expect("complete model supports a decision");
     ctrl.update_loss_matrix(LossMatrix::new());
-    let sel = ctrl
-        .select_action(&calm_posterior(), epoch(1), "t")
-        .expect("select");
-    assert_eq!(sel.expected_loss, 0);
+    let error = ctrl
+        .select_action(&calm_posterior(), epoch(1), "after-update")
+        .expect_err("empty replacement model must not create a free action");
+    assert_eq!(error, PolicyControllerError::NoLossEntries);
+    assert_eq!(ctrl.decision_count(), 1);
+    assert_eq!(ctrl.decisions(), std::slice::from_ref(&previous));
 }
 
 #[test]

@@ -72,6 +72,11 @@ use subtle::ConstantTimeEq;
 use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
+mod async_generator;
+use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
+#[cfg(test)]
+use async_generator::AsyncGeneratorPhase;
+
 use frankenengine_core::object_model::{
     BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
 };
@@ -2987,6 +2992,11 @@ pub enum BuiltinFunctionKind {    Require,
     GeneratorNext,
     GeneratorReturn,
     GeneratorThrow,
+    /// Async methods have a separate receiver brand and always return Promises.
+    AsyncGeneratorNext,
+    AsyncGeneratorReturn,
+    AsyncGeneratorThrow,
+    AsyncGeneratorIteratorSelf,
 }
 
 impl BuiltinFunctionKind {
@@ -4298,9 +4308,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
-            BuiltinFunctionKind::IteratorNext | BuiltinFunctionKind::GeneratorNext => "next",
-            BuiltinFunctionKind::GeneratorReturn => "return",
-            BuiltinFunctionKind::GeneratorThrow => "throw",
+            BuiltinFunctionKind::IteratorNext | BuiltinFunctionKind::GeneratorNext
+            | BuiltinFunctionKind::AsyncGeneratorNext => "next",
+            BuiltinFunctionKind::GeneratorReturn | BuiltinFunctionKind::AsyncGeneratorReturn => "return",
+            BuiltinFunctionKind::GeneratorThrow | BuiltinFunctionKind::AsyncGeneratorThrow => "throw",
+            BuiltinFunctionKind::AsyncGeneratorIteratorSelf => "@@asyncIterator",
             BuiltinFunctionKind::IteratorSelf => "@@iterator",
             BuiltinFunctionKind::ConsoleLog => "log",
             BuiltinFunctionKind::ConsoleError => "error",
@@ -5914,22 +5926,6 @@ enum AsyncFunctionPhase {
     Completed,
 }
 
-/// Execution phases for async generator objects.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AsyncGeneratorPhase {
-    /// Created but not yet started (initial .next() call).
-    SuspendedStart,
-    /// Suspended at a yield point.
-    SuspendedYield,
-    /// Suspended at an await point.
-    SuspendedAwait,
-    /// Currently executing.
-    Executing,
-    /// Completed (returned or threw).
-    Completed,
-}
-
 /// An async function object holds the suspended state of an async function
 /// and its result Promise.
 #[allow(dead_code)]
@@ -5986,34 +5982,6 @@ enum ModuleAwaitContinuation {
 struct TopLevelAwaitResumptionContext {
     module_specifier: String,
     continuation: ModuleAwaitContinuation,
-}
-
-/// An async generator object combines generator suspension with promise wrapping.
-/// Each yield creates a promise-wrapped value, and can use await inside the body.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct AsyncGeneratorObject {
-    /// Immutable program that owns `function_index` and all future
-    /// yield/await resumptions.
-    owner_module: Arc<Ir3Module>,
-    /// Function index in the function table.
-    function_index: u32,
-    /// Closure index (captures from the enclosing scope).
-    closure_index: Option<u32>,
-    /// Saved instruction pointer (resume point after yield/await).
-    saved_ip: usize,
-    /// Saved register file snapshot at suspension.
-    saved_registers: Vec<Value>,
-    /// Saved IFC label snapshot parallel to `saved_registers`.
-    saved_register_labels: Vec<Label>,
-    /// Saved register base offset.
-    saved_register_base: usize,
-    /// Raw invocation arguments retained until body execution is supported.
-    pending_arguments: Vec<Value>,
-    /// IFC labels parallel to `pending_arguments`.
-    pending_argument_labels: Vec<Label>,
-    /// Current phase of the async generator.
-    phase: AsyncGeneratorPhase,
 }
 
 // ---------------------------------------------------------------------------
@@ -10232,6 +10200,8 @@ pub struct InterpreterCore {
     top_level_await_outcome: Option<Result<LabeledReturn, InterpreterError>>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
+    /// FIFO request continuations use the existing Promise reaction queue.
+    async_generator_runtime: AsyncGeneratorRuntime,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
@@ -11029,6 +10999,7 @@ impl InterpreterCore {
             top_level_await_resumption_contexts: BTreeMap::new(),
             top_level_await_outcome: None,
             async_generators: Vec::new(),
+            async_generator_runtime: AsyncGeneratorRuntime::default(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_in_flight_task_bytes: 0,
@@ -30307,6 +30278,7 @@ impl InterpreterCore {
         self.generator_delegation = None;
         self.async_functions.clear();
         self.async_generators.clear();
+        self.async_generator_runtime = AsyncGeneratorRuntime::default();
         self.async_resumption_contexts.clear();
         self.promise_store = crate::promise_model::PromiseStore::new();
         self.event_loop = crate::promise_model::EventLoop::new();
@@ -33633,6 +33605,11 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
+            BuiltinFunctionKind::AsyncGeneratorNext
+            | BuiltinFunctionKind::AsyncGeneratorReturn
+            | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
+                module, builtin.kind, args, receiver, receiver_register,
+            ),
             BuiltinFunctionKind::GeneratorNext
             | BuiltinFunctionKind::GeneratorReturn
             | BuiltinFunctionKind::GeneratorThrow => self.dispatch_generator_resume(
@@ -33735,6 +33712,11 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
+            BuiltinFunctionKind::AsyncGeneratorNext
+            | BuiltinFunctionKind::AsyncGeneratorReturn
+            | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
+                module, builtin.kind, args, receiver, receiver_register,
+            ),
             BuiltinFunctionKind::GeneratorNext
             | BuiltinFunctionKind::GeneratorReturn
             | BuiltinFunctionKind::GeneratorThrow => self.dispatch_generator_resume(
@@ -36773,6 +36755,9 @@ impl InterpreterCore {
                     });
                 }
                 Ok(receiver)
+            }
+            BuiltinFunctionKind::AsyncGeneratorIteratorSelf => {
+                Ok(receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::CryptoUpdate => {
                 self.crypto_update(receiver, builtin, args)
@@ -40318,13 +40303,14 @@ impl InterpreterCore {
         )
     }
 
-    fn generator_resume(
+    fn generator_resume_with_async(
         &mut self,
         module: &Ir3Module,
         gen_id: u32,
         resume_kind: GeneratorResumeKind,
         argument: Value,
         argument_label: Label,
+        async_generator: Option<u32>,
     ) -> Result<(Value, Label), InterpreterError> {
         let generator_index = gen_id as usize;
         let owner_module = Arc::clone(
@@ -40453,6 +40439,10 @@ impl InterpreterCore {
             generator.phase = GeneratorPhase::Executing;
         }
 
+        let caller_async_generator = std::mem::replace(
+            &mut self.async_generator_runtime.active,
+            async_generator,
+        );
         let caller_generator_yielded = std::mem::replace(&mut self.generator_yielded, false);
         let caller_generator_resume_dst = self.generator_resume_dst.take();
         let caller_generator_result_label =
@@ -40494,6 +40484,7 @@ impl InterpreterCore {
             self.generator_yielded = caller_generator_yielded;
             self.generator_resume_dst = caller_generator_resume_dst;
             self.generator_result_label = caller_generator_result_label;
+            self.async_generator_runtime.active = caller_async_generator;
             let generator = &mut self.generators[generator_index];
             if phase == GeneratorPhase::SuspendedYield {
                 generator.execution = Some(activation);
@@ -40577,6 +40568,7 @@ impl InterpreterCore {
         self.generator_yielded = caller_generator_yielded;
         self.generator_resume_dst = caller_generator_resume_dst;
         self.generator_result_label = caller_generator_result_label;
+        self.async_generator_runtime.active = caller_async_generator;
 
         match result {
             Ok(yielded_value) if yielded => {
@@ -40622,63 +40614,6 @@ impl InterpreterCore {
                 Err(error)
             }
         }
-    }
-
-    /// Execute .next() on an async generator.
-    /// Returns a Promise that resolves to {value, done}.
-    #[allow(dead_code)]
-    fn async_generator_next(
-        &mut self,
-        _module: &Ir3Module,
-        gen_id: u32,
-        _arg: Value,
-    ) -> Result<Value, InterpreterError> {
-        let async_gen = self
-            .async_generators
-            .get_mut(gen_id as usize)
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "valid async generator".into(),
-                got: format!("async_generator#{gen_id} not found"),
-            })?;
-
-        match async_gen.phase {
-            AsyncGeneratorPhase::Completed => {
-                // Return a resolved Promise with {value: undefined, done: true}
-                let previous_estimated_bytes = self.estimated_memory_bytes;
-                let previous_heap_len = self.heap.len();
-                let outcome = (|| -> Result<Value, InterpreterError> {
-                    let result_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                    let result_promise = self.create_fulfilled_promise(
-                        crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(
-                            result_id.0,
-                        )),
-                        crate::ifc_artifacts::Label::Public,
-                    )?;
-                    Ok(Value::Promise(result_promise.0))
-                })();
-                if outcome.is_err() {
-                    self.rollback_heap_to_len(previous_heap_len);
-                    self.estimated_memory_bytes = previous_estimated_bytes;
-                }
-                return outcome;
-            }
-            AsyncGeneratorPhase::Executing => {
-                return Err(InterpreterError::TypeError {
-                    expected: "suspended async generator".into(),
-                    got: "async generator already executing".into(),
-                });
-            }
-            AsyncGeneratorPhase::SuspendedStart
-            | AsyncGeneratorPhase::SuspendedYield
-            | AsyncGeneratorPhase::SuspendedAwait => {}
-        }
-
-        Err(InterpreterError::TypeError {
-            expected: "implemented async generator body execution".into(),
-            got: "async generator .next() body execution is not implemented".into(),
-        })
     }
 
     /// Is there a catch frame in the *current* run-loop invocation that can
@@ -42039,26 +41974,30 @@ impl InterpreterCore {
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
-                        let (pending_arguments, pending_argument_labels) =
+                        let (arguments, argument_labels) =
                             self.capture_generator_arguments(args)?;
                         let owner_module = self.continuation_owner_module(*cid, module)?;
-                        let async_gen_id =
-                            self.push_async_generator_object(AsyncGeneratorObject {
-                                owner_module,
+                        let (module_specifier, generated_function_artifact) =
+                            self.closure_execution_provenance(&callee_val, module)?;
+                        let async_gen_id = self.create_async_generator(
+                            owner_module,
+                            GeneratorInvocation {
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
-                                saved_ip: 0,
-                                saved_registers: Vec::new(),
-                                saved_register_labels: Vec::new(),
-                                saved_register_base: 0,
-                                pending_arguments,
-                                pending_argument_labels,
-                                phase: AsyncGeneratorPhase::SuspendedStart,
-                            })?;
+                                arguments,
+                                argument_labels,
+                                this_value: Value::Undefined,
+                                this_label: Label::Public,
+                                inline_context_label: self.active_inline_callback_context_label.clone(),
+                                module_specifier: Some(module_specifier),
+                                generated_function_artifact,
+                            },
+                        )?;
                         if let Err(error) =
                             self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
                         {
                             self.pop_async_generator_object_and_release();
+                            self.pop_generator_object_and_release();
                             return Err(error);
                         }
                         self.ip += 1;
@@ -42582,26 +42521,31 @@ impl InterpreterCore {
 
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
                         self.mark_inline_callback_started();
-                        let (pending_arguments, pending_argument_labels) =
+                        let (arguments, argument_labels) =
                             self.capture_generator_arguments(args)?;
+                        let receiver_label = self.clone_register_label_with_temporary_budget(receiver)?;
                         let owner_module = self.continuation_owner_module(*cid, module)?;
-                        let async_gen_id =
-                            self.push_async_generator_object(AsyncGeneratorObject {
-                                owner_module,
+                        let (module_specifier, generated_function_artifact) =
+                            self.closure_execution_provenance(&callee_val, module)?;
+                        let async_gen_id = self.create_async_generator(
+                            owner_module,
+                            GeneratorInvocation {
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
-                                saved_ip: 0,
-                                saved_registers: Vec::new(),
-                                saved_register_labels: Vec::new(),
-                                saved_register_base: 0,
-                                pending_arguments,
-                                pending_argument_labels,
-                                phase: AsyncGeneratorPhase::SuspendedStart,
-                            })?;
+                                arguments,
+                                argument_labels,
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label,
+                                inline_context_label: self.active_inline_callback_context_label.clone(),
+                                module_specifier: Some(module_specifier),
+                                generated_function_artifact,
+                            },
+                        )?;
                         if let Err(error) =
                             self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
                         {
                             self.pop_async_generator_object_and_release();
+                            self.pop_generator_object_and_release();
                             return Err(error);
                         }
                         self.ip += 1;
@@ -43009,6 +42953,17 @@ impl InterpreterCore {
                             },
                             RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::Iterator.id() =>
                                 Value::BuiltinFunction(BuiltinFunction::generator_iterator_self()),
+                            _ => Value::Undefined,
+                        },
+                        Value::AsyncGeneratorObject(_) => match property_key {
+                            RuntimePropertyKey::String(ref key) => match key.as_str() {
+                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorNext)),
+                                Some("return") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorReturn)),
+                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorThrow)),
+                                _ => Value::Undefined,
+                            },
+                            RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::AsyncIterator.id() =>
+                                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorIteratorSelf)),
                             _ => Value::Undefined,
                         },
                         Value::Promise(_) => property_key
@@ -44183,8 +44138,8 @@ impl InterpreterCore {
                             | Value::BuiltinFunction(_)
                             | Value::AsyncFunction(_)
                             | Value::AsyncFunctionObject(_)
-                            | Value::AsyncGeneratorFunction(_)
-                            | Value::AsyncGeneratorObject(_) => JsString::from("function"),
+                            | Value::AsyncGeneratorFunction(_) => JsString::from("function"),
+                            Value::AsyncGeneratorObject(_) => JsString::from("object"),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result = result.concat(&part_str);
@@ -44775,6 +44730,16 @@ impl InterpreterCore {
                 | Ir3Instruction::ModuleAwaitValue { promise_reg }) => {
                     let is_module_await =
                         matches!(await_instruction, Ir3Instruction::ModuleAwaitValue { .. });
+                    if !is_module_await
+                        && self.nearest_async_call_depth().is_none()
+                        && let Some(id) = self.async_generator_runtime.active
+                    {
+                        self.suspend_async_generator_await(id, promise_reg)?;
+                        return Ok(DispatchOutcome::Complete(LabeledReturn {
+                            value: Value::Undefined,
+                            label: Label::Public,
+                        }));
+                    }
                     if is_module_await {
                         let current = self.current_module_specifier.as_deref();
                         if !self.call_stack.is_empty() {
@@ -52101,6 +52066,10 @@ impl InterpreterCore {
                     } => {
                         // Check if this is an async function resumption
                         if handler.is_none() {
+                            if let Some(context) = self.async_generator_runtime.continuations.remove(&result_promise.0) {
+                                self.resume_async_generator_task(context, Ok(argument.clone()), task_label.clone(), module)?;
+                                return Ok(());
+                            }
                             // Check if there's an async resumption context for this promise
                             if let Some(resumption_context) =
                                 self.async_resumption_contexts.remove(&result_promise.0)
@@ -52186,6 +52155,10 @@ impl InterpreterCore {
                         result_promise,
                         label: task_label,
                     } => {
+                        if let Some(context) = self.async_generator_runtime.continuations.remove(&result_promise.0) {
+                            self.resume_async_generator_task(context, Err(reason.clone()), task_label.clone(), module)?;
+                            return Ok(());
+                        }
                         if let Some(resumption_context) =
                             self.async_resumption_contexts.remove(&result_promise.0)
                         {
@@ -76658,27 +76631,6 @@ impl InterpreterCore {
         )
     }
 
-    fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
-        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
-            .saturating_add(MEMORY_ESTIMATE_CONTINUATION_OWNER_BYTES)
-            .saturating_add(Self::estimate_value_vec_bytes(&generator.saved_registers))
-            .saturating_add(Self::estimate_label_vec_bytes(
-                &generator.saved_register_labels,
-            ))
-            .saturating_add(Self::estimate_value_vec_bytes(&generator.pending_arguments))
-            .saturating_add(Self::estimate_label_vec_bytes(
-                &generator.pending_argument_labels,
-            ))
-    }
-
-    fn async_generators_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(
-            self.async_generators
-                .iter()
-                .map(Self::estimate_async_generator_bytes),
-        )
-    }
-
     fn push_generator_object(
         &mut self,
         generator: GeneratorObject,
@@ -95191,18 +95143,15 @@ mod async_runtime_tests_current {
             result_promise: 7,
         };
         let generator = AsyncGeneratorObject {
-            owner_module,
-            function_index: 11,
-            closure_index: Some(13),
-            saved_ip: 17,
-            saved_registers: saved,
-            saved_register_labels: vec![Label::Custom {
-                name: "async-generator-register-label".repeat(29),
-                level: 4,
-            }],
-            saved_register_base: 0,
-            pending_arguments: Vec::new(),
-            pending_argument_labels: Vec::new(),
+            generator_id: 0,
+            requests: VecDeque::new(),
+            awaited: Some(LabeledReturn {
+                value: saved[0].clone(),
+                label: Label::Custom {
+                    name: "async-generator-register-label".repeat(29),
+                    level: 4,
+                },
+            }),
             phase: AsyncGeneratorPhase::SuspendedYield,
         };
 
@@ -113302,13 +113251,15 @@ mod function_prototype_call_apply_tests_current {
             panic!("expected generated AsyncGeneratorObject, got {async_generator_value:?}");
         };
         let async_generator = &core.async_generators[async_generator_id as usize];
+        let activation = &core.generators[async_generator.generator_id as usize];
         assert!(Arc::ptr_eq(
-            &async_generator.owner_module,
+            &activation.owner_module,
             &async_generator_program
         ));
-        assert_eq!(async_generator.function_index, 1);
+        let invocation = activation.invocation.as_ref().expect("retained invocation");
+        assert_eq!(invocation.function_index, 1);
         assert_eq!(
-            async_generator.closure_index,
+            invocation.closure_index,
             Some(async_generator_closure_id)
         );
         assert_eq!(
@@ -128327,8 +128278,9 @@ mod tests {
 
             assert_eq!(core.async_generators.len(), 1);
             let created_gen = &core.async_generators[0];
-            assert_eq!(created_gen.function_index, 0);
-            assert_eq!(created_gen.closure_index, Some(0));
+            let invocation = core.generators[created_gen.generator_id as usize].invocation.as_ref().unwrap();
+            assert_eq!(invocation.function_index, 0);
+            assert_eq!(invocation.closure_index, Some(0));
             assert!(matches!(
                 created_gen.phase,
                 AsyncGeneratorPhase::SuspendedStart
@@ -128413,14 +128365,16 @@ mod tests {
 
             // First async generator
             let gen1 = &core.async_generators[0];
-            assert_eq!(gen1.function_index, 0);
-            assert_eq!(gen1.closure_index, Some(0));
+            let invocation = core.generators[gen1.generator_id as usize].invocation.as_ref().unwrap();
+            assert_eq!(invocation.function_index, 0);
+            assert_eq!(invocation.closure_index, Some(0));
             assert!(matches!(gen1.phase, AsyncGeneratorPhase::SuspendedStart));
 
             // Second async generator
             let gen2 = &core.async_generators[1];
-            assert_eq!(gen2.function_index, 1);
-            assert_eq!(gen2.closure_index, Some(1));
+            let invocation = core.generators[gen2.generator_id as usize].invocation.as_ref().unwrap();
+            assert_eq!(invocation.function_index, 1);
+            assert_eq!(invocation.closure_index, Some(1));
             assert!(matches!(gen2.phase, AsyncGeneratorPhase::SuspendedStart));
 
             // Verify result registers contain correct AsyncGeneratorObject values
@@ -128440,26 +128394,22 @@ mod tests {
         #[test]
         fn async_generator_next_returns_promise() {
             let mut core = test_interpreter();
-
-            // Create async generator, call it to get object, then call .next()
-            let async_gen_id = {
-                core.async_generators.push(AsyncGeneratorObject {
-                    owner_module: Arc::new(test_module(vec![])),
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 0,
-                    saved_registers: Vec::new(),
-                    saved_register_labels: Vec::new(),
-                    saved_register_base: 0,
-                    pending_arguments: Vec::new(),
-                    pending_argument_labels: Vec::new(),
-                    phase: AsyncGeneratorPhase::Completed,
-                });
-                (core.async_generators.len() - 1) as u32
-            };
+            let backing = core.push_generator_object(GeneratorObject {
+                owner_module: Arc::new(test_module(vec![])),
+                invocation: None,
+                execution: None,
+                resume_dst: None,
+                phase: GeneratorPhase::Completed,
+            }).unwrap();
+            let async_gen_id = core.push_async_generator_object(AsyncGeneratorObject {
+                generator_id: backing,
+                requests: VecDeque::new(),
+                awaited: None,
+                phase: AsyncGeneratorPhase::Completed,
+            }).unwrap();
 
             let result = core
-                .async_generator_next(&test_module(vec![]), async_gen_id, Value::Undefined)
+                .enqueue_async_generator_request(&test_module(vec![]), async_gen_id, GeneratorResumeKind::Next, Value::Undefined, Label::Public)
                 .expect("operation should succeed for valid inputs");
 
             match result {
@@ -128469,36 +128419,37 @@ mod tests {
         }
 
         #[test]
-        fn async_generator_next_fails_closed_for_suspended_body() {
+        fn async_generator_next_executes_suspended_body() {
             let mut core = test_interpreter();
-            core.async_generators.push(AsyncGeneratorObject {
-                owner_module: Arc::new(test_module(vec![])),
+            let module = test_module_with_functions(vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::Yield { value: 0, delegate: false, resume_dst: 1 },
+                Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                Ir3Instruction::Return { value: 0 },
+            ], vec![Ir3FunctionDesc {
+                entry: 0, arity: 0, frame_size: 2,
+                name: Some("async-generator-body".into()),
+                is_generator: true, rest_param_index: None,
+            }]);
+            let id = core.create_async_generator(Arc::new(module.clone()), GeneratorInvocation {
                 function_index: 0,
                 closure_index: None,
-                saved_ip: 0,
-                saved_registers: Vec::new(),
-                saved_register_labels: Vec::new(),
-                saved_register_base: 0,
-                pending_arguments: Vec::new(),
-                pending_argument_labels: Vec::new(),
-                phase: AsyncGeneratorPhase::SuspendedStart,
-            });
-
-            let err = core
-                .async_generator_next(&test_module(vec![]), 0, Value::Undefined)
-                .expect_err("suspended async generator body execution is unsupported");
-
-            assert_eq!(
-                err,
-                InterpreterError::TypeError {
-                    expected: "implemented async generator body execution".into(),
-                    got: "async generator .next() body execution is not implemented".into(),
-                }
-            );
-            assert!(matches!(
-                core.async_generators[0].phase,
-                AsyncGeneratorPhase::SuspendedStart
-            ));
+                arguments: Vec::new(), argument_labels: Vec::new(),
+                this_value: Value::Undefined, this_label: Label::Public,
+                inline_context_label: None, module_specifier: None,
+                generated_function_artifact: None,
+            }).unwrap();
+            for (expected, done) in [(41, false), (42, true)] {
+                let Value::Promise(promise) = core.enqueue_async_generator_request(
+                    &module, id, GeneratorResumeKind::Next, Value::Undefined, Label::Public,
+                ).unwrap() else { panic!("next must return a Promise"); };
+                core.drain_microtasks(Some(&module)).unwrap();
+                let crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Object(object)) =
+                    core.promise_store.get(crate::promise_model::PromiseHandle(promise)).unwrap().state
+                else { panic!("next must fulfill with an iterator result"); };
+                assert_eq!(core.heap[object.0 as usize].properties.get("value"), Some(&Value::Int(expected)));
+                assert_eq!(core.heap[object.0 as usize].properties.get("done"), Some(&Value::Bool(done)));
+            }
         }
 
         #[test]

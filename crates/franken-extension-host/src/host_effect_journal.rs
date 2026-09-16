@@ -15,7 +15,7 @@ use crate::process_spawn::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// One globally ordered extension-host effect and its exact typed outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +264,9 @@ impl fmt::Debug for HostEffectJournalAttemptRecord {
 pub struct HostEffectJournalReservation {
     index: usize,
     request: HostEffectJournalRequest,
+    // Allocation identity is process-private, move-stable, and kept alive by
+    // outstanding reservations. It never enters serialized replay evidence.
+    scope: Arc<()>,
 }
 
 /// Exact-match, globally ordered transcript for one or more executions.
@@ -278,6 +281,7 @@ pub struct InMemoryHostEffectJournal {
     state: Mutex<JournalState>,
     attempt_entries: Mutex<Vec<HostEffectJournalEntry>>,
     attempt_record_start: Mutex<usize>,
+    reservation_scope: Arc<()>,
 }
 
 impl InMemoryHostEffectJournal {
@@ -289,6 +293,7 @@ impl InMemoryHostEffectJournal {
             state: Mutex::new(JournalState::Idle),
             attempt_entries: Mutex::new(Vec::new()),
             attempt_record_start: Mutex::new(0),
+            reservation_scope: Arc::new(()),
         }
     }
 
@@ -300,6 +305,7 @@ impl InMemoryHostEffectJournal {
             state: Mutex::new(JournalState::Idle),
             attempt_entries: Mutex::new(Vec::new()),
             attempt_record_start: Mutex::new(0),
+            reservation_scope: Arc::new(()),
         }
     }
 
@@ -387,6 +393,7 @@ impl InMemoryHostEffectJournal {
         request: &HostIoRequest,
         outcome: &HostIoOutcome,
     ) -> Result<(), HostEffectJournalError> {
+        self.check_reservation_scope(&reservation)?;
         self.complete(
             reservation,
             HostEffectJournalEntry::HostIo {
@@ -503,6 +510,7 @@ impl InMemoryHostEffectJournal {
         reservation: HostEffectJournalReservation,
         prepared: &ProcessSpawnRequest,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
+        self.check_reservation_scope(&reservation)?;
         self.rebind(
             reservation,
             HostEffectJournalRequest::ProcessSpawn(prepared.clone()),
@@ -515,6 +523,7 @@ impl InMemoryHostEffectJournal {
         request: &ProcessSpawnRequest,
         outcome: &ProcessSpawnOutcome,
     ) -> Result<(), HostEffectJournalError> {
+        self.check_reservation_scope(&reservation)?;
         self.complete(
             reservation,
             HostEffectJournalEntry::ProcessSpawn {
@@ -663,6 +672,24 @@ impl InMemoryHostEffectJournal {
             .collect()
     }
 
+    fn check_reservation_scope(
+        &self,
+        reservation: &HostEffectJournalReservation,
+    ) -> Result<(), HostEffectJournalError> {
+        if Arc::ptr_eq(&self.reservation_scope, &reservation.scope) {
+            return Ok(());
+        }
+        let mut state = self.state.lock().expect("host-effect journal state mutex");
+        if let JournalState::Poisoned(error) = &*state {
+            return Err(error.clone());
+        }
+        let error = HostEffectJournalError::Lifecycle {
+            detail: "record reservation belongs to a different journal".to_string(),
+        };
+        *state = JournalState::Poisoned(error.clone());
+        Err(error)
+    }
+
     fn consume_replay(
         &self,
         live_request: &HostEffectJournalRequest,
@@ -758,7 +785,11 @@ impl InMemoryHostEffectJournal {
             let mut entries = self.entries.lock().expect("host-effect journal mutex");
             let index = entries.len();
             entries.push(JournalSlot::Reserved(request.clone()));
-            Ok(HostEffectJournalReservation { index, request })
+            Ok(HostEffectJournalReservation {
+                index,
+                request,
+                scope: Arc::clone(&self.reservation_scope),
+            })
         } else {
             let error = HostEffectJournalError::Lifecycle {
                 detail: "record reservation attempted outside an active execution".to_string(),
@@ -891,6 +922,7 @@ impl InMemoryHostEffectJournal {
         Ok(HostEffectJournalReservation {
             index: reservation.index,
             request,
+            scope: reservation.scope,
         })
     }
 }
@@ -1405,5 +1437,108 @@ mod tests {
     fn capability_types_stay_separate_across_the_shared_journal() {
         assert_eq!(HostIoCapability::FsRead.as_str(), "fs_read");
         assert_eq!(ProcessSpawnCapability::Spawn.as_str(), "process_spawn");
+    }
+
+    #[test]
+    fn foreign_host_io_reservation_cannot_complete_an_identical_slot() {
+        let issuer = InMemoryHostEffectJournal::recording();
+        let recipient = InMemoryHostEffectJournal::recording();
+        issuer.begin_execution().unwrap();
+        recipient.begin_execution().unwrap();
+        let foreign = issuer.reserve_host_io(&fs_request()).unwrap();
+        let local = recipient.reserve_host_io(&fs_request()).unwrap();
+        let error = recipient
+            .complete_host_io(foreign, &fs_request(), &fs_outcome())
+            .unwrap_err();
+        assert!(error.to_string().contains("different journal"));
+        assert!(issuer.entries().is_empty());
+        assert!(recipient.entries().is_empty());
+        // Legitimate effects already in flight must still be recorded after
+        // poison, but the rejected crossing cannot become a successful run.
+        recipient.complete_host_io(local, &fs_request(), &fs_outcome()).unwrap();
+        assert_eq!(recipient.entries().len(), 1);
+        assert_eq!(recipient.finish_execution(), Err(error));
+        assert!(issuer.finish_execution().is_err());
+    }
+
+    #[test]
+    fn foreign_process_reservation_cannot_complete_an_identical_slot() {
+        let issuer = InMemoryHostEffectJournal::recording();
+        let recipient = InMemoryHostEffectJournal::recording();
+        issuer.begin_execution().unwrap();
+        recipient.begin_execution().unwrap();
+        let foreign = issuer.reserve_process_spawn(&process_request()).unwrap();
+        let _local = recipient.reserve_process_spawn(&process_request()).unwrap();
+        assert!(recipient
+            .complete_process_spawn(foreign, &process_request(), &process_outcome())
+            .is_err());
+        assert!(recipient.entries().is_empty());
+        assert!(recipient.finish_execution().is_err());
+    }
+
+    #[test]
+    fn foreign_process_reservation_cannot_rebind_a_local_slot() {
+        let issuer = InMemoryHostEffectJournal::recording();
+        let recipient = InMemoryHostEffectJournal::recording();
+        issuer.begin_execution().unwrap();
+        recipient.begin_execution().unwrap();
+        let foreign = issuer.reserve_process_spawn(&process_request()).unwrap();
+        let local = recipient.reserve_process_spawn(&process_request()).unwrap();
+        let before = recipient.attempt_records();
+        let mut prepared = process_request();
+        if let ProcessSpawnRequest::Run { timeout_millis, .. } = &mut prepared {
+            *timeout_millis = Some(50);
+        }
+        let error = recipient.bind_prepared_process_spawn(foreign, &prepared).unwrap_err();
+        assert_eq!(recipient.attempt_records(), before);
+        recipient.complete_process_spawn(local, &process_request(), &process_outcome()).unwrap();
+        assert_eq!(recipient.finish_execution(), Err(error));
+    }
+
+    #[test]
+    fn reservation_scope_survives_journal_move_and_process_rebinding() {
+        let journal = InMemoryHostEffectJournal::recording();
+        journal.begin_execution().unwrap();
+        let reservation = journal.reserve_process_spawn(&process_request()).unwrap();
+        let entries = std::thread::spawn(move || {
+            let reservation = journal
+                .bind_prepared_process_spawn(reservation, &process_request())
+                .unwrap();
+            journal.complete_process_spawn(reservation, &process_request(), &process_outcome()).unwrap();
+            journal.finish_execution().unwrap()
+        }).join().unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn reservation_from_dropped_journal_cannot_authorize_a_replacement() {
+        let foreign = {
+            let journal = InMemoryHostEffectJournal::recording();
+            journal.begin_execution().unwrap();
+            journal.reserve_host_io(&fs_request()).unwrap()
+        };
+        let replacement = InMemoryHostEffectJournal::recording();
+        replacement.begin_execution().unwrap();
+        let _local = replacement.reserve_host_io(&fs_request()).unwrap();
+        assert!(replacement.complete_host_io(foreign, &fs_request(), &fs_outcome()).is_err());
+        assert!(replacement.entries().is_empty());
+    }
+
+    #[test]
+    fn private_reservation_identity_does_not_change_replay_bytes() {
+        let record = || {
+            let journal = InMemoryHostEffectJournal::recording();
+            journal.begin_execution().unwrap();
+            journal.record_host_io(&fs_request(), &fs_outcome()).unwrap();
+            journal.record_process_spawn(&process_request(), &process_outcome()).unwrap();
+            serde_json::to_vec(&journal.finish_execution().unwrap()).unwrap()
+        };
+        let bytes = record();
+        assert_eq!(bytes, record());
+        let replay = InMemoryHostEffectJournal::replaying(serde_json::from_slice(&bytes).unwrap());
+        replay.begin_execution().unwrap();
+        assert_eq!(replay.replay_host_io(&fs_request()), Some(fs_outcome()));
+        assert_eq!(replay.replay_process_spawn(&process_request()), Some(process_outcome()));
+        assert_eq!(serde_json::to_vec(&replay.finish_execution().unwrap()).unwrap(), bytes);
     }
 }

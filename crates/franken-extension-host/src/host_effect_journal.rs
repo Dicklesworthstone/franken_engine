@@ -17,6 +17,10 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+mod budget;
+pub use budget::HostEffectJournalLimits;
+use budget::{EntryRef, JournalBudget, RequestRef};
+
 /// One globally ordered extension-host effect and its exact typed outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "effect_family", deny_unknown_fields)]
@@ -267,6 +271,7 @@ pub struct HostEffectJournalReservation {
     // Allocation identity is process-private, move-stable, and kept alive by
     // outstanding reservations. It never enters serialized replay evidence.
     scope: Arc<()>,
+    charge: usize,
 }
 
 /// Exact-match, globally ordered transcript for one or more executions.
@@ -274,6 +279,9 @@ pub struct HostEffectJournalReservation {
 /// Recording journals may be reused; each execution returns only its appended
 /// suffix. Replay journals are single-use and reject request mutation, family
 /// reordering, and unused suffixes before evidence can be certified.
+/// Retained entries and encoded payload bytes are bounded across the journal's
+/// lifetime. Capacity refusal poisons the attempt, never silently drops an
+/// effect, and does not prevent already admitted effects from completing.
 #[derive(Debug)]
 pub struct InMemoryHostEffectJournal {
     mode: HostEffectJournalMode,
@@ -282,11 +290,17 @@ pub struct InMemoryHostEffectJournal {
     attempt_entries: Mutex<Vec<HostEffectJournalEntry>>,
     attempt_record_start: Mutex<usize>,
     reservation_scope: Arc<()>,
+    budget: Mutex<JournalBudget>,
 }
 
 impl InMemoryHostEffectJournal {
     #[must_use]
     pub fn recording() -> Self {
+        Self::recording_with_limits(HostEffectJournalLimits::default())
+    }
+
+    #[must_use]
+    pub fn recording_with_limits(limits: HostEffectJournalLimits) -> Self {
         Self {
             mode: HostEffectJournalMode::Record,
             entries: Mutex::new(Vec::new()),
@@ -294,19 +308,60 @@ impl InMemoryHostEffectJournal {
             attempt_entries: Mutex::new(Vec::new()),
             attempt_record_start: Mutex::new(0),
             reservation_scope: Arc::new(()),
+            budget: Mutex::new(JournalBudget::new(limits)),
         }
     }
 
+    /// Oversized input produces an unusable, poisoned replay journal. Use
+    /// `replaying_with_limits` when the constructor's error must be inspected.
     #[must_use]
     pub fn replaying(entries: Vec<HostEffectJournalEntry>) -> Self {
-        Self {
+        let limits = HostEffectJournalLimits::default();
+        Self::replaying_with_limits(entries, limits).unwrap_or_else(|error| {
+            let mut rejected = Self::recording_with_limits(limits);
+            rejected.mode = HostEffectJournalMode::Replay;
+            *rejected.state.get_mut().expect("new journal state mutex") =
+                JournalState::Poisoned(error);
+            rejected
+        })
+    }
+
+    pub fn replaying_with_limits(
+        entries: Vec<HostEffectJournalEntry>,
+        limits: HostEffectJournalLimits,
+    ) -> Result<Self, HostEffectJournalError> {
+        let mut budget = JournalBudget::new(limits);
+        budget.check_count(entries.len())?;
+        for entry in &entries {
+            let admission = budget.prepare_replacement(0, entry)?;
+            budget.commit(admission);
+        }
+        let mut slots = Vec::new();
+        slots.try_reserve_exact(entries.len()).map_err(|_| HostEffectJournalError::Lifecycle {
+            detail: "journal slot allocation failed".to_string(),
+        })?;
+        slots.extend(entries.into_iter().map(JournalSlot::Completed));
+        Ok(Self {
             mode: HostEffectJournalMode::Replay,
-            entries: Mutex::new(entries.into_iter().map(JournalSlot::Completed).collect()),
+            entries: Mutex::new(slots),
             state: Mutex::new(JournalState::Idle),
             attempt_entries: Mutex::new(Vec::new()),
             attempt_record_start: Mutex::new(0),
             reservation_scope: Arc::new(()),
-        }
+            budget: Mutex::new(budget),
+        })
+    }
+
+    /// Encoded bytes retained as reserved requests or completed entries. This
+    /// is a logical payload budget, not an allocator or process RSS estimate.
+    #[must_use]
+    pub fn retained_encoded_bytes(&self) -> usize {
+        self.budget.lock().expect("host-effect budget mutex").retained_bytes()
+    }
+
+    #[must_use]
+    pub fn limits(&self) -> HostEffectJournalLimits {
+        self.budget.lock().expect("host-effect budget mutex").limits()
     }
 
     #[must_use]
@@ -384,7 +439,7 @@ impl InMemoryHostEffectJournal {
         &self,
         request: &HostIoRequest,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
-        self.reserve(HostEffectJournalRequest::HostIo(request.clone()))
+        self.reserve(RequestRef::HostIo(request))
     }
 
     pub fn complete_host_io(
@@ -394,13 +449,7 @@ impl InMemoryHostEffectJournal {
         outcome: &HostIoOutcome,
     ) -> Result<(), HostEffectJournalError> {
         self.check_reservation_scope(&reservation)?;
-        self.complete(
-            reservation,
-            HostEffectJournalEntry::HostIo {
-                request: request.clone(),
-                outcome: outcome.clone(),
-            },
-        )
+        self.complete(reservation, EntryRef::HostIo { request, outcome })
     }
 
     pub fn record_host_io(
@@ -497,7 +546,7 @@ impl InMemoryHostEffectJournal {
         &self,
         request: &ProcessSpawnRequest,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
-        self.reserve(HostEffectJournalRequest::ProcessSpawn(request.clone()))
+        self.reserve(RequestRef::ProcessSpawn(request))
     }
 
     /// Replace a provisional process reservation with the exact canonical
@@ -511,10 +560,7 @@ impl InMemoryHostEffectJournal {
         prepared: &ProcessSpawnRequest,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
         self.check_reservation_scope(&reservation)?;
-        self.rebind(
-            reservation,
-            HostEffectJournalRequest::ProcessSpawn(prepared.clone()),
-        )
+        self.rebind(reservation, RequestRef::ProcessSpawn(prepared))
     }
 
     pub fn complete_process_spawn(
@@ -524,13 +570,7 @@ impl InMemoryHostEffectJournal {
         outcome: &ProcessSpawnOutcome,
     ) -> Result<(), HostEffectJournalError> {
         self.check_reservation_scope(&reservation)?;
-        self.complete(
-            reservation,
-            HostEffectJournalEntry::ProcessSpawn {
-                request: request.clone(),
-                outcome: outcome.clone(),
-            },
-        )
+        self.complete(reservation, EntryRef::ProcessSpawn { request, outcome })
     }
 
     pub fn record_process_spawn(
@@ -773,7 +813,7 @@ impl InMemoryHostEffectJournal {
 
     fn reserve(
         &self,
-        request: HostEffectJournalRequest,
+        request: RequestRef<'_>,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
         if self.mode != HostEffectJournalMode::Record {
             return Err(HostEffectJournalError::Lifecycle {
@@ -781,30 +821,50 @@ impl InMemoryHostEffectJournal {
             });
         }
         let mut state = self.state.lock().expect("host-effect journal state mutex");
-        if matches!(&*state, JournalState::Recording { .. }) {
-            let mut entries = self.entries.lock().expect("host-effect journal mutex");
-            let index = entries.len();
-            entries.push(JournalSlot::Reserved(request.clone()));
-            Ok(HostEffectJournalReservation {
-                index,
-                request,
-                scope: Arc::clone(&self.reservation_scope),
-            })
-        } else {
-            let error = HostEffectJournalError::Lifecycle {
-                detail: "record reservation attempted outside an active execution".to_string(),
-            };
-            if !matches!(&*state, JournalState::Poisoned(_)) {
-                *state = JournalState::Poisoned(error.clone());
-            }
-            Err(error)
+        if let JournalState::Poisoned(error) = &*state {
+            return Err(error.clone());
         }
+        if !matches!(&*state, JournalState::Recording { .. }) {
+            return Err(poison_once(&mut state, HostEffectJournalError::Lifecycle {
+                detail: "record reservation attempted outside an active execution".to_string(),
+            }));
+        }
+        let mut entries = self.entries.lock().expect("host-effect journal mutex");
+        let mut budget = self.budget.lock().expect("host-effect budget mutex");
+        let index = entries.len();
+        let admission = index.checked_add(1)
+            .ok_or_else(|| HostEffectJournalError::Lifecycle {
+                detail: "journal sequence space exhausted".to_string(),
+            })
+            .and_then(|count| budget.check_count(count))
+            .and_then(|()| budget.prepare_replacement(0, &request));
+        let admission = match admission {
+            Ok(admission) => admission,
+            Err(error) => return Err(poison_once(&mut state, error)),
+        };
+        if entries.try_reserve(1).is_err() {
+            return Err(poison_once(&mut state, HostEffectJournalError::Lifecycle {
+                detail: "journal slot allocation failed".to_string(),
+            }));
+        }
+        // Clone only after both count and payload admission. No provider may
+        // run until this reservation is returned successfully.
+        let request = request.into_owned();
+        let charge = admission.charge;
+        entries.push(JournalSlot::Reserved(request.clone()));
+        budget.commit(admission);
+        Ok(HostEffectJournalReservation {
+            index,
+            request,
+            scope: Arc::clone(&self.reservation_scope),
+            charge,
+        })
     }
 
     fn complete(
         &self,
         reservation: HostEffectJournalReservation,
-        entry: HostEffectJournalEntry,
+        entry: EntryRef<'_>,
     ) -> Result<(), HostEffectJournalError> {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
         if self.mode != HostEffectJournalMode::Record
@@ -832,7 +892,7 @@ impl InMemoryHostEffectJournal {
             return Err(error);
         };
         if !matches!(slot, JournalSlot::Reserved(request)
-            if (*request).eq(&reservation.request) && request.matches_entry(&entry))
+            if (*request).eq(&reservation.request) && entry.request().matches(request))
         {
             let error = HostEffectJournalError::Lifecycle {
                 detail: format!(
@@ -845,7 +905,15 @@ impl InMemoryHostEffectJournal {
             }
             return Err(error);
         }
-        *slot = JournalSlot::Completed(entry);
+        let mut budget = self.budget.lock().expect("host-effect budget mutex");
+        let admission = match budget.prepare_replacement(reservation.charge, &entry) {
+            Ok(admission) => admission,
+            Err(error) => return Err(poison_once(&mut state, error)),
+        };
+        // A refused result leaves an explicit uncompleted position. Other
+        // already admitted effects can still record their outcomes after poison.
+        *slot = JournalSlot::Completed(entry.into_owned());
+        budget.commit(admission);
         let start = *self
             .attempt_record_start
             .lock()
@@ -869,7 +937,7 @@ impl InMemoryHostEffectJournal {
     fn rebind(
         &self,
         reservation: HostEffectJournalReservation,
-        request: HostEffectJournalRequest,
+        request: RequestRef<'_>,
     ) -> Result<HostEffectJournalReservation, HostEffectJournalError> {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
         if self.mode != HostEffectJournalMode::Record
@@ -918,13 +986,30 @@ impl InMemoryHostEffectJournal {
             *state = JournalState::Poisoned(error.clone());
             return Err(error);
         }
+        let mut budget = self.budget.lock().expect("host-effect budget mutex");
+        let admission = match budget.prepare_replacement(reservation.charge, &request) {
+            Ok(admission) => admission,
+            Err(error) => return Err(poison_once(&mut state, error)),
+        };
+        let request = request.into_owned();
+        let charge = admission.charge;
         *slot = JournalSlot::Reserved(request.clone());
+        budget.commit(admission);
         Ok(HostEffectJournalReservation {
             index: reservation.index,
             request,
             scope: reservation.scope,
+            charge,
         })
     }
+}
+
+fn poison_once(state: &mut JournalState, error: HostEffectJournalError) -> HostEffectJournalError {
+    if let JournalState::Poisoned(first) = state {
+        return first.clone();
+    }
+    *state = JournalState::Poisoned(error.clone());
+    error
 }
 
 fn completed_entries(

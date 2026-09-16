@@ -1504,6 +1504,7 @@ fn decision_receipt_log_append_only() {
     let receipt = CryptographicDecisionReceipt {
         receipt_id: "r-1".to_string(),
         request_id: "req-1".to_string(),
+        request_binding: None,
         verdict: DecisionVerdict::Approved { conditions: vec![] },
         contract_chain: vec!["c-1".to_string()],
         conditions: vec![],

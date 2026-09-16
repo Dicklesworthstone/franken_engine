@@ -7,6 +7,7 @@ pub mod process_spawn;
 
 mod decision_crypto;
 pub use decision_crypto::DecisionPublicKeyError;
+mod decision_binding;
 
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
@@ -4386,6 +4387,10 @@ impl DecisionPublicKey {
 pub struct CryptographicDecisionReceipt {
     pub receipt_id: String,
     pub request_id: String,
+    /// Full policy-input commitment. None denotes an unbound audit-only or
+    /// fail-closed fallback receipt, never request-specific authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_binding: Option<[u8; 32]>,
     pub verdict: DecisionVerdict,
     pub contract_chain: Vec<String>,
     pub conditions: Vec<DeclassificationCondition>,
@@ -4399,6 +4404,8 @@ pub struct CryptographicDecisionReceipt {
 struct ReceiptSigningPayload<'a> {
     receipt_id: &'a str,
     request_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_binding: Option<[u8; 32]>,
     verdict: &'a DecisionVerdict,
     contract_chain: &'a [String],
     conditions: &'a [DeclassificationCondition],
@@ -4425,6 +4432,7 @@ pub enum PolicySignError {
     OversizedPayload {
         request_id: String,
         surface: PolicySignSurface,
+        /// Observed lower bound; bounded serialization reports max_bytes + 1.
         actual_bytes: usize,
         max_bytes: usize,
     },
@@ -4498,17 +4506,7 @@ fn serialize_policy_signing_payload<T: Serialize + ?Sized>(
     request_id: &str,
     payload: &T,
 ) -> Result<Vec<u8>, PolicySignError> {
-    let payload_bytes = serde_json::to_vec(payload)
-        .map_err(|err| policy_sign_fail_closed(surface, request_id, err.to_string()))?;
-    if payload_bytes.len() > MAX_POLICY_SIGNING_PAYLOAD_BYTES {
-        return Err(PolicySignError::OversizedPayload {
-            request_id: request_id.to_string(),
-            surface,
-            actual_bytes: payload_bytes.len(),
-            max_bytes: MAX_POLICY_SIGNING_PAYLOAD_BYTES,
-        });
-    }
-    Ok(payload_bytes)
+    decision_binding::serialize_payload(surface, request_id, payload)
 }
 
 impl CryptographicDecisionReceipt {
@@ -4521,44 +4519,70 @@ impl CryptographicDecisionReceipt {
         timestamp_ns: u64,
         signer: &DecisionSigningKey,
     ) -> Result<Self, PolicySignError> {
-        if posterior_at_decision_micros > GUARDPLANE_MAX_POSTERIOR_MICROS {
+        Self::new_signed_payload(
+            ReceiptSigningPayload {
+                receipt_id: "",
+                request_id,
+                request_binding: None,
+                verdict: &verdict,
+                contract_chain: &contract_chain,
+                conditions: &conditions,
+                posterior_at_decision_micros,
+                timestamp_ns,
+            },
+            signer,
+        )
+    }
+
+    fn new_signed_payload(
+        payload: ReceiptSigningPayload<'_>,
+        signer: &DecisionSigningKey,
+    ) -> Result<Self, PolicySignError> {
+        if payload.posterior_at_decision_micros > GUARDPLANE_MAX_POSTERIOR_MICROS {
             return Err(policy_sign_fail_closed(
                 PolicySignSurface::DeclassificationReceipt,
-                request_id,
+                payload.request_id,
                 format!(
-                    "posterior_at_decision_micros {posterior_at_decision_micros} exceeds {GUARDPLANE_MAX_POSTERIOR_MICROS}"
+                    "posterior_at_decision_micros {} exceeds {GUARDPLANE_MAX_POSTERIOR_MICROS}",
+                    payload.posterior_at_decision_micros,
                 ),
             ));
         }
-        let outcome_tag = match &verdict {
+        let outcome_tag = match payload.verdict {
             DecisionVerdict::Approved { .. } => "approved",
             DecisionVerdict::Denied { .. } => "denied",
             DecisionVerdict::Deferred { .. } => "deferred",
         };
-        let receipt_id = derive_receipt_id(request_id, timestamp_ns, outcome_tag);
+        // The commitment uses an empty ID to avoid circular self-hashing. All
+        // other signed fields, including the full policy input binding, count.
+        let payload = ReceiptSigningPayload {
+            receipt_id: "",
+            ..payload
+        };
+        let receipt_id = if payload.request_binding.is_some() {
+            decision_binding::bound_receipt_id(payload.request_id, &payload)?
+        } else {
+            derive_receipt_id(payload.request_id, payload.timestamp_ns, outcome_tag)
+        };
         let payload = ReceiptSigningPayload {
             receipt_id: &receipt_id,
-            request_id,
-            verdict: &verdict,
-            contract_chain: &contract_chain,
-            conditions: &conditions,
-            posterior_at_decision_micros,
-            timestamp_ns,
+            ..payload
         };
         let payload_bytes = serialize_policy_signing_payload(
             PolicySignSurface::DeclassificationReceipt,
-            request_id,
+            payload.request_id,
             &payload,
         )?;
         let signature = signer.sign(&payload_bytes);
         Ok(Self {
-            receipt_id,
-            request_id: request_id.to_string(),
-            verdict,
-            contract_chain,
-            conditions,
-            posterior_at_decision_micros,
-            timestamp_ns,
+            receipt_id: receipt_id.clone(),
+            request_id: payload.request_id.to_string(),
+            request_binding: payload.request_binding,
+            verdict: payload.verdict.clone(),
+            contract_chain: payload.contract_chain.to_vec(),
+            conditions: payload.conditions.to_vec(),
+            posterior_at_decision_micros: payload.posterior_at_decision_micros,
+            timestamp_ns: payload.timestamp_ns,
             signature,
         })
     }
@@ -4567,6 +4591,7 @@ impl CryptographicDecisionReceipt {
         let payload = ReceiptSigningPayload {
             receipt_id: &self.receipt_id,
             request_id: &self.request_id,
+            request_binding: self.request_binding,
             verdict: &self.verdict,
             contract_chain: &self.contract_chain,
             conditions: &self.conditions,
@@ -4580,6 +4605,8 @@ impl CryptographicDecisionReceipt {
         )
     }
 
+    /// Check the signature, not whether the receipt describes a proposed data
+    /// release. Use `verify_for_request` for request-specific correspondence.
     pub fn verify(&self, public_key: &DecisionPublicKey) -> bool {
         self.signing_payload_bytes()
             .map(|payload| public_key.verify(&payload, &self.signature))
@@ -4618,6 +4645,7 @@ fn minimal_fail_closed_declassification_receipt(
     let payload = ReceiptSigningPayload {
         receipt_id: &receipt_id,
         request_id,
+        request_binding: None,
         verdict: &verdict,
         contract_chain: &contract_chain,
         conditions: &conditions,
@@ -4635,6 +4663,7 @@ fn minimal_fail_closed_declassification_receipt(
     CryptographicDecisionReceipt {
         receipt_id,
         request_id: request_id.to_string(),
+        request_binding: None,
         verdict,
         contract_chain,
         conditions,
@@ -4817,44 +4846,52 @@ impl DeclassificationGateway {
         };
 
         let mut receipt_emission_failed = false;
-        let receipt = match CryptographicDecisionReceipt::new_signed(
-            &request.request_id,
-            verdict.clone(),
-            contract_chain.clone(),
-            conditions.clone(),
-            posterior_at_decision_micros,
-            request.timestamp_ns,
-            &self.signing_key,
-        ) {
-            Ok(receipt) => receipt,
-            Err(err) => {
-                receipt_emission_failed = true;
-                let reason = DeclassificationDenialReason::ContractRejected {
-                    contract_id: "receipt_signing".to_string(),
-                    detail: bounded_policy_sign_error_detail(&err),
-                };
-                verdict = DecisionVerdict::Denied {
-                    reason: reason.clone(),
-                };
-                let fallback_request_id = fail_closed_receipt_request_id(&request.request_id);
-                CryptographicDecisionReceipt::new_signed(
-                    &fallback_request_id,
-                    DecisionVerdict::Denied { reason },
-                    vec!["declassification_receipt_emission".to_string()],
-                    Vec::new(),
-                    posterior_at_decision_micros.min(GUARDPLANE_MAX_POSTERIOR_MICROS),
-                    request.timestamp_ns,
-                    &self.signing_key,
-                )
-                .unwrap_or_else(|fallback_err| {
-                    minimal_fail_closed_declassification_receipt(
+        let receipt =
+            match decision_binding::request_binding(&request, requester_capabilities, context)
+                .and_then(|binding| {
+                    CryptographicDecisionReceipt::new_signed_payload(
+                        ReceiptSigningPayload {
+                            receipt_id: "",
+                            request_id: &request.request_id,
+                            request_binding: Some(binding),
+                            verdict: &verdict,
+                            contract_chain: &contract_chain,
+                            conditions: &conditions,
+                            posterior_at_decision_micros,
+                            timestamp_ns: request.timestamp_ns,
+                        },
+                        &self.signing_key,
+                    )
+                }) {
+                Ok(receipt) => receipt,
+                Err(err) => {
+                    receipt_emission_failed = true;
+                    let reason = DeclassificationDenialReason::ContractRejected {
+                        contract_id: "receipt_signing".to_string(),
+                        detail: bounded_policy_sign_error_detail(&err),
+                    };
+                    verdict = DecisionVerdict::Denied {
+                        reason: reason.clone(),
+                    };
+                    let fallback_request_id = fail_closed_receipt_request_id(&request.request_id);
+                    CryptographicDecisionReceipt::new_signed(
+                        &fallback_request_id,
+                        DecisionVerdict::Denied { reason },
+                        vec!["declassification_receipt_emission".to_string()],
+                        Vec::new(),
+                        posterior_at_decision_micros.min(GUARDPLANE_MAX_POSTERIOR_MICROS),
                         request.timestamp_ns,
                         &self.signing_key,
-                        fallback_err,
                     )
-                })
-            }
-        };
+                    .unwrap_or_else(|fallback_err| {
+                        minimal_fail_closed_declassification_receipt(
+                            request.timestamp_ns,
+                            &self.signing_key,
+                            fallback_err,
+                        )
+                    })
+                }
+            };
         self.receipt_log.append(receipt.clone());
         self.request_history_by_requester
             .entry(request.requester.clone())
@@ -5555,6 +5592,9 @@ pub enum DelegateCellEvidence {
 pub enum DelegateCellError {
     InvalidDelegateId,
     InvalidDelegatorId,
+    RequesterMismatch {
+        delegate_id: String,
+    },
     InvalidMaxLifetime {
         requested_ns: u64,
     },
@@ -5583,6 +5623,10 @@ impl fmt::Display for DelegateCellError {
         match self {
             Self::InvalidDelegateId => f.write_str("delegate_id must not be empty"),
             Self::InvalidDelegatorId => f.write_str("delegator_id must not be empty"),
+            Self::RequesterMismatch { delegate_id } => write!(
+                f,
+                "declassification requester must match delegate '{delegate_id}'"
+            ),
             Self::InvalidMaxLifetime { requested_ns } => write!(
                 f,
                 "max_lifetime_ns must be in 1..={MAX_DELEGATE_LIFETIME_NS}, got {requested_ns}"
@@ -6334,6 +6378,9 @@ impl DelegateCell {
         Ok(outcome)
     }
 
+    /// Evaluate a request only for this authenticated delegate identity. The
+    /// caller cannot borrow this cell's capabilities while attributing the
+    /// receipt or rate-limit history to another principal.
     pub fn request_declassification(
         &mut self,
         request: DeclassificationRequest,
@@ -6343,6 +6390,26 @@ impl DelegateCell {
         self.check_lifetime(request.timestamp_ns, lifecycle_context)?;
         self.ensure_operational_for("request_declassification")?;
         let timestamp_ns = request.timestamp_ns;
+        if request.requester != self.delegate_id {
+            self.apply_guardplane_penalty(self.policy.declassification_denial_penalty_micros);
+            self.record_event(
+                flow_context.trace_id,
+                flow_context.decision_id,
+                flow_context.policy_id,
+                "delegate_declassification",
+                "denied",
+                Some("FE-DELEGATE-0006"),
+            );
+            self.evaluate_guardplane_policy_action(
+                "delegate_declassification",
+                timestamp_ns,
+                flow_context,
+                lifecycle_context,
+            );
+            return Err(DelegateCellError::RequesterMismatch {
+                delegate_id: self.delegate_id.clone(),
+            });
+        }
         let outcome = self.declassification_gateway.evaluate_request(
             request,
             &self.manifest.base_manifest.capabilities,
@@ -8755,6 +8822,167 @@ mod delegate_cell_tests {
                 .evidence()
                 .iter()
                 .any(|item| matches!(item, DelegateCellEvidence::DeclassificationDenied(_)))
+        );
+    }
+
+    fn identity_bound_delegate() -> DelegateCell {
+        DelegateCellFactory::test_default()
+            .create_delegate_cell(
+                "identity-bound-delegate",
+                delegate_manifest(&[Capability::FsRead, Capability::Declassify], 1_000_000),
+                ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 100),
+                BudgetExhaustionPolicy::Suspend,
+                0,
+                &lifecycle_context(),
+            )
+            .expect("real signed delegate manifest is admitted")
+    }
+
+    fn identity_bound_request(requester: &str, timestamp_ns: u64) -> DeclassificationRequest {
+        DeclassificationRequest {
+            request_id: format!("identity-request-{timestamp_ns}"),
+            requester: requester.to_string(),
+            data_ref: DataRef::new("memory", "token"),
+            current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+            target_label: FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated),
+            purpose: DeclassificationPurpose::OperatorOverride,
+            justification: "approved operator release".to_string(),
+            timestamp_ns,
+        }
+    }
+
+    #[test]
+    fn delegate_cannot_issue_receipts_for_a_claimed_foreign_requester() {
+        let mut delegate = identity_bound_delegate();
+        let result = delegate.request_declassification(
+            identity_bound_request("another-principal", 10),
+            &flow_context(),
+            &lifecycle_context(),
+        );
+        assert_eq!(
+            result,
+            Err(DelegateCellError::RequesterMismatch {
+                delegate_id: "identity-bound-delegate".to_string(),
+            })
+        );
+        assert!(
+            delegate
+                .declassification_gateway
+                .receipt_log()
+                .receipts()
+                .is_empty()
+        );
+        assert!(
+            delegate
+                .declassification_gateway
+                .request_history_by_requester
+                .is_empty()
+        );
+        let event = delegate
+            .events()
+            .iter()
+            .find(|event| event.error_code.as_deref() == Some("FE-DELEGATE-0006"))
+            .expect("identity rejection has a stable denial event");
+        assert_eq!(event.delegate_id, "identity-bound-delegate");
+        assert_eq!(event.outcome, "denied");
+    }
+
+    #[test]
+    fn changing_claimed_requester_cannot_bypass_delegate_rate_limit() {
+        let mut delegate = identity_bound_delegate();
+        for timestamp_ns in 10..18 {
+            let request = identity_bound_request("identity-bound-delegate", timestamp_ns);
+            let DeclassificationOutcome::Approved { receipt, .. } = delegate
+                .request_declassification(request.clone(), &flow_context(), &lifecycle_context())
+                .expect("request evaluated")
+            else {
+                panic!("first eight requests are admitted");
+            };
+            assert!(receipt.verify_for_request(
+                &delegate.declassification_gateway.public_key(),
+                &request,
+                &delegate.manifest.base_manifest.capabilities,
+                &flow_context(),
+            ));
+        }
+        assert!(matches!(
+            delegate.request_declassification(
+                identity_bound_request("fresh-rate-limit-identity", 18),
+                &flow_context(),
+                &lifecycle_context(),
+            ),
+            Err(DelegateCellError::RequesterMismatch { .. })
+        ));
+        let outcome = delegate
+            .request_declassification(
+                identity_bound_request("identity-bound-delegate", 19),
+                &flow_context(),
+                &lifecycle_context(),
+            )
+            .expect("real principal remains subject to its original quota");
+        assert!(matches!(
+            outcome,
+            DeclassificationOutcome::Denied {
+                reason: DeclassificationDenialReason::RateLimited { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            delegate
+                .declassification_gateway
+                .request_history_by_requester
+                .len(),
+            1
+        );
+        assert_eq!(
+            delegate
+                .declassification_gateway
+                .receipt_log()
+                .receipts()
+                .len(),
+            9
+        );
+    }
+
+    #[test]
+    fn rejected_identity_does_not_consume_the_real_principals_release_quota() {
+        let mut delegate = identity_bound_delegate();
+        assert!(
+            delegate
+                .request_declassification(
+                    identity_bound_request("", 10),
+                    &flow_context(),
+                    &lifecycle_context(),
+                )
+                .is_err()
+        );
+        let request = identity_bound_request("identity-bound-delegate", 11);
+        let DeclassificationOutcome::Approved { receipt, .. } = delegate
+            .request_declassification(request.clone(), &flow_context(), &lifecycle_context())
+            .unwrap()
+        else {
+            panic!("a valid identity still works after rejection");
+        };
+        assert!(receipt.verify_for_request(
+            &delegate.declassification_gateway.public_key(),
+            &request,
+            &delegate.manifest.base_manifest.capabilities,
+            &flow_context(),
+        ));
+        assert_eq!(
+            delegate
+                .declassification_gateway
+                .request_history_by_requester
+                .get("identity-bound-delegate"),
+            Some(&vec![11])
+        );
+        assert_eq!(
+            delegate
+                .declassification_gateway
+                .receipt_log()
+                .receipts()
+                .len(),
+            1
         );
     }
 
@@ -11526,6 +11754,7 @@ mod enrichment_tests {
         let payload = ReceiptSigningPayload {
             receipt_id: &receipt_id,
             request_id,
+            request_binding: None,
             verdict: &verdict,
             contract_chain: &contract_chain,
             conditions: &conditions,
@@ -11751,6 +11980,7 @@ mod enrichment_tests {
         let oversized_receipt = CryptographicDecisionReceipt {
             receipt_id: derive_receipt_id(&oversized_request_id, 4100, "approved"),
             request_id: oversized_request_id,
+            request_binding: None,
             verdict: DecisionVerdict::Approved { conditions: vec![] },
             contract_chain: vec![],
             conditions: vec![],

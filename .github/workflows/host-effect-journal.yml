@@ -27,11 +27,42 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
-      CARGO_TERM_COLOR: always
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal
+        run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
       - name: Run production journal unit tests
         run: |
-          cargo +nightly test --locked -p frankenengine-extension-host --lib host_effect_journal:: -- --nocapture
+          status=0
+          cargo +nightly test --locked -p frankenengine-extension-host --lib host_effect_journal:: -- --nocapture > journal-unit-tests.log 2>&1 || status=$?
+          tail -n 80 journal-unit-tests.log
+          exit "$status"
+      - name: Exercise real filesystem effects and replay
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-extension-host --test host_effect_journal_admission -- --nocapture > journal-provider-tests.log 2>&1 || status=$?
+          tail -n 80 journal-provider-tests.log
+          exit "$status"
+      - name: Check extension-host library and tests
+        run: |
+          status=0
+          cargo +nightly clippy --locked -p frankenengine-extension-host --all-targets -- -D warnings > journal-clippy.log 2>&1 || status=$?
+          tail -n 120 journal-clippy.log
+          exit "$status"
+      - name: Check touched Rust formatting
+        if: always()
+        run: |
+          rustfmt +nightly --edition 2024 crates/franken-extension-host/src/host_effect_journal.rs crates/franken-extension-host/tests/host_effect_journal_admission.rs
+          git diff --exit-code -- crates/franken-extension-host/src/host_effect_journal.rs crates/franken-extension-host/src/host_effect_journal/budget.rs crates/franken-extension-host/tests/host_effect_journal_admission.rs
+      - name: Retain exact validation output and formatted sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-effect-journal-validation
+          path: |
+            journal-*.log
+            crates/franken-extension-host/src/host_effect_journal.rs
+            crates/franken-extension-host/src/host_effect_journal/budget.rs
+            crates/franken-extension-host/tests/host_effect_journal_admission.rs
+          retention-days: 7

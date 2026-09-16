@@ -217,3 +217,46 @@ fn rejected_yield_is_thrown_back_into_body_instead_of_completing_request() {
         &["sync", "caught 17", "one 18 false", "two 19 true"],
     );
 }
+
+#[test]
+fn return_rejection_enters_the_generators_catch() {
+    assert_output(
+        r#"const log=console.log; async function* g(){try{return Promise.reject(17);}catch(e){log('caught',e);yield e+1;}return 19;} const it=g(); it.next().then(r=>log('first',r.value,r.done)); it.next().then(r=>log('second',r.value,r.done)); log('sync');"#,
+        &["sync", "caught 17", "first 18 false", "second 19 true"],
+    );
+}
+
+#[test]
+fn return_waits_before_entering_finally() {
+    assert_output(
+        r#"const log=console.log; let release; const pending={then(resolve){release=resolve;}}; async function* g(){try {return pending;}finally{log('finally');yield 9;}} const it=g(); it.next().then(r=>log('first',r.value,r.done)); it.next().then(r=>log('second',r.value,r.done)); Promise.resolve().then(()=>{log('release');release(42);}); log('sync');"#,
+        &[
+            "sync",
+            "release",
+            "finally",
+            "first 9 false",
+            "second 42 true",
+        ],
+    );
+}
+
+#[test]
+fn return_await_does_not_overwrite_the_original_binding() {
+    assert_output(
+        r#"const log=console.log; const p=Promise.resolve(42); async function* g(){const local=p;try{return local;}finally{log('identity',local===p,typeof local.then);yield 9;}} const it=g();it.next().then(r=>log('first',r.value,r.done));it.next().then(r=>log('second',r.value,r.done));log('sync');"#,
+        &[
+            "sync",
+            "identity true function",
+            "first 9 false",
+            "second 42 true",
+        ],
+    );
+}
+
+#[test]
+fn rejection_during_finally_return_reaches_outer_catch() {
+    assert_output(
+        r#"const log=console.log;async function* g(){try{try{return 1;}finally{return Promise.reject(7);}}catch(e){log('caught',e);yield e;}return 8;}const it=g();it.next().then(r=>log('first',r.value,r.done));it.next().then(r=>log('second',r.value,r.done));log('sync');"#,
+        &["sync", "caught 7", "first 7 false", "second 8 true"],
+    );
+}

@@ -9008,7 +9008,7 @@ pub fn lower_ir2_to_ir3(
             child_captured_locals: fn_child_captured_locals,
             local_lexical_bindings: fn_local_lexical_bindings,
             is_generator: fn_is_generator,
-            is_async: _fn_is_async,
+            is_async: fn_is_async,
             is_arrow: _fn_is_arrow,
             rest_param_index: fn_rest_param_index,
         } = deferred_functions[deferred_idx].clone();
@@ -9474,6 +9474,25 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::Return => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
+                    // Async-generator ReturnStatement awaits its operand
+                    // BEFORE creating the return completion. In particular,
+                    // rejection must still enter this frame's catch/finally;
+                    // awaiting only the finished generator's result is too late.
+                    // AwaitValue overwrites its register, so never await in a
+                    // register that may still back a live local binding.
+                    let value = if fn_is_async && fn_is_generator {
+                        let awaited = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: awaited,
+                            src: value,
+                        });
+                        ir3.instructions.push(Ir3Instruction::AwaitValue {
+                            promise_reg: awaited,
+                        });
+                        awaited
+                    } else {
+                        value
+                    };
                     ir3.instructions.push(Ir3Instruction::Return { value });
                 }
                 Ir1Op::Call { arg_count } => {

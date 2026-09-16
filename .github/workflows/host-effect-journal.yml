@@ -78,3 +78,82 @@ jobs:
             crates/franken-extension-host/tests/host_effect_journal_admission.rs
             crates/franken-extension-host/tests/http_response_framing.rs
           retention-days: 7
+  # Large-file candidate transport only; remove when the tested code lands.
+  binding-candidate:
+    if: github.event_name == 'push' && github.event.before == '1c9d5815d30bfbae423f8c7851d7ed2c53eb973e'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact candidate without moving refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir binding-output
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          url = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/e9567ed47f881dbfd29d528f23de47221c7f489c'
+          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              raw = base64.b64decode(json.load(response)['content'])
+          assert hashlib.sha256(raw).hexdigest() == 'de65e7c585cf2d1b0df78d9e0ccc8bedeecd49ff3520cb21966d1459944dfea9'
+          path = pathlib.Path('binding-output/candidate.patch')
+          path.write_bytes(gzip.decompress(raw))
+          files = ['crates/franken-extension-host/src/lib.rs', 'crates/franken-extension-host/src/decision_binding.rs']
+          stats = subprocess.check_output(['git', 'apply', '--numstat', str(path)], text=True)
+          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(files)
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + files[0]], text=True).strip() == '29e54c712be90175f2a636d26fd6f42607506de6'
+          subprocess.run(['git', 'apply', '--index', str(path)], check=True)
+          pathlib.Path('binding-output/files.json').write_text(json.dumps(files))
+          PY
+      - name: Install Rust and format touched sources
+        run: |
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+          rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-extension-host/src/lib.rs crates/franken-extension-host/src/decision_binding.rs
+      - name: Run all host unit and integration tests
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-extension-host --lib --tests 2>&1 | tee binding-output/tests.log
+      - name: Check and lint every host target
+        run: |
+          set -o pipefail
+          cargo +nightly check --locked -p frankenengine-extension-host --all-targets 2>&1 | tee binding-output/check.log
+          cargo +nightly clippy --locked -p frankenengine-extension-host --all-targets -- -D warnings 2>&1 | tee binding-output/clippy.log
+      - name: Store exact tested sources as immutable blobs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          root = pathlib.Path('binding-output')
+          result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
+          for name in json.loads((root / 'files.json').read_text()):
+              path = pathlib.Path(name)
+              assert path.is_file() and not path.is_symlink()
+              content = path.read_bytes()
+              body = json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode()
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=body, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  sha = json.load(response)['sha']
+              assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
+              result['files'].append({'path': name, 'mode': '100644', 'type': 'blob', 'sha': sha})
+              target = root / 'source' / name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(content)
+          (root / 'result.json').write_text(json.dumps(result, indent=2))
+          PY
+      - name: Retain exact sources and validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binding-candidate-validation
+          path: binding-output/
+          retention-days: 7

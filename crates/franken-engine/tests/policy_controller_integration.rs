@@ -157,7 +157,7 @@ fn loss_matrix_serde_json_structure() {
     let entries = v["entries"].as_array().expect("array");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["state"], "state_a");
-    assert_eq!(entries[0]["action"], "act_x"), "act_x");
+    assert_eq!(entries[0]["action"], "act_x");
     assert_eq!(entries[0]["loss"], 42);
 }
 

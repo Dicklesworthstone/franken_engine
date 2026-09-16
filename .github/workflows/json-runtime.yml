@@ -7,6 +7,7 @@ on:
       - 'crates/franken-engine/src/baseline_interpreter*'
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
+      - 'crates/franken-engine/src/capability.rs'
       - 'crates/franken-engine/tests/json_*'
       - 'crates/franken-engine/tests/js_string_integration.rs'
       - '.github/workflows/json-runtime.yml'
@@ -37,9 +38,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # One-time candidate transport. Only immutable blobs are written; main
-      # is advanced by the connector after inspecting the validation results.
-      - name: Materialize exact JSON candidate
+      # Temporary candidate transport; no Git refs are modified by this job.
+      - name: Materialize exact iterative JSON candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -49,10 +49,11 @@ jobs:
           import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
           root = pathlib.Path('json-validation')
           files = {
-              'crates/franken-engine/src/baseline_interpreter.rs': 'd7b998f6319ceeb2d8d6dfa0fa4c750acf77d3bc',
-              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': '44b68afb447a57a356e2fd5d8a12c1c7b823e46b',
+              'crates/franken-engine/src/baseline_interpreter.rs': 'fd8821ae405688969f82a7bd66f0d999e76aed44',
+              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': 'd6a943c809f1b26388066745570b39997bfe2478',
               'crates/franken-engine/tests/js_string_integration.rs': 'ab76255200a4771563b4607addc743fbfdc8fced',
-              'crates/franken-engine/tests/json_parse_execution.rs': '267a3daf74a74e70e9cf50e396d29682d65483b7',
+              'crates/franken-engine/tests/json_parse_execution.rs': 'a13fb433672767567f88f68ddac73fadec658a2d',
+              'crates/franken-engine/src/lowering_pipeline.rs': '52c0e7ac30671e85380383ca46409c2b3979bfa5',
           }
           def blob(sha):
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
@@ -68,6 +69,7 @@ jobs:
               for path, expected in {
                   'crates/franken-engine/src/baseline_interpreter.rs': '210386e53da790764e1075d17c19f18930ebc917',
                   'crates/franken-engine/src/lowering_pipeline.rs': '10aea81b8e465ec3bc9bad8cdcbaa84596974b9b',
+                  'crates/franken-engine/src/capability.rs': 'e7d154c5c356c264e0c5cae5427a8846430d28cc',
               }.items():
                   actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip()
                   assert actual == expected, path + ' changed; review required'
@@ -75,20 +77,13 @@ jobs:
                   file = pathlib.Path(path)
                   file.parent.mkdir(parents=True, exist_ok=True)
                   file.write_bytes(blob(sha))
-              path = pathlib.Path('crates/franken-engine/src/baseline_interpreter/json_parse.rs')
-              text = path.read_text()
-              for name in ['json_parse_builtin', 'json_charge_work', 'json_store_parsed_property']:
-                  before = '    fn ' + name + '('
-                  assert text.count(before) == 1
-                  text = text.replace(before, '    pub(super) fn ' + name + '(', 1)
-              path.write_text(text)
-              raw = blob('40c34f0ed83786a56f7ebfb2cbcc7625dcb43bf6')
-              assert hashlib.sha256(raw).hexdigest() == 'a74f7f372137e62c9901eeb4d80438a729f90fdba4e6cba2158946fda5063f3f'
-              patch = root / 'intrinsic.patch'
+              raw = blob('94f6f6a5a8a56672fb6472f69f7359d666ba446d')
+              assert hashlib.sha256(raw).hexdigest() == 'd10c24d05153588e439d9e59b69d209e1d5f6555990c7831723863014c73c0a9'
+              patch = root / 'iterative.patch'
               patch.write_bytes(gzip.decompress(raw))
               subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
               subprocess.run(['git', 'apply', str(patch)], check=True)
-          paths = list(files) + ['crates/franken-engine/src/lowering_pipeline.rs']
+          paths = list(files) + ['crates/franken-engine/src/capability.rs']
           (root / 'paths.json').write_text(json.dumps(paths))
           PY
       - name: Install Rust and format candidate
@@ -109,8 +104,6 @@ jobs:
         run: |
           python3 - <<'PY'
           import pathlib, subprocess, textwrap
-          # Reuse the existing native-runtime.yml target selection verbatim.
-          # This does not substitute implementations or weaken the full check.
           text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
           step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
           script = textwrap.dedent(step.split('        run: |\n', 1)[1])

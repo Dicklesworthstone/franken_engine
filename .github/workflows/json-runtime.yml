@@ -37,47 +37,44 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # Temporary transport for large candidate files; never moves a branch ref.
-      - name: Materialize exact JSON implementation
+      # Temporary candidate transport for the large interpreter file; no ref writes.
+      - name: Materialize exact serialization candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p json-validation
           git rev-parse HEAD > json-validation/revision.txt
           python3 - <<'PY'
-          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
-          files = {
-              'crates/franken-engine/src/baseline_interpreter.rs': 'b832d48a59ab4d8fca881cbc39ffc455c7942610',
-              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': 'bec08606080ddcb2fb45cc1d3b16e37155cdfb8a',
-              'crates/franken-engine/tests/js_string_integration.rs': 'ab76255200a4771563b4607addc743fbfdc8fced',
-              'crates/franken-engine/tests/json_parse_execution.rs': '873a01d2b2d22bde56875417be2359858a93f7c6',
-              'crates/franken-engine/src/lowering_pipeline.rs': '52c0e7ac30671e85380383ca46409c2b3979bfa5',
-              'crates/franken-engine/src/capability.rs': '14cd4a01a2e0ad666b8471bdcad70894be3f9fff',
-              'crates/franken-engine/src/parser.rs': '4518f283105eef47cb03bbf38fd77b1a39666539',
-          }
-          def blob(sha):
-              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
-                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  data = base64.b64decode(json.load(response)['content'])
-              assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
-              return data
-          if not pathlib.Path('crates/franken-engine/src/baseline_interpreter/json_parse.rs').exists():
-              for path, expected in {
-                  'crates/franken-engine/src/baseline_interpreter.rs': '210386e53da790764e1075d17c19f18930ebc917',
-                  'crates/franken-engine/src/lowering_pipeline.rs': '10aea81b8e465ec3bc9bad8cdcbaa84596974b9b',
-                  'crates/franken-engine/src/capability.rs': 'e7d154c5c356c264e0c5cae5427a8846430d28cc',
-                  'crates/franken-engine/src/parser.rs': '6948e8cb301f2d860173bfb9f932e2a49c94d8c3',
-              }.items():
-                  assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected, path + ' changed'
-              for path, sha in files.items():
-                  file = pathlib.Path(path); file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(blob(sha))
-              patch = pathlib.Path('json-validation/number-output.patch')
-              patch.write_bytes(blob('61186fec5b385c0f65289ceccd6167011daae404'))
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          paths = [
+              'crates/franken-engine/src/baseline_interpreter.rs',
+              'crates/franken-engine/src/baseline_interpreter/json_parse.rs',
+              'crates/franken-engine/src/baseline_interpreter/json_stringify.rs',
+              'crates/franken-engine/tests/js_string_integration.rs',
+              'crates/franken-engine/tests/json_parse_execution.rs',
+              'crates/franken-engine/tests/json_stringify_execution.rs',
+              'crates/franken-engine/src/lowering_pipeline.rs',
+              'crates/franken-engine/src/capability.rs',
+              'crates/franken-engine/src/parser.rs',
+          ]
+          if not pathlib.Path(paths[2]).exists():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + paths[0]], text=True).strip() == '0413b7d27766d2c53673fac4ecb5f0af2f008273'
+              raw = bytearray()
+              for sha in ['0cadffc23e54bd63435238b5fa98c933b717078d', 'e993e4fd3d560917e30405f2ea1a8377f125cc3c', '5b48d80e56d5dfa33f872db26b0dd85e71444528', '7645b21e8ebd7f8b31824548c0361b129cb087b1']:
+                  req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                      'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      data = base64.b64decode(json.load(response)['content'])
+                  assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
+                  raw.extend(data)
+              assert hashlib.sha256(raw).hexdigest() == 'e4db7f29e362a06158cf291e3583c1d9f2220806e0cd878639fc0730ac9f1720'
+              patch = pathlib.Path('json-validation/stringify.patch'); patch.write_bytes(gzip.decompress(raw))
+              stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
+              assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted([paths[0], paths[2], paths[5]])
               subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
               subprocess.run(['git', 'apply', str(patch)], check=True)
-          pathlib.Path('json-validation/paths.json').write_text(json.dumps(list(files)))
+          pathlib.Path('json-validation/paths.json').write_text(json.dumps(paths))
           PY
       - name: Install Rust and format candidate
         run: |
@@ -106,7 +103,7 @@ jobs:
         if: matrix.mode == 'runtime-tests'
         run: |
           set -o pipefail
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test json_parse_execution --test js_string_integration -- --nocapture 2>&1 | tee json-validation/source-tests.log
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee json-validation/source-tests.log
       - name: Save exact candidate blobs without moving refs
         if: always() && matrix.mode == 'runtime-tests'
         env:

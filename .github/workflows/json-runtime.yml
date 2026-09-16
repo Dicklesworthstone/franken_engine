@@ -8,16 +8,15 @@ on:
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/src/capability.rs'
+      - 'crates/franken-engine/src/parser.rs'
       - 'crates/franken-engine/tests/json_*'
       - 'crates/franken-engine/tests/js_string_integration.rs'
       - '.github/workflows/json-runtime.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   json:
     strategy:
@@ -38,8 +37,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # Temporary candidate transport; no Git refs are modified by this job.
-      - name: Materialize exact iterative JSON candidate
+      # Temporary candidate transport; never writes a branch or changes a ref.
+      - name: Materialize exact JSON implementation
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,44 +46,38 @@ jobs:
           git rev-parse HEAD > json-validation/revision.txt
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
-          root = pathlib.Path('json-validation')
           files = {
               'crates/franken-engine/src/baseline_interpreter.rs': 'fd8821ae405688969f82a7bd66f0d999e76aed44',
-              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': 'd6a943c809f1b26388066745570b39997bfe2478',
+              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': 'bec08606080ddcb2fb45cc1d3b16e37155cdfb8a',
               'crates/franken-engine/tests/js_string_integration.rs': 'ab76255200a4771563b4607addc743fbfdc8fced',
-              'crates/franken-engine/tests/json_parse_execution.rs': 'a13fb433672767567f88f68ddac73fadec658a2d',
+              'crates/franken-engine/tests/json_parse_execution.rs': 'dc8f51e6e4994023e7e35f45fbd762ae3caec295',
               'crates/franken-engine/src/lowering_pipeline.rs': '52c0e7ac30671e85380383ca46409c2b3979bfa5',
+              'crates/franken-engine/src/capability.rs': '14cd4a01a2e0ad666b8471bdcad70894be3f9fff',
           }
           def blob(sha):
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                  'Accept': 'application/vnd.github+json',
-                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
-              })
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req, timeout=60) as response:
-                  content = base64.b64decode(json.load(response)['content'])
-              assert hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest() == sha
-              return content
+                  data = base64.b64decode(json.load(response)['content'])
+              assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
+              return data
           if not pathlib.Path('crates/franken-engine/src/baseline_interpreter/json_parse.rs').exists():
               for path, expected in {
                   'crates/franken-engine/src/baseline_interpreter.rs': '210386e53da790764e1075d17c19f18930ebc917',
                   'crates/franken-engine/src/lowering_pipeline.rs': '10aea81b8e465ec3bc9bad8cdcbaa84596974b9b',
                   'crates/franken-engine/src/capability.rs': 'e7d154c5c356c264e0c5cae5427a8846430d28cc',
+                  'crates/franken-engine/src/parser.rs': '6948e8cb301f2d860173bfb9f932e2a49c94d8c3',
               }.items():
-                  actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip()
-                  assert actual == expected, path + ' changed; review required'
+                  assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected, path + ' changed'
               for path, sha in files.items():
-                  file = pathlib.Path(path)
-                  file.parent.mkdir(parents=True, exist_ok=True)
-                  file.write_bytes(blob(sha))
-              raw = blob('94f6f6a5a8a56672fb6472f69f7359d666ba446d')
-              assert hashlib.sha256(raw).hexdigest() == 'd10c24d05153588e439d9e59b69d209e1d5f6555990c7831723863014c73c0a9'
-              patch = root / 'iterative.patch'
-              patch.write_bytes(gzip.decompress(raw))
+                  file = pathlib.Path(path); file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(blob(sha))
+              raw = blob('ab89023ed8bce896db1fe7528e4df5d1515643dc')
+              assert hashlib.sha256(raw).hexdigest() == 'ca19a971e5de21005c920f00ffb382cbd6746a182aab8be3733af0542b4149d1'
+              patch = pathlib.Path('json-validation/dependencies.patch'); patch.write_bytes(gzip.decompress(raw))
               subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
               subprocess.run(['git', 'apply', str(patch)], check=True)
-          paths = list(files) + ['crates/franken-engine/src/capability.rs']
-          (root / 'paths.json').write_text(json.dumps(paths))
+          pathlib.Path('json-validation/paths.json').write_text(json.dumps(list(files) + ['crates/franken-engine/src/parser.rs']))
           PY
       - name: Install Rust and format candidate
         run: |
@@ -106,8 +99,7 @@ jobs:
           import pathlib, subprocess, textwrap
           text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
           step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
-          script = textwrap.dedent(step.split('        run: |\n', 1)[1])
-          subprocess.run(['bash', '-e', '-c', script], check=True)
+          subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('json-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
           PY
       - name: Run JSON and UTF-16 source execution regressions
@@ -122,26 +114,18 @@ jobs:
         run: |
           python3 - <<'PY'
           import base64, hashlib, json, os, pathlib, urllib.request
-          root = pathlib.Path('json-validation')
-          result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
+          root = pathlib.Path('json-validation'); result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
           for path in json.loads((root / 'paths.json').read_text()):
-              file = pathlib.Path(path)
-              assert file.is_file() and not file.is_symlink()
-              content = file.read_bytes()
+              file = pathlib.Path(path); assert file.is_file() and not file.is_symlink(); content = file.read_bytes()
               body = json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode()
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=body, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                  'Accept': 'application/vnd.github+json',
-                  'Content-Type': 'application/json',
-                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
-              })
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req, timeout=60) as response:
                   sha = json.load(response)['sha']
               assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
               result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
-              dest = root / 'source' / path
-              dest.parent.mkdir(parents=True, exist_ok=True)
-              dest.write_bytes(content)
+              dest = root / 'source' / path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(content)
           (root / 'result.json').write_text(json.dumps(result, indent=2))
           PY
       - name: Retain complete validation output

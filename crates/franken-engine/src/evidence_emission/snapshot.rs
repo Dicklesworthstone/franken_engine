@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 use serde::Deserialize;
 
@@ -35,6 +35,7 @@ pub enum EmitterRestoreError {
     CheckpointTooLarge { limit: usize },
     CheckpointDigestMismatch,
     CheckpointFormat { reason: String },
+    CheckpointRead { kind: io::ErrorKind },
 }
 
 impl fmt::Display for EmitterRestoreError {
@@ -68,6 +69,9 @@ impl fmt::Display for EmitterRestoreError {
             }
             Self::CheckpointFormat { reason } => {
                 write!(f, "invalid evidence checkpoint encoding: {reason}")
+            }
+            Self::CheckpointRead { kind } => {
+                write!(f, "evidence checkpoint read failed: {kind:?}")
             }
         }
     }
@@ -249,6 +253,57 @@ impl CanonicalEvidenceEmitter {
         Ok(emitter)
     }
 
+    /// Read a checkpoint without first loading an unbounded input into memory.
+    ///
+    /// Reads at most `max_bytes` plus one overflow-detection byte. Short reads
+    /// and interruptions are supported; all other I/O errors abort recovery.
+    /// The reader must contain exactly one checkpoint, ending at EOF. Callers
+    /// using sockets or other potentially blocking readers must enforce their
+    /// own I/O deadline: this is a byte bound, not a wall-clock time bound.
+    /// Authentication and current-policy admission are identical to
+    /// `restore_checkpoint`; no live emitter is returned on a partial read.
+    pub fn restore_checkpoint_from_reader<R: Read>(
+        mut reader: R,
+        expected_digest: &ContentHash,
+        config: EmitterConfig,
+        current_epoch: SecurityEpoch,
+        max_bytes: usize,
+    ) -> Result<Self, EmitterRestoreError> {
+        let mut writer = BoundedCheckpointWriter {
+            bytes: Vec::new(),
+            limit: max_bytes,
+            exceeded: false,
+        };
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let remaining = max_bytes - writer.bytes.len();
+            let read_limit = chunk.len().min(remaining.saturating_add(1));
+            let count = match reader.read(&mut chunk[..read_limit]) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(EmitterRestoreError::CheckpointRead { kind: error.kind() });
+                }
+            };
+            if count > remaining {
+                return Err(EmitterRestoreError::CheckpointTooLarge { limit: max_bytes });
+            }
+            writer.write_all(&chunk[..count]).map_err(|error| {
+                EmitterRestoreError::CheckpointFormat {
+                    reason: error.to_string(),
+                }
+            })?;
+        }
+        Self::restore_checkpoint(
+            &writer.bytes,
+            expected_digest,
+            config,
+            current_epoch,
+            max_bytes,
+        )
+    }
+
     /// Validate the complete resumable state, including all derived caches.
     ///
     /// The retained ledger is an append-only prefix starting at sequence zero.
@@ -372,6 +427,7 @@ impl CanonicalEvidenceEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control_plane::ContextAdapter;
     use crate::control_plane::mocks::{
         MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
     };
@@ -789,5 +845,91 @@ mod tests {
         assert_eq!(writer.bytes, b"abc");
         assert!(writer.write_all(b"d").is_err());
         assert_eq!(writer.bytes, b"abc");
+    }
+
+    #[test]
+    fn reader_supports_short_reads_interruptions_and_exact_byte_limit() {
+        struct ShortReads<'a> {
+            cursor: io::Cursor<&'a [u8]>,
+            interrupted: bool,
+        }
+        impl Read for ShortReads<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                let size = buffer.len().min(3);
+                self.cursor.read(&mut buffer[..size])
+            }
+        }
+        let original = populated(3);
+        let (bytes, digest) = original.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let reader = ShortReads { cursor: io::Cursor::new(bytes.as_slice()), interrupted: false };
+        let restored = CanonicalEvidenceEmitter::restore_checkpoint_from_reader(
+            reader, &digest, EmitterConfig::default(), SecurityEpoch::from_raw(3), bytes.len(),
+        ).unwrap();
+        assert_eq!(restored.entries(), original.entries());
+        assert_eq!(restored.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap(), (bytes, digest));
+    }
+
+    #[test]
+    fn reader_stops_after_a_single_overflow_detection_byte() {
+        for limit in [0, 1, 17, 8192] {
+            let mut reader = io::Cursor::new(vec![0_u8; 20_000]);
+            let result = CanonicalEvidenceEmitter::restore_checkpoint_from_reader(
+                &mut reader, &ContentHash::default(), EmitterConfig::default(),
+                SecurityEpoch::from_raw(3), limit,
+            );
+            assert_eq!(result.unwrap_err(), EmitterRestoreError::CheckpointTooLarge { limit });
+            assert_eq!(reader.position(), u64::try_from(limit + 1).unwrap());
+        }
+    }
+
+    #[test]
+    fn reader_aborts_on_midstream_io_failure() {
+        struct BrokenReader;
+        impl Read for BrokenReader {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let (bytes, digest) = populated(2).checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let reader = io::Cursor::new(&bytes[..bytes.len() / 2]).chain(BrokenReader);
+        assert_eq!(
+            CanonicalEvidenceEmitter::restore_checkpoint_from_reader(
+                reader, &digest, EmitterConfig::default(), SecurityEpoch::from_raw(3), CHECKPOINT_LIMIT,
+            ).unwrap_err(),
+            EmitterRestoreError::CheckpointRead { kind: io::ErrorKind::BrokenPipe }
+        );
+    }
+
+    #[test]
+    fn checkpoint_restoration_preserves_finite_float_bits_and_hashes() {
+        let mut values = vec![0.0, -0.0, f64::MIN_POSITIVE, f64::from_bits(1), f64::MAX, -f64::MAX];
+        let mut bits = 0x5a17_f09c_7823_d146_u64;
+        for _ in 0..256 {
+            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let value = f64::from_bits(bits);
+            if value.is_finite() {
+                values.push(value);
+            }
+        }
+        let mut emitter = populated(0);
+        let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10_000));
+        for (index, value) in values.iter().copied().enumerate() {
+            let mut req = request(u64::try_from(index).unwrap());
+            req.top_features = vec![("round-trip".into(), value)];
+            emitter.emit(&mut cx, &req).unwrap();
+        }
+        let (bytes, digest) = emitter.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let restored = restore(&bytes, &digest).unwrap();
+        for (entry, expected) in restored.entries().iter().zip(&values) {
+            assert_eq!(entry.ledger_entry.top_features[0].1.to_bits(), expected.to_bits());
+        }
+        assert_eq!(restored.entries().len(), values.len());
+        assert_eq!(restored.entries(), emitter.entries());
+        assert_eq!(restored.rolling_hash(), emitter.rolling_hash());
+        assert_eq!(restored.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap(), (bytes, digest));
     }
 }

@@ -157,7 +157,7 @@ fn loss_matrix_serde_json_structure() {
     let entries = v["entries"].as_array().expect("array");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["state"], "state_a");
-    assert_eq!(entries[0]["action"], "act_x");
+    assert_eq!(entries[0]["action"], "act_x"), "act_x");
     assert_eq!(entries[0]["loss"], 42);
 }
 
@@ -398,7 +398,8 @@ fn controller_accepts_valid_config() {
 
 #[test]
 fn controller_accepts_empty_loss_matrix() {
-    // Valid config with empty matrix — select_action returns 0 expected loss.
+    // Construction may precede model provisioning, but selection must reject
+    // an empty model rather than interpreting missing entries as zero cost.
     let config = ControllerConfig {
         controller_id: "c".to_string(),
         domain: "d".to_string(),
@@ -449,33 +450,35 @@ fn selects_high_in_anomalous_state() {
 fn selection_with_empty_posterior() {
     let mut ctrl = monitoring_controller();
     let empty = Posterior::new(BTreeMap::new());
-    let sel = ctrl
+    let error = ctrl
         .select_action(&empty, epoch(1), "t-empty")
-        .expect("select");
-    // All expected losses are 0 when posterior has no states.
-    assert_eq!(sel.expected_loss, 0);
-    // Picks first action with min expected loss (all tied at 0).
-    assert!(!sel.is_safe_default);
+        .expect_err("empty posterior must not select a free action");
+    assert!(error.to_string().contains("invalid posterior"));
+    assert_eq!(ctrl.decision_count(), 0);
+    assert!(ctrl.decisions().is_empty());
 }
 
 #[test]
 fn selection_with_empty_loss_matrix() {
     let config = monitoring_config();
     let mut ctrl = PolicyController::new(config, LossMatrix::new()).expect("create");
-    let sel = ctrl
+    let error = ctrl
         .select_action(&normal_posterior(), epoch(1), "t-no-loss")
-        .expect("select");
-    // All expected losses are 0 (missing entries default to 0).
-    assert_eq!(sel.expected_loss, 0);
+        .expect_err("an empty loss matrix is not a zero-cost model");
+    assert_eq!(error, PolicyControllerError::NoLossEntries);
+    assert_eq!(ctrl.decision_count(), 0);
+    assert!(ctrl.decisions().is_empty());
 }
 
 #[test]
 fn expected_loss_computation_fixed_point() {
     // Verify precise fixed-point arithmetic:
     // P(s) = 500_000 (0.5), L(s, a) = 600_000 (0.6)
+    // The other half of the probability mass has an explicit zero loss.
     // E[L(a)] = (500_000 * 600_000) / 1_000_000 = 300_000
     let mut m = LossMatrix::new();
     m.set("s", "a", 600_000);
+    m.set("other", "a", 0);
     let config = ControllerConfig {
         controller_id: "c".to_string(),
         domain: "d".to_string(),
@@ -486,6 +489,7 @@ fn expected_loss_computation_fixed_point() {
     let mut ctrl = PolicyController::new(config, m).expect("create");
     let mut probs = BTreeMap::new();
     probs.insert("s".to_string(), 500_000);
+    probs.insert("other".to_string(), 500_000);
     let posterior = Posterior::new(probs);
     let sel = ctrl
         .select_action(&posterior, epoch(1), "t-fp")

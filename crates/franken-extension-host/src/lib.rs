@@ -6410,6 +6410,18 @@ impl DelegateCell {
                 delegate_id: self.delegate_id.clone(),
             });
         }
+        // Winding-down cells may still report denied requests for containment
+        // evidence. They must not mint new release authority. A cell without
+        // Declassify can only reach the default gateway's capability denial;
+        // a cell holding that capability must still be fully Running.
+        if self
+            .manifest
+            .base_manifest
+            .capabilities
+            .contains(&Capability::Declassify)
+        {
+            self.ensure_running_for_authority("request_declassification")?;
+        }
         let outcome = self.declassification_gateway.evaluate_request(
             request,
             &self.manifest.base_manifest.capabilities,
@@ -8976,6 +8988,89 @@ mod delegate_cell_tests {
                 .get("identity-bound-delegate"),
             Some(&vec![11])
         );
+        assert_eq!(
+            delegate
+                .declassification_gateway
+                .receipt_log()
+                .receipts()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn pending_containment_cannot_mint_new_declassification_authority() {
+        for (transition, state) in [
+            (LifecycleTransition::Suspend, ExtensionState::Suspending),
+            (LifecycleTransition::Terminate, ExtensionState::Terminating),
+        ] {
+            let mut delegate = identity_bound_delegate();
+            delegate
+                .apply_transition(transition, 10, &lifecycle_context())
+                .unwrap();
+            assert_eq!(delegate.lifecycle_manager.state(), state);
+            let outcome = delegate.request_declassification(
+                identity_bound_request("identity-bound-delegate", 11),
+                &flow_context(),
+                &lifecycle_context(),
+            );
+            assert!(matches!(outcome, Err(DelegateCellError::InactiveState {
+                state: actual, action: "request_declassification", ..
+            }) if actual == state));
+            assert!(
+                delegate
+                    .declassification_gateway
+                    .receipt_log()
+                    .receipts()
+                    .is_empty()
+            );
+            assert!(
+                delegate
+                    .declassification_gateway
+                    .request_history_by_requester
+                    .is_empty()
+            );
+            assert_eq!(delegate.lifecycle_manager.state(), state);
+        }
+    }
+
+    #[test]
+    fn explicit_resume_restores_release_authority_without_a_phantom_approval() {
+        let mut delegate = identity_bound_delegate();
+        delegate
+            .apply_transition(LifecycleTransition::Suspend, 10, &lifecycle_context())
+            .unwrap();
+        assert!(
+            delegate
+                .request_declassification(
+                    identity_bound_request("identity-bound-delegate", 11),
+                    &flow_context(),
+                    &lifecycle_context(),
+                )
+                .is_err()
+        );
+        for (transition, timestamp) in [
+            (LifecycleTransition::Freeze, 12),
+            (LifecycleTransition::Resume, 13),
+            (LifecycleTransition::Reactivate, 14),
+        ] {
+            delegate
+                .apply_transition(transition, timestamp, &lifecycle_context())
+                .unwrap();
+        }
+        let request = identity_bound_request("identity-bound-delegate", 15);
+        let DeclassificationOutcome::Approved { receipt, .. } = delegate
+            .request_declassification(request.clone(), &flow_context(), &lifecycle_context())
+            .unwrap()
+        else {
+            panic!("reactivated delegate should retain its capability");
+        };
+        assert!(receipt.verify_for_request(
+            &delegate.declassification_gateway.public_key(),
+            &request,
+            &delegate.manifest.base_manifest.capabilities,
+            &flow_context(),
+        ));
         assert_eq!(
             delegate
                 .declassification_gateway

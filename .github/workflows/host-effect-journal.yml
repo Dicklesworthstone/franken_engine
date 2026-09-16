@@ -80,7 +80,7 @@ jobs:
           retention-days: 7
   # Large-file candidate transport only; remove when the tested code lands.
   binding-candidate:
-    if: github.event_name == 'push' && github.event.before == '1c9d5815d30bfbae423f8c7851d7ed2c53eb973e'
+    if: github.event_name == 'push' && github.event.before == '39b86338ecf374236938fb1fbff6036d648bdd40'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -92,7 +92,7 @@ jobs:
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v4
-      - name: Apply exact candidate without moving refs
+      - name: Apply original receipt candidate without moving refs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -111,12 +111,32 @@ jobs:
           assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(files)
           assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + files[0]], text=True).strip() == '29e54c712be90175f2a636d26fd6f42607506de6'
           subprocess.run(['git', 'apply', '--index', str(path)], check=True)
-          pathlib.Path('binding-output/files.json').write_text(json.dumps(files))
           PY
-      - name: Install Rust and format touched sources
+      - name: Install Rust and format original candidate
         run: |
           rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
           rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-extension-host/src/lib.rs crates/franken-extension-host/src/decision_binding.rs
+      - name: Apply principal gate and consumer corrections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          url = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/0209a6e1adddecd6484845fa8aa0de3091d97d4d'
+          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              raw = base64.b64decode(json.load(response)['content'])
+          assert hashlib.sha256(raw).hexdigest() == '3cf0e1526b53d3cfd49449265d3691340a8d6155035e935adf194daff26ad556'
+          path = pathlib.Path('binding-output/principal.patch')
+          path.write_bytes(gzip.decompress(raw))
+          files = ['crates/franken-extension-host/src/lib.rs', 'crates/franken-extension-host/src/decision_binding.rs', 'crates/franken-extension-host/tests/comprehensive_unit_suite.rs']
+          stats = subprocess.check_output(['git', 'apply', '--numstat', str(path)], text=True)
+          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(files)
+          subprocess.run(['git', 'apply', '--check', str(path)], check=True)
+          subprocess.run(['git', 'apply', str(path)], check=True)
+          pathlib.Path('binding-output/files.json').write_text(json.dumps(files))
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + files, check=True)
+          PY
       - name: Run all host unit and integration tests
         run: |
           set -o pipefail

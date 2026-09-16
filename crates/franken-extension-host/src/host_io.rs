@@ -15,6 +15,9 @@ use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+mod http_response;
+pub use http_response::{ParsedHttpResponse, parse_http_response};
+
 /// Capability a guest must hold for the host to perform a given I/O request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2338,9 +2341,9 @@ impl SandboxedHostIo {
     /// (bounded by `min(max_len, max_bytes)`). This is the mechanism behind a
     /// guest `http.get`/`fetch`: the response bytes returned here are the real
     /// status line + headers + body the peer sent, which the engine parses into a
-    /// JS response object. Read termination relies on the peer closing the
-    /// connection after responding (the engine frames `Connection: close`), so
-    /// `read_to_end` returns at EOF rather than blocking until the read timeout.
+    /// JS response object. Self-delimited replies finish at their HTTP message
+    /// boundary, even on a persistent connection. Truncated framed replies are
+    /// errors, not partial successful responses.
     fn network_request(
         &self,
         endpoint: &str,
@@ -2376,20 +2379,11 @@ impl SandboxedHostIo {
         // it leaves our read half open to receive the reply. Best-effort: a peer
         // that already closed makes this a no-op.
         let _ = stream.shutdown(Shutdown::Write);
-        // Read the reply on the SAME socket. cap+1 so a peer that streams more
-        // than the cap fails closed rather than being silently truncated.
-        let mut response = Vec::new();
-        stream
-            .take(cap.saturating_add(1))
-            .read_to_end(&mut response)
-            .map_err(|err| HostIoError::Io {
-                detail: format!("recv from {endpoint}: {err}"),
-            })?;
-        if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
-            return Err(HostIoError::Io {
-                detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
-            });
-        }
+        let response = http_response::read_response(&mut stream, payload, cap).map_err(|err| {
+            HostIoError::Io {
+                detail: format!("HTTP recv from {endpoint}: {err}"),
+            }
+        })?;
         Ok(HostIoResponse::NetworkRequest { response })
     }
 
@@ -2405,8 +2399,8 @@ impl SandboxedHostIo {
     /// TCP FIN inside a TLS session is a truncation signal, not end-of-request.
     /// Request termination is carried by the HTTP framing itself
     /// (`Content-Length` + `Connection: close` synthesized by the engine's wire
-    /// builder), and the read tolerates a peer that closes without a TLS
-    /// `close_notify` after responding (common for one-shot HTTP servers).
+    /// builder). A fully received length-delimited or chunked message needs no
+    /// TLS close notification; a close-delimited body requires a clean TLS EOF.
     fn network_request_tls(&self, endpoint: &str, payload: &[u8], cap: u64) -> HostIoOutcome {
         // Verification identity: the host part of `host:port`. (IPv6 endpoints
         // in bracket form are not produced by the engine's wire builder.)
@@ -2437,36 +2431,14 @@ impl SandboxedHostIo {
         tls.flush().map_err(|err| HostIoError::Io {
             detail: format!("TLS flush to {endpoint}: {err}"),
         })?;
-        // Bounded read of the reply on the same TLS session. cap+1 semantics as
-        // the plaintext path: a peer that streams more than the cap fails closed
-        // rather than being silently truncated. `UnexpectedEof` after the
-        // response is a peer that TCP-closed without `close_notify`; the HTTP
-        // framing (`Connection: close`) already delimits the response, so treat
-        // it as end-of-stream rather than an error.
-        let mut response = Vec::new();
-        let mut buf = [0u8; 8192];
-        loop {
-            if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
-                return Err(HostIoError::Io {
-                    detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
-                });
+        // rustls reports a missing close_notify as UnexpectedEof. Never turn
+        // that into success unless framing already completed the message (in
+        // which case the reader returns before asking TLS for another byte).
+        let response = http_response::read_response(&mut tls, payload, cap).map_err(|err| {
+            HostIoError::Io {
+                detail: format!("TLS HTTP recv from {endpoint}: {err}"),
             }
-            match tls.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => response.extend_from_slice(&buf[..n]),
-                Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(err) => {
-                    return Err(HostIoError::Io {
-                        detail: format!("TLS recv from {endpoint}: {err}"),
-                    });
-                }
-            }
-        }
-        if u64::try_from(response.len()).unwrap_or(u64::MAX) > cap {
-            return Err(HostIoError::Io {
-                detail: format!("network response from {endpoint} exceeds the {cap}-byte cap"),
-            });
-        }
+        })?;
         Ok(HostIoResponse::NetworkRequest { response })
     }
 }

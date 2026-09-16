@@ -36,46 +36,46 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # Temporary large-file transport. This never changes a Git ref and is
-      # removed when the tested implementation is published through the connector.
-      - name: Apply exact saved JSON candidate
+      # Temporary immutable candidate transport; never modifies a Git ref.
+      # Removed when the tested implementation is committed through the connector.
+      - name: Materialize exact JSON candidate and visibility correction
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p json-validation
           git rev-parse HEAD > json-validation/revision.txt
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
           root = pathlib.Path('json-validation')
-          paths = [
-              'crates/franken-engine/src/baseline_interpreter.rs',
-              'crates/franken-engine/src/baseline_interpreter/json_parse.rs',
-              'crates/franken-engine/tests/js_string_integration.rs',
-              'crates/franken-engine/tests/json_parse_execution.rs',
-          ]
-          if not pathlib.Path(paths[1]).exists():
-              expected = '210386e53da790764e1075d17c19f18930ebc917'
-              actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:' + paths[0]], text=True).strip()
-              assert actual == expected, 'interpreter base changed; candidate requires review'
-              parts = ['7317ff0a029c1a1b71f3af942abdafb4e1ce16fe', '130e1034169a5461a9e0e6f17e4ffdfb40a4b716', '4ac2d38db5dbeb311d037344410dac6a0020cf1a', '8424a3948cf4901e41b772f19fbf7465ffbd747f', '726ce0c0dc513488bdbb4cf47b8929c0397cfe53']
-              raw = bytearray()
-              for sha in parts:
+          files = {
+              'crates/franken-engine/src/baseline_interpreter.rs': 'd7b998f6319ceeb2d8d6dfa0fa4c750acf77d3bc',
+              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': '44b68afb447a57a356e2fd5d8a12c1c7b823e46b',
+              'crates/franken-engine/tests/js_string_integration.rs': 'ab76255200a4771563b4607addc743fbfdc8fced',
+              'crates/franken-engine/tests/json_parse_execution.rs': '267a3daf74a74e70e9cf50e396d29682d65483b7',
+          }
+          if not pathlib.Path('crates/franken-engine/src/baseline_interpreter/json_parse.rs').exists():
+              actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:crates/franken-engine/src/baseline_interpreter.rs'], text=True).strip()
+              assert actual == '210386e53da790764e1075d17c19f18930ebc917', 'interpreter changed; review required'
+              for path, sha in files.items():
                   req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
                       'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
                       'Accept': 'application/vnd.github+json',
                       'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
                   })
                   with urllib.request.urlopen(req, timeout=60) as response:
-                      raw.extend(base64.b64decode(json.load(response)['content']))
-              assert hashlib.sha256(raw).hexdigest() == '8f43f83d270dab769f600d89b6ca7647ad6991c0eaac9d38cbef2f016cef79c0'
-              patch = gzip.decompress(raw)
-              assert hashlib.sha256(patch).hexdigest() == 'cbf99e77eaf030b677a205988a179c2ec92fcf62ae07745ce76d6045575ce6d1'
-              patch_path = root / 'candidate.patch'
-              patch_path.write_bytes(patch)
-              stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch_path)], text=True)
-              assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(paths)
-              subprocess.run(['git', 'apply', '--index', str(patch_path)], check=True)
-          (root / 'paths.json').write_text(json.dumps(paths))
+                      content = base64.b64decode(json.load(response)['content'])
+                  assert hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest() == sha
+                  file = pathlib.Path(path)
+                  file.parent.mkdir(parents=True, exist_ok=True)
+                  file.write_bytes(content)
+              path = pathlib.Path('crates/franken-engine/src/baseline_interpreter/json_parse.rs')
+              text = path.read_text()
+              for name in ['json_parse_builtin', 'json_charge_work', 'json_store_parsed_property']:
+                  before = '    fn ' + name + '('
+                  assert text.count(before) == 1
+                  text = text.replace(before, '    pub(super) fn ' + name + '(', 1)
+              path.write_text(text)
+          (root / 'paths.json').write_text(json.dumps(list(files)))
           PY
       - name: Install Rust and format candidate
         run: |

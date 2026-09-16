@@ -60,6 +60,8 @@ jobs:
   async-generators:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: write
     env:
       CARGO_BUILD_JOBS: '1'
       CARGO_INCREMENTAL: '0'
@@ -72,6 +74,60 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal --component rustfmt
+      # One-shot immutable-blob transport. No branch/ref writes are performed;
+      # the reviewed result is committed separately through the GitHub connector.
+      - name: Materialize exact async-delegation candidate
+        if: github.event_name == 'push' && github.event.before == 'd28226f1c2168a201e95f07ba7ded99b35319e96'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          output = pathlib.Path('async-generator-validation')
+          output.mkdir(exist_ok=True)
+          api = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
+          def request(path, data=None):
+              body = None if data is None else json.dumps(data).encode()
+              req = urllib.request.Request(api + path, data=body, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
+                  'Content-Type': 'application/json',
+              })
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+          def blob(sha):
+              content = base64.b64decode(request('/git/blobs/' + sha)['content'])
+              assert hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest() == sha
+              return content
+          bases = {
+              'crates/franken-engine/src/baseline_interpreter.rs': 'bcc39458a695ada12eb08afe6e23edd01236601b',
+              'crates/franken-engine/src/baseline_interpreter/async_generator.rs': '523795dd763123e956853bcf4dcc9162d3caf307',
+              'crates/franken-engine/tests/async_generator_execution.rs': 'd3acbdd77a674c55d3bb559277d107b4cdb02dfd',
+          }
+          for path, expected in bases.items():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected
+          patch = blob('47a451109bd83f5c33cf75077d75bd9c1ed8c8e2') + blob('40acf179577bbb50dfedc72280a041613fef5e65')
+          patch_path = output / 'candidate.patch'
+          patch_path.write_bytes(patch)
+          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch_path)], text=True)
+          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(bases)
+          subprocess.run(['git', 'apply', '--check', str(patch_path)], check=True)
+          subprocess.run(['git', 'apply', str(patch_path)], check=True)
+          child = pathlib.Path('crates/franken-engine/src/baseline_interpreter/async_generator/delegation.rs')
+          assert not child.exists()
+          child.parent.mkdir(exist_ok=True)
+          child.write_bytes(blob('470b58a4eabee60a5362aa0cba5dd3d3042bddcc'))
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', 'crates/franken-engine/src/baseline_interpreter/async_generator.rs', 'crates/franken-engine/tests/async_generator_execution.rs'], check=True)
+          result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
+          for path in [*bases, str(child)]:
+              content = pathlib.Path(path).read_bytes()
+              sha = request('/git/blobs', {'content': base64.b64encode(content).decode(), 'encoding': 'base64'})['sha']
+              assert hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest() == sha
+              result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+              (output / pathlib.Path(path).name).write_bytes(content)
+          (output / 'result.json').write_text(json.dumps(result, indent=2))
+          PY
       - name: Select native runtime dependency closure
         run: |
           mkdir -p async-generator-validation

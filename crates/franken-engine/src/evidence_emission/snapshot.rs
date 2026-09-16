@@ -1,11 +1,25 @@
-//! Validated recovery of canonical evidence emission state (bd-8yhg4).
+//! Validated recovery of canonical evidence emission state.
 //!
-//! Deserialization checks self-consistency, not origin or freshness. A caller
-//! accepting an untrusted checkpoint must additionally authenticate its bytes
-//! against an independently held commitment. In particular, an attacker can
-//! recompute an unkeyed chain; a valid chain alone is not a trust anchor.
+//! Bare deserialization checks self-consistency, not origin or freshness.
+//! Use `restore_checkpoint` with an independently protected, latest checkpoint
+//! digest when accepting untrusted storage. A digest stored beside attacker-
+//! controlled checkpoint bytes is not a trust anchor. Persisting the bytes and
+//! protecting/updating the latest digest remain the caller's responsibility.
 
-use super::*;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::io::{self, Write};
+
+use serde::Deserialize;
+
+use super::{
+    ActionCategory, CanonicalEvidenceEmitter, CanonicalEvidenceEntry, EmitterConfig,
+    EvidenceEmissionEvent, COMPONENT_NAME, HASH_SCRATCH_CAPACITY, SCHEMA_VERSION,
+};
+use crate::hash_tiers::ContentHash;
+use crate::security_epoch::SecurityEpoch;
+
+const CHECKPOINT_HASH_DOMAIN: &[u8] = b"franken-engine.evidence-emitter-checkpoint.v1\0";
 
 /// A persisted emitter cannot safely resume at the claimed ledger position.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +32,9 @@ pub enum EmitterRestoreError {
     CategoryCounts,
     Epoch { minimum: u64, actual: u64 },
     Events { index: usize, reason: String },
+    CheckpointTooLarge { limit: usize },
+    CheckpointDigestMismatch,
+    CheckpointFormat { reason: String },
 }
 
 impl fmt::Display for EmitterRestoreError {
@@ -43,6 +60,15 @@ impl fmt::Display for EmitterRestoreError {
             Self::Events { index, reason } => {
                 write!(f, "invalid evidence emission event at index {index}: {reason}")
             }
+            Self::CheckpointTooLarge { limit } => {
+                write!(f, "evidence checkpoint exceeds the {limit}-byte limit")
+            }
+            Self::CheckpointDigestMismatch => {
+                f.write_str("evidence checkpoint does not match the trusted digest")
+            }
+            Self::CheckpointFormat { reason } => {
+                write!(f, "invalid evidence checkpoint encoding: {reason}")
+            }
         }
     }
 }
@@ -64,37 +90,172 @@ struct EmitterSnapshot {
     category_counts: BTreeMap<ActionCategory, u64>,
 }
 
+impl EmitterSnapshot {
+    fn into_validated(self) -> Result<CanonicalEvidenceEmitter, EmitterRestoreError> {
+        let emitter = CanonicalEvidenceEmitter {
+            config: self.config,
+            entries: self.entries,
+            events: self.events,
+            epoch: self.epoch,
+            next_sequence: self.next_sequence,
+            rolling_hash: self.rolling_hash,
+            category_counts: self.category_counts,
+            scratch: Vec::with_capacity(HASH_SCRATCH_CAPACITY),
+        };
+        emitter.validate_integrity()?;
+        Ok(emitter)
+    }
+}
+
 impl<'de> Deserialize<'de> for CanonicalEvidenceEmitter {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let snapshot = EmitterSnapshot::deserialize(deserializer)?;
-        let emitter = Self {
-            config: snapshot.config,
-            entries: snapshot.entries,
-            events: snapshot.events,
-            epoch: snapshot.epoch,
-            next_sequence: snapshot.next_sequence,
-            rolling_hash: snapshot.rolling_hash,
-            category_counts: snapshot.category_counts,
-            scratch: Vec::with_capacity(HASH_SCRATCH_CAPACITY),
-        };
-        emitter
-            .validate_integrity()
-            .map_err(serde::de::Error::custom)?;
-        Ok(emitter)
+        EmitterSnapshot::deserialize(deserializer)?
+            .into_validated()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+// Hash the exact wire bytes, including resource configuration and rejection
+// events that are not part of the entry hash chain. Domain separation uses a
+// fixed-size preimage rather than copying the entire checkpoint a second time.
+fn checkpoint_digest(bytes: &[u8]) -> ContentHash {
+    let body_hash = ContentHash::compute(bytes);
+    let mut preimage = [0_u8; CHECKPOINT_HASH_DOMAIN.len() + 32];
+    preimage[..CHECKPOINT_HASH_DOMAIN.len()].copy_from_slice(CHECKPOINT_HASH_DOMAIN);
+    preimage[CHECKPOINT_HASH_DOMAIN.len()..].copy_from_slice(body_hash.as_bytes());
+    ContentHash::compute(&preimage)
+}
+
+/// Stops serialization at the configured encoded-byte limit, not after an
+/// unbounded `to_vec`. Growth is fallible and capped at the requested limit.
+/// The limit bounds encoded bytes; it is not an exact resident-memory limit.
+struct BoundedCheckpointWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl Write for BoundedCheckpointWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint byte limit exceeded",
+            ));
+        }
+        // The limit check above also proves this addition cannot overflow.
+        let required = self.bytes.len() + buffer.len();
+        if required > self.bytes.capacity() {
+            let capacity = self
+                .bytes
+                .capacity()
+                .saturating_mul(2)
+                .max(1024)
+                .max(required)
+                .min(self.limit);
+            self.bytes
+                .try_reserve_exact(capacity - self.bytes.len())
+                .map_err(io::Error::other)?;
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
 impl CanonicalEvidenceEmitter {
+    /// Export validated, deterministic checkpoint bytes and their commitment.
+    ///
+    /// The caller persists the bytes through its existing storage substrate and
+    /// protects the digest independently, for example in its signed checkpoint
+    /// manifest. Publish that digest only after those bytes are durable. An
+    /// export failure does not mutate entries, counters, events, or budget.
+    /// `max_bytes` bounds the encoded output, including escaped metadata.
+    pub fn checkpoint_bytes(
+        &self,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, ContentHash), EmitterRestoreError> {
+        self.validate_integrity()?;
+        let mut writer = BoundedCheckpointWriter {
+            bytes: Vec::new(),
+            limit: max_bytes,
+            exceeded: false,
+        };
+        if let Err(error) = serde_json::to_writer(&mut writer, self) {
+            return Err(if writer.exceeded {
+                EmitterRestoreError::CheckpointTooLarge { limit: max_bytes }
+            } else {
+                EmitterRestoreError::CheckpointFormat {
+                    reason: error.to_string(),
+                }
+            });
+        }
+        let digest = checkpoint_digest(&writer.bytes);
+        Ok((writer.bytes, digest))
+    }
+
+    /// Restore the exact checkpoint committed by a trusted external authority.
+    ///
+    /// `expected_digest` MUST come from an independently authenticated, latest
+    /// checkpoint record, not the same untrusted input as `bytes`. Supplying an
+    /// old digest intentionally permits its old checkpoint: freshness depends
+    /// on the caller's protected latest-checkpoint record.
+    ///
+    /// The byte limit is enforced before hashing or parsing, and a digest
+    /// mismatch is rejected before deserialization. After integrity validation,
+    /// the current caller-owned resource policy replaces the stored policy;
+    /// historical budget settings never authorize future emissions. The current
+    /// epoch may advance but cannot precede the checkpoint's epoch. Existing
+    /// entries keep their original epochs and hashes.
+    pub fn restore_checkpoint(
+        bytes: &[u8],
+        expected_digest: &ContentHash,
+        config: EmitterConfig,
+        current_epoch: SecurityEpoch,
+        max_bytes: usize,
+    ) -> Result<Self, EmitterRestoreError> {
+        if bytes.len() > max_bytes {
+            return Err(EmitterRestoreError::CheckpointTooLarge { limit: max_bytes });
+        }
+        if checkpoint_digest(bytes) != *expected_digest {
+            return Err(EmitterRestoreError::CheckpointDigestMismatch);
+        }
+        let snapshot: EmitterSnapshot =
+            serde_json::from_slice(bytes).map_err(|error| EmitterRestoreError::CheckpointFormat {
+                reason: error.to_string(),
+            })?;
+        if snapshot.entries.len() > config.buffer_capacity {
+            return Err(EmitterRestoreError::Capacity {
+                entries: snapshot.entries.len(),
+                capacity: config.buffer_capacity,
+            });
+        }
+        if current_epoch < snapshot.epoch {
+            return Err(EmitterRestoreError::Epoch {
+                minimum: snapshot.epoch.as_u64(),
+                actual: current_epoch.as_u64(),
+            });
+        }
+        let mut emitter = snapshot.into_validated()?;
+        emitter.config = config;
+        emitter.epoch = current_epoch;
+        Ok(emitter)
+    }
+
     /// Validate the complete resumable state, including all derived caches.
     ///
     /// The retained ledger is an append-only prefix starting at sequence zero.
     /// This check rejects gaps, duplicated positions, stale counters, altered
     /// category totals, inconsistent epochs and contradictory success events.
     /// It does not authenticate the producer or detect a fully resealed prefix
-    /// rollback; those require an independently trusted checkpoint commitment.
+    /// rollback; use `restore_checkpoint` with an independently trusted digest.
     pub fn validate_integrity(&self) -> Result<(), EmitterRestoreError> {
         if self.entries.len() > self.config.buffer_capacity {
             return Err(EmitterRestoreError::Capacity {
@@ -132,13 +293,13 @@ impl CanonicalEvidenceEmitter {
             if !entry.verify_chain_link(previous) {
                 return Err(invalid_entry("predecessor chain hash mismatch"));
             }
-            if let Some(previous) = previous {
-                if entry.epoch < previous.epoch {
-                    return Err(EmitterRestoreError::Epoch {
-                        minimum: previous.epoch.as_u64(),
-                        actual: entry.epoch.as_u64(),
-                    });
-                }
+            if let Some(previous) = previous
+                && entry.epoch < previous.epoch
+            {
+                return Err(EmitterRestoreError::Epoch {
+                    minimum: previous.epoch.as_u64(),
+                    actual: entry.epoch.as_u64(),
+                });
             }
             rolling_preimage[..32].copy_from_slice(rolling_hash.as_bytes());
             rolling_preimage[32..].copy_from_slice(entry.artifact_hash.as_bytes());
@@ -161,13 +322,13 @@ impl CanonicalEvidenceEmitter {
         if self.category_counts != category_counts {
             return Err(EmitterRestoreError::CategoryCounts);
         }
-        if let Some(last) = previous {
-            if self.epoch < last.epoch {
-                return Err(EmitterRestoreError::Epoch {
-                    minimum: last.epoch.as_u64(),
-                    actual: self.epoch.as_u64(),
-                });
-            }
+        if let Some(last) = previous
+            && self.epoch < last.epoch
+        {
+            return Err(EmitterRestoreError::Epoch {
+                minimum: last.epoch.as_u64(),
+                actual: self.epoch.as_u64(),
+            });
         }
 
         // Rejections do not advance the ledger. Every successful emit must
@@ -214,10 +375,15 @@ mod tests {
     use crate::control_plane::mocks::{
         MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
     };
+    use crate::evidence_emission::{
+        EvidenceEmissionError, EvidenceEmissionRequest, EvidenceEntryId, compute_chain_hash,
+    };
+
+    const CHECKPOINT_LIMIT: usize = 1_000_000;
 
     fn request(index: u64) -> EvidenceEmissionRequest {
         EvidenceEmissionRequest {
-            category: if index % 2 == 0 {
+            category: if index.is_multiple_of(2) {
                 ActionCategory::DecisionContract
             } else {
                 ActionCategory::ContainmentAction
@@ -261,6 +427,16 @@ mod tests {
             entry.chain_hash = compute_chain_hash(previous.as_ref(), &entry.artifact_hash);
             previous = Some(entry.chain_hash);
         }
+    }
+
+    fn restore(bytes: &[u8], digest: &ContentHash) -> Result<CanonicalEvidenceEmitter, EmitterRestoreError> {
+        CanonicalEvidenceEmitter::restore_checkpoint(
+            bytes,
+            digest,
+            EmitterConfig::default(),
+            SecurityEpoch::from_raw(3),
+            CHECKPOINT_LIMIT,
+        )
     }
 
     #[test]
@@ -428,5 +604,190 @@ mod tests {
         let bytes = serde_json::to_string(&populated(1)).unwrap();
         let duplicate = format!("{{\"next_sequence\":999,{}", &bytes[1..]);
         assert!(serde_json::from_str::<CanonicalEvidenceEmitter>(&duplicate).is_err());
+    }
+
+    #[test]
+    fn authenticated_checkpoint_resume_matches_uninterrupted_run() {
+        let emitter = populated(2);
+        let (bytes, digest) = emitter.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let mut restored = restore(&bytes, &digest).unwrap();
+        assert_eq!(restored.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap(), (bytes, digest));
+        let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(100));
+        restored.emit(&mut cx, &request(2)).unwrap();
+        assert_eq!(
+            restored.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap(),
+            populated(3).checkpoint_bytes(CHECKPOINT_LIMIT).unwrap()
+        );
+    }
+
+    #[test]
+    fn latest_trusted_digest_rejects_a_valid_older_prefix() {
+        let (old_bytes, old_digest) = populated(1).checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let (_, latest_digest) = populated(2).checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        assert!(serde_json::from_slice::<CanonicalEvidenceEmitter>(&old_bytes).is_ok());
+        assert!(matches!(
+            restore(&old_bytes, &latest_digest),
+            Err(EmitterRestoreError::CheckpointDigestMismatch)
+        ));
+        // This boundary deliberately does not pretend an obsolete trusted
+        // commitment can detect rollback. The caller must protect the latest.
+        assert!(restore(&old_bytes, &old_digest).is_ok());
+    }
+
+    #[test]
+    fn trusted_digest_rejects_a_fully_resealed_forgery() {
+        let mut forged = populated(2);
+        let (_, trusted_digest) = forged.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        forged.entries[0].policy_id = "forged-policy".into();
+        forged.events[0].policy_id = "forged-policy".into();
+        reseal_entries(&mut forged);
+        let mut rolling = ContentHash::compute(b"evidence-genesis");
+        for entry in &forged.entries {
+            let mut preimage = [0_u8; 64];
+            preimage[..32].copy_from_slice(rolling.as_bytes());
+            preimage[32..].copy_from_slice(entry.artifact_hash.as_bytes());
+            rolling = ContentHash::compute(&preimage);
+        }
+        forged.rolling_hash = rolling;
+        assert_eq!(forged.validate_integrity(), Ok(()));
+        let (forged_bytes, _) = forged.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        assert!(matches!(
+            restore(&forged_bytes, &trusted_digest),
+            Err(EmitterRestoreError::CheckpointDigestMismatch)
+        ));
+    }
+
+    #[test]
+    fn checkpoint_commits_configuration_and_rejection_events_too() {
+        let mut emitter = populated(1);
+        let mut exhausted = MockCx::new(trace_id_from_seed(1), MockBudget::new(0));
+        assert!(emitter.emit(&mut exhausted, &request(1)).is_err());
+        let (_, trusted_digest) = emitter.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let mut config_attack = emitter.clone();
+        config_attack.config.budget_cost_ms = 0;
+        let mut event_attack = emitter;
+        event_attack.events[1].policy_id = "forged-rejection-policy".into();
+        for attack in [config_attack, event_attack] {
+            assert_eq!(attack.validate_integrity(), Ok(()));
+            let (bytes, _) = attack.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+            assert!(matches!(
+                restore(&bytes, &trusted_digest),
+                Err(EmitterRestoreError::CheckpointDigestMismatch)
+            ));
+        }
+    }
+
+    #[test]
+    fn checkpoint_limits_are_exact_and_failure_does_not_mutate_state() {
+        let mut emitter = populated(1);
+        let mut req = request(1);
+        req.metadata.insert("escaped".into(), "\u{0000}\"\\".repeat(200));
+        let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(100));
+        emitter.emit(&mut cx, &req).unwrap();
+        let before = serde_json::to_vec(&emitter).unwrap();
+        let (bytes, digest) = emitter.checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        assert_eq!(bytes, before);
+        assert_eq!(emitter.checkpoint_bytes(bytes.len()).unwrap(), (bytes.clone(), digest));
+        assert_eq!(
+            emitter.checkpoint_bytes(bytes.len() - 1).unwrap_err(),
+            EmitterRestoreError::CheckpointTooLarge { limit: bytes.len() - 1 }
+        );
+        assert_eq!(serde_json::to_vec(&emitter).unwrap(), before);
+        assert!(matches!(
+            CanonicalEvidenceEmitter::restore_checkpoint(
+                &bytes,
+                &ContentHash::default(),
+                EmitterConfig::default(),
+                SecurityEpoch::from_raw(3),
+                bytes.len() - 1,
+            ),
+            Err(EmitterRestoreError::CheckpointTooLarge { .. })
+        ));
+        assert_eq!(emitter.checkpoint_bytes(0).unwrap_err(), EmitterRestoreError::CheckpointTooLarge { limit: 0 });
+    }
+
+    #[test]
+    fn restore_reapplies_current_resource_policy_and_advances_epoch() {
+        let (bytes, digest) = populated(1).checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        let mut restored = CanonicalEvidenceEmitter::restore_checkpoint(
+            &bytes,
+            &digest,
+            EmitterConfig { buffer_capacity: 2, budget_cost_ms: 7 },
+            SecurityEpoch::from_raw(4),
+            CHECKPOINT_LIMIT,
+        ).unwrap();
+        let first = restored.entries()[0].clone();
+        let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(100));
+        restored.emit(&mut cx, &request(1)).unwrap();
+        assert_eq!(cx.budget().remaining_ms(), 93);
+        assert_eq!(restored.entries()[0], first);
+        assert_eq!(restored.entries()[0].epoch, SecurityEpoch::from_raw(3));
+        assert_eq!(restored.entries()[1].epoch, SecurityEpoch::from_raw(4));
+        assert_eq!(restored.entries()[1].sequence, 1);
+        assert_eq!(
+            restored.emit(&mut cx, &request(2)).unwrap_err(),
+            EvidenceEmissionError::BufferFull { capacity: 2 }
+        );
+        assert_eq!(cx.budget().remaining_ms(), 93);
+        assert_eq!(restored.validate_integrity(), Ok(()));
+    }
+
+    #[test]
+    fn restore_rejects_current_policy_that_cannot_admit_the_checkpoint() {
+        let (bytes, digest) = populated(1).checkpoint_bytes(CHECKPOINT_LIMIT).unwrap();
+        assert!(matches!(
+            CanonicalEvidenceEmitter::restore_checkpoint(
+                &bytes, &digest,
+                EmitterConfig { buffer_capacity: 0, budget_cost_ms: 1 },
+                SecurityEpoch::from_raw(3), CHECKPOINT_LIMIT,
+            ),
+            Err(EmitterRestoreError::Capacity { entries: 1, capacity: 0 })
+        ));
+        assert!(matches!(
+            CanonicalEvidenceEmitter::restore_checkpoint(
+                &bytes, &digest, EmitterConfig::default(),
+                SecurityEpoch::from_raw(2), CHECKPOINT_LIMIT,
+            ),
+            Err(EmitterRestoreError::Epoch { minimum: 3, actual: 2 })
+        ));
+    }
+
+    #[test]
+    fn restore_checks_digest_before_parsing_and_keeps_typed_integrity_errors() {
+        let malformed = b"not a JSON checkpoint";
+        assert!(matches!(
+            restore(malformed, &ContentHash::default()),
+            Err(EmitterRestoreError::CheckpointDigestMismatch)
+        ));
+        assert!(matches!(
+            restore(malformed, &checkpoint_digest(malformed)),
+            Err(EmitterRestoreError::CheckpointFormat { .. })
+        ));
+        let mut invalid = populated(1);
+        invalid.next_sequence = 0;
+        assert!(matches!(
+            invalid.checkpoint_bytes(CHECKPOINT_LIMIT),
+            Err(EmitterRestoreError::NextSequence { expected: 1, actual: 0 })
+        ));
+        let invalid_bytes = serde_json::to_vec(&invalid).unwrap();
+        assert!(matches!(
+            restore(&invalid_bytes, &checkpoint_digest(&invalid_bytes)),
+            Err(EmitterRestoreError::NextSequence { expected: 1, actual: 0 })
+        ));
+    }
+
+    #[test]
+    fn bounded_writer_rejects_a_whole_chunk_without_exceeding_its_limit() {
+        let mut writer = BoundedCheckpointWriter {
+            bytes: Vec::new(), limit: 3, exceeded: false,
+        };
+        writer.write_all(b"a").unwrap();
+        assert!(writer.write_all(b"bcd").is_err());
+        assert_eq!(writer.bytes, b"a");
+        assert!(writer.exceeded);
+        writer.write_all(b"bc").unwrap();
+        assert_eq!(writer.bytes, b"abc");
+        assert!(writer.write_all(b"d").is_err());
+        assert_eq!(writer.bytes, b"abc");
     }
 }

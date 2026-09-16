@@ -287,7 +287,9 @@ pub struct InMemoryHostEffectJournal {
     mode: HostEffectJournalMode,
     entries: Mutex<Vec<JournalSlot>>,
     state: Mutex<JournalState>,
-    attempt_entries: Mutex<Vec<HostEffectJournalEntry>>,
+    // Number of contiguous completed/consumed slots in the current attempt.
+    // Payloads have one retained owner; inspection clones only on demand.
+    attempt_prefix_len: Mutex<usize>,
     attempt_record_start: Mutex<usize>,
     reservation_scope: Arc<()>,
     budget: Mutex<JournalBudget>,
@@ -305,7 +307,7 @@ impl InMemoryHostEffectJournal {
             mode: HostEffectJournalMode::Record,
             entries: Mutex::new(Vec::new()),
             state: Mutex::new(JournalState::Idle),
-            attempt_entries: Mutex::new(Vec::new()),
+            attempt_prefix_len: Mutex::new(0),
             attempt_record_start: Mutex::new(0),
             reservation_scope: Arc::new(()),
             budget: Mutex::new(JournalBudget::new(limits)),
@@ -337,15 +339,17 @@ impl InMemoryHostEffectJournal {
             budget.commit(admission);
         }
         let mut slots = Vec::new();
-        slots.try_reserve_exact(entries.len()).map_err(|_| HostEffectJournalError::Lifecycle {
-            detail: "journal slot allocation failed".to_string(),
-        })?;
+        slots
+            .try_reserve_exact(entries.len())
+            .map_err(|_| HostEffectJournalError::Lifecycle {
+                detail: "journal slot allocation failed".to_string(),
+            })?;
         slots.extend(entries.into_iter().map(JournalSlot::Completed));
         Ok(Self {
             mode: HostEffectJournalMode::Replay,
             entries: Mutex::new(slots),
             state: Mutex::new(JournalState::Idle),
-            attempt_entries: Mutex::new(Vec::new()),
+            attempt_prefix_len: Mutex::new(0),
             attempt_record_start: Mutex::new(0),
             reservation_scope: Arc::new(()),
             budget: Mutex::new(budget),
@@ -356,12 +360,18 @@ impl InMemoryHostEffectJournal {
     /// is a logical payload budget, not an allocator or process RSS estimate.
     #[must_use]
     pub fn retained_encoded_bytes(&self) -> usize {
-        self.budget.lock().expect("host-effect budget mutex").retained_bytes()
+        self.budget
+            .lock()
+            .expect("host-effect budget mutex")
+            .retained_bytes()
     }
 
     #[must_use]
     pub fn limits(&self) -> HostEffectJournalLimits {
-        self.budget.lock().expect("host-effect budget mutex").limits()
+        self.budget
+            .lock()
+            .expect("host-effect budget mutex")
+            .limits()
     }
 
     #[must_use]
@@ -386,10 +396,10 @@ impl InMemoryHostEffectJournal {
         let mut state = self.state.lock().expect("host-effect journal state mutex");
         match &*state {
             JournalState::Idle => {
-                self.attempt_entries
+                *self
+                    .attempt_prefix_len
                     .lock()
-                    .expect("host-effect attempt mutex")
-                    .clear();
+                    .expect("host-effect attempt prefix mutex") = 0;
                 *state = match self.mode {
                     HostEffectJournalMode::Record => {
                         let start = self
@@ -653,46 +663,56 @@ impl InMemoryHostEffectJournal {
     /// must retain incomplete positions and later out-of-order completions.
     #[must_use]
     pub fn attempt_entries(&self) -> Vec<HostEffectJournalEntry> {
-        self.attempt_entries
+        // Keep the lifecycle boundary and slot view in one critical section;
+        // begin_execution cannot reset the prefix halfway through this read.
+        let _state = self.state.lock().expect("host-effect journal state mutex");
+        let entries = self.entries.lock().expect("host-effect journal mutex");
+        let start = *self
+            .attempt_record_start
             .lock()
-            .expect("host-effect attempt mutex")
-            .clone()
+            .expect("host-effect attempt boundary mutex");
+        let prefix_len = *self
+            .attempt_prefix_len
+            .lock()
+            .expect("host-effect attempt prefix mutex");
+        entries
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .take(prefix_len)
+            .map_while(|slot| match slot {
+                JournalSlot::Completed(entry) => Some(entry.clone()),
+                JournalSlot::Reserved(_) => None,
+            })
+            .collect()
     }
 
     /// Complete and incomplete reservations from the current or most recently
     /// failed attempt, preserving their absolute global sequence positions.
     #[must_use]
     pub fn attempt_records(&self) -> Vec<HostEffectJournalAttemptRecord> {
+        let _state = self.state.lock().expect("host-effect journal state mutex");
+        let entries = self.entries.lock().expect("host-effect journal mutex");
         let start = *self
             .attempt_record_start
             .lock()
             .expect("host-effect attempt boundary mutex");
-        let replay_end = if self.mode == HostEffectJournalMode::Replay {
-            let state = self.state.lock().expect("host-effect journal state mutex");
-            Some(match &*state {
-                JournalState::Idle => 0,
-                JournalState::Replaying { cursor } => *cursor,
-                JournalState::Finalized => usize::MAX,
-                JournalState::Poisoned(HostEffectJournalError::ReplayDivergence { evidence }) => {
-                    evidence.index
-                }
-                JournalState::Poisoned(HostEffectJournalError::UnusedReplaySuffix {
-                    index,
-                    ..
-                }) => *index,
-                JournalState::Poisoned(HostEffectJournalError::Lifecycle { .. })
-                | JournalState::Recording { .. } => 0,
-            })
+        // Replay only exposes outcomes actually consumed, including when a
+        // later lifecycle failure poisons the attempt. Never infer progress
+        // from the error variant or include unused expected transcript entries.
+        let count = if self.mode == HostEffectJournalMode::Replay {
+            *self
+                .attempt_prefix_len
+                .lock()
+                .expect("host-effect attempt prefix mutex")
         } else {
-            None
+            usize::MAX
         };
-        self.entries
-            .lock()
-            .expect("host-effect journal mutex")
+        entries
             .iter()
             .enumerate()
             .skip(start)
-            .take(replay_end.unwrap_or(usize::MAX).saturating_sub(start))
+            .take(count)
             .map(|(index, slot)| {
                 let sequence =
                     u64::try_from(index).expect("host-effect journal sequence must fit in u64");
@@ -804,10 +824,10 @@ impl InMemoryHostEffectJournal {
         }
         let entry = entry.clone();
         *state = JournalState::Replaying { cursor: cursor + 1 };
-        self.attempt_entries
+        *self
+            .attempt_prefix_len
             .lock()
-            .expect("host-effect attempt mutex")
-            .push(entry.clone());
+            .expect("host-effect attempt prefix mutex") = cursor + 1;
         Ok(entry)
     }
 
@@ -825,14 +845,18 @@ impl InMemoryHostEffectJournal {
             return Err(error.clone());
         }
         if !matches!(&*state, JournalState::Recording { .. }) {
-            return Err(poison_once(&mut state, HostEffectJournalError::Lifecycle {
-                detail: "record reservation attempted outside an active execution".to_string(),
-            }));
+            return Err(poison_once(
+                &mut state,
+                HostEffectJournalError::Lifecycle {
+                    detail: "record reservation attempted outside an active execution".to_string(),
+                },
+            ));
         }
         let mut entries = self.entries.lock().expect("host-effect journal mutex");
         let mut budget = self.budget.lock().expect("host-effect budget mutex");
         let index = entries.len();
-        let admission = index.checked_add(1)
+        let admission = index
+            .checked_add(1)
             .ok_or_else(|| HostEffectJournalError::Lifecycle {
                 detail: "journal sequence space exhausted".to_string(),
             })
@@ -843,9 +867,12 @@ impl InMemoryHostEffectJournal {
             Err(error) => return Err(poison_once(&mut state, error)),
         };
         if entries.try_reserve(1).is_err() {
-            return Err(poison_once(&mut state, HostEffectJournalError::Lifecycle {
-                detail: "journal slot allocation failed".to_string(),
-            }));
+            return Err(poison_once(
+                &mut state,
+                HostEffectJournalError::Lifecycle {
+                    detail: "journal slot allocation failed".to_string(),
+                },
+            ));
         }
         // Clone only after both count and payload admission. No provider may
         // run until this reservation is returned successfully.
@@ -918,19 +945,21 @@ impl InMemoryHostEffectJournal {
             .attempt_record_start
             .lock()
             .expect("host-effect attempt boundary mutex");
-        let completed = entries
+        let mut prefix_len = self
+            .attempt_prefix_len
+            .lock()
+            .expect("host-effect attempt prefix mutex");
+        // Each completed slot is advanced over at most once per attempt. A
+        // completion behind a hole inspects that hole, but never recopies any
+        // earlier payload. The prefix's owned view is built only on request.
+        let additional = entries
             .get(start..)
             .unwrap_or_default()
             .iter()
-            .map_while(|slot| match slot {
-                JournalSlot::Completed(entry) => Some(entry.clone()),
-                JournalSlot::Reserved(_) => None,
-            })
-            .collect();
-        *self
-            .attempt_entries
-            .lock()
-            .expect("host-effect attempt mutex") = completed;
+            .skip(*prefix_len)
+            .take_while(|slot| matches!(slot, JournalSlot::Completed(_)))
+            .count();
+        *prefix_len += additional;
         Ok(())
     }
 
@@ -1540,7 +1569,9 @@ mod tests {
         assert!(recipient.entries().is_empty());
         // Legitimate effects already in flight must still be recorded after
         // poison, but the rejected crossing cannot become a successful run.
-        recipient.complete_host_io(local, &fs_request(), &fs_outcome()).unwrap();
+        recipient
+            .complete_host_io(local, &fs_request(), &fs_outcome())
+            .unwrap();
         assert_eq!(recipient.entries().len(), 1);
         assert_eq!(recipient.finish_execution(), Err(error));
         assert!(issuer.finish_execution().is_err());
@@ -1554,9 +1585,11 @@ mod tests {
         recipient.begin_execution().unwrap();
         let foreign = issuer.reserve_process_spawn(&process_request()).unwrap();
         let _local = recipient.reserve_process_spawn(&process_request()).unwrap();
-        assert!(recipient
-            .complete_process_spawn(foreign, &process_request(), &process_outcome())
-            .is_err());
+        assert!(
+            recipient
+                .complete_process_spawn(foreign, &process_request(), &process_outcome())
+                .is_err()
+        );
         assert!(recipient.entries().is_empty());
         assert!(recipient.finish_execution().is_err());
     }
@@ -1574,9 +1607,13 @@ mod tests {
         if let ProcessSpawnRequest::Run { timeout_millis, .. } = &mut prepared {
             *timeout_millis = Some(50);
         }
-        let error = recipient.bind_prepared_process_spawn(foreign, &prepared).unwrap_err();
+        let error = recipient
+            .bind_prepared_process_spawn(foreign, &prepared)
+            .unwrap_err();
         assert_eq!(recipient.attempt_records(), before);
-        recipient.complete_process_spawn(local, &process_request(), &process_outcome()).unwrap();
+        recipient
+            .complete_process_spawn(local, &process_request(), &process_outcome())
+            .unwrap();
         assert_eq!(recipient.finish_execution(), Err(error));
     }
 
@@ -1589,9 +1626,13 @@ mod tests {
             let reservation = journal
                 .bind_prepared_process_spawn(reservation, &process_request())
                 .unwrap();
-            journal.complete_process_spawn(reservation, &process_request(), &process_outcome()).unwrap();
+            journal
+                .complete_process_spawn(reservation, &process_request(), &process_outcome())
+                .unwrap();
             journal.finish_execution().unwrap()
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
         assert_eq!(entries.len(), 1);
     }
 
@@ -1605,7 +1646,11 @@ mod tests {
         let replacement = InMemoryHostEffectJournal::recording();
         replacement.begin_execution().unwrap();
         let _local = replacement.reserve_host_io(&fs_request()).unwrap();
-        assert!(replacement.complete_host_io(foreign, &fs_request(), &fs_outcome()).is_err());
+        assert!(
+            replacement
+                .complete_host_io(foreign, &fs_request(), &fs_outcome())
+                .is_err()
+        );
         assert!(replacement.entries().is_empty());
     }
 
@@ -1614,8 +1659,12 @@ mod tests {
         let record = || {
             let journal = InMemoryHostEffectJournal::recording();
             journal.begin_execution().unwrap();
-            journal.record_host_io(&fs_request(), &fs_outcome()).unwrap();
-            journal.record_process_spawn(&process_request(), &process_outcome()).unwrap();
+            journal
+                .record_host_io(&fs_request(), &fs_outcome())
+                .unwrap();
+            journal
+                .record_process_spawn(&process_request(), &process_outcome())
+                .unwrap();
             serde_json::to_vec(&journal.finish_execution().unwrap()).unwrap()
         };
         let bytes = record();
@@ -1623,7 +1672,90 @@ mod tests {
         let replay = InMemoryHostEffectJournal::replaying(serde_json::from_slice(&bytes).unwrap());
         replay.begin_execution().unwrap();
         assert_eq!(replay.replay_host_io(&fs_request()), Some(fs_outcome()));
-        assert_eq!(replay.replay_process_spawn(&process_request()), Some(process_outcome()));
-        assert_eq!(serde_json::to_vec(&replay.finish_execution().unwrap()).unwrap(), bytes);
+        assert_eq!(
+            replay.replay_process_spawn(&process_request()),
+            Some(process_outcome())
+        );
+        assert_eq!(
+            serde_json::to_vec(&replay.finish_execution().unwrap()).unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn completed_prefix_advances_once_when_out_of_order_holes_close() {
+        let journal = InMemoryHostEffectJournal::recording();
+        journal.begin_execution().unwrap();
+        let mut reservations: Vec<_> = (0..32)
+            .map(|_| journal.reserve_host_io(&fs_request()).unwrap())
+            .collect();
+        while reservations.len() > 1 {
+            journal
+                .complete_host_io(reservations.pop().unwrap(), &fs_request(), &fs_outcome())
+                .unwrap();
+            assert_eq!(*journal.attempt_prefix_len.lock().unwrap(), 0);
+            assert!(journal.attempt_entries().is_empty());
+        }
+        journal
+            .complete_host_io(reservations.pop().unwrap(), &fs_request(), &fs_outcome())
+            .unwrap();
+        assert_eq!(*journal.attempt_prefix_len.lock().unwrap(), 32);
+        assert_eq!(journal.attempt_entries(), journal.finish_execution().unwrap());
+    }
+
+    #[test]
+    fn reused_recording_prefix_views_are_isolated_and_independently_owned() {
+        let journal = InMemoryHostEffectJournal::recording();
+        journal.begin_execution().unwrap();
+        journal
+            .record_host_io(&fs_request(), &fs_outcome())
+            .unwrap();
+        journal.finish_execution().unwrap();
+        journal.begin_execution().unwrap();
+        assert!(journal.attempt_entries().is_empty());
+        assert!(journal.attempt_records().is_empty());
+        let second_outcome = Ok(HostIoResponse::FsRead {
+            bytes: b"second attempt".to_vec(),
+        });
+        journal
+            .record_host_io(&fs_request(), &second_outcome)
+            .unwrap();
+        assert_eq!(journal.attempt_entries(), journal.entries()[1..]);
+        assert!(matches!(
+            journal.attempt_records().as_slice(),
+            [HostEffectJournalAttemptRecord::Completed { sequence: 1, .. }]
+        ));
+        let mut detached = journal.attempt_entries();
+        if let HostEffectJournalEntry::HostIo { outcome, .. } = &mut detached[0] {
+            *outcome = fs_outcome();
+        }
+        assert_ne!(detached, journal.attempt_entries());
+        assert_eq!(journal.finish_execution().unwrap(), journal.attempt_entries());
+    }
+
+    #[test]
+    fn replay_lifecycle_poison_preserves_the_consumed_prefix_not_unused_entries() {
+        let first = HostEffectJournalEntry::HostIo {
+            request: fs_request(),
+            outcome: fs_outcome(),
+        };
+        let replay = InMemoryHostEffectJournal::replaying(vec![first.clone(), first.clone()]);
+        replay.begin_execution().unwrap();
+        assert_eq!(replay.replay_host_io(&fs_request()), Some(fs_outcome()));
+        let issuer = InMemoryHostEffectJournal::recording();
+        issuer.begin_execution().unwrap();
+        let foreign = issuer.reserve_host_io(&fs_request()).unwrap();
+        let error = replay
+            .complete_host_io(foreign, &fs_request(), &fs_outcome())
+            .unwrap_err();
+        assert_eq!(replay.attempt_entries(), vec![first.clone()]);
+        assert_eq!(
+            replay.attempt_records(),
+            vec![HostEffectJournalAttemptRecord::Completed {
+                sequence: 0,
+                entry: first,
+            }]
+        );
+        assert_eq!(replay.finish_execution(), Err(error));
     }
 }

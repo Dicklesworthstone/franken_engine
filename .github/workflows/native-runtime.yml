@@ -84,11 +84,11 @@ jobs:
           root = (src / 'lib.rs').read_text()
           names = set(re.findall(r'^pub mod (\w+);', root, re.M))
           # These roots include production dependencies declared after embedded
-          # test modules, which the lightweight dependency scanner cannot infer.
+          # test modules and the public parse_script integration-test helper.
           todo = ['lib', 'baseline_interpreter', 'parser', 'lowering_pipeline',
                   'ir_contract', 'security_e2e', 'tls_x509_metadata',
                   'crypto_kdf_zeroized', 'profiling', 'ts_normalization',
-                  'static_semantics']
+                  'static_semantics', 'parser_api_stability']
           seen = set()
           def production(text):
               return re.split(r'#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+', text)[0]
@@ -123,7 +123,7 @@ jobs:
       - name: Run async and synchronous generator source regressions
         run: |
           status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test async_generator_execution --test generator_next_bd_v6cv1_regression -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test async_generator_execution --test generator_next_bd_v6cv1_regression -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
           tail -n 220 async-generator-validation/tests.log
           exit "$status"
       - name: Check async implementation and regression formatting

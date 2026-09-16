@@ -14,12 +14,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let reviver = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-        let mut context = self.join_arg_range_label(args)?;
-        for value in [&input, &reviver] {
-            if let Some(label) = self.process_dynamic_value_label_ref(value, &mut BTreeSet::new()) {
-                context = self.join_owned_label_with_temporary_budget(context, label)?;
-            }
-        }
+        let context = self.join_arg_range_label(args)?;
         // Keep the caller's context accounted while it is moved out. Coercion
         // hooks and revivers inherit the input provenance, including zero-arg
         // effects performed from a callback. Restore it on every exit path.
@@ -36,7 +31,12 @@ impl InterpreterCore {
             return Err(error);
         }
         let previous_context = self.active_inline_callback_context_label.replace(context);
-        let mut outcome = self.json_parse_builtin_inner(module, input, reviver);
+        let mut outcome = (|| {
+            for value in [&input, &reviver] {
+                self.json_observe_reachable_value(value)?;
+            }
+            self.json_parse_builtin_inner(module, input, reviver)
+        })();
         let context = self
             .active_inline_callback_context_label
             .take()
@@ -229,6 +229,74 @@ impl InterpreterCore {
         self.json_parse_temporary_bytes = self.json_parse_temporary_bytes.saturating_sub(bytes);
     }
 
+    /// Match the runtime's conservative reachable-value provenance floor,
+    /// without recursing on an attacker-controlled graph before the JSON depth
+    /// guard. Both the visited set and pending edges are admission-accounted.
+    /// This walk performs no guest Get and cannot change callback order.
+    pub(super) fn json_observe_reachable_value(
+        &mut self,
+        value: &Value,
+    ) -> Result<(), InterpreterError> {
+        let Value::Object(root) = value else {
+            return Ok(());
+        };
+        let mut pending = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut charged = 0_u64;
+        let outcome = (|| {
+            self.json_reserve_temporary(std::mem::size_of::<ObjectId>() as u64)?;
+            charged += std::mem::size_of::<ObjectId>() as u64;
+            pending
+                .try_reserve_exact(1)
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+            pending.push(*root);
+            while let Some(object) = pending.pop() {
+                self.json_charge_work()?;
+                if visited.contains(&object) {
+                    continue;
+                }
+                self.json_reserve_temporary(64)?;
+                charged += 64;
+                visited.insert(object);
+                let label = self
+                    .object_mutation_labels
+                    .get(&object)
+                    .into_iter()
+                    .chain(self.binary_storage_label_ref(object))
+                    .max();
+                if let Some(label) = label {
+                    self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+                    let label = label.clone();
+                    self.json_observe_label(label)?;
+                }
+                let count = self.heap.get(object.0 as usize).map_or(0, |object| {
+                    object
+                        .properties
+                        .values()
+                        .filter(|value| matches!(value, Value::Object(_)))
+                        .count()
+                });
+                let bytes = (count as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64);
+                self.json_reserve_temporary(bytes)?;
+                charged += bytes;
+                pending.try_reserve_exact(count).map_err(|_| {
+                    self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+                })?;
+                if let Some(object) = self.heap.get(object.0 as usize) {
+                    pending.extend(object.properties.values().filter_map(|value| match value {
+                        Value::Object(id) => Some(*id),
+                        _ => None,
+                    }));
+                }
+            }
+            Ok(())
+        })();
+        drop(pending);
+        drop(visited);
+        self.json_release_temporary(charged);
+        outcome
+    }
+
     pub(super) fn json_charge_work(&mut self) -> Result<(), InterpreterError> {
         if self
             .config
@@ -315,13 +383,7 @@ impl InterpreterCore {
                     )?;
                     let label = self.json_parse_context_label()?;
                     self.json_observe_label(label)?;
-                    if let Some(label) =
-                        self.process_dynamic_value_label_ref(&value, &mut BTreeSet::new())
-                    {
-                        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
-                        let label = label.clone();
-                        self.json_observe_label(label)?;
-                    }
+                    self.json_observe_reachable_value(&value)?;
                     let charged = (std::mem::size_of::<Frame>() as u64)
                         .saturating_add(Self::estimate_js_string_bytes(&name))
                         .saturating_add(Self::estimate_value_bytes(&value));

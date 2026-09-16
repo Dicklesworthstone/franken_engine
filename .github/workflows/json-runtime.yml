@@ -25,8 +25,6 @@ jobs:
         mode: [runtime-tests, full-engine-check]
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    permissions:
-      contents: write
     env:
       CARGO_BUILD_JOBS: '1'
       CARGO_INCREMENTAL: '0'
@@ -37,46 +35,39 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # Temporary exact-candidate validation; publication stays connector-controlled.
-      - name: Materialize bounded JSON provenance candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Retain exact committed JSON sources
         run: |
           mkdir -p json-validation
           git rev-parse HEAD > json-validation/revision.txt
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
-          files = {
-              'crates/franken-engine/src/baseline_interpreter/json_parse.rs': 'bec08606080ddcb2fb45cc1d3b16e37155cdfb8a',
-              'crates/franken-engine/src/baseline_interpreter/json_stringify.rs': '931831003c16faa78bb4dfaccaf8af0fee2250bd',
-              'crates/franken-engine/tests/json_parse_execution.rs': '873a01d2b2d22bde56875417be2359858a93f7c6',
-              'crates/franken-engine/tests/json_stringify_execution.rs': '8bed579f1bb0ae639aa7d7ca4ace8d4f4f281f34',
-          }
-          for path, expected in files.items():
-              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected, path + ' changed'
-          sha = '2a574d01010635b03765e96737e95ca67849665d'
-          req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
-              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
-              'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-          with urllib.request.urlopen(req, timeout=60) as response:
-              raw = base64.b64decode(json.load(response)['content'])
-          assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
-          assert hashlib.sha256(raw).hexdigest() == 'aa15a9e94fcd821182923b71d1ff2eaa07e69ac7024667e5f962a2ebcddcfe8a'
-          patch = pathlib.Path('json-validation/provenance.patch'); patch.write_bytes(gzip.decompress(raw))
-          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
-          assert set(line.split('\t', 2)[2] for line in stats.splitlines()) == set(files)
-          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
-          subprocess.run(['git', 'apply', str(patch)], check=True)
-          pathlib.Path('json-validation/paths.json').write_text(json.dumps(list(files)))
+          import hashlib, json, pathlib
+          paths = [
+              'crates/franken-engine/src/baseline_interpreter.rs',
+              'crates/franken-engine/src/baseline_interpreter/json_parse.rs',
+              'crates/franken-engine/src/baseline_interpreter/json_stringify.rs',
+              'crates/franken-engine/tests/js_string_integration.rs',
+              'crates/franken-engine/tests/json_parse_execution.rs',
+              'crates/franken-engine/tests/json_stringify_execution.rs',
+              'crates/franken-engine/src/lowering_pipeline.rs',
+              'crates/franken-engine/src/capability.rs',
+              'crates/franken-engine/src/parser.rs',
+          ]
+          root = pathlib.Path('json-validation')
+          (root / 'paths.json').write_text(json.dumps(paths))
+          hashes = {}
+          for path in paths:
+              data = pathlib.Path(path).read_bytes()
+              hashes[path] = hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
+              dest = root / 'source' / path
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(data)
+          (root / 'source-hashes.json').write_text(json.dumps(hashes, indent=2))
           PY
-      - name: Install Rust and format candidate
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+      - name: Check committed JSON module formatting
         run: |
-          rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
-          python3 - <<'PY'
-          import json, pathlib, subprocess
-          paths = json.loads(pathlib.Path('json-validation/paths.json').read_text())
-          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
-          PY
+          rustfmt +nightly --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/json_parse.rs crates/franken-engine/src/baseline_interpreter/json_stringify.rs crates/franken-engine/tests/json_parse_execution.rs crates/franken-engine/tests/json_stringify_execution.rs
       - name: Check complete native engine library
         if: matrix.mode == 'full-engine-check'
         run: |
@@ -102,27 +93,6 @@ jobs:
         run: |
           set -o pipefail
           cargo +nightly clippy --locked -p frankenengine-engine --no-default-features --lib -- -D warnings 2>&1 | tee json-validation/full-engine-clippy.log
-      - name: Save exact candidate blobs without moving refs
-        if: always() && matrix.mode == 'runtime-tests'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import base64, hashlib, json, os, pathlib, urllib.request
-          root = pathlib.Path('json-validation'); result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
-          for path in json.loads((root / 'paths.json').read_text()):
-              file = pathlib.Path(path); assert file.is_file() and not file.is_symlink(); content = file.read_bytes()
-              body = json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode()
-              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=body, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
-                  'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  sha = json.load(response)['sha']
-              assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
-              result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
-              dest = root / 'source' / path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(content)
-          (root / 'result.json').write_text(json.dumps(result, indent=2))
-          PY
       - name: Retain complete validation output
         if: always()
         uses: actions/upload-artifact@v4

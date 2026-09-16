@@ -203,7 +203,7 @@ impl InterpreterCore {
         let previous = self.active_inline_callback_context_label.replace(context);
         let mut outcome = (|| {
             for value in [&input, &replacer, &space] {
-                self.json_stringify_observe_value(value)?;
+                self.json_observe_reachable_value(value)?;
             }
             self.json_stringify_document(module, input, replacer, space)
         })();
@@ -254,73 +254,8 @@ impl InterpreterCore {
         let value = self.iterator_protocol_property(module, object, &property, receiver)?;
         let label = self.json_parse_context_label()?;
         self.json_observe_label(label)?;
-        self.json_stringify_observe_value(&value)?;
+        self.json_observe_reachable_value(&value)?;
         Ok(value)
-    }
-
-    /// Match the runtime's conservative reachable-value provenance floor,
-    /// without recursing on an attacker-controlled graph before the JSON depth
-    /// guard. Both the visited set and pending edges are admission-accounted.
-    /// This walk performs no guest Get and cannot change callback order.
-    fn json_stringify_observe_value(&mut self, value: &Value) -> Result<(), InterpreterError> {
-        let Value::Object(root) = value else {
-            return Ok(());
-        };
-        let mut pending = Vec::new();
-        let mut visited = BTreeSet::new();
-        let mut charged = 0_u64;
-        let outcome = (|| {
-            self.json_reserve_temporary(std::mem::size_of::<ObjectId>() as u64)?;
-            charged += std::mem::size_of::<ObjectId>() as u64;
-            pending
-                .try_reserve_exact(1)
-                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
-            pending.push(*root);
-            while let Some(object) = pending.pop() {
-                self.json_charge_work()?;
-                if visited.contains(&object) {
-                    continue;
-                }
-                self.json_reserve_temporary(64)?;
-                charged += 64;
-                visited.insert(object);
-                let label = self
-                    .object_mutation_labels
-                    .get(&object)
-                    .into_iter()
-                    .chain(self.binary_storage_label_ref(object))
-                    .max();
-                if let Some(label) = label {
-                    self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
-                    let label = label.clone();
-                    self.json_observe_label(label)?;
-                }
-                let count = self.heap.get(object.0 as usize).map_or(0, |object| {
-                    object
-                        .properties
-                        .values()
-                        .filter(|value| matches!(value, Value::Object(_)))
-                        .count()
-                });
-                let bytes = (count as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64);
-                self.json_reserve_temporary(bytes)?;
-                charged += bytes;
-                pending.try_reserve_exact(count).map_err(|_| {
-                    self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-                })?;
-                if let Some(object) = self.heap.get(object.0 as usize) {
-                    pending.extend(object.properties.values().filter_map(|value| match value {
-                        Value::Object(id) => Some(*id),
-                        _ => None,
-                    }));
-                }
-            }
-            Ok(())
-        })();
-        drop(pending);
-        drop(visited);
-        self.json_release_temporary(charged);
-        outcome
     }
 
     fn json_stringify_array_id(&self, value: &Value) -> Result<Option<ObjectId>, InterpreterError> {
@@ -363,7 +298,7 @@ impl InterpreterCore {
                     Some(context),
                 )?;
                 self.json_observe_label(label)?;
-                self.json_stringify_observe_value(&result)?;
+                self.json_observe_reachable_value(&result)?;
                 value = result;
             }
         }
@@ -377,7 +312,7 @@ impl InterpreterCore {
                 Some(context),
             )?;
             self.json_observe_label(label)?;
-            self.json_stringify_observe_value(&result)?;
+            self.json_observe_reachable_value(&result)?;
             value = result;
         }
         Ok(value)

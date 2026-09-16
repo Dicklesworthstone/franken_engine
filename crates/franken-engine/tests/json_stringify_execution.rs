@@ -420,3 +420,92 @@ fn overdeep_input_hits_the_host_guard_without_leaking_traversal_scratch() {
         );
     }
 }
+
+#[test]
+fn serialization_keeps_secret_shape_even_when_a_property_list_omits_the_value() {
+    use frankenengine_engine::baseline_interpreter::Value;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, RegRange};
+
+    for omit in [false, true] {
+        for mut core in cores() {
+            let object = core.alloc_object_with_prototype(None).unwrap();
+            let list = core.alloc_array_with_prototype(None).unwrap();
+            core.seed_register(0, Value::Object(object)).unwrap();
+            core.seed_register(5, Value::Object(object)).unwrap();
+            core.seed_register(1, Value::str("secret")).unwrap();
+            core.seed_register(2, Value::str("payload")).unwrap();
+            core.set_register_label(2, Label::Secret).unwrap();
+            core.seed_register(4, Value::Object(list)).unwrap();
+            let mut module = lower("0;");
+            module.instructions = vec![
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                // Use a separately seeded public alias, not the mutation's register.
+                Ir3Instruction::Move { dst: 0, src: 5 },
+            ];
+            if omit {
+                module
+                    .instructions
+                    .push(Ir3Instruction::Move { dst: 1, src: 4 });
+            }
+            module.instructions.extend([
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:JsonStringify".into()),
+                    args: RegRange {
+                        start: 0,
+                        count: if omit { 2 } else { 1 },
+                    },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ]);
+            let result = core.execute(&module).unwrap();
+            assert_eq!(
+                result.value,
+                Value::str(if omit {
+                    "{}"
+                } else {
+                    "{\"secret\":\"payload\"}"
+                })
+            );
+            assert_eq!(core.get_register_label(0).unwrap(), &Label::Public);
+            assert_eq!(result.completion_label, Label::Secret);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn large_sparse_arrays_obey_the_instruction_budget_inside_serialization() {
+    let module = lower("const a = []; a.length = 1000000000; JSON.stringify(a);");
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.instruction_budget = 200;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "json-stringify-work-budget");
+        assert!(matches!(
+            core.execute(&module),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}

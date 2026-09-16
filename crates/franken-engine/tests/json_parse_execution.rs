@@ -484,3 +484,16 @@ fn negative_zero_source_spellings_match_parsed_negative_zero() {
         ],
     );
 }
+
+#[test]
+fn coercion_of_a_deep_object_graph_uses_bounded_provenance_work() {
+    assert_output(
+        r#"
+        const root = { toString: function() { return '7'; } };
+        let cursor = root;
+        for (let i = 0; i < 400; i++) { cursor.child = {}; cursor = cursor.child; }
+        log(JSON.parse(root));
+        "#,
+        &["7"],
+    );
+}

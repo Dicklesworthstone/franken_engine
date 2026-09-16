@@ -27,13 +27,15 @@ fn make_config(actions: &[&str], safe_default: &str) -> ControllerConfig {
 }
 
 fn make_uniform_posterior(states: &[&str]) -> Posterior {
-    let n = states.len() as i64;
-    let prob = 1_000_000 / n;
-    let mut probs = BTreeMap::new();
-    for state in states {
-        probs.insert(state.to_string(), prob);
-    }
-    Posterior::new(probs)
+    Posterior::from_weights(states.iter().map(|state| (state.to_string(), 1)).collect())
+        .expect("nonempty fixture weights normalize to exactly one million")
+}
+
+fn zero_cost_single_state_matrix() -> LossMatrix {
+    let mut matrix = LossMatrix::new();
+    matrix.set("s1", "allow", 0);
+    matrix.set("s1", "deny", 0);
+    matrix
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,7 @@ fn deep_posterior_serde_roundtrip() {
     let json = serde_json::to_string(&posterior).unwrap();
     let decoded: Posterior = serde_json::from_str(&json).unwrap();
     assert_eq!(posterior, decoded);
+    assert_eq!(decoded.validate(), Ok(()));
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +212,7 @@ fn deep_select_minimizes_expected_loss() {
 #[test]
 fn deep_select_falls_back_to_safe_default() {
     let config = make_config(&["allow", "deny"], "allow");
-    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let mut ctrl = PolicyController::new(config, zero_cost_single_state_matrix()).unwrap();
 
     // Block both actions
     ctrl.add_guardrail(Guardrail {
@@ -255,7 +258,7 @@ fn deep_select_guardrail_rejection_tracked() {
 #[test]
 fn deep_select_decision_id_sequential() {
     let config = make_config(&["allow", "deny"], "allow");
-    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let mut ctrl = PolicyController::new(config, zero_cost_single_state_matrix()).unwrap();
     let posterior = make_uniform_posterior(&["s1"]);
 
     let r1 = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
@@ -374,7 +377,7 @@ fn deep_update_loss_matrix_changes_selection() {
 #[test]
 fn deep_decision_count_increments() {
     let config = make_config(&["allow", "deny"], "allow");
-    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let mut ctrl = PolicyController::new(config, zero_cost_single_state_matrix()).unwrap();
     let posterior = make_uniform_posterior(&["s1"]);
 
     assert_eq!(ctrl.decision_count(), 0);
@@ -468,11 +471,11 @@ fn deep_three_state_selection() {
     }
     let mut ctrl = PolicyController::new(config, matrix).unwrap();
 
-    // Uniform posterior: each state 1/3
+    // Equal weights, rounded deterministically to exactly one million units.
     let posterior = make_uniform_posterior(&["s1", "s2", "s3"]);
+    assert_eq!(posterior.validate(), Ok(()));
     let result = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
-    // E[a1] = (100+500+300)/3 = 300k, E[a2] = (500+100+300)/3 = 300k
-    // E[a3] = (300+300+100)/3 ≈ 233k -> a3 wins
+    // E[a1] ≈ 300k, E[a2] ≈ 300k; E[a3] ≈ 233k -> a3 wins.
     assert_eq!(result.action, "a3");
 }
 
@@ -515,20 +518,21 @@ fn deep_multiple_guardrails_compound() {
 }
 
 // ---------------------------------------------------------------------------
-// Empty loss matrix still selects safe default
+// Empty loss matrix cannot support a decision
 // ---------------------------------------------------------------------------
 
 #[test]
-fn deep_empty_matrix_selects_safe_default_by_convention() {
+fn deep_empty_matrix_rejected_without_recording_a_decision() {
     let config = make_config(&["allow", "deny"], "allow");
     let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
     let posterior = make_uniform_posterior(&["s1"]);
 
-    // With empty matrix, all expected losses are 0, so first action alphabetically
-    let result = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
-    // Both have 0 expected loss; the selection picks the first in action_set order
-    assert!(result.action == "allow" || result.action == "deny");
-    assert!(!result.is_safe_default);
+    assert_eq!(
+        ctrl.select_action(&posterior, epoch(1), "t1"),
+        Err(PolicyControllerError::NoLossEntries)
+    );
+    assert_eq!(ctrl.decision_count(), 0);
+    assert!(ctrl.decisions().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -604,7 +608,7 @@ fn deep_guardrail_empty_blocked_list() {
 #[test]
 fn deep_decision_id_deterministic_format() {
     let config = make_config(&["allow", "deny"], "allow");
-    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let mut ctrl = PolicyController::new(config, zero_cost_single_state_matrix()).unwrap();
     let posterior = make_uniform_posterior(&["s1"]);
 
     for i in 1..=5 {
@@ -629,8 +633,10 @@ fn deep_controller_full_workflow() {
     let mut matrix = LossMatrix::new();
     matrix.set("normal", "allow", 10_000);
     matrix.set("normal", "deny", 500_000);
+    matrix.set("normal", "sandbox", 200_000);
     matrix.set("anomalous", "allow", 900_000);
     matrix.set("anomalous", "deny", 100_000);
+    matrix.set("anomalous", "sandbox", 300_000);
 
     let mut ctrl = PolicyController::new(config, matrix).unwrap();
     ctrl.add_guardrail(Guardrail {

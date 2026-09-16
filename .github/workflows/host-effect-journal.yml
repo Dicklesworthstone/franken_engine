@@ -33,4 +33,5 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal
       - name: Run production journal unit tests
-        run: cargo +nightly test --locked -p frankenengine-extension-host --lib host_effect_journal:: -- --nocapture
+        run: |
+          cargo +nightly test --locked -p frankenengine-extension-host --lib host_effect_journal:: -- --nocapture

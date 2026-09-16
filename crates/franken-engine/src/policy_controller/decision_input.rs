@@ -3,27 +3,70 @@
 //! A missing cost is not a free action. Validate the distribution before doing
 //! arithmetic and require an explicit loss for every state with positive mass.
 
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
 use super::{LossMatrix, PolicyControllerError, Posterior};
 
 const PROBABILITY_SCALE: i128 = 1_000_000;
 
-pub(super) fn validate_posterior(posterior: &Posterior) -> Result<(), PolicyControllerError> {
+/// Why a posterior and loss model cannot support an auditable decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DecisionInputError {
+    InvalidPosterior { reason: String },
+    NoLossEntries,
+    MissingLossEntry { state: String, action: String },
+    ExpectedLossOutOfRange { action: String },
+}
+
+impl fmt::Display for DecisionInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPosterior { reason } => write!(f, "invalid posterior: {reason}"),
+            Self::NoLossEntries => write!(f, "loss matrix is empty"),
+            Self::MissingLossEntry { state, action } => {
+                write!(f, "missing loss for state '{state}' and action '{action}'")
+            }
+            Self::ExpectedLossOutOfRange { action } => {
+                write!(f, "expected loss for action '{action}' is out of range")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecisionInputError {}
+
+impl From<DecisionInputError> for PolicyControllerError {
+    fn from(error: DecisionInputError) -> Self {
+        match error {
+            DecisionInputError::NoLossEntries => Self::NoLossEntries,
+            error => Self::EvidenceEmissionFailed {
+                // Keep the existing serialized controller/error-code boundary:
+                // invalid model inputs cannot support valid decision evidence.
+                reason: format!("invalid decision inputs: {error}"),
+            },
+        }
+    }
+}
+
+pub(super) fn validate_posterior(posterior: &Posterior) -> Result<(), DecisionInputError> {
     let mut total = 0_i128;
     for (state, &probability) in &posterior.probabilities {
         if !(0..=1_000_000).contains(&probability) {
-            return Err(PolicyControllerError::InvalidPosterior {
+            return Err(DecisionInputError::InvalidPosterior {
                 reason: format!("probability for state '{state}' is outside 0..=1000000"),
             });
         }
         total += i128::from(probability);
         if total > PROBABILITY_SCALE {
-            return Err(PolicyControllerError::InvalidPosterior {
+            return Err(DecisionInputError::InvalidPosterior {
                 reason: "probability mass exceeds 1000000".to_string(),
             });
         }
     }
     if total != PROBABILITY_SCALE {
-        return Err(PolicyControllerError::InvalidPosterior {
+        return Err(DecisionInputError::InvalidPosterior {
             reason: format!("probability mass is {total}, expected 1000000"),
         });
     }
@@ -34,10 +77,10 @@ pub(super) fn expected_loss(
     matrix: &LossMatrix,
     action: &str,
     posterior: &Posterior,
-) -> Result<i64, PolicyControllerError> {
+) -> Result<i64, DecisionInputError> {
     validate_posterior(posterior)?;
     if matrix.is_empty() {
-        return Err(PolicyControllerError::NoLossEntries);
+        return Err(DecisionInputError::NoLossEntries);
     }
 
     let mut numerator = 0_i128;
@@ -46,11 +89,9 @@ pub(super) fn expected_loss(
         if probability == 0 {
             continue;
         }
-        let loss = matrix.get(state, action).ok_or_else(|| {
-            PolicyControllerError::MissingLossEntry {
-                state: state.clone(),
-                action: action.to_string(),
-            }
+        let loss = matrix.get(state, action).ok_or_else(|| DecisionInputError::MissingLossEntry {
+            state: state.clone(),
+            action: action.to_string(),
         })?;
         // Validation bounds total probability mass to 1M. Even at either i64
         // loss endpoint, the entire numerator fits in i128. Round only once:
@@ -58,7 +99,7 @@ pub(super) fn expected_loss(
         numerator += i128::from(probability) * i128::from(loss);
     }
     i64::try_from(numerator / PROBABILITY_SCALE).map_err(|_| {
-        PolicyControllerError::ExpectedLossOutOfRange {
+        DecisionInputError::ExpectedLossOutOfRange {
             action: action.to_string(),
         }
     })
@@ -95,13 +136,13 @@ mod tests {
             assert!(
                 matches!(
                     validate_posterior(&distribution),
-                    Err(PolicyControllerError::InvalidPosterior { .. })
+                    Err(DecisionInputError::InvalidPosterior { .. })
                 ),
                 "accepted malformed distribution: {case:?}"
             );
             assert!(matches!(
                 expected_loss(&LossMatrix::new(), "allow", &distribution),
-                Err(PolicyControllerError::InvalidPosterior { .. })
+                Err(DecisionInputError::InvalidPosterior { .. })
             ));
         }
     }
@@ -110,7 +151,7 @@ mod tests {
     fn empty_matrix_is_not_a_zero_cost_model() {
         assert_eq!(
             expected_loss(&LossMatrix::new(), "allow", &posterior(&[("a", 1_000_000)])),
-            Err(PolicyControllerError::NoLossEntries)
+            Err(DecisionInputError::NoLossEntries)
         );
     }
 
@@ -124,7 +165,7 @@ mod tests {
                 "allow",
                 &posterior(&[("benign", 900_000), ("malicious", 100_000)])
             ),
-            Err(PolicyControllerError::MissingLossEntry {
+            Err(DecisionInputError::MissingLossEntry {
                 state: "malicious".to_string(),
                 action: "allow".to_string(),
             })
@@ -137,7 +178,7 @@ mod tests {
         matrix.set("a", "deny", 100);
         assert_eq!(
             expected_loss(&matrix, "allow", &posterior(&[("a", 1_000_000)])),
-            Err(PolicyControllerError::MissingLossEntry {
+            Err(DecisionInputError::MissingLossEntry {
                 state: "a".to_string(),
                 action: "allow".to_string(),
             })
@@ -217,5 +258,25 @@ mod tests {
             expected_loss(&matrix, "allow", &posterior(&[("a", 500_000), ("b", 500_000)])),
             Ok(0)
         );
+    }
+
+    #[test]
+    fn input_errors_round_trip_and_preserve_controller_error_boundary() {
+        for error in [
+            DecisionInputError::InvalidPosterior { reason: "mass".into() },
+            DecisionInputError::NoLossEntries,
+            DecisionInputError::MissingLossEntry { state: "s".into(), action: "a".into() },
+            DecisionInputError::ExpectedLossOutOfRange { action: "a".into() },
+        ] {
+            let json = serde_json::to_string(&error).expect("serialize input error");
+            assert_eq!(serde_json::from_str::<DecisionInputError>(&json).unwrap(), error);
+            assert!(!error.to_string().is_empty());
+            let controller_error = PolicyControllerError::from(error.clone());
+            if error == DecisionInputError::NoLossEntries {
+                assert_eq!(controller_error, PolicyControllerError::NoLossEntries);
+            } else {
+                assert!(matches!(controller_error, PolicyControllerError::EvidenceEmissionFailed { .. }));
+            }
+        }
     }
 }

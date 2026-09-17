@@ -1,0 +1,112 @@
+name: Native Reflect Properties
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-engine/src/baseline_interpreter*'
+      - 'crates/franken-engine/src/baseline_interpreter/**'
+      - 'crates/franken-engine/src/lowering_pipeline.rs'
+      - 'crates/franken-engine/tests/reflect_property_execution.rs'
+      - '.github/workflows/reflect-properties.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  properties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Retrieve exact candidate without changing refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir property-validation
+          git rev-parse HEAD > property-validation/revision.txt
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          for path, sha in {
+              'crates/franken-engine/src/baseline_interpreter.rs': '78c7e88aee0bbcdd9fed7626292752308945dec4',
+              'crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs': 'b7f81a62883d8046536a66d4d722ccc5ca62adaf',
+              'crates/franken-engine/src/lowering_pipeline.rs': '49de36026235c4bee0b52be9ada9ca3e66e00895',
+          }.items():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == sha, path
+          for path, sha in {
+              'property-validation/change.patch': 'b736146f3ab88127bb8cd9f3352cc72ae78f553e',
+              'crates/franken-engine/tests/reflect_property_execution.rs': '845103d8bbb705b0bbf8abe896e6a3ac8603a33c',
+          }.items():
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response: data = base64.b64decode(json.load(response)['content'])
+              assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
+              pathlib.Path(path).write_bytes(data)
+          PY
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+      - name: Select existing production runtime dependency closure
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, textwrap
+          text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
+          step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
+          subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
+          pathlib.Path('property-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
+          PY
+      - name: Reproduce unchanged computed-key failure
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test function_prototype_invocation_regression computed_literal_key_getter_throw_skips_value -- --nocapture > property-validation/before.log 2>&1 || status=$?
+          tail -n 70 property-validation/before.log
+          test "$status" -ne 0
+          grep -F 'TopSecret -> Secret' property-validation/before.log
+          grep -F 'computed_literal_key_getter_throw_skips_value ... FAILED' property-validation/before.log
+      - name: Apply candidate and format changed sources
+        run: |
+          git apply --check property-validation/change.patch
+          git apply property-validation/change.patch
+          rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs crates/franken-engine/src/lowering_pipeline.rs crates/franken-engine/tests/reflect_property_execution.rs
+      - name: Run property and shared invocation regressions
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_property_execution --test function_prototype_invocation_regression --test reflect_invocation_execution --test primitive_conversion_execution -- --nocapture 2>&1 | tee property-validation/after.log
+      - name: Check runtime dependency closure
+        run: |
+          set -o pipefail
+          cargo +nightly check --locked -p frankenengine-engine --no-default-features --lib 2>&1 | tee property-validation/check.log
+          cargo +nightly clippy --locked -p frankenengine-engine --no-default-features --lib -- -D warnings 2>&1 | tee property-validation/clippy.log
+      - name: Retain exact candidate source identities without moving refs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          root = pathlib.Path('property-validation'); files = []
+          for path in ['crates/franken-engine/src/baseline_interpreter.rs', 'crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs', 'crates/franken-engine/src/lowering_pipeline.rs', 'crates/franken-engine/tests/reflect_property_execution.rs']:
+              data = pathlib.Path(path).read_bytes()
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=json.dumps({'content': base64.b64encode(data).decode(), 'encoding': 'base64'}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response: sha = json.load(response)['sha']
+              assert sha == hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
+              files.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+              dest = root / 'source' / path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(data)
+          (root / 'result.json').write_text(json.dumps({'base_commit': os.environ['GITHUB_SHA'], 'files': files}, indent=2))
+          PY
+      - name: Retain complete validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: property-validation
+          path: property-validation/
+          retention-days: 7

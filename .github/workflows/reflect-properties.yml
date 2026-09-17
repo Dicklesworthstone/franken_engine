@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         mode: [runtime-tests, full-engine-check]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     # Temporary immutable source transport, with no commit or ref writes.
     permissions:

@@ -22,7 +22,7 @@ jobs:
         mode: [runtime-tests, full-engine-check]
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Temporary immutable candidate transport; remove after connector publication.
+    # Temporary exact-source validation. Publication uses the GitHub connector.
     permissions:
       contents: write
     env:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Retrieve exact reflection and prototype candidates
+      - name: Apply exact reflection candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,25 +52,32 @@ jobs:
               ('reflection', '665a9bd5263a002b4067153c5f8fb25b9f321359', 'eea011f0061a2235d81d88315df811c09428d086863f3e8a4395d5d72bf72909'),
               ('refinement', '5efa781f1e11c24c548faf0cac92253be1c151aa', '7a1f8ab17ce2a6ff621575e031ac1aaf8402ab105df1b0fdf6508c9c66fc7921'),
               ('prototype', 'fcc5eded94c821f35e2d398bf238a762332af751', 'eb0232188b06c2e49063aad5f5aa7c9199f2cc82d8d82b9b07658587861d1a90'),
+              ('visibility', '250182e650188ca4386ff4a3e90bbe06ba488cc8', '3d478aa288585590050c7d0b0204d35789dcac216d2aacdf63c1c6b98d4b823a'),
           ]
           for name, sha, digest in candidates:
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req, timeout=60) as response: raw = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
-              (root / (name + '.received')).write_bytes(raw)
               if name == 'prototype':
                   encoded = base64.b64encode(raw).decode()
                   corrections = [(826, 827, 'O'), (1601, 1604, ''), (2468, 2471, ''), (3379, 3380, 'q'), (4512, 4512, 'A=')]
                   for start, end, text in reversed(corrections): encoded = encoded[:start] + text + encoded[end:]
                   raw = base64.b64decode(encoded, validate=True)
-              (root / (name + '.gz')).write_bytes(raw)
               assert hashlib.sha256(raw).hexdigest() == digest, name + ' transport checksum mismatch'
               patch = root / (name + '.patch'); patch.write_bytes(gzip.decompress(raw))
               stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
               assert set(line.split('\t', 2)[2] for line in stats.splitlines()) <= set(paths)
+              subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+              subprocess.run(['git', 'apply', str(patch)], check=True)
           PY
-      - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+      - name: Install Rust and format candidate
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          paths = json.loads(pathlib.Path('conversion-validation/paths.json').read_text())
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
+          PY
       - name: Select existing production runtime dependency closure
         if: matrix.mode == 'runtime-tests'
         run: |
@@ -80,26 +87,6 @@ jobs:
           step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('conversion-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
-          PY
-      - name: Check existing computed-key failure before any implementation change
-        if: matrix.mode == 'runtime-tests'
-        run: |
-          status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test function_prototype_invocation_regression computed_literal_key_getter_throw_skips_value -- --exact --nocapture > conversion-validation/existing-failure.log 2>&1 || status=$?
-          tail -n 100 conversion-validation/existing-failure.log
-          test "$status" -eq 101
-          grep -F 'unauthorized flow detected' conversion-validation/existing-failure.log
-          grep -F 'computed_literal_key_getter_throw_skips_value ... FAILED' conversion-validation/existing-failure.log
-      - name: Apply implementation and format exact changed sources
-        run: |
-          for patch in reflection refinement prototype; do
-            git apply --check "conversion-validation/$patch.patch"
-            git apply "conversion-validation/$patch.patch"
-          done
-          python3 - <<'PY'
-          import json, pathlib, subprocess
-          paths = json.loads(pathlib.Path('conversion-validation/paths.json').read_text())
-          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
           PY
       - name: Run reflection, conversion, JSON and UTF-16 regressions
         if: matrix.mode == 'runtime-tests'

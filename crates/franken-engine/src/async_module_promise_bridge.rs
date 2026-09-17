@@ -772,8 +772,21 @@ impl AsyncModulePromiseBridge {
         reason: JsValue,
         label: Label,
     ) -> Result<(), AsyncModulePromiseBridgeError> {
-        let affected: Vec<String> = linkage.transitive_closure.iter().cloned().collect();
-        for specifier in affected {
+        // Static import edges and runtime evaluation-Promise waits are two
+        // different graphs. A failure can alternate between them arbitrarily.
+        // Drain a deterministic worklist instead of recursively synchronizing
+        // waiters, so backward handle links and cycles need no native stack.
+        let mut pending = BTreeMap::new();
+        for specifier in std::iter::once(&linkage.rejected_module)
+            .chain(linkage.transitive_closure.iter())
+        {
+            pending.insert(specifier.clone(), (reason.clone(), label.clone()));
+        }
+        let mut visited = BTreeSet::new();
+        while let Some((specifier, (reason, label))) = pending.pop_first() {
+            if !visited.insert(specifier.clone()) {
+                continue;
+            }
             let rejected = self
                 .evaluator
                 .states()
@@ -783,14 +796,41 @@ impl AsyncModulePromiseBridge {
                 continue;
             }
             self.detach_active_await(&specifier);
-            self.module_rejections
-                .insert(specifier.clone(), (reason.clone(), label.clone()));
-            if self.module_promises.contains_key(&specifier) {
-                self.reject_evaluation_promise_if_pending(
-                    &specifier,
-                    reason.clone(),
-                    label.clone(),
-                )?;
+            // A second failing dependency must not overwrite a module's first
+            // rejection, including for synchronous modules and late importers.
+            let (reason, label) = self.module_rejections
+                .entry(specifier.clone())
+                .or_insert((reason, label))
+                .clone();
+            let Some(promise) = self.module_promise(&specifier) else {
+                continue;
+            };
+            self.reject_evaluation_promise_if_pending(&specifier, reason.clone(), label.clone())?;
+
+            let awaiters = self.awaiters_by_promise.remove(&promise).unwrap_or_default();
+            for waiter in awaiters {
+                if self.active_await(&waiter) != Some(promise) {
+                    return Err(AsyncModulePromiseBridgeError::ModuleEvaluation {
+                        specifier: waiter,
+                        detail: format!("await index is inconsistent for {promise}"),
+                    });
+                }
+                self.active_awaits_by_module.remove(&waiter);
+                if self.module_state(&waiter)?.phase.is_terminal() {
+                    continue;
+                }
+                self.reject_evaluation_promise_if_pending(&waiter, reason.clone(), label.clone())?;
+                let next = self.evaluator
+                    .reject_module(&waiter, &reason, &mut self.live_bindings)
+                    .map_err(|error| self.module_error(&waiter, error))?;
+                for affected in std::iter::once(&next.rejected_module)
+                    .chain(next.transitive_closure.iter())
+                {
+                    if !visited.contains(affected) {
+                        pending.entry(affected.clone())
+                            .or_insert_with(|| (reason.clone(), label.clone()));
+                    }
+                }
             }
         }
         Ok(())
@@ -1144,5 +1184,156 @@ mod tests {
         assert_eq!(bridge.promise_store().get(waiter).unwrap().state,
             PromiseState::Rejected(JsValue::Int(9)));
         assert_eq!(bridge.promise_store().get(waiter).unwrap().label, Label::Confidential);
+    }
+
+    fn assert_module_rejection(
+        bridge: &AsyncModulePromiseBridge,
+        specifier: &str,
+        reason: &JsValue,
+        label: &Label,
+    ) {
+        assert_eq!(bridge.evaluator().states()[specifier].phase, AsyncModulePhase::Rejected);
+        assert_eq!(bridge.active_await(specifier), None);
+        assert_eq!(bridge.module_rejections.get(specifier), Some(&(reason.clone(), label.clone())));
+        if let Some(promise) = bridge.module_promise(specifier) {
+            let record = bridge.promise_store().get(promise).unwrap();
+            assert_eq!(&record.state, &PromiseState::Rejected(reason.clone()));
+            assert_eq!(&record.label, label);
+        }
+    }
+
+    #[test]
+    fn evaluation_rejection_crosses_wait_edges_and_preserves_unrelated_modules() {
+        let mut bridge = AsyncModulePromiseBridge::with_defaults();
+        let a = bridge.register_module("a", true, &[]).unwrap().unwrap();
+        let b = bridge.register_module("b", true, &[]).unwrap().unwrap();
+        let c = bridge.register_module("c", true, &[]).unwrap().unwrap();
+        let unrelated = bridge.register_module("unrelated", true, &[]).unwrap().unwrap();
+        let done = bridge.register_module("done", true, &[]).unwrap().unwrap();
+        bridge.fulfill_module("done", JsValue::Int(100), Label::Public).unwrap();
+        bridge.suspend_module_on_promise("a", b).unwrap();
+        bridge.suspend_module_on_promise("b", c).unwrap();
+        let reason = JsValue::Str("evaluation failure".into());
+        bridge.reject_module("c", reason.clone(), Label::Secret).unwrap();
+        for name in ["a", "b", "c"] {
+            assert_module_rejection(&bridge, name, &reason, &Label::Secret);
+        }
+        assert!(a < c);
+        assert_eq!(bridge.promise_store().get(unrelated).unwrap().state, PromiseState::Pending);
+        assert_eq!(bridge.promise_store().get(done).unwrap().state,
+            PromiseState::Fulfilled(JsValue::Int(100)));
+        assert!(bridge.awaiters_by_promise.is_empty());
+        let events = bridge.evaluator().witness_events().to_vec();
+        bridge.synchronize_all().unwrap();
+        assert_eq!(bridge.evaluator().witness_events(), events.as_slice());
+    }
+
+    #[test]
+    fn rejection_alternates_between_static_imports_and_evaluation_waits() {
+        let mut bridge = AsyncModulePromiseBridge::with_defaults();
+        bridge.register_module("root", false, &[]).unwrap();
+        let imported = bridge.register_module("imported", true, &["root".into()])
+            .unwrap().unwrap();
+        bridge.register_module("waiter", true, &[]).unwrap();
+        bridge.suspend_module_on_promise("waiter", imported).unwrap();
+        bridge.register_module("sync-child", false, &["waiter".into()]).unwrap();
+        let child = bridge.register_module("async-child", true, &["sync-child".into()])
+            .unwrap().unwrap();
+        bridge.register_module("tail", true, &[]).unwrap();
+        bridge.suspend_module_on_promise("tail", child).unwrap();
+        let binding = bridge.live_bindings_mut().register_cell(
+            BindingCell::new("tail", "x", "x", BindingType::Direct));
+        let reason = JsValue::Int(19);
+        bridge.reject_synchronous_module("root", reason.clone(), Label::Confidential).unwrap();
+        for name in ["root", "imported", "waiter", "sync-child", "async-child", "tail"] {
+            assert_module_rejection(&bridge, name, &reason, &Label::Confidential);
+        }
+        assert_eq!(bridge.live_bindings().get_cell(&binding).unwrap().state, BindingCellState::Dead);
+        assert!(bridge.awaiters_by_promise.is_empty());
+        let late = bridge.register_module("late", true, &["tail".into()]).unwrap().unwrap();
+        assert_eq!(bridge.promise_store().get(late).unwrap().state, PromiseState::Rejected(reason));
+        assert_eq!(bridge.promise_store().get(late).unwrap().label, Label::Confidential);
+    }
+
+    #[test]
+    fn evaluation_wait_cycle_is_closed_without_recursive_synchronization() {
+        let mut bridge = AsyncModulePromiseBridge::with_defaults();
+        let a = bridge.register_module("a", true, &[]).unwrap().unwrap();
+        let b = bridge.register_module("b", true, &[]).unwrap().unwrap();
+        let c = bridge.register_module("c", true, &[]).unwrap().unwrap();
+        bridge.suspend_module_on_promise("a", b).unwrap();
+        bridge.suspend_module_on_promise("b", c).unwrap();
+        bridge.suspend_module_on_promise("c", a).unwrap();
+        let reason = JsValue::Str("cycle cancelled".into());
+        bridge.reject_module("a", reason.clone(), Label::Secret).unwrap();
+        for name in ["a", "b", "c"] {
+            assert_module_rejection(&bridge, name, &reason, &Label::Secret);
+        }
+        assert!(bridge.active_awaits_by_module.is_empty());
+        assert!(bridge.awaiters_by_promise.is_empty());
+        let events = bridge.evaluator().witness_events().to_vec();
+        bridge.reject_module("a", JsValue::Int(999), Label::Public).unwrap();
+        bridge.synchronize_all().unwrap();
+        assert_eq!(bridge.evaluator().witness_events(), events.as_slice());
+        assert_module_rejection(&bridge, "a", &reason, &Label::Secret);
+    }
+
+    #[test]
+    fn shared_host_failure_reaches_evaluation_waiters_but_not_other_host_waits() {
+        let mut bridge = AsyncModulePromiseBridge::with_defaults();
+        let a = bridge.register_module("a", true, &[]).unwrap().unwrap();
+        let b = bridge.register_module("b", true, &[]).unwrap().unwrap();
+        for name in ["x", "y", "survivor"] {
+            bridge.register_module(name, true, &[]).unwrap();
+        }
+        let host = bridge.create_pending_promise();
+        let other = bridge.create_pending_promise();
+        bridge.suspend_module_on_promise("a", host).unwrap();
+        bridge.suspend_module_on_promise("b", host).unwrap();
+        bridge.suspend_module_on_promise("x", a).unwrap();
+        bridge.suspend_module_on_promise("y", b).unwrap();
+        bridge.suspend_module_on_promise("survivor", other).unwrap();
+        let reason = JsValue::Int(7);
+        let updates = bridge.reject_awaited_promise(host, reason.clone(), Label::Secret).unwrap();
+        assert_eq!(updates.len(), 2);
+        for name in ["a", "b", "x", "y"] {
+            assert_module_rejection(&bridge, name, &reason, &Label::Secret);
+        }
+        assert_eq!(bridge.active_await("survivor"), Some(other));
+        assert_eq!(bridge.fulfill_awaited_promise(other, JsValue::Int(42), Label::Public).unwrap(),
+            vec!["survivor"]);
+        assert!(bridge.awaiters_by_promise.is_empty());
+    }
+
+    #[test]
+    fn overlapping_rejections_keep_first_reason_for_late_sync_and_async_importers() {
+        for tla in [false, true] {
+            let mut bridge = AsyncModulePromiseBridge::with_defaults();
+            bridge.register_module("first", false, &[]).unwrap();
+            bridge.register_module("second", false, &[]).unwrap();
+            bridge.register_module("both", tla, &["first".into(), "second".into()]).unwrap();
+            bridge.reject_synchronous_module("first", JsValue::Int(1), Label::Secret).unwrap();
+            bridge.reject_synchronous_module("second", JsValue::Int(2), Label::Public).unwrap();
+            assert_module_rejection(&bridge, "both", &JsValue::Int(1), &Label::Secret);
+            bridge.register_module("late", true, &["both".into()]).unwrap();
+            assert_module_rejection(&bridge, "late", &JsValue::Int(1), &Label::Secret);
+        }
+    }
+
+    #[test]
+    fn long_backward_evaluation_wait_chain_rejects_every_promise() {
+        let mut bridge = AsyncModulePromiseBridge::with_defaults();
+        let promises: Vec<_> = (0..1024)
+            .map(|i| bridge.register_module(&format!("m{i:04}"), true, &[]).unwrap().unwrap())
+            .collect();
+        for i in 0..1023 {
+            bridge.suspend_module_on_promise(&format!("m{i:04}"), promises[i + 1]).unwrap();
+        }
+        bridge.reject_module("m1023", JsValue::Int(5), Label::Secret).unwrap();
+        for i in 0..1024 {
+            assert_module_rejection(&bridge, &format!("m{i:04}"), &JsValue::Int(5), &Label::Secret);
+        }
+        assert!(bridge.awaiters_by_promise.is_empty());
+        assert!(bridge.active_awaits_by_module.is_empty());
     }
 }

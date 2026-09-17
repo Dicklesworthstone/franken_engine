@@ -24,6 +24,14 @@ use crate::closure_model::ClosureHandle;
 use crate::ifc_artifacts::Label;
 use crate::object_model::JsValue;
 
+#[cfg(test)]
+#[path = "promise_model_replay_regressions.rs"]
+mod replay_regressions;
+
+#[cfg(test)]
+#[path = "promise_model_combinator_regressions.rs"]
+mod combinator_regressions;
+
 // ---------------------------------------------------------------------------
 // Resident-memory estimation (bd-ur3tk.21, ported from the engine twin)
 // ---------------------------------------------------------------------------
@@ -837,7 +845,9 @@ impl MicrotaskQueue {
     pub fn dequeue(&mut self) -> Option<Microtask> {
         if self.cursor < self.tasks.len() {
             let task = self.tasks[self.cursor].clone();
-            let index = self.cursor as u64;
+            // Buffer slots are a suffix of all enqueues. Compaction changes
+            // their local offsets, not the enqueue IDs used by replay.
+            let index = self.enqueue_count - self.tasks.len() as u64 + self.cursor as u64;
             self.cursor += 1;
             self.witness.push(WitnessEvent::MicrotaskDequeued { index });
             Some(task)
@@ -1267,17 +1277,15 @@ pub struct PromiseAllTracker {
 }
 
 impl PromiseAllTracker {
-    /// Record that input promise at `index` fulfilled with `value`.
-    /// Returns `true` if all promises are now resolved.
+    /// Record the first fulfillment of an input promise.
+    /// Returns `true` only on the transition to all inputs resolved.
+    /// Duplicate and out-of-range callbacks have no effect.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
-        if self.settled {
+        if self.settled || index >= self.total || self.values.contains_key(&index) {
             return false;
         }
-        // Only increment if this index is newly inserted (not a duplicate).
-        if !self.values.contains_key(&index) {
-            self.resolved_count += 1;
-        }
         self.values.insert(index, value);
+        self.resolved_count += 1;
         self.resolved_count == self.total
     }
 
@@ -1317,10 +1325,12 @@ pub struct SettledOutcome {
 }
 
 impl PromiseAllSettledTracker {
-    /// Record a fulfillment. Returns `true` if all settled.
+    /// Record the first outcome for this input; duplicates (including a
+    /// rejection after fulfillment) and out-of-range callbacks have no effect.
+    /// Returns `true` only on the transition to all inputs settled.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
-        if !self.outcomes.contains_key(&index) {
-            self.settled_count += 1;
+        if index >= self.total || self.outcomes.contains_key(&index) {
+            return false;
         }
         self.outcomes.insert(
             index,
@@ -1329,13 +1339,15 @@ impl PromiseAllSettledTracker {
                 value,
             },
         );
+        self.settled_count += 1;
         self.settled_count == self.total
     }
 
-    /// Record a rejection. Returns `true` if all settled.
+    /// Record the first outcome for this input, with the same shared one-shot
+    /// guard as fulfillment. Returns `true` only when all inputs just settled.
     pub fn record_rejection(&mut self, index: u32, reason: JsValue) -> bool {
-        if !self.outcomes.contains_key(&index) {
-            self.settled_count += 1;
+        if index >= self.total || self.outcomes.contains_key(&index) {
+            return false;
         }
         self.outcomes.insert(
             index,
@@ -1344,6 +1356,7 @@ impl PromiseAllSettledTracker {
                 value: reason,
             },
         );
+        self.settled_count += 1;
         self.settled_count == self.total
     }
 }
@@ -1384,15 +1397,15 @@ pub struct PromiseAnyTracker {
 }
 
 impl PromiseAnyTracker {
-    /// Record a rejection. Returns `true` if all promises have rejected (AggregateError).
+    /// Record the first rejection of an input promise.
+    /// Returns `true` only on the transition to all inputs rejected.
+    /// Duplicate and out-of-range callbacks have no effect.
     pub fn record_rejection(&mut self, index: u32, reason: JsValue) -> bool {
-        if self.settled {
+        if self.settled || index >= self.total || self.errors.contains_key(&index) {
             return false;
         }
-        if !self.errors.contains_key(&index) {
-            self.rejected_count += 1;
-        }
         self.errors.insert(index, reason);
+        self.rejected_count += 1;
         self.rejected_count == self.total
     }
 

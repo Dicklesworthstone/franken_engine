@@ -29,7 +29,7 @@ use async_module_scheduler::{
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::module_async_evaluation::AsyncModulePhase;
 use frankenengine_engine::object_model::JsValue;
-use frankenengine_engine::promise_model::PromiseHandle;
+use frankenengine_engine::promise_model::{PromiseHandle, PromiseState};
 
 const COMPONENT: &str = "async_module_runtime";
 const SCHEMA_VERSION: &str = "franken-engine.async-module-runtime.v1";
@@ -44,6 +44,10 @@ struct Scenario {
     scheduler_config: Option<AsyncModuleSchedulerConfig>,
     #[serde(default)]
     pending_promises: Vec<String>,
+    /// Alias -> module specifier. These refer to the graph's real evaluation
+    /// Promises; they do not allocate a second Promise or permit host settlement.
+    #[serde(default)]
+    evaluation_promise_aliases: BTreeMap<String, String>,
     #[serde(default)]
     operations: Vec<Operation>,
 }
@@ -82,6 +86,12 @@ enum Operation {
 }
 
 #[derive(Debug, Serialize)]
+struct PromiseResult {
+    state: PromiseState,
+    label: Label,
+}
+
+#[derive(Debug, Serialize)]
 struct Output {
     component: &'static str,
     schema_version: &'static str,
@@ -89,6 +99,7 @@ struct Output {
     graph_plan: ModuleGraphPlan,
     evaluation_promises: BTreeMap<String, PromiseHandle>,
     named_promises: BTreeMap<String, PromiseHandle>,
+    named_promise_results: BTreeMap<String, PromiseResult>,
     dispatched: Vec<ModuleTask>,
     module_phases: BTreeMap<String, AsyncModulePhase>,
     snapshot: SchedulerSnapshot,
@@ -137,6 +148,18 @@ fn run(scenario: Scenario) -> Result<Output, String> {
             return Err(format!("duplicate pending Promise alias: {name}"));
         }
         named_promises.insert(name, scheduler.create_pending_promise());
+    }
+    for (alias, specifier) in scenario.evaluation_promise_aliases {
+        if alias.trim().is_empty() {
+            return Err("evaluation Promise alias cannot be empty".to_string());
+        }
+        if named_promises.contains_key(&alias) {
+            return Err(format!("duplicate Promise alias: {alias}"));
+        }
+        let promise = registered.evaluation_promises.get(&specifier)
+            .copied()
+            .ok_or_else(|| format!("module has no evaluation Promise: {specifier}"))?;
+        named_promises.insert(alias, promise);
     }
 
     let mut task_aliases = BTreeMap::<String, ModuleTask>::new();
@@ -203,6 +226,18 @@ fn run(scenario: Scenario) -> Result<Output, String> {
         }
     }
 
+    // Return actual settlement values and labels, not just opaque handles or
+    // terminal phase names. Consumers can distinguish still-pending imports
+    // from fulfilled imports and inspect the precise propagated failure.
+    let mut named_promise_results = BTreeMap::new();
+    for (alias, promise) in &named_promises {
+        let record = scheduler.bridge().promise_store().get(*promise)
+            .map_err(|error| error.to_string())?;
+        named_promise_results.insert(alias.clone(), PromiseResult {
+            state: record.state.clone(),
+            label: record.label.clone(),
+        });
+    }
     let module_phases = scheduler
         .bridge()
         .evaluator()
@@ -217,6 +252,7 @@ fn run(scenario: Scenario) -> Result<Output, String> {
         graph_plan: registered.plan,
         evaluation_promises: registered.evaluation_promises,
         named_promises,
+        named_promise_results,
         dispatched,
         module_phases,
         snapshot: scheduler.snapshot(),
@@ -291,5 +327,96 @@ mod tests {
         .expect("scenario");
         let error = run(scenario).expect_err("unknown dependency must fail");
         assert!(error.contains("depends on unknown module"));
+    }
+
+    #[test]
+    fn scenario_can_await_real_evaluation_promise_and_inspect_settlement() {
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "modules": [
+                {"specifier":"a-waiter", "has_top_level_await":true},
+                {"specifier":"b-provider", "has_top_level_await":true}
+            ],
+            "evaluation_promise_aliases": {"imported":"b-provider", "same":"b-provider"},
+            "operations": [
+                {"kind":"dispatch", "save_as":"waiter"},
+                {"kind":"suspend", "task":"waiter", "promise":"imported"},
+                {"kind":"dispatch", "save_as":"provider"},
+                {"kind":"complete", "task":"provider", "value":JsValue::Int(42), "label":Label::Secret},
+                {"kind":"dispatch", "save_as":"resume"},
+                {"kind":"complete", "task":"resume"}
+            ]
+        })).unwrap();
+        let output = run(scenario).unwrap();
+        assert_eq!(output.named_promises["imported"], output.evaluation_promises["b-provider"]);
+        assert_eq!(output.named_promises["same"], output.named_promises["imported"]);
+        assert_eq!(output.named_promise_results["imported"].state,
+            PromiseState::Fulfilled(JsValue::Int(42)));
+        assert_eq!(output.named_promise_results["imported"].label, Label::Secret);
+        assert_eq!(output.dispatched.len(), 3);
+        assert_eq!(output.dispatched[2].module_specifier, "a-waiter");
+        assert_eq!(output.dispatched[2].kind, async_module_scheduler::ModuleTaskKind::Resume);
+        assert_eq!(output.dispatched[2].generation, 2);
+        assert!(output.module_phases.values().all(|phase| *phase == AsyncModulePhase::Settled));
+        assert_eq!(output.snapshot.in_flight_tasks, 0);
+        assert_eq!(output.snapshot.ready_tasks, 0);
+        let json = serde_json::to_value(&output).unwrap();
+        assert_eq!(json["named_promise_results"]["imported"]["state"],
+            serde_json::to_value(PromiseState::Fulfilled(JsValue::Int(42))).unwrap());
+    }
+
+    #[test]
+    fn scenario_rejection_closes_cross_module_waits_and_keeps_unrelated_task() {
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "modules": [
+                {"specifier":"a-waiter", "has_top_level_await":true},
+                {"specifier":"b-provider", "has_top_level_await":true},
+                {"specifier":"c-importer", "dependencies":["a-waiter"]},
+                {"specifier":"z-unrelated"}
+            ],
+            "evaluation_promise_aliases": {"imported":"b-provider", "waiter-result":"a-waiter"},
+            "operations": [
+                {"kind":"dispatch", "save_as":"waiter"},
+                {"kind":"suspend", "task":"waiter", "promise":"imported"},
+                {"kind":"dispatch", "save_as":"provider"},
+                {"kind":"reject", "task":"provider", "reason":JsValue::Int(7), "label":Label::Secret},
+                {"kind":"dispatch", "save_as":"unrelated"},
+                {"kind":"complete", "task":"unrelated"}
+            ]
+        })).unwrap();
+        let output = run(scenario).unwrap();
+        for name in ["a-waiter", "b-provider", "c-importer"] {
+            assert_eq!(output.module_phases[name], AsyncModulePhase::Rejected);
+        }
+        for alias in ["imported", "waiter-result"] {
+            assert_eq!(output.named_promise_results[alias].state, PromiseState::Rejected(JsValue::Int(7)));
+            assert_eq!(output.named_promise_results[alias].label, Label::Secret);
+        }
+        assert_eq!(output.dispatched[2].module_specifier, "z-unrelated");
+        assert_eq!(output.module_phases["z-unrelated"], AsyncModulePhase::Settled);
+        assert_eq!(output.snapshot.in_flight_tasks, 0);
+        assert_eq!(output.snapshot.ready_tasks, 0);
+    }
+
+    #[test]
+    fn evaluation_aliases_reject_unknown_modules_collisions_and_host_settlement() {
+        for (aliases, pending) in [
+            (serde_json::json!({"x":"missing"}), serde_json::json!([])),
+            (serde_json::json!({"x":"sync"}), serde_json::json!([])),
+            (serde_json::json!({"x":"async"}), serde_json::json!(["x"])),
+            (serde_json::json!({" ":"async"}), serde_json::json!([])),
+        ] {
+            let scenario: Scenario = serde_json::from_value(serde_json::json!({
+                "modules":[{"specifier":"async", "has_top_level_await":true}, {"specifier":"sync"}],
+                "evaluation_promise_aliases":aliases,
+                "pending_promises":pending
+            })).unwrap();
+            assert!(run(scenario).is_err());
+        }
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "modules":[{"specifier":"async", "has_top_level_await":true}],
+            "evaluation_promise_aliases":{"x":"async"},
+            "operations":[{"kind":"fulfill_awaited", "promise":"x"}]
+        })).unwrap();
+        assert!(run(scenario).unwrap_err().contains("must be settled through the module-evaluation path"));
     }
 }

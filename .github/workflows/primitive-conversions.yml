@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Retrieve exact reflection candidate and install regression tests
+      - name: Retrieve exact reflection and prototype candidates
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -44,14 +44,7 @@ jobs:
           git rev-parse HEAD > conversion-validation/revision.txt
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
-          sha = '665a9bd5263a002b4067153c5f8fb25b9f321359'
-          req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
-              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
-              'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-          with urllib.request.urlopen(req, timeout=60) as response:
-              raw = base64.b64decode(json.load(response)['content'])
-          assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
-          assert hashlib.sha256(raw).hexdigest() == 'eea011f0061a2235d81d88315df811c09428d086863f3e8a4395d5d72bf72909'
+          root = pathlib.Path('conversion-validation')
           paths = [
               'crates/franken-engine/src/baseline_interpreter.rs',
               'crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs',
@@ -60,12 +53,29 @@ jobs:
           ]
           for path, expected in [(paths[0], '81fdcc0ea5a5c7bdcfa97ee5815d3c5d47f5c771'), (paths[1], '76a203693f7444178cf17ca95a4945a4747242a4')]:
               assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected
-          root = pathlib.Path('conversion-validation')
-          patch = root / 'reflection.patch'; patch.write_bytes(gzip.decompress(raw))
-          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
-          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(paths)
-          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
-          subprocess.run(['git', 'apply', '--include=' + paths[3], str(patch)], check=True)
+          candidates = [
+              ('reflection', '665a9bd5263a002b4067153c5f8fb25b9f321359', 'eea011f0061a2235d81d88315df811c09428d086863f3e8a4395d5d72bf72909'),
+              ('refinement', '5efa781f1e11c24c548faf0cac92253be1c151aa', '7a1f8ab17ce2a6ff621575e031ac1aaf8402ab105df1b0fdf6508c9c66fc7921'),
+              ('prototype', 'fcc5eded94c821f35e2d398bf238a762332af751', 'eb0232188b06c2e49063aad5f5aa7c9199f2cc82d8d82b9b07658587861d1a90'),
+          ]
+          for name, sha, digest in candidates:
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  raw = base64.b64decode(json.load(response)['content'])
+              assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
+              if name == 'prototype':
+                  encoded = base64.b64encode(raw).decode()
+                  for old, new in [('IZvNvy3PoJOTu', 'IZvNvy3OoJOTu'), ('lqtwVbIGpIGp3EDWH', 'lqtwVbIGp3EDWH'), ('CebTT6piPeinx', 'CebTT6einx'), ('dl3h/c+vQEJ', 'dl3h/c+vqEJ')]:
+                      assert encoded.count(old) == 1
+                      encoded = encoded.replace(old, new)
+                  raw = base64.b64decode(encoded, validate=True)
+              (root / (name + '.gz')).write_bytes(raw)
+              assert hashlib.sha256(raw).hexdigest() == digest, name + ' transport checksum mismatch'
+              patch = root / (name + '.patch'); patch.write_bytes(gzip.decompress(raw))
+              stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
+              assert set(line.split('\t', 2)[2] for line in stats.splitlines()) <= set(paths)
           (root / 'paths.json').write_text(json.dumps(paths))
           PY
       - name: Install Rust
@@ -80,28 +90,36 @@ jobs:
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('conversion-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
           PY
-      - name: Reproduce Reflect getter failure on unchanged runtime
+      - name: Check existing computed-key failure before any implementation change
         if: matrix.mode == 'runtime-tests'
         run: |
           status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test reflect_invocation_execution reflect_apply_reads_length_then_live_indices_before_calling_target -- --exact --nocapture > conversion-validation/before.log 2>&1 || status=$?
-          tail -n 100 conversion-validation/before.log
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test function_prototype_invocation_regression computed_literal_key_getter_throw_skips_value -- --exact --nocapture > conversion-validation/existing-failure.log 2>&1 || status=$?
+          tail -n 100 conversion-validation/existing-failure.log
           test "$status" -eq 101
-          grep -F 'reflect_apply_reads_length_then_live_indices_before_calling_target ... FAILED' conversion-validation/before.log
-          grep -F 'assertion `left == right` failed' conversion-validation/before.log
+          grep -F 'unauthorized flow detected' conversion-validation/existing-failure.log
+          grep -F 'computed_literal_key_getter_throw_skips_value ... FAILED' conversion-validation/existing-failure.log
       - name: Apply implementation and format exact changed sources
         run: |
-          git apply --exclude=crates/franken-engine/tests/reflect_invocation_execution.rs conversion-validation/reflection.patch
+          for patch in reflection refinement prototype; do
+            git apply --check "conversion-validation/$patch.patch"
+            git apply "conversion-validation/$patch.patch"
+          done
           python3 - <<'PY'
           import json, pathlib, subprocess
           paths = json.loads(pathlib.Path('conversion-validation/paths.json').read_text())
           subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
           PY
-      - name: Run reflection, call-apply, conversion, JSON and UTF-16 regressions
+      - name: Run reflection, conversion, JSON and UTF-16 regressions
         if: matrix.mode == 'runtime-tests'
         run: |
           set -o pipefail
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_invocation_execution --test function_prototype_invocation_regression --test primitive_conversion_execution --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee conversion-validation/after.log
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_invocation_execution --test primitive_conversion_execution --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee conversion-validation/after.log
+      - name: Run all pre-existing Function.apply regressions
+        if: matrix.mode == 'runtime-tests'
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test function_prototype_invocation_regression apply_ -- --nocapture 2>&1 | tee conversion-validation/apply.log
       - name: Check complete native engine library
         if: matrix.mode == 'full-engine-check'
         run: |

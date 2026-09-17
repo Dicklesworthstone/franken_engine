@@ -197,10 +197,31 @@ impl AsyncModuleScheduler {
         has_top_level_await: bool,
         dependencies: &[String],
     ) -> Result<Option<PromiseHandle>, AsyncModuleSchedulerError> {
+        if self.bridge.evaluator().states().contains_key(specifier) {
+            return Err(AsyncModulePromiseBridgeError::DuplicateModule {
+                specifier: specifier.to_string(),
+            }
+            .into());
+        }
         if self.bridge.evaluator().states().len() >= self.config.max_registered_modules {
             return Err(AsyncModuleSchedulerError::RegisteredModuleLimitExceeded {
                 max: self.config.max_registered_modules,
             });
+        }
+        // Match the evaluator's registration readiness before it creates a
+        // Promise or emits events. Rejected dependencies produce a terminal
+        // module and require no queue slot; pending dependencies defer it.
+        let immediately_ready = dependencies.iter().all(|dependency| {
+            self.bridge
+                .evaluator()
+                .states()
+                .get(dependency)
+                .is_none_or(|state| {
+                    state.phase.is_terminal() && state.phase != AsyncModulePhase::Rejected
+                })
+        });
+        if immediately_ready {
+            self.ensure_ready_capacity(1)?;
         }
         let promise = self
             .bridge
@@ -226,13 +247,13 @@ impl AsyncModuleScheduler {
                 max: self.config.max_dispatched_tasks,
             });
         }
-        self.ready.remove(&key);
-        self.queued_by_module.remove(&key.module_specifier);
         if self.in_flight.contains_key(&key.module_specifier) {
             return Err(AsyncModuleSchedulerError::ModuleAlreadyInFlight {
                 module_specifier: key.module_specifier,
             });
         }
+        self.ready.remove(&key);
+        self.queued_by_module.remove(&key.module_specifier);
         let task = ModuleTask {
             sequence: key.sequence,
             generation: key.generation,
@@ -265,6 +286,22 @@ impl AsyncModuleScheduler {
         label: Label,
     ) -> Result<Option<ModulePromiseUpdate>, AsyncModuleSchedulerError> {
         self.validate_in_flight(task)?;
+        // Settlement cannot be undone. Admit the entire newly ready batch
+        // before changing the evaluator, Promise store, or in-flight lease.
+        // The authoritative pending sets identify exactly those dependents
+        // for which this completion removes the final outstanding dependency.
+        self.preflight_ready_batch(
+            self.bridge
+                .evaluator()
+                .states()
+                .iter()
+                .filter(|(_, state)| {
+                    !runtime_terminal(state.phase)
+                        && state.pending_dependencies.len() == 1
+                        && state.pending_dependencies.contains(&task.module_specifier)
+                })
+                .map(|(specifier, _)| (specifier.as_str(), self.next_kind(specifier))),
+        )?;
         let has_top_level_await = self.bridge.evaluator().states()[&task.module_specifier]
             .has_top_level_await;
         if has_top_level_await {
@@ -315,6 +352,17 @@ impl AsyncModuleScheduler {
         value: JsValue,
         label: Label,
     ) -> Result<Vec<String>, AsyncModuleSchedulerError> {
+        // A shared Promise can wake many modules. Refusing after only part of
+        // that batch was enqueued would strand the rest on an already-settled
+        // Promise, so reserve all required slots before settling it.
+        self.preflight_ready_batch(
+            self.bridge
+                .evaluator()
+                .states()
+                .keys()
+                .filter(|specifier| self.bridge.active_await(specifier) == Some(promise))
+                .map(|specifier| (specifier.as_str(), ModuleTaskKind::Resume)),
+        )?;
         let resumable = self
             .bridge
             .fulfill_awaited_promise(promise, value, label)?;
@@ -356,17 +404,81 @@ impl AsyncModuleScheduler {
         self.in_flight.get(specifier)
     }
 
+    fn next_kind(&self, specifier: &str) -> ModuleTaskKind {
+        if self.started.contains(specifier) {
+            ModuleTaskKind::Resume
+        } else {
+            ModuleTaskKind::Start
+        }
+    }
+
+    fn ensure_ready_capacity(&self, additional: usize) -> Result<(), AsyncModuleSchedulerError> {
+        if additional > self.config.max_ready_tasks.saturating_sub(self.ready.len()) {
+            return Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded {
+                max: self.config.max_ready_tasks,
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether admission needs a new slot. This is shared by preflight and
+    /// enqueue so duplicate leases and conflicting task kinds cannot drift.
+    fn enqueue_slot_required(
+        &self,
+        specifier: &str,
+        kind: ModuleTaskKind,
+    ) -> Result<bool, AsyncModuleSchedulerError> {
+        if self.in_flight.contains_key(specifier) {
+            return Err(AsyncModuleSchedulerError::ModuleAlreadyInFlight {
+                module_specifier: specifier.to_string(),
+            });
+        }
+        if let Some(existing) = self.queued_by_module.get(specifier) {
+            if existing.kind == kind {
+                return Ok(false);
+            }
+            return Err(AsyncModuleSchedulerError::InvalidTaskKind {
+                module_specifier: specifier.to_string(),
+                expected: existing.kind,
+                actual: kind,
+            });
+        }
+        Ok(true)
+    }
+
+    /// Callers traverse unique module keys from the authoritative state map.
+    /// Pending dependencies are intentionally allowed here: the admitted
+    /// transition clears them before enqueue. No state or sequence is changed.
+    fn preflight_ready_batch<'a>(
+        &self,
+        modules: impl Iterator<Item = (&'a str, ModuleTaskKind)>,
+    ) -> Result<(), AsyncModuleSchedulerError> {
+        let mut additional = 0usize;
+        for (specifier, kind) in modules {
+            if self.enqueue_slot_required(specifier, kind)? {
+                additional = additional.saturating_add(1);
+            }
+        }
+        self.ensure_ready_capacity(additional)
+    }
+
     fn enqueue_newly_ready(
         &mut self,
         modules: &[String],
     ) -> Result<(), AsyncModuleSchedulerError> {
         for specifier in modules {
-            let kind = if self.started.contains(specifier) {
-                ModuleTaskKind::Resume
-            } else {
-                ModuleTaskKind::Start
-            };
-            self.enqueue(specifier, kind)?;
+            // Rejection may have made a pending dependency edge obsolete.
+            // Resolving that edge must not resurrect its terminal dependent.
+            if self
+                .bridge
+                .evaluator()
+                .states()
+                .get(specifier)
+                .is_some_and(|state| runtime_terminal(state.phase))
+            {
+                continue;
+            }
+            self.enqueue(specifier, self.next_kind(specifier))?;
         }
         Ok(())
     }
@@ -397,26 +509,10 @@ impl AsyncModuleScheduler {
                 ),
             });
         }
-        if self.in_flight.contains_key(specifier) {
-            return Err(AsyncModuleSchedulerError::ModuleAlreadyInFlight {
-                module_specifier: specifier.to_string(),
-            });
+        if !self.enqueue_slot_required(specifier, kind)? {
+            return Ok(());
         }
-        if let Some(existing) = self.queued_by_module.get(specifier) {
-            if existing.kind == kind {
-                return Ok(());
-            }
-            return Err(AsyncModuleSchedulerError::InvalidTaskKind {
-                module_specifier: specifier.to_string(),
-                expected: existing.kind,
-                actual: kind,
-            });
-        }
-        if self.ready.len() >= self.config.max_ready_tasks {
-            return Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded {
-                max: self.config.max_ready_tasks,
-            });
-        }
+        self.ensure_ready_capacity(1)?;
         let generation = self
             .generations
             .entry(specifier.to_string())
@@ -650,5 +746,191 @@ mod tests {
             scheduler.next_task().unwrap_err(),
             AsyncModuleSchedulerError::DispatchBudgetExceeded { max: 1 }
         ));
+    }
+
+    fn observable_state(scheduler: &AsyncModuleScheduler) -> serde_json::Value {
+        serde_json::json!({
+            "snapshot": scheduler.snapshot(),
+            "modules": scheduler.bridge().evaluator().states(),
+            "promises": scheduler.bridge().promise_store(),
+            "microtasks": scheduler.bridge().microtasks(),
+            "bindings": scheduler.bridge().live_bindings(),
+            "in_flight": &scheduler.in_flight,
+            "started": &scheduler.started,
+            "generations": &scheduler.generations,
+        })
+    }
+
+    fn bounded_scheduler(max_ready_tasks: usize) -> AsyncModuleScheduler {
+        AsyncModuleScheduler::new(AsyncModuleSchedulerConfig {
+            max_ready_tasks,
+            ..AsyncModuleSchedulerConfig::default()
+        })
+    }
+
+    #[test]
+    fn registration_capacity_refusal_preserves_state_and_is_retryable() {
+        let mut scheduler = bounded_scheduler(1);
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        let before = observable_state(&scheduler);
+        assert!(matches!(
+            scheduler.register_module("new", true, &[]),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 1 })
+        ));
+        assert_eq!(observable_state(&scheduler), before);
+        scheduler.next_task().unwrap().unwrap();
+        let promise = scheduler.register_module("new", true, &[]).unwrap().unwrap();
+        assert_eq!(promise, PromiseHandle(0));
+        let task = scheduler.next_task().unwrap().unwrap();
+        assert_eq!(task.module_specifier, "new");
+        assert_eq!(task.sequence, 1);
+        assert_eq!(task.generation, 1);
+    }
+
+    #[test]
+    fn zero_capacity_registration_creates_no_promise_or_module() {
+        let mut scheduler = bounded_scheduler(0);
+        let before = observable_state(&scheduler);
+        for has_tla in [false, true] {
+            assert!(matches!(
+                scheduler.register_module("new", has_tla, &[]),
+                Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 0 })
+            ));
+            assert_eq!(observable_state(&scheduler), before);
+        }
+        assert_eq!(scheduler.create_pending_promise(), PromiseHandle(0));
+    }
+
+    #[test]
+    fn completion_fanout_refusal_preserves_lease_and_retries_whole_batch() {
+        let mut scheduler = bounded_scheduler(2);
+        let root_promise = scheduler.register_module("root", true, &[]).unwrap().unwrap();
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        let root = scheduler.next_task().unwrap().unwrap();
+        for child in ["a", "b"] {
+            scheduler.register_module(child, true, &["root".into()]).unwrap();
+        }
+        let before = observable_state(&scheduler);
+        assert!(matches!(
+            scheduler.complete_task(&root, JsValue::Int(7), Label::Secret),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 2 })
+        ));
+        assert_eq!(observable_state(&scheduler), before);
+        assert_eq!(scheduler.in_flight_task("root"), Some(&root));
+        assert_eq!(
+            scheduler.bridge().promise_store().get(root_promise).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        );
+        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "occupied");
+        let update = scheduler.complete_task(&root, JsValue::Int(7), Label::Secret)
+            .unwrap().unwrap();
+        assert_eq!(update.dependency_ready, vec!["a", "b"]);
+        let a = scheduler.next_task().unwrap().unwrap();
+        let b = scheduler.next_task().unwrap().unwrap();
+        assert_eq!((a.module_specifier.as_str(), a.sequence), ("a", 2));
+        assert_eq!((b.module_specifier.as_str(), b.sequence), ("b", 3));
+        assert!(scheduler.next_task().unwrap().is_none());
+        assert!(scheduler.complete_task(&root, JsValue::Undefined, public()).is_err());
+    }
+
+    #[test]
+    fn shared_await_refusal_preserves_all_waiters_and_exact_settlement() {
+        let mut scheduler = bounded_scheduler(2);
+        for module in ["a", "b"] {
+            scheduler.register_module(module, true, &[]).unwrap();
+        }
+        let a = scheduler.next_task().unwrap().unwrap();
+        let b = scheduler.next_task().unwrap().unwrap();
+        let promise = scheduler.create_pending_promise();
+        scheduler.suspend_task(&a, promise).unwrap();
+        scheduler.suspend_task(&b, promise).unwrap();
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        let before = observable_state(&scheduler);
+        assert!(matches!(
+            scheduler.fulfill_awaited_promise(promise, JsValue::Int(42), Label::Secret),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 2 })
+        ));
+        assert_eq!(observable_state(&scheduler), before);
+        assert_eq!(scheduler.bridge().active_await("a"), Some(promise));
+        assert_eq!(scheduler.bridge().active_await("b"), Some(promise));
+        scheduler.next_task().unwrap().unwrap();
+        assert_eq!(
+            scheduler.fulfill_awaited_promise(promise, JsValue::Int(42), Label::Secret).unwrap(),
+            vec!["a", "b"]
+        );
+        let record = scheduler.bridge().promise_store().get(promise).unwrap();
+        assert_eq!(record.state, crate::promise_model::PromiseState::Fulfilled(JsValue::Int(42)));
+        assert_eq!(record.label, Label::Secret);
+        for expected in ["a", "b"] {
+            let task = scheduler.next_task().unwrap().unwrap();
+            assert_eq!(task.module_specifier, expected);
+            assert_eq!(task.kind, ModuleTaskKind::Resume);
+            assert_eq!(task.generation, 2);
+        }
+        assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn completion_reserves_only_dependents_losing_their_last_dependency() {
+        let mut scheduler = bounded_scheduler(2);
+        scheduler.register_module("x", true, &[]).unwrap();
+        scheduler.register_module("y", true, &[]).unwrap();
+        scheduler.register_module("both", true, &["x".into(), "y".into()]).unwrap();
+        scheduler.register_module("only_x", true, &["x".into()]).unwrap();
+        let x = scheduler.next_task().unwrap().unwrap();
+        let y = scheduler.next_task().unwrap().unwrap();
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        scheduler.complete_task(&x, JsValue::Undefined, public()).unwrap();
+        assert_eq!(scheduler.snapshot().ready_tasks, 2);
+        let before = observable_state(&scheduler);
+        assert!(matches!(
+            scheduler.complete_task(&y, JsValue::Undefined, public()),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 2 })
+        ));
+        assert_eq!(observable_state(&scheduler), before);
+        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "occupied");
+        scheduler.complete_task(&y, JsValue::Undefined, public()).unwrap();
+        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "only_x");
+        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "both");
+        assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn unobserved_promise_can_settle_when_ready_queue_is_full() {
+        let mut scheduler = bounded_scheduler(1);
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        let promise = scheduler.create_pending_promise();
+        let before = scheduler.snapshot();
+        assert!(scheduler.fulfill_awaited_promise(promise, JsValue::Int(5), public())
+            .unwrap().is_empty());
+        assert_eq!(scheduler.snapshot(), before);
+        assert_eq!(
+            scheduler.bridge().promise_store().get(promise).unwrap().state,
+            crate::promise_model::PromiseState::Fulfilled(JsValue::Int(5))
+        );
+    }
+
+    #[test]
+    fn capacity_refusal_does_not_prevent_rejection_cleanup() {
+        let mut scheduler = bounded_scheduler(1);
+        scheduler.register_module("root", true, &[]).unwrap();
+        for child in ["a", "b"] {
+            scheduler.register_module(child, true, &["root".into()]).unwrap();
+        }
+        let root = scheduler.next_task().unwrap().unwrap();
+        assert!(matches!(
+            scheduler.complete_task(&root, JsValue::Undefined, public()),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 1 })
+        ));
+        scheduler.reject_task(&root, JsValue::Str("aborted".into()), Label::Secret).unwrap();
+        for module in ["root", "a", "b"] {
+            assert_eq!(scheduler.bridge().evaluator().states()[module].phase, AsyncModulePhase::Rejected);
+            let promise = scheduler.bridge().module_promise(module).unwrap();
+            let record = scheduler.bridge().promise_store().get(promise).unwrap();
+            assert_eq!(record.state, crate::promise_model::PromiseState::Rejected(JsValue::Str("aborted".into())));
+            assert_eq!(record.label, Label::Secret);
+        }
+        assert_eq!(scheduler.snapshot().ready_tasks, 0);
+        assert_eq!(scheduler.snapshot().in_flight_tasks, 0);
     }
 }

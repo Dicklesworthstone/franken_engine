@@ -51,6 +51,7 @@ jobs:
               'crates/franken-engine/src/baseline_interpreter/reflect_invocation.rs',
               'crates/franken-engine/tests/reflect_invocation_execution.rs',
           ]
+          (root / 'paths.json').write_text(json.dumps(paths))
           for path, expected in [(paths[0], '81fdcc0ea5a5c7bdcfa97ee5815d3c5d47f5c771'), (paths[1], '76a203693f7444178cf17ca95a4945a4747242a4')]:
               assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected
           candidates = [
@@ -65,10 +66,11 @@ jobs:
               with urllib.request.urlopen(req, timeout=60) as response:
                   raw = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
+              (root / (name + '.received')).write_bytes(raw)
               if name == 'prototype':
                   encoded = base64.b64encode(raw).decode()
-                  for old, new in [('IZvNvy3PoJOTu', 'IZvNvy3OoJOTu'), ('lqtwVbIGpIGp3EDWH', 'lqtwVbIGp3EDWH'), ('CebTT6piPeinx', 'CebTT6einx'), ('dl3h/c+vQEJ', 'dl3h/c+vqEJ')]:
-                      assert encoded.count(old) == 1
+                  for old, new in [('IZvNvy3PoJOTu', 'IZvNvy3OoJOTu'), ('LqtwVbIGpIGp3EDWH', 'LqtwVbIGp3EDWH'), ('CebTT6piPeinx', 'CebTT6einx'), ('dl3h/c+vQEJ', 'dl3h/c+vqEJ')]:
+                      assert encoded.count(old) == 1, old
                       encoded = encoded.replace(old, new)
                   raw = base64.b64decode(encoded, validate=True)
               (root / (name + '.gz')).write_bytes(raw)
@@ -76,7 +78,6 @@ jobs:
               patch = root / (name + '.patch'); patch.write_bytes(gzip.decompress(raw))
               stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
               assert set(line.split('\t', 2)[2] for line in stats.splitlines()) <= set(paths)
-          (root / 'paths.json').write_text(json.dumps(paths))
           PY
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy

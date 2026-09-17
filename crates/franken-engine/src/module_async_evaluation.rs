@@ -42,11 +42,12 @@ pub const MODULE_ASYNC_EVAL_COMPONENT: &str = "module_async_evaluation";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AsyncModulePhase {
-    /// Module does not use top-level await — evaluation is synchronous.
+    /// Module does not use top-level await. Its body still needs to execute;
+    /// only `Settled` records successful completion of synchronous evaluation.
     Synchronous,
     /// Module evaluation has started and is suspended at a top-level await.
     Suspended,
-    /// Module is waiting for async dependencies to settle before resuming.
+    /// Module is waiting for dependencies to finish before executing or resuming.
     AwaitingDependencies,
     /// Module evaluation resumed and completed successfully.
     Settled,
@@ -73,8 +74,10 @@ impl AsyncModulePhase {
         }
     }
 
+    /// Registration is not execution. Synchronous bodies can still throw and
+    /// must hold their importers behind the same completion barrier as TLA.
     pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Synchronous | Self::Settled | Self::Rejected)
+        matches!(self, Self::Settled | Self::Rejected)
     }
 }
 
@@ -460,9 +463,7 @@ impl AsyncEvalResult {
     pub fn settled_count(&self) -> usize {
         self.module_states
             .values()
-            .filter(|s| {
-                s.phase == AsyncModulePhase::Settled || s.phase == AsyncModulePhase::Synchronous
-            })
+            .filter(|s| s.phase == AsyncModulePhase::Settled)
             .count()
     }
 
@@ -601,7 +602,8 @@ impl AsyncModuleEvaluator {
         }
     }
 
-    /// Register a module for async evaluation.
+    /// Register a module for async evaluation. Dependencies are registered
+    /// first; synchronous dependencies remain pending until explicitly settled.
     pub fn register_module(
         &mut self,
         specifier: &str,
@@ -625,7 +627,7 @@ impl AsyncModuleEvaluator {
         let mut pending_dependencies = Vec::new();
         let mut rejected_dependency = None;
 
-        // Track which dependencies are async (need to wait).
+        // Every unfinished dependency is a barrier, even without top-level await.
         for dep in dependencies {
             if let Some(dep_state) = self.states.get(dep) {
                 if dep_state.phase == AsyncModulePhase::Rejected {
@@ -1179,7 +1181,7 @@ mod tests {
 
     #[test]
     fn phase_terminal_check() {
-        assert!(AsyncModulePhase::Synchronous.is_terminal());
+        assert!(!AsyncModulePhase::Synchronous.is_terminal());
         assert!(!AsyncModulePhase::Suspended.is_terminal());
         assert!(!AsyncModulePhase::AwaitingDependencies.is_terminal());
         assert!(AsyncModulePhase::Settled.is_terminal());
@@ -1457,6 +1459,9 @@ mod tests {
             &["provider.js".to_string()],
             Some(PromiseHandle(1)),
         );
+        // Exercise the declared graph after its mutable wakeup edge was removed.
+        eval.notify_dependency_settled("provider.js")
+            .expect("remove the pending notification edge");
 
         assert!(
             !eval.states()["consumer.js"]
@@ -1547,6 +1552,8 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("a.js", false, &[], None);
         eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
+        eval.settle_module("a.js")
+            .expect("synchronous body must complete too");
         eval.settle_module("b.js")
             .expect("operation should succeed for valid inputs");
         let result = eval.finalize();
@@ -1782,12 +1789,13 @@ mod tests {
     fn async_eval_result_counts() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("ok.js", false, &[], None);
+        eval.settle_module("ok.js").expect("complete synchronous body");
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("bad.js", &js_error("err"), &mut bindings)
             .expect("operation should succeed for valid inputs");
         let result = eval.finalize();
-        assert_eq!(result.settled_count(), 1); // ok.js is Synchronous
+        assert_eq!(result.settled_count(), 1); // ok.js actually completed
         assert_eq!(result.rejected_count(), 1); // bad.js
     }
 
@@ -2617,7 +2625,7 @@ mod tests {
         assert!(result.total_suspensions >= 2);
     }
 
-    // -- Evaluator: register_module with sync dep does not add pending --
+    // -- Evaluator: only completed dependencies release importers --
 
     #[test]
     fn evaluator_register_with_settled_dep_no_pending() {
@@ -2633,12 +2641,66 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_register_with_sync_dep_no_pending() {
+    fn evaluator_register_with_unexecuted_sync_dep_waits() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("dep.js", false, &[], None);
-
-        // Synchronous dep is terminal and not Rejected — not added as pending.
         eval.register_module("app.js", false, &["dep.js".into()], None);
+        assert_eq!(eval.states()["app.js"].phase, AsyncModulePhase::AwaitingDependencies);
+        assert!(eval.states()["app.js"].pending_dependencies.contains("dep.js"));
+        assert_eq!(eval.settle_module("dep.js").unwrap(), vec!["app.js"]);
         assert!(eval.states()["app.js"].all_dependencies_settled());
+        assert!(!eval.states()["app.js"].phase.is_terminal());
+        eval.settle_module("app.js").unwrap();
+        assert!(eval.finalize().all_settled);
+    }
+
+    #[test]
+    fn registration_alone_never_counts_as_successful_execution() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("sync.js", false, &[], None);
+        let result = eval.finalize();
+        assert!(!result.all_settled);
+        assert_eq!(result.settled_count(), 0);
+        assert_eq!(result.rejected_count(), 0);
+    }
+
+    #[test]
+    fn synchronous_diamond_releases_only_after_both_bodies_complete() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("root", false, &[], None);
+        eval.register_module("left", false, &["root".into()], None);
+        eval.register_module("right", false, &["root".into()], None);
+        eval.register_module("app", false, &["left".into(), "right".into()], None);
+        assert_eq!(eval.settle_module("root").unwrap(), vec!["left", "right"]);
+        assert!(eval.settle_module("right").unwrap().is_empty());
+        assert_eq!(eval.states()["app"].pending_dependencies, BTreeSet::from(["left".into()]));
+        assert_eq!(eval.settle_module("left").unwrap(), vec!["app"]);
+        assert!(!eval.states()["app"].phase.is_terminal());
+        eval.settle_module("app").unwrap();
+        let result = eval.finalize();
+        assert!(result.all_settled);
+        assert_eq!(result.settled_count(), 4);
+    }
+
+    #[test]
+    fn synchronous_failure_cascades_through_mixed_importers() {
+        for mid_async in [false, true] {
+            let mut eval = AsyncModuleEvaluator::with_defaults();
+            eval.register_module("root", false, &[], None);
+            eval.register_module("mid", mid_async, &["root".into()], mid_async.then_some(PromiseHandle(1)));
+            eval.register_module("leaf", false, &["mid".into()], None);
+            eval.register_module("unrelated", false, &[], None);
+            let mut bindings = empty_live_bindings();
+            let leaf_binding = bindings.register_cell(BindingCell::new("leaf", "x", "x", BindingType::Direct));
+            let linkage = eval.reject_module("root", &js_error("sync failure"), &mut bindings).unwrap();
+            assert_eq!(linkage.transitive_closure, BTreeSet::from(["leaf".into(), "mid".into()]));
+            for name in ["root", "mid", "leaf"] {
+                assert_eq!(eval.states()[name].phase, AsyncModulePhase::Rejected);
+                assert_eq!(eval.states()[name].rejection_reason_hash, Some(linkage.rejection_reason_hash.clone()));
+            }
+            assert_eq!(bindings.get_cell(&leaf_binding).unwrap().state, BindingCellState::Dead);
+            assert_eq!(eval.states()["unrelated"].phase, AsyncModulePhase::Synchronous);
+            assert!(!eval.finalize().all_settled);
+        }
     }
 }

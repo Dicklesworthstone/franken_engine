@@ -62,7 +62,7 @@ fn phase_display_matches_as_str() {
 
 #[test]
 fn phase_terminal_check() {
-    assert!(AsyncModulePhase::Synchronous.is_terminal());
+    assert!(!AsyncModulePhase::Synchronous.is_terminal());
     assert!(!AsyncModulePhase::Suspended.is_terminal());
     assert!(!AsyncModulePhase::AwaitingDependencies.is_terminal());
     assert!(AsyncModulePhase::Settled.is_terminal());
@@ -620,6 +620,7 @@ fn evaluator_finalize_all_settled() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("a.js", false, &[], None);
     eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
+    eval.settle_module("a.js").unwrap();
     eval.settle_module("b.js").unwrap();
     let result = eval.finalize();
     assert!(result.all_settled);

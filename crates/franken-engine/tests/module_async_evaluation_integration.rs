@@ -109,8 +109,8 @@ fn phase_as_str_all_distinct() {
 }
 
 #[test]
-fn phase_terminal_synchronous_settled_rejected() {
-    assert!(AsyncModulePhase::Synchronous.is_terminal());
+fn phase_terminal_requires_actual_completion() {
+    assert!(!AsyncModulePhase::Synchronous.is_terminal());
     assert!(AsyncModulePhase::Settled.is_terminal());
     assert!(AsyncModulePhase::Rejected.is_terminal());
 }
@@ -813,6 +813,8 @@ fn evaluator_reject_uses_declared_dependency_graph_after_non_pending_registratio
     eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(2)));
     eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(1))
         .unwrap();
+    // Explicitly consume the notification edge before checking static linkage.
+    eval.notify_dependency_settled("root.js").unwrap();
 
     assert!(
         !eval.states()["mid.js"]
@@ -957,6 +959,7 @@ fn evaluator_finalize_all_settled() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("a.js", false, &[], None);
     eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
+    eval.settle_module("a.js").unwrap();
     eval.settle_module("b.js").unwrap();
 
     let result = eval.finalize();
@@ -972,6 +975,7 @@ fn evaluator_finalize_with_rejection() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("ok.js", false, &[], None);
     eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
+    eval.settle_module("ok.js").unwrap();
     let mut bindings = empty_bindings();
     eval.reject_module("bad.js", &js_error("err"), &mut bindings)
         .unwrap();
@@ -1181,6 +1185,8 @@ fn pipeline_three_module_chain_settle_in_order() {
     eval.suspend_on_dependency("top.js", "mid.js", PromiseHandle(1))
         .unwrap();
 
+    // Complete the synchronous base before either importer is released.
+    assert_eq!(eval.settle_module("base.js").unwrap(), vec!["mid.js"]);
     // Settle mid.js
     let resumable = eval.settle_module("mid.js").unwrap();
     assert!(resumable.contains(&"top.js".to_string()));
@@ -1200,6 +1206,8 @@ fn pipeline_mixed_sync_async_modules() {
     eval.register_module("sync1.js", false, &[], None);
     eval.register_module("sync2.js", false, &[], None);
     eval.register_module("async1.js", true, &[], Some(PromiseHandle(1)));
+    eval.settle_module("sync1.js").unwrap();
+    eval.settle_module("sync2.js").unwrap();
 
     eval.suspend_at_top_level_await("async1.js", PromiseHandle(10))
         .unwrap();
@@ -1380,6 +1388,7 @@ fn evaluator_multiple_rejections_independent() {
     eval.register_module("bad1.js", true, &[], Some(PromiseHandle(1)));
     eval.register_module("bad2.js", true, &[], Some(PromiseHandle(2)));
     eval.register_module("good.js", false, &[], None);
+    eval.settle_module("good.js").unwrap();
 
     let mut bindings = empty_bindings();
     eval.reject_module("bad1.js", &js_error("err1"), &mut bindings)

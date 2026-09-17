@@ -281,7 +281,7 @@ fn decimal_prefix_len(text: &str) -> usize {
     pos
 }
 
-fn string_number(text: &JsString) -> f64 {
+pub(super) fn string_number(text: &JsString) -> f64 {
     let text = text.trim_matches(is_js_whitespace);
     if text.is_empty() {
         return 0.0;

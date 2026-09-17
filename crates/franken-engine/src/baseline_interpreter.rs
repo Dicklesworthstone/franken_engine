@@ -76,6 +76,7 @@ mod async_generator;
 mod json_parse;
 mod json_stringify;
 mod primitive_conversion;
+mod reflect_invocation;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
@@ -39300,10 +39301,14 @@ impl InterpreterCore {
         return_ip: usize,
         return_reg: u32,
         new_target_value: Value,
-        new_target_label: Label,
+        mut new_target_label: Label,
         initialize_derived_this_on_return: bool,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<(), InterpreterError> {
+        if let Some((_, label)) = self.constructor_prototype_override(module, &new_target_value)? {
+            new_target_label =
+                self.join_owned_label_with_temporary_budget(new_target_label, &label)?;
+        }
         let mut active_callee = callee_value;
         let mut active_callee_label = callee_label;
         let mut forwarding_depth = 0usize;
@@ -42898,6 +42903,13 @@ impl InterpreterCore {
                     }
 
                     let mut result_label = self.binary_operation_label(obj, key)?;
+                    if property_key.as_str() == Some("prototype")
+                        && let Some((_, label)) =
+                            self.constructor_prototype_override(module, &obj_val)?
+                    {
+                        result_label =
+                            self.join_owned_label_with_temporary_budget(result_label, &label)?;
+                    }
                     if let Value::Closure(closure_id) = &obj_val
                         && let Some(method) = self.closure_method_metadata.get(closure_id)
                     {
@@ -43297,6 +43309,17 @@ impl InterpreterCore {
                                     self.maintain_array_index_assignment(label_owner, index)?;
                                 }
                             }
+                        }
+                        function @ (Value::Function(_) | Value::Closure(_))
+                            if property_key.as_str() == Some("prototype") =>
+                        {
+                            let label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.set_constructor_prototype_override(
+                                module, &function, set_val, label,
+                            )?;
                         }
                         Value::BuiltinFunction(builtin) => {
                             let Some(property_object) =
@@ -43773,7 +43796,16 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::InstanceOf { dst, lhs, rhs } => {
-                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    let mut result_label = self.binary_operation_label(lhs, rhs)?;
+                    let constructor = self.read_reg(rhs)?;
+                    if let Some((_, prototype_label)) =
+                        self.constructor_prototype_override(module, &constructor)?
+                    {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &prototype_label,
+                        )?;
+                    }
                     let result = self.eval_instanceof(module, lhs, rhs)?;
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
@@ -43853,8 +43885,15 @@ impl InterpreterCore {
                     let callee_value = self.read_reg(callee)?;
                     let callee_label = self.clone_register_label_with_temporary_budget(callee)?;
                     let new_target_value = self.read_reg(new_target)?;
-                    let new_target_label =
+                    let mut new_target_label =
                         self.clone_register_label_with_temporary_budget(new_target)?;
+
+                    if let Some((_, label)) =
+                        self.constructor_prototype_override(module, &new_target_value)?
+                    {
+                        new_target_label =
+                            self.join_owned_label_with_temporary_budget(new_target_label, &label)?;
+                    }
 
                     if !self.is_constructible_value(&callee_value) {
                         return Err(InterpreterError::TypeError {
@@ -46114,37 +46153,50 @@ impl InterpreterCore {
                 got: constructor.type_name().to_string(),
             });
         }
-        let prototype = match constructor {
-            Value::Function(func_idx) => self.ensure_function_prototype(module, func_idx)?,
-            Value::Closure(closure_id) => {
-                self.closures.get(closure_id as usize).ok_or_else(|| {
-                    InterpreterError::TypeError {
-                        expected: "valid closure".to_string(),
-                        got: format!("closure#{closure_id} not found"),
-                    }
-                })?;
-                let owner_module =
-                    self.foreign_closure_module(&Value::Closure(closure_id), module)?;
-                self.ensure_closure_prototype(
-                    owner_module.as_deref().unwrap_or(module),
-                    closure_id,
-                )?
-            }
-            Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::EventEmitterConstructor =>
-            {
-                self.ensure_builtin_prototype("EventEmitter")?
-            }
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "function".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-        };
-
         let Value::Object(object_id) = candidate else {
             return Ok(Value::Bool(false));
+        };
+        let prototype = if let Some((value, _)) =
+            self.constructor_prototype_override(module, &constructor)?
+        {
+            match value {
+                Value::Object(prototype) => prototype,
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object-valued constructor prototype".into(),
+                        got: value.type_name().into(),
+                    });
+                }
+            }
+        } else {
+            match constructor {
+                Value::Function(func_idx) => self.ensure_function_prototype(module, func_idx)?,
+                Value::Closure(closure_id) => {
+                    self.closures.get(closure_id as usize).ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "valid closure".to_string(),
+                            got: format!("closure#{closure_id} not found"),
+                        }
+                    })?;
+                    let owner_module =
+                        self.foreign_closure_module(&Value::Closure(closure_id), module)?;
+                    self.ensure_closure_prototype(
+                        owner_module.as_deref().unwrap_or(module),
+                        closure_id,
+                    )?
+                }
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::EventEmitterConstructor =>
+                {
+                    self.ensure_builtin_prototype("EventEmitter")?
+                }
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
         };
 
         Ok(Value::Bool(
@@ -49923,17 +49975,7 @@ impl InterpreterCore {
         if let Some(result) =
             self.invoke_proxy_trap(module, handler, "ownKeys", vec![Value::Object(target)])?
         {
-            let key_values = match result {
-                Value::Object(result_id) => {
-                    self.array_like_argument_values(Value::Object(result_id))?
-                }
-                other => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "array-like object returned by Proxy.ownKeys".to_string(),
-                        got: other.type_name().to_string(),
-                    });
-                }
-            };
+            let key_values = self.observable_proxy_own_keys_list(module, result)?;
             let mut seen = BTreeSet::new();
             for key_value in &key_values {
                 if !matches!(key_value, Value::Str(_) | Value::Symbol(_)) {
@@ -57076,8 +57118,13 @@ impl InterpreterCore {
                 } else {
                     Label::Public
                 };
-                let (values, value_labels, selection_label) =
-                    self.observable_apply_arguments(module, source, source_label, &mut reserved)?;
+                let (values, value_labels, selection_label) = self.observable_apply_arguments(
+                    module,
+                    source,
+                    source_label,
+                    &mut reserved,
+                    false,
+                )?;
                 context_label =
                     self.join_owned_label_with_temporary_budget(context_label, &selection_label)?;
                 labels.arguments = IsolatedArgumentLabels::Exact(value_labels);
@@ -57123,7 +57170,9 @@ impl InterpreterCore {
         source: Value,
         mut source_label: Label,
         reserved: &mut u64,
+        property_keys_only: bool,
     ) -> Result<(Vec<Value>, Vec<Label>, Label), InterpreterError> {
+        self.json_charge_work()?;
         if matches!(source, Value::Null | Value::Undefined) {
             return Ok((Vec::new(), Vec::new(), source_label));
         }
@@ -57152,7 +57201,13 @@ impl InterpreterCore {
                     got: primitive.type_name().to_string(),
                 });
             }
-            Value::Str(text) => Self::array_like_length_string_number(text),
+            Value::Str(text) => {
+                self.check_string_limit(text.len())?;
+                for _ in 0..text.len().div_ceil(64) {
+                    self.json_charge_work()?;
+                }
+                Self::array_like_length_string_number(text)
+            }
             _ => Self::coerce_to_float(&primitive).unwrap_or(f64::NAN),
         };
         let length = if numeric.is_nan() || numeric <= 0.0 {
@@ -57177,10 +57232,16 @@ impl InterpreterCore {
         // getter's heap mutation/recompute cannot erase this reservation.
         self.simple_callback_temporary_bytes =
             self.simple_callback_temporary_bytes.saturating_add(bytes);
-        let mut values = Vec::with_capacity(length);
-        let mut labels = Vec::with_capacity(length);
+        let mut values = Vec::new();
+        let mut labels = Vec::new();
+        values
+            .try_reserve_exact(length)
+            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+        labels
+            .try_reserve_exact(length)
+            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
         for index in 0..length {
-            self.charge_property_copy_work()?;
+            self.json_charge_work()?;
             let key = RuntimePropertyKey::String(index.to_string().into());
             let mut label = source_label.clone();
             let value = if let Some(object_id) = backing {
@@ -57198,6 +57259,14 @@ impl InterpreterCore {
             if let Some(callback_label) = self.take_pending_hostcall_result_label() {
                 label = self.join_owned_label_with_temporary_budget(label, &callback_label)?;
             }
+            // CreateListFromArrayLike's elementTypes check precedes Get of
+            // the next index. Proxy ownKeys may not read past an invalid key.
+            if property_keys_only && !matches!(value, Value::Str(_) | Value::Symbol(_)) {
+                return Err(InterpreterError::TypeError {
+                    expected: "string or Symbol Proxy.ownKeys result key".into(),
+                    got: value.type_name().into(),
+                });
+            }
             let bytes = Self::estimate_value_bytes(&value)
                 .saturating_add(Self::estimate_label_bytes(&label));
             self.check_temporary_memory_budget(bytes)?;
@@ -57211,62 +57280,7 @@ impl InterpreterCore {
     }
 
     fn array_like_length_string_number(text: &JsString) -> f64 {
-        let text = text.trim();
-        let text = text.trim_matches('\u{feff}').trim();
-        match text {
-            "" => return 0.0,
-            "Infinity" | "+Infinity" => return f64::INFINITY,
-            "-Infinity" => return f64::NEG_INFINITY,
-            _ => {}
-        }
-        for (lower, upper, radix) in [("0x", "0X", 16), ("0o", "0O", 8), ("0b", "0B", 2)] {
-            if let Some(digits) = text
-                .strip_prefix(lower)
-                .or_else(|| text.strip_prefix(upper))
-            {
-                if digits.is_empty() {
-                    return f64::NAN;
-                }
-                let mut number = 0.0;
-                for digit in digits.chars() {
-                    let Some(digit) = digit.to_digit(radix) else {
-                        return f64::NAN;
-                    };
-                    number = number * f64::from(radix) + f64::from(digit);
-                }
-                return number;
-            }
-        }
-        // Rust also accepts inf/infinity spellings that JS does not. Permit
-        // only decimal-grammar characters after the exact Infinity cases.
-        if !text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-'))
-        {
-            return f64::NAN;
-        }
-        text.parse::<f64>().unwrap_or(f64::NAN)
-    }
-
-    fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {
-        match value {
-            Value::Undefined | Value::Null => Ok(Vec::new()),
-            Value::Object(object_id) => {
-                let length = self.array_like_length(object_id)?;
-                let mut values = Vec::with_capacity(length);
-                for element_index in 0..length {
-                    values.push(
-                        self.array_index_value(object_id, element_index)?
-                            .unwrap_or(Value::Undefined),
-                    );
-                }
-                Ok(values)
-            }
-            other => Err(InterpreterError::TypeError {
-                expected: "array-like object or null/undefined".to_string(),
-                got: other.type_name().to_string(),
-            }),
-        }
+        primitive_conversion::string_number(text)
     }
 
     /// Clone an `ApplyHostCall` arguments list only after reserving the full
@@ -69773,128 +69787,8 @@ impl InterpreterCore {
                 }
                 Ok(Value::Bool(deleted))
             }
-            "builtin:ReflectApply" => {
-                if args.count < 3 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Reflect.apply target, thisArg, and argumentsList".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let target = self.read_reg(args.start)?;
-                if !matches!(
-                    target,
-                    Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)
-                ) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "function".to_string(),
-                        got: target.type_name().to_string(),
-                    });
-                }
-                let this_arg = self.read_reg(args.start + 1)?;
-                let arguments_list_register =
-                    args.start
-                        .checked_add(2)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        })?;
-                let arguments_list = self.read_reg(arguments_list_register)?;
-                let arguments = self.array_like_argument_values(arguments_list)?;
-                let argument_label = self.join_arg_range_with_object_mutation_label(RegRange {
-                    start: arguments_list_register,
-                    count: 1,
-                })?;
-                let mut call_labels = self.clone_isolated_call_labels_from_registers(
-                    Some(args.start + 1),
-                    RegRange {
-                        start: args.start,
-                        count: 0,
-                    },
-                )?;
-                call_labels.arguments = IsolatedArgumentLabels::Uniform(argument_label);
-                let (value, label) = self.invoke_inline_method_call_with_labels(
-                    module,
-                    target,
-                    this_arg,
-                    arguments,
-                    None,
-                    call_labels,
-                )?;
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                Ok(value)
-            }
-            "builtin:ReflectConstruct" => {
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Reflect.construct target and argumentsList".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let target = self.read_reg(args.start)?;
-                if !self.is_constructible_value(&target) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "constructor function".to_string(),
-                        got: target.type_name().to_string(),
-                    });
-                }
-                let explicit_new_target = if args.count >= 3 {
-                    let new_target_register =
-                        args.start
-                            .checked_add(2)
-                            .ok_or(InterpreterError::RegisterOutOfBounds {
-                                register: args.start,
-                                max: self.config.max_registers,
-                            })?;
-                    let new_target = self.read_reg(new_target_register)?;
-                    if !self.is_constructible_value(&new_target) {
-                        return Err(InterpreterError::TypeError {
-                            expected: "constructible Reflect.construct newTarget".to_string(),
-                            got: new_target.type_name().to_string(),
-                        });
-                    }
-                    Some((
-                        new_target,
-                        self.clone_register_label_with_temporary_budget(new_target_register)?,
-                    ))
-                } else {
-                    None
-                };
-                let arguments_list_register =
-                    args.start
-                        .checked_add(1)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        })?;
-                let arguments =
-                    self.array_like_argument_values(self.read_reg(arguments_list_register)?)?;
-                let argument_label = self.join_arg_range_with_object_mutation_label(RegRange {
-                    start: arguments_list_register,
-                    count: 1,
-                })?;
-                let mut call_labels = self.clone_isolated_call_labels_from_registers(
-                    Some(args.start),
-                    RegRange {
-                        start: args.start,
-                        count: 0,
-                    },
-                )?;
-                call_labels.arguments = IsolatedArgumentLabels::Uniform(argument_label);
-                let (value, label) = self.invoke_inline_construct_with_labels(
-                    module,
-                    target,
-                    arguments,
-                    Some(call_labels),
-                    explicit_new_target.clone(),
-                )?;
-                let label = if let Some((_, new_target_label)) = explicit_new_target {
-                    self.join_owned_label_with_temporary_budget(label, &new_target_label)?
-                } else {
-                    label
-                };
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                Ok(value)
-            }
+            "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
+            "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
                 let prototype = self.ensure_builtin_prototype("Map")?;
@@ -79472,7 +79366,8 @@ impl InterpreterCore {
         match value {
             Value::Function(index) => Ok(*index),
             Value::Closure(closure_id)
-                if !self.closure_method_metadata.contains_key(closure_id) =>
+                if !self.closure_method_metadata.contains_key(closure_id)
+                    && !self.arrow_lexical_this.contains_key(closure_id) =>
             {
                 self.closure_function_index(*closure_id)
             }
@@ -79489,6 +79384,7 @@ impl InterpreterCore {
             Value::Closure(closure_id) => {
                 self.closures.get(*closure_id as usize).is_some()
                     && !self.closure_method_metadata.contains_key(closure_id)
+                    && !self.arrow_lexical_this.contains_key(closure_id)
             }
             Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
             _ => false,
@@ -79716,6 +79612,20 @@ impl InterpreterCore {
         module: &Ir3Module,
         value: &Value,
     ) -> Result<ObjectId, InterpreterError> {
+        if let Some((value, _)) = self.constructor_prototype_override(module, value)? {
+            return match value {
+                Value::Object(prototype) => Ok(prototype),
+                _ => self.ensure_builtin_prototype("Object"),
+            };
+        }
+        self.default_constructor_prototype_for_value(module, value)
+    }
+
+    fn default_constructor_prototype_for_value(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<ObjectId, InterpreterError> {
         let foreign_owner = self.foreign_closure_module(value, module)?;
         let owner_module = foreign_owner.as_deref().unwrap_or(module);
         match value {
@@ -79742,7 +79652,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         constructor: &Value,
     ) -> Result<(bool, bool, Value, Label), InterpreterError> {
-        let prototype = self.constructor_prototype_for_value(module, constructor)?;
+        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
         let object = self
             .heap
             .get(prototype.0 as usize)
@@ -79769,7 +79679,7 @@ impl InterpreterCore {
         parent_label: Label,
         default_constructor: bool,
     ) -> Result<(), InterpreterError> {
-        let prototype = self.constructor_prototype_for_value(module, constructor)?;
+        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
         let index = prototype.0 as usize;
         let previous = self
             .heap
@@ -80022,6 +79932,11 @@ impl InterpreterCore {
             return Ok(value);
         }
         if key == "prototype" {
+            if let Some((value, _)) =
+                self.constructor_prototype_override(module, &Value::Function(func_idx))?
+            {
+                return Ok(value);
+            }
             Ok(Value::Object(
                 self.ensure_function_prototype(module, func_idx)?,
             ))
@@ -80038,6 +79953,16 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         if let Some(value) = Self::function_prototype_property(key) {
             return Ok(value);
+        }
+        if key == "prototype" {
+            if let Some((value, _)) =
+                self.constructor_prototype_override(module, &Value::Closure(closure_id))?
+            {
+                return Ok(value);
+            }
+            if self.arrow_lexical_this.contains_key(&closure_id) {
+                return Ok(Value::Undefined);
+            }
         }
         if let Some(metadata) = self.closure_method_metadata.get(&closure_id) {
             return Ok(match key {

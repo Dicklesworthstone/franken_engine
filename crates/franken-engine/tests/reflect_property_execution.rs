@@ -1345,3 +1345,395 @@ fn proxy_factory_clearance_is_exact_and_does_not_declassify_returned_objects() {
         assert!(external.declassification_required);
     }
 }
+
+#[test]
+fn prevent_extensions_is_private_enforced_and_idempotent() {
+    assert_value(
+        r###"
+const target = { keep: 1, __extensible__: true };
+const first = Object.preventExtensions(target) === target;
+target.__extensible__ = true;
+const updated = Reflect.set(target, 'keep', 2);
+const added = Reflect.set(target, 'new', 3);
+const removed = Reflect.deleteProperty(target, 'keep');
+const restored = Reflect.set(target, 'keep', 4);
+first + ':' + Object.isExtensible(target) + ':' + updated + ':' + added + ':' + removed + ':' + restored + ':' + Object.keys(target).join(',') + ':' + Reflect.preventExtensions(target);
+"###,
+        Value::str("true:false:true:false:true:false:__extensible__:true"),
+    );
+}
+
+#[test]
+fn nonextensible_symbol_and_exact_keys_cannot_be_recreated() {
+    assert_value(
+        r###"
+const key = Symbol('slot'); const target = { [key]: 1, '\uD800': 2 };
+Object.preventExtensions(target);
+const a = Reflect.set(target, key, 3); const b = Reflect.set(target, '\uD800', 4);
+Reflect.deleteProperty(target, key); Reflect.deleteProperty(target, '\uD800');
+a + ':' + b + ':' + Reflect.set(target, key, 5) + ':' + Reflect.set(target, '\uD800', 6) + ':' + Reflect.ownKeys(target).length;
+"###,
+        Value::str("true:true:false:false:0"),
+    );
+}
+
+#[test]
+fn prevent_extensions_rejects_definition_and_array_growth() {
+    assert_value(
+        r###"
+const target = {}; Object.preventExtensions(target); let error = '';
+try { Object.defineProperty(target, 'new', { value: 1 }); } catch(e) { error = e.name; }
+const array = [1,2]; Object.preventExtensions(array);
+const present = Reflect.set(array, '1', 3); const absent = Reflect.set(array, '2', 4);
+let push = ''; try { array.push(5); } catch(e) { push = e.name; }
+error + ':' + Object.keys(target).length + ':' + present + ':' + absent + ':' + array.length + ':' + array[1] + ':' + push;
+"###,
+        Value::str("TypeError:0:true:false:2:3:TypeError"),
+    );
+}
+
+#[test]
+fn prevent_extensions_keeps_inherited_setters_and_distinct_receivers() {
+    assert_value(
+        r###"
+let seen = 0; const parent = { set x(v) { seen = v; } };
+const target = Object.create(parent); Object.preventExtensions(target);
+const setter = Reflect.set(target, 'x', 7);
+const source = { y: 1 }; const receiver = {}; Object.preventExtensions(receiver);
+setter + ':' + seen + ':' + Reflect.set(source, 'y', 2, receiver) + ':' + source.y + ':' + Object.keys(receiver).length;
+"###,
+        Value::str("true:7:false:1:0"),
+    );
+}
+
+#[test]
+fn nonextensible_array_holes_stay_absent_and_length_can_grow() {
+    assert_value(
+        r###"
+const array = [1,2,3]; delete array[1]; Object.preventExtensions(array);
+const hole = Reflect.set(array, '1', 8); const length = Reflect.set(array, 'length', 5);
+hole + ':' + length + ':' + array.length + ':' + Reflect.set(array, '4', 9) + ':' + array[0];
+"###,
+        Value::str("false:true:5:false:1"),
+    );
+}
+
+#[test]
+fn json_reviver_ignores_failed_recreation_on_nonextensible_holder() {
+    assert_value(
+        r###"
+const result = JSON.parse('{"a":1,"b":2}', function(k,v) {
+ if(k === 'a') { delete this.b; Object.preventExtensions(this); }
+ if(k === 'b') return 9;
+ return v;
+});
+result.a + ':' + ('b' in result) + ':' + Object.isExtensible(result);
+"###,
+        Value::str("1:false:false"),
+    );
+}
+
+#[test]
+fn ordinary_prototype_changes_reject_cycles_without_mutation() {
+    assert_value(
+        r###"
+const x = Object.create(null); const y = Object.create(null);
+const first = Reflect.setPrototypeOf(x, y); const cycle = Reflect.setPrototypeOf(y, x);
+let error = ''; try { Object.setPrototypeOf(y, x); } catch(e) { error = e.name; }
+first + ':' + cycle + ':' + error + ':' + (Object.getPrototypeOf(x) === y) + ':' + (Object.getPrototypeOf(y) === null);
+"###,
+        Value::str("true:false:TypeError:true:true"),
+    );
+}
+
+#[test]
+fn nonextensible_and_frozen_objects_allow_only_identical_prototypes() {
+    assert_value(
+        r###"
+const proto = {}; const other = {}; const target = Object.create(proto);
+Object.preventExtensions(target);
+const same = Reflect.setPrototypeOf(target, proto); const change = Reflect.setPrototypeOf(target, other);
+const frozen = Object.freeze(Object.create(proto));
+same + ':' + change + ':' + Reflect.isExtensible(frozen) + ':' + Reflect.setPrototypeOf(frozen, proto) + ':' + Reflect.setPrototypeOf(frozen, null);
+"###,
+        Value::str("true:false:false:true:false"),
+    );
+}
+
+#[test]
+fn object_prototype_is_immutable_without_preventing_ordinary_extensions() {
+    assert_value(
+        r###"
+Reflect.setPrototypeOf(Object.prototype, null) + ':' + Reflect.setPrototypeOf(Object.prototype, {}) + ':' + Object.isExtensible(Object.prototype);
+"###,
+        Value::str("true:false:true"),
+    );
+}
+
+#[test]
+fn object_identity_primitive_conventions_and_reflect_type_errors() {
+    assert_value(
+        r###"
+let trace = '';
+try { Reflect.isExtensible(1); } catch(e) { trace += e.name; }
+try { Reflect.preventExtensions(null); } catch(e) { trace += ':' + e.name; }
+try { Object.getPrototypeOf(); } catch(e) { trace += ':' + e.name; }
+try { Object.setPrototypeOf(1, 2); } catch(e) { trace += ':' + e.name; }
+trace + ':' + Object.isExtensible(1) + ':' + Object.isExtensible() + ':' + Object.preventExtensions(7) + ':' + Object.setPrototypeOf(8, null);
+"###,
+        Value::str("TypeError:TypeError:TypeError:TypeError:false:false:7:8"),
+    );
+}
+
+#[test]
+fn primitive_prototype_observation_uses_intrinsics_without_conversion_hooks() {
+    assert_value(
+        r###"
+(Object.getPrototypeOf(1) === Number.prototype) + ':' + (Object.getPrototypeOf('x') === String.prototype) + ':' + (Object.getPrototypeOf(true) === Boolean.prototype) + ':' + (Object.getPrototypeOf(1n) === BigInt.prototype) + ':' + (Object.getPrototypeOf(Symbol('x')) === Symbol.prototype);
+"###,
+        Value::str("true:true:true:true:true"),
+    );
+}
+
+#[test]
+fn transparent_proxy_identity_operations_reach_the_target() {
+    assert_value(
+        r###"
+const proto = {}; const target = Object.create(proto); target.x = 1;
+const proxy = new Proxy(target, {});
+const same = Object.getPrototypeOf(proxy) === proto;
+const prevented = Reflect.preventExtensions(proxy);
+same + ':' + prevented + ':' + Object.isExtensible(target) + ':' + Object.isExtensible(proxy) + ':' + Reflect.set(proxy, 'new', 2) + ':' + Reflect.set(proxy, 'x', 3) + ':' + target.x;
+"###,
+        Value::str("true:true:false:false:false:true:3"),
+    );
+}
+
+#[test]
+fn is_extensible_proxy_invariants_use_post_trap_target_state() {
+    assert_value(
+        r###"
+const target = {}; let count = 0;
+const liar = new Proxy(target, { isExtensible(t) { count++; return false; } });
+let error = ''; try { Reflect.isExtensible(liar); } catch(e) { error = e.name; }
+const valid = new Proxy(target, { isExtensible(t) { Object.preventExtensions(t); return 0; } });
+error + ':' + Reflect.isExtensible(valid) + ':' + Object.isExtensible(target) + ':' + count;
+"###,
+        Value::str("TypeError:false:false:1"),
+    );
+}
+
+#[test]
+fn prevent_extensions_proxy_success_must_change_target_but_false_does_not_rollback() {
+    assert_value(
+        r###"
+const target = {}; const liar = new Proxy(target, { preventExtensions() { return true; } });
+let error = ''; try { Reflect.preventExtensions(liar); } catch(e) { error = e.name; }
+let calls = 0; const rejecting = new Proxy(target, { preventExtensions(t) { calls++; Object.preventExtensions(t); return false; } });
+const result = Reflect.preventExtensions(rejecting);
+let objectError = ''; try { Object.preventExtensions(rejecting); } catch(e) { objectError = e.name; }
+error + ':' + result + ':' + Object.isExtensible(target) + ':' + objectError + ':' + calls;
+"###,
+        Value::str("TypeError:false:false:TypeError:2"),
+    );
+}
+
+#[test]
+fn get_prototype_proxy_invariants_and_truthful_nonextensible_reports() {
+    assert_value(
+        r###"
+const proto = {}; const other = {}; const target = Object.create(proto);
+const proxy = new Proxy(target, { getPrototypeOf() { return other; } });
+const loose = Reflect.getPrototypeOf(proxy) === other;
+Object.preventExtensions(target); let error = '';
+try { Object.getPrototypeOf(proxy); } catch(e) { error = e.name; }
+const good = new Proxy(target, { getPrototypeOf() { return proto; } });
+loose + ':' + error + ':' + (Reflect.getPrototypeOf(good) === proto);
+"###,
+        Value::str("true:TypeError:true"),
+    );
+}
+
+#[test]
+fn set_prototype_proxy_invariants_do_not_force_extensible_targets_to_mutate() {
+    assert_value(
+        r###"
+const proto = {}; const other = {}; const target = Object.create(proto);
+const proxy = new Proxy(target, { setPrototypeOf() { return true; } });
+const loose = Reflect.setPrototypeOf(proxy, other); const unchanged = Object.getPrototypeOf(target) === proto;
+Object.preventExtensions(target); let error = '';
+try { Reflect.setPrototypeOf(proxy, other); } catch(e) { error = e.name; }
+loose + ':' + unchanged + ':' + error + ':' + Reflect.setPrototypeOf(proxy, proto);
+"###,
+        Value::str("true:true:TypeError:true"),
+    );
+}
+
+#[test]
+fn prototype_validation_precedes_trap_lookup_and_traps_use_handler_this() {
+    assert_value(
+        r###"
+let trace = ''; const proto = {}; const target = {}; const handler = {
+ get setPrototypeOf() { trace += 'g'; return function(t,p) { trace += (this === handler) + ':' + (t === target) + ':' + (p === proto); return false; }; }
+}; const proxy = new Proxy(target, handler);
+try { Reflect.setPrototypeOf(proxy, 1); } catch(e) { trace += 'E'; }
+const result = Reflect.setPrototypeOf(proxy, proto);
+trace + ':' + result;
+"###,
+        Value::str("Egtrue:true:true:false"),
+    );
+}
+
+#[test]
+fn get_prototype_trap_rejects_primitives_before_observing_extensibility() {
+    assert_value(
+        r###"
+let trace = ''; const inner = new Proxy({}, { isExtensible() { trace += 'bad'; return true; } });
+const outer = new Proxy(inner, { getPrototypeOf() { trace += 'get'; return 1; } });
+try { Reflect.getPrototypeOf(outer); } catch(e) { trace += e.name; }
+trace;
+"###,
+        Value::str("getTypeError"),
+    );
+}
+
+#[test]
+fn prototype_cycle_check_stops_at_exotics_without_invoking_or_revoking_them() {
+    assert_value(
+        r###"
+let calls = 0; const proxy = new Proxy({}, { getPrototypeOf() { calls++; throw 7; } });
+const target = {}; const set = Reflect.setPrototypeOf(target, proxy);
+const pair = Proxy.revocable({}, {}); pair.revoke();
+const other = {}; const revoked = Reflect.setPrototypeOf(other, pair.proxy);
+set + ':' + calls + ':' + revoked + ':' + (Object.getPrototypeOf(other) === pair.proxy);
+"###,
+        Value::str("true:0:true:true"),
+    );
+}
+
+#[test]
+fn revoked_proxies_reject_all_four_identity_operations() {
+    assert_value(
+        r###"
+const pair = Proxy.revocable({}, {}); pair.revoke(); let trace = '';
+try { Reflect.getPrototypeOf(pair.proxy); } catch(e) { trace += e.name; }
+try { Reflect.setPrototypeOf(pair.proxy, null); } catch(e) { trace += ':' + e.name; }
+try { Reflect.isExtensible(pair.proxy); } catch(e) { trace += ':' + e.name; }
+try { Reflect.preventExtensions(pair.proxy); } catch(e) { trace += ':' + e.name; }
+trace;
+"###,
+        Value::str("TypeError:TypeError:TypeError:TypeError"),
+    );
+}
+
+#[test]
+fn nested_proxy_invariants_observe_target_internal_methods_in_order() {
+    assert_value(
+        r###"
+let trace = ''; const base = Object.create(null); Object.preventExtensions(base);
+const target = new Proxy(base, {
+ isExtensible(t) { trace += 'e'; return Reflect.isExtensible(t); },
+ getPrototypeOf(t) { trace += 'p'; return Reflect.getPrototypeOf(t); }
+});
+const outer = new Proxy(target, { getPrototypeOf() { trace += 'g'; return null; } });
+const result = Reflect.getPrototypeOf(outer);
+trace + ':' + result;
+"###,
+        Value::str("gep:null"),
+    );
+}
+
+#[test]
+fn identity_operation_lowering_preserves_quoted_calls_and_lexical_shadowing() {
+    assert_value(
+        r###"
+const target = {}; const first = Reflect['preventExtensions'](target);
+const second = Object['isExtensible'](target);
+let trace = ''; { const Reflect = { getPrototypeOf() { return 17; } }; trace += Reflect.getPrototypeOf(target); }
+{ const Object = { preventExtensions() { return 19; } }; trace += ':' + Object.preventExtensions(target); }
+first + ':' + second + ':' + trace;
+"###,
+        Value::str("true:false:17:19"),
+    );
+}
+
+#[test]
+fn frozen_extensibility_regression() {
+    assert_value(
+        "Object.isExtensible(Object.freeze({}));",
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn primitive_prototypes_are_stable_distinct_and_inherit_object_prototype() {
+    assert_value(
+        r#"
+const n = Object.getPrototypeOf(1); const s = Object.getPrototypeOf('x');
+const b = Object.getPrototypeOf(false); const y = Object.getPrototypeOf(Symbol());
+(n === Object.getPrototypeOf(2)) + ':' + (n !== s && s !== b && b !== y) + ':' +
+(Object.getPrototypeOf(n) === Object.prototype) + ':' +
+(Object.getPrototypeOf(s) === Object.prototype) + ':' +
+(Object.getPrototypeOf(b) === Object.prototype) + ':' +
+(Object.getPrototypeOf(y) === Object.prototype);
+"#,
+        Value::str("true:true:true:true:true:true"),
+    );
+}
+
+#[test]
+fn primitive_prototype_reads_respect_lexical_shadowing() {
+    assert_value(
+        r#"
+let result = '';
+{ const Number = { prototype: 1 }; result += Number.prototype; }
+{ const String = { prototype: 2 }; result += ':' + String['prototype']; }
+{ const Boolean = { prototype: 3 }; result += ':' + Boolean.prototype; }
+{ const Symbol = { prototype: 4 }; result += ':' + Symbol['prototype']; }
+result;
+"#,
+        Value::str("1:2:3:4"),
+    );
+}
+
+#[test]
+fn prototype_identity_capabilities_do_not_authorize_unknown_or_constructor_operations() {
+    use frankenengine_engine::capability::hostcall_registry_row;
+    for name in ["Number", "String", "Boolean", "Symbol", "BigInt"] {
+        assert!(hostcall_registry_row(&format!("builtin:proto:{name}")).is_some());
+        assert!(hostcall_registry_row(&format!("builtin:instanceof:{name}")).is_none());
+    }
+    assert!(hostcall_registry_row("builtin:proto:Unknown").is_none());
+}
+
+#[test]
+fn nonextensibility_preserves_secret_mutation_through_public_alias() {
+    for mut core in cores() {
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        core.seed_register(0, Value::Object(target)).unwrap();
+        core.seed_register(1, Value::Object(target)).unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        let mut module = lower("0;");
+        module.instructions = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ReflectPreventExtensions".into()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 2,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ReflectIsExtensible".into()),
+                args: RegRange { start: 1, count: 1 },
+                dst: 2,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ];
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Bool(false));
+        assert_eq!(result.completion_label, Label::Secret);
+        assert_eq!(core.get_register_label(1).unwrap(), &Label::Public);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}

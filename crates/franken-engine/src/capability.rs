@@ -219,7 +219,7 @@ fn internal_builtin_meta_tag(tag: &str) -> bool {
     else {
         return false;
     };
-    if name == "BigInt" {
+    if matches!(name, "BigInt" | "Number" | "String" | "Boolean" | "Symbol") {
         return kind == "proto";
     }
     matches!(kind, "proto" | "instanceof")

@@ -75,11 +75,13 @@ use zeroize::Zeroizing;
 mod async_generator;
 mod json_parse;
 mod json_stringify;
+mod object_integrity;
 mod primitive_conversion;
 mod reflect_invocation;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
+use object_integrity::ObjectIntegrityOperation;
 use primitive_conversion::PrimitiveConversion;
 use reflect_invocation::ReflectPropertyOperation;
 
@@ -781,6 +783,10 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Map" => Some("Map"),
         "Set" => Some("Set"),
         "BigInt" => Some("BigInt"),
+        "Number" => Some("Number"),
+        "String" => Some("String"),
+        "Boolean" => Some("Boolean"),
+        "Symbol" => Some("Symbol"),
         "Error" => Some("Error"),
         "TypeError" => Some("TypeError"),
         "RangeError" => Some("RangeError"),
@@ -5127,6 +5133,8 @@ pub struct HeapObject {
     pub data_view: Option<DataViewView>,
     /// Whether this object has been frozen via Object.freeze().
     pub is_frozen: bool,
+    /// Private [[Extensible]] state; guest property names cannot forge it.
+    is_non_extensible: bool,
     /// Whether this object is the engine-owned `import.meta` contract object.
     pub is_import_meta: bool,
 }
@@ -5178,7 +5186,8 @@ impl Serialize for HeapObject {
             || self.derived_constructor_parent_label.is_some();
         let mut object = serializer.serialize_struct(
             "HeapObject",
-            10 + usize::from(!symbol_properties.is_empty())
+            10 + usize::from(self.is_non_extensible)
+                + usize::from(!symbol_properties.is_empty())
                 + usize::from(!self.property_labels.is_empty())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
@@ -5191,6 +5200,9 @@ impl Serialize for HeapObject {
         object.serialize_field("typed_array", &self.typed_array)?;
         object.serialize_field("data_view", &self.data_view)?;
         object.serialize_field("is_frozen", &self.is_frozen)?;
+        if self.is_non_extensible {
+            object.serialize_field("is_non_extensible", &true)?;
+        }
         object.serialize_field("is_import_meta", &self.is_import_meta)?;
         if has_constructor_metadata {
             object.serialize_field(
@@ -5232,6 +5244,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             typed_array: Option<TypedArrayView>,
             data_view: Option<DataViewView>,
             is_frozen: bool,
+            #[serde(default)]
+            is_non_extensible: bool,
             #[serde(default)]
             is_import_meta: bool,
             #[serde(default)]
@@ -5290,6 +5304,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             typed_array: wire.typed_array,
             data_view: wire.data_view,
             is_frozen: wire.is_frozen,
+            is_non_extensible: wire.is_non_extensible,
             is_import_meta: wire.is_import_meta,
             derived_constructor_parent: wire.derived_constructor_parent,
             derived_constructor_parent_label: wire.derived_constructor_parent_label,
@@ -5452,6 +5467,10 @@ fn validate_heap_symbol_references(
 }
 
 impl HeapObject {
+    fn extensible(&self) -> bool {
+        !self.is_non_extensible && !self.is_frozen
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -14669,6 +14688,12 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if !object.extensible() && !object.properties.contains_key(key) {
+            return Err(InterpreterError::TypeError {
+                expected: "existing property on non-extensible object".to_string(),
+                got: "new property".to_string(),
+            });
+        }
         if object.is_frozen {
             return Err(InterpreterError::TypeError {
                 expected: "mutable object".to_string(),
@@ -49947,6 +49972,8 @@ impl InterpreterCore {
                 .get(receiver_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: receiver_id.0 })?;
             if receiver_object.is_frozen
+                || (!receiver_object.extensible()
+                    && !receiver_object.contains_own_runtime_property(key))
                 || matches!(
                     receiver_object.own_runtime_property_value(key),
                     Some(Value::Accessor { .. })
@@ -59971,6 +59998,12 @@ impl InterpreterCore {
             .heap
             .get(heap_index)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if !object.extensible() && !object.contains_own_runtime_property(&key) {
+            return Err(InterpreterError::TypeError {
+                expected: "existing property on non-extensible object".to_string(),
+                got: "new property".to_string(),
+            });
+        }
         if object.is_frozen {
             return Err(InterpreterError::TypeError {
                 expected: "mutable object".to_string(),
@@ -69867,6 +69900,30 @@ impl InterpreterCore {
                 ])?;
                 Ok(Value::Object(result_id))
             }
+            "builtin:ReflectGetPrototypeOf" => self.object_integrity_builtin(
+                module,
+                args,
+                ObjectIntegrityOperation::GetPrototype,
+                true,
+            ),
+            "builtin:ReflectSetPrototypeOf" => self.object_integrity_builtin(
+                module,
+                args,
+                ObjectIntegrityOperation::SetPrototype,
+                true,
+            ),
+            "builtin:ReflectIsExtensible" => self.object_integrity_builtin(
+                module,
+                args,
+                ObjectIntegrityOperation::IsExtensible,
+                true,
+            ),
+            "builtin:ReflectPreventExtensions" => self.object_integrity_builtin(
+                module,
+                args,
+                ObjectIntegrityOperation::PreventExtensions,
+                true,
+            ),
             "builtin:ReflectGet" => {
                 self.reflect_property_builtin(module, args, ReflectPropertyOperation::Get)
             }
@@ -70488,32 +70545,12 @@ impl InterpreterCore {
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
 
-            "builtin:ObjectGetPrototypeOf" => {
-                // Object.getPrototypeOf(obj) implementation
-                if args.count == 0 {
-                    return Ok(Value::Null);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        // Get the object's prototype
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(prototype_id) = obj.prototype {
-                                Ok(Value::Object(prototype_id))
-                            } else {
-                                Ok(Value::Null)
-                            }
-                        } else {
-                            Ok(Value::Null)
-                        }
-                    }
-                    _ => {
-                        // Non-object argument throws TypeError in strict JS, but we'll return null
-                        Ok(Value::Null)
-                    }
-                }
-            }
+            "builtin:ObjectGetPrototypeOf" => self.object_integrity_builtin(
+                module,
+                args,
+                ObjectIntegrityOperation::GetPrototype,
+                false,
+            ),
 
             "builtin:PromiseReject" => {
                 // Promise.reject(reason) implementation
@@ -71293,36 +71330,12 @@ impl InterpreterCore {
 
             "builtin:ArrayPrototypeValues" => self.array_prototype_iterator(args, "values"),
 
-            "builtin:ObjectSetPrototypeOf" => {
-                // Object.setPrototypeOf(obj, prototype) implementation
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't have prototypes set
-                };
-
-                let proto_val = self.read_reg(args.start + 1)?;
-                let proto_id = match proto_val {
-                    Value::Object(id) => Some(id),
-                    Value::Null => None,
-                    _ => return Ok(Value::Undefined), // Invalid prototype
-                };
-
-                // Set the prototype on the object
-                let heap_index = obj_id.0 as usize;
-                self.mutate_heap(|heap| {
-                    if let Some(obj) = heap.get_mut(heap_index) {
-                        obj.prototype = proto_id;
-                    }
-                });
-
-                // Return the modified object
-                Ok(Value::Object(obj_id))
-            }
+            "builtin:ObjectSetPrototypeOf" => self.object_integrity_builtin(
+                module,
+                args,
+                ObjectIntegrityOperation::SetPrototype,
+                false,
+            ),
 
             "builtin:SymbolIterator" => Ok(Value::Symbol(WellKnownSymbol::Iterator.id())),
 
@@ -72521,25 +72534,15 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:ObjectIsExtensible" => {
-                // Object.isExtensible(obj) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Bool(true)); // Default to true for missing argument
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                match obj_val {
-                    Value::Object(_) => {
-                        // Simplified implementation: all objects are extensible by default
-                        // In a real implementation, this would check the [[Extensible]] internal slot
-                        Ok(Value::Bool(true))
-                    }
-                    _ => {
-                        // Primitives are not extensible
-                        Ok(Value::Bool(false))
-                    }
-                }
-            }
+            "builtin:ObjectIsExtensible" => self.object_integrity_builtin(
+                module,
+                RegRange {
+                    start: args.start.saturating_add(1),
+                    count: args.count.saturating_sub(1),
+                },
+                ObjectIntegrityOperation::IsExtensible,
+                false,
+            ),
 
             "builtin:StringPrototypeTrimEnd" => {
                 // String.prototype.trimEnd() implementation (ES2019)
@@ -72639,32 +72642,15 @@ impl InterpreterCore {
                 Ok(Value::Object(result_obj_id))
             }
 
-            "builtin:ObjectPreventExtensions" => {
-                // Object.preventExtensions(obj) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        // Simplified implementation: mark object as non-extensible
-                        // In a real implementation, this would set [[Extensible]] to false
-                        let heap_index = obj_id.0 as usize;
-                        self.mutate_heap(|heap| {
-                            if let Some(obj) = heap.get_mut(heap_index) {
-                                obj.properties
-                                    .insert("__extensible__".to_string(), Value::Bool(false));
-                            }
-                        });
-                        Ok(obj_val) // Return the object
-                    }
-                    _ => {
-                        // Primitives can't be made non-extensible, just return them
-                        Ok(obj_val)
-                    }
-                }
-            }
+            "builtin:ObjectPreventExtensions" => self.object_integrity_builtin(
+                module,
+                RegRange {
+                    start: args.start.saturating_add(1),
+                    count: args.count.saturating_sub(1),
+                },
+                ObjectIntegrityOperation::PreventExtensions,
+                false,
+            ),
 
             "builtin:StringPrototypeSearch" => {
                 let this_val = self.read_reg(args.start)?;
@@ -78927,6 +78913,17 @@ impl InterpreterCore {
             .heap
             .get(heap_index)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if !object.extensible()
+            && object
+                .properties
+                .baseline_symbol_property(core_symbol_id(symbol))
+                .is_none()
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "existing property on non-extensible object".to_string(),
+                got: "new property".to_string(),
+            });
+        }
         if object.is_frozen {
             return Err(InterpreterError::TypeError {
                 expected: "mutable object".to_string(),
@@ -79021,6 +79018,12 @@ impl InterpreterCore {
             .heap
             .get(heap_index)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if !object.extensible() && !object.properties.contains_exact_key(&key) {
+            return Err(InterpreterError::TypeError {
+                expected: "existing property on non-extensible object".to_string(),
+                got: "new property".to_string(),
+            });
+        }
         if object.is_frozen {
             return Err(InterpreterError::TypeError {
                 expected: "mutable object".to_string(),
@@ -79127,6 +79130,12 @@ impl InterpreterCore {
             .heap
             .get(heap_index)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if !object.extensible() && !object.properties.contains_key(&key) {
+            return Err(InterpreterError::TypeError {
+                expected: "existing property on non-extensible object".to_string(),
+                got: "new property".to_string(),
+            });
+        }
         if object.is_frozen {
             return Err(InterpreterError::TypeError {
                 expected: "mutable object".to_string(),
@@ -79790,7 +79799,9 @@ impl InterpreterCore {
         }
 
         let parent = match canonical {
-            "BigInt" => Some(self.ensure_builtin_prototype("Object")?),
+            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" => {
+                Some(self.ensure_builtin_prototype("Object")?)
+            }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" => Some(self.ensure_builtin_prototype("Error")?),
             _ => None,

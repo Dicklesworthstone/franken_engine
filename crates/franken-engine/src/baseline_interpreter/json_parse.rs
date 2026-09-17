@@ -578,7 +578,12 @@ impl InterpreterCore {
             }
             return self.json_apply_revived_property(module, target, name, value, depth + 1);
         }
-        if self.heap[object.0 as usize].is_frozen {
+        if self.heap[object.0 as usize].is_frozen
+            || (!self.heap[object.0 as usize].extensible()
+                && !self.heap[object.0 as usize]
+                    .properties
+                    .contains_exact_key(&name))
+        {
             // Likewise, a refused CreateDataProperty must not become a throw.
             return Ok(());
         }

@@ -17133,12 +17133,17 @@ fn builtin_prototype_capability(
     expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<String> {
-    // BigInt has an intrinsic prototype but is not a constructor. Do not
-    // register it in the construct/extends or optimized instanceof routes.
-    if matches!(expression, Expression::Identifier(name) if name == "BigInt")
-        && !is_lexically_shadowed(binding_lookup, "BigInt")
+    // Prototype identity does not imply support for boxed construction. Keep
+    // these explicit reads separate from construct/extends/instanceof routing,
+    // particularly for the non-constructible Symbol and BigInt functions.
+    if let Expression::Identifier(name) = expression
+        && matches!(
+            name.as_str(),
+            "BigInt" | "Number" | "String" | "Boolean" | "Symbol"
+        )
+        && !is_lexically_shadowed(binding_lookup, name)
     {
-        return Some("builtin:proto:BigInt".to_string());
+        return Some(format!("builtin:proto:{name}"));
     }
     builtin_constructor_name(expression, binding_lookup).map(|name| format!("builtin:proto:{name}"))
 }
@@ -24849,6 +24854,10 @@ fn reflect_builtin_call_capability(
         "apply" => Some("builtin:ReflectApply"),
         "construct" => Some("builtin:ReflectConstruct"),
         "ownKeys" => Some("builtin:ReflectOwnKeys"),
+        "getPrototypeOf" => Some("builtin:ReflectGetPrototypeOf"),
+        "setPrototypeOf" => Some("builtin:ReflectSetPrototypeOf"),
+        "isExtensible" => Some("builtin:ReflectIsExtensible"),
+        "preventExtensions" => Some("builtin:ReflectPreventExtensions"),
         _ => None,
     }
 }
@@ -25156,6 +25165,7 @@ fn object_receiver_static_call_capability(
     match property_name {
         "is" => Some("builtin:ObjectIs"),
         "isExtensible" => Some("builtin:ObjectIsExtensible"),
+        "preventExtensions" => Some("builtin:ObjectPreventExtensions"),
         _ => None,
     }
 }
@@ -28870,6 +28880,14 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
             | "builtin:ReflectSet"
             | "builtin:ReflectHas"
             | "builtin:ReflectDeleteProperty"
+            | "builtin:ReflectGetPrototypeOf"
+            | "builtin:ReflectSetPrototypeOf"
+            | "builtin:ReflectIsExtensible"
+            | "builtin:ReflectPreventExtensions"
+            | "builtin:ObjectGetPrototypeOf"
+            | "builtin:ObjectSetPrototypeOf"
+            | "builtin:ObjectIsExtensible"
+            | "builtin:ObjectPreventExtensions"
     ) {
         return Label::TopSecret;
     }

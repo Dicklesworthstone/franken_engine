@@ -385,17 +385,23 @@ impl AsyncModuleScheduler {
         self.validate_in_flight(task)?;
         // Settlement cannot be undone. Admit the entire newly ready batch
         // before changing the evaluator, Promise store, or in-flight lease.
-        // The authoritative pending sets identify exactly those dependents
-        // for which this completion removes the final outstanding dependency.
+        // Admit both static importers and explicit evaluation-Promise awaiters.
+        // Walk unique module keys so a continuation can consume at most one
+        // slot. A synchronous module has no evaluation Promise: None must not
+        // accidentally match every module with no active await.
+        let completion_promise = self.bridge.module_promise(&task.module_specifier);
         self.preflight_ready_batch(
             self.bridge
                 .evaluator()
                 .states()
                 .iter()
-                .filter(|(_, state)| {
+                .filter(|(specifier, state)| {
                     !runtime_terminal(state.phase)
-                        && state.pending_dependencies.len() == 1
-                        && state.pending_dependencies.contains(&task.module_specifier)
+                        && ((state.pending_dependencies.len() == 1
+                            && state.pending_dependencies.contains(&task.module_specifier))
+                            || completion_promise.is_some_and(|promise| {
+                                self.bridge.active_await(specifier) == Some(promise)
+                            }))
                 })
                 .map(|(specifier, _)| (specifier.as_str(), self.next_kind(specifier))),
         )?;
@@ -1029,5 +1035,124 @@ mod tests {
         }
         assert_eq!(scheduler.snapshot().ready_tasks, 0);
         assert_eq!(scheduler.snapshot().in_flight_tasks, 0);
+    }
+
+    #[test]
+    fn evaluation_completion_dispatches_importers_and_awaiters_in_one_batch() {
+        let mut scheduler = AsyncModuleScheduler::default();
+        let provider = scheduler.register_module("provider", true, &[]).unwrap().unwrap();
+        scheduler.register_module("z-waiter", true, &[]).unwrap();
+        scheduler.register_module("a-importer", false, &["provider".into()]).unwrap();
+        let body = scheduler.next_task().unwrap().unwrap();
+        let waiting_body = scheduler.next_task().unwrap().unwrap();
+        scheduler.suspend_task(&waiting_body, provider).unwrap();
+        assert!(scheduler.next_task().unwrap().is_none());
+
+        let update = scheduler.complete_task(&body, JsValue::Int(42), Label::Secret)
+            .unwrap().unwrap();
+        assert_eq!(update.dependency_ready, vec!["a-importer", "z-waiter"]);
+        let importer = scheduler.next_task().unwrap().unwrap();
+        let resumed = scheduler.next_task().unwrap().unwrap();
+        assert_eq!((importer.module_specifier.as_str(), importer.kind),
+            ("a-importer", ModuleTaskKind::Start));
+        assert_eq!((resumed.module_specifier.as_str(), resumed.kind),
+            ("z-waiter", ModuleTaskKind::Resume));
+        assert_eq!(resumed.generation, waiting_body.generation + 1);
+        assert!(matches!(
+            scheduler.complete_task(&waiting_body, JsValue::Undefined, public()),
+            Err(AsyncModuleSchedulerError::StaleTask { .. })
+        ));
+        assert!(scheduler.next_task().unwrap().is_none());
+        scheduler.complete_task(&importer, JsValue::Undefined, public()).unwrap();
+        scheduler.complete_task(&resumed, JsValue::Int(43), Label::Secret).unwrap();
+        assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn combined_evaluation_wakeup_refusal_is_atomic_and_retryable() {
+        let mut scheduler = bounded_scheduler(2);
+        let provider = scheduler.register_module("provider", true, &[]).unwrap().unwrap();
+        scheduler.register_module("z-waiter", true, &[]).unwrap();
+        scheduler.register_module("a-importer", false, &["provider".into()]).unwrap();
+        let body = scheduler.next_task().unwrap().unwrap();
+        let waiting_body = scheduler.next_task().unwrap().unwrap();
+        scheduler.suspend_task(&waiting_body, provider).unwrap();
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        let before = observable_state(&scheduler);
+        let events = scheduler.bridge().evaluator().witness_events().to_vec();
+        assert!(matches!(
+            scheduler.complete_task(&body, JsValue::Int(42), Label::Secret),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 2 })
+        ));
+        assert_eq!(observable_state(&scheduler), before);
+        assert_eq!(scheduler.bridge().evaluator().witness_events(), events.as_slice());
+        assert_eq!(scheduler.bridge().active_await("z-waiter"), Some(provider));
+        assert_eq!(scheduler.in_flight_task("provider"), Some(&body));
+        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "occupied");
+        scheduler.complete_task(&body, JsValue::Int(42), Label::Secret).unwrap();
+        for (name, kind, sequence) in [
+            ("a-importer", ModuleTaskKind::Start, 3),
+            ("z-waiter", ModuleTaskKind::Resume, 4),
+        ] {
+            let task = scheduler.next_task().unwrap().unwrap();
+            assert_eq!((task.module_specifier.as_str(), task.kind, task.sequence),
+                (name, kind, sequence));
+        }
+        assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn evaluation_wait_chain_requires_each_resumed_body_to_complete() {
+        let mut scheduler = AsyncModuleScheduler::default();
+        let promises: Vec<_> = (0..64)
+            .map(|i| scheduler.register_module(&format!("m{i}"), true, &[]).unwrap().unwrap())
+            .collect();
+        let tasks: Vec<_> = (0..64).map(|_| scheduler.next_task().unwrap().unwrap()).collect();
+        for i in 0..63 {
+            scheduler.suspend_task(&tasks[i], promises[i + 1]).unwrap();
+        }
+        let mut task = tasks[63].clone();
+        for i in (0..64).rev() {
+            assert_eq!(task.module_specifier, format!("m{i}"));
+            assert!(scheduler.next_task().unwrap().is_none());
+            scheduler.complete_task(&task, JsValue::Int(i as i64), public()).unwrap();
+            if i > 0 {
+                task = scheduler.next_task().unwrap().unwrap();
+                assert_eq!(task.kind, ModuleTaskKind::Resume);
+                assert_eq!(task.generation, 2);
+                assert_eq!(scheduler.bridge().promise_store().get(promises[i - 1]).unwrap().state,
+                    crate::promise_model::PromiseState::Pending);
+            }
+        }
+        assert_eq!(scheduler.snapshot().dispatched_tasks, 127);
+        assert_eq!(scheduler.snapshot().in_flight_tasks, 0);
+        assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn shared_evaluation_promise_admits_every_resume_before_settlement() {
+        let mut scheduler = bounded_scheduler(2);
+        let provider = scheduler.register_module("provider", true, &[]).unwrap().unwrap();
+        let body = scheduler.next_task().unwrap().unwrap();
+        for name in ["b", "a"] {
+            scheduler.register_module(name, true, &[]).unwrap();
+            let task = scheduler.next_task().unwrap().unwrap();
+            scheduler.suspend_task(&task, provider).unwrap();
+        }
+        scheduler.register_module("occupied", false, &[]).unwrap();
+        let before = observable_state(&scheduler);
+        assert!(matches!(
+            scheduler.complete_task(&body, JsValue::Undefined, public()),
+            Err(AsyncModuleSchedulerError::ReadyQueueLimitExceeded { max: 2 })
+        ));
+        assert_eq!(observable_state(&scheduler), before);
+        scheduler.next_task().unwrap().unwrap();
+        scheduler.complete_task(&body, JsValue::Undefined, public()).unwrap();
+        for name in ["a", "b"] {
+            let task = scheduler.next_task().unwrap().unwrap();
+            assert_eq!(task.module_specifier, name);
+            assert_eq!(task.kind, ModuleTaskKind::Resume);
+        }
+        assert!(scheduler.next_task().unwrap().is_none());
     }
 }

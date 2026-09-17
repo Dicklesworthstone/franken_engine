@@ -25114,6 +25114,10 @@ fn object_json_builtin_call_capability(
         // Symbol global registry (bd-hitj1): Symbol.for(key)/Symbol.keyFor(sym).
         ("Symbol", "for") => Some("builtin:SymbolFor"),
         ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),
+        // Like the Reflect statics, Proxy.revocable is a slot-zero native
+        // factory, not an ambient global binding. The lexical-shadowing check
+        // above keeps a user-defined Proxy object's method entirely ordinary.
+        ("Proxy", "revocable") => Some("builtin:ProxyRevocable"),
         _ => None,
     }
 }
@@ -28854,12 +28858,26 @@ fn infer_sink_clearance(
 }
 
 fn sink_clearance_from_capability(capability: &str) -> Label {
-    // This exact compiler intrinsic computes a labeled property name inside
-    // the VM; "Key" does not make it a credential/secret sink. Its observable
-    // conversion runs in the operand's callback context, retains observations
-    // on the returned key/exception, and actual callback effects gate at their
-    // own sinks. Do not extend this to arbitrary names containing PropertyKey.
-    if capability == "builtin:ToPropertyKey" {
+    // Canonicalizing a property name is internal computation, not disclosure
+    // to a sink whose name happens to contain "key". Guest conversion hooks
+    // keep their own hostcall gates; operand, callback and exception labels
+    // must still reach the subsequent read/write or actual egress operation.
+    // Deliberately exact: unauthenticated names must not inherit this contract.
+    if matches!(
+        capability,
+        "builtin:ToPropertyKey"
+            | "builtin:ReflectGet"
+            | "builtin:ReflectSet"
+            | "builtin:ReflectHas"
+            | "builtin:ReflectDeleteProperty"
+    ) {
+        return Label::TopSecret;
+    }
+    // Proxy factories allocate only interpreter-owned target/handler carriers.
+    // The result retains both argument labels; later traps and actual effects
+    // still check their own boundaries. A high captured callback is not itself
+    // disclosed merely by creating a Proxy. No future name inherits this rule.
+    if matches!(capability, "builtin:Proxy" | "builtin:ProxyRevocable") {
         return Label::TopSecret;
     }
     // Authenticated builtin prototype membership is internal observation, not

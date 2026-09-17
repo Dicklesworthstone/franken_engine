@@ -81,6 +81,7 @@ mod reflect_invocation;
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
 use primitive_conversion::PrimitiveConversion;
+use reflect_invocation::ReflectPropertyOperation;
 
 use frankenengine_core::object_model::{
     BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
@@ -10469,6 +10470,10 @@ pub struct InterpreterCore {
     /// (rest arrays, promises, generator records, or guest code); it deliberately
     /// survives module snapshot/restore.
     inline_callback_start_probes: Vec<bool>,
+    /// Native GetMethod nesting while selecting Proxy traps. This transient
+    /// guard stays outside guest activation snapshots: a handler whose
+    /// prototype refers back to its Proxy must not reset the host stack bound.
+    proxy_trap_lookup_depth: u32,
     /// WeakMap storage with weak reference semantics.
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
     /// Exact Symbol identities, descriptions, and global registry state.
@@ -11097,6 +11102,7 @@ impl InterpreterCore {
             object_mutation_labels: BTreeMap::new(),
             active_inline_callback_context_label: None,
             inline_callback_start_probes: Vec::new(),
+            proxy_trap_lookup_depth: 0,
             weakmap_storage: BTreeMap::new(),
             symbol_state: SeedTrackedField::new(RuntimeSymbolState::default()),
             gc_remembered_set: BTreeSet::new(),
@@ -46688,6 +46694,9 @@ impl InterpreterCore {
         if let Some(module) = module {
             self.run_pre_runtime_property_access_hook(module, object_id, key)?;
         }
+        if self.active_inline_callback_context_label.is_some() {
+            self.reflect_observe_selected_property(object_id, key)?;
+        }
         let stored_label = self.runtime_property_label(object_id, key);
         // Publish before Get: a getter that throws still carries the property
         // selection provenance. Successful callback labels join this value.
@@ -46697,6 +46706,7 @@ impl InterpreterCore {
             .unwrap_or(&Label::Public)
             .join(&stored_label);
         self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()?;
         let value = self.proxy_aware_get_runtime_property(module, object_id, key, receiver, 0);
         let label = self
             .pending_hostcall_result_label
@@ -46704,6 +46714,7 @@ impl InterpreterCore {
             .unwrap_or(&Label::Public)
             .join(&stored_label);
         self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()?;
         value
     }
 
@@ -48350,6 +48361,19 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
+        self.prototype_chain_get_with_receiver_runtime_at_depth(module, object_id, key, receiver, 0)
+    }
+
+    /// Preserve one traversal budget across ordinary and Proxy prototype links.
+    /// A Proxy is an internal-method boundary, never a map to skip over.
+    fn prototype_chain_get_with_receiver_runtime_at_depth(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+        initial_depth: u32,
+    ) -> Result<Value, InterpreterError> {
         self.validate_executable_property_key(key)?;
         if let Some(key) = key.as_str() {
             if let Some(value) = self.writable_state_view_value(object_id, key) {
@@ -48361,7 +48385,7 @@ impl InterpreterCore {
         }
 
         let mut current = Some(object_id);
-        let mut depth = 0u32;
+        let mut depth = initial_depth;
         let mut visited = BTreeSet::new();
 
         while let Some(id) = current {
@@ -48380,10 +48404,16 @@ impl InterpreterCore {
                 );
                 return Ok(Value::Undefined);
             }
-            if let Some(key) = key.as_str()
-                && let Some(value) = self.writable_state_view_value(id, key)
-            {
-                return Ok(value);
+            if self.proxy_record(id)?.is_some() {
+                return self.proxy_aware_get_runtime_property(module, id, key, receiver, depth);
+            }
+            if let Some(key) = key.as_str() {
+                if let Some(value) = self.writable_state_view_value(id, key) {
+                    return Ok(value);
+                }
+                if let Some(value) = self.typed_array_indexed_get_property(id, key)? {
+                    return Ok(value);
+                }
             }
             let (property_value, next_prototype) = {
                 let object = self
@@ -49669,12 +49699,38 @@ impl InterpreterCore {
         handler_id: ObjectId,
         trap_name: &str,
     ) -> Result<Option<Value>, InterpreterError> {
-        match self.prototype_chain_get_with_receiver(
+        self.json_charge_work()?;
+        let depth = self.proxy_trap_lookup_depth;
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::StackOverflow {
+                depth: depth as usize,
+                max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
+            });
+        }
+        self.proxy_trap_lookup_depth = depth + 1;
+        let result = self.proxy_trap_value_inner(module, handler_id, trap_name);
+        self.proxy_trap_lookup_depth = depth;
+        result
+    }
+
+    fn proxy_trap_value_inner(
+        &mut self,
+        module: Option<&Ir3Module>,
+        handler_id: ObjectId,
+        trap_name: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let key = RuntimePropertyKey::String(JsString::from(trap_name));
+        if self.active_inline_callback_context_label.is_some() {
+            self.reflect_observe_selected_property(handler_id, &key)?;
+        }
+        let result = self.prototype_chain_get_with_receiver(
             module,
             handler_id,
             trap_name,
             Value::Object(handler_id),
-        )? {
+        );
+        self.observe_scoped_callback_result()?;
+        match result? {
             Value::Undefined | Value::Null => Ok(None),
             trap @ (Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)) => {
                 Ok(Some(trap))
@@ -49757,8 +49813,12 @@ impl InterpreterCore {
             return self.import_meta_property_value(key);
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self
-                .prototype_chain_get_with_receiver_runtime(module, object_id, key, receiver);
+            if self.active_inline_callback_context_label.is_some() {
+                self.reflect_observe_selected_property(object_id, key)?;
+            }
+            return self.prototype_chain_get_with_receiver_runtime_at_depth(
+                module, object_id, key, receiver, depth,
+            );
         };
 
         if let Some(value) = self.invoke_proxy_trap(
@@ -49820,20 +49880,82 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if self.active_inline_callback_context_label.is_some() {
+                // A Proxy trap getter may have raised the context after the
+                // Reflect entry check and then returned undefined. Admission
+                // at the actual mutation site must include that observation.
+                self.observe_scoped_callback_result()?;
+                self.reflect_observe_selected_property(object_id, key)?;
+                self.reflect_admit_mutation_label(object_id)?;
+                if let Value::Object(receiver) = &receiver {
+                    self.reflect_admit_mutation_label(*receiver)?;
+                }
+            }
             if let Some(key) = key.as_str()
                 && let Some(success) =
                     self.typed_array_indexed_set_property(object_id, key, &value)?
             {
                 return Ok(success);
             }
-            if let Some(property) = self.prototype_chain_find_runtime_property(object_id, key)?
-                && matches!(&property, Value::Accessor { .. })
-            {
-                return self.resolve_accessor_set(module, property, receiver, value);
+            let mut owner = object_id;
+            let mut owner_depth = depth;
+            loop {
+                if owner_depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                    return Err(InterpreterError::StackOverflow {
+                        depth: owner_depth as usize,
+                        max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
+                    });
+                }
+                if owner != object_id && self.proxy_record(owner)?.is_some() {
+                    // OrdinarySet delegates to the prototype's [[Set]] before
+                    // consulting the receiver. Preserve that receiver exactly.
+                    return self.proxy_aware_set_runtime_property(
+                        module,
+                        owner,
+                        key,
+                        value,
+                        receiver,
+                        owner_depth,
+                    );
+                }
+                let object = self
+                    .heap
+                    .get(owner.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: owner.0 })?;
+                if let Some(property) = object.own_runtime_property_value(key) {
+                    if matches!(&property, Value::Accessor { .. }) {
+                        return self.resolve_accessor_set(module, property, receiver, value);
+                    }
+                    if object.is_frozen {
+                        return Ok(false);
+                    }
+                    break;
+                }
+                match object.prototype {
+                    Some(prototype) => {
+                        owner = prototype;
+                        owner_depth += 1;
+                    }
+                    None => break,
+                }
             }
             let Some(receiver_id) = self.proxy_set_receiver_object(&receiver)? else {
                 return Ok(false);
             };
+            let receiver_object = self
+                .heap
+                .get(receiver_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: receiver_id.0 })?;
+            if receiver_object.is_frozen
+                || matches!(
+                    receiver_object.own_runtime_property_value(key),
+                    Some(Value::Accessor { .. })
+                )
+            {
+                // OrdinarySetWithOwnDescriptor does not invoke or overwrite
+                // an accessor on a distinct receiver of a data-property write.
+                return Ok(false);
+            }
             self.set_object_runtime_property(receiver_id, key.clone(), value)?;
             return Ok(true);
         };
@@ -49895,7 +50017,40 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self.prototype_chain_has_runtime_key(object_id, key);
+            if self.active_inline_callback_context_label.is_some() {
+                self.reflect_observe_selected_property(object_id, key)?;
+            }
+            let mut current = Some(object_id);
+            let mut depth = depth;
+            while let Some(id) = current {
+                if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                    return Err(InterpreterError::StackOverflow {
+                        depth: depth as usize,
+                        max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
+                    });
+                }
+                if id != object_id && self.proxy_record(id)?.is_some() {
+                    return self.proxy_aware_has_runtime_property(module, id, key, depth);
+                }
+                if let Some(name) = key.as_str() {
+                    if self.writable_state_view_value(id, name).is_some() {
+                        return Ok(true);
+                    }
+                    if let Some(value) = self.typed_array_indexed_get_property(id, name)? {
+                        return Ok(!matches!(value, Value::Undefined));
+                    }
+                }
+                let object = self
+                    .heap
+                    .get(id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+                if object.contains_own_runtime_property(key) {
+                    return Ok(true);
+                }
+                current = object.prototype;
+                depth += 1;
+            }
+            return Ok(false);
         };
 
         if let Some(result) = self.invoke_proxy_trap(
@@ -49924,7 +50079,34 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self.remove_object_runtime_property(object_id, key);
+            self.validate_executable_property_key(key)?;
+            let object = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if object.is_array && key.as_str() == Some("length") {
+                return Ok(false);
+            }
+            if let Some(view) = &object.typed_array
+                && let Some(index) = key.as_str().and_then(Self::typed_array_integer_index_key)
+            {
+                return Ok(index >= view.length);
+            }
+            // [[Delete]] reports success, not whether a map entry was removed.
+            // An absent own property succeeds even on a frozen object or when
+            // an inherited property with the same name remains observable.
+            if !object.contains_own_runtime_property(key) {
+                return Ok(true);
+            }
+            if self.active_inline_callback_context_label.is_some() {
+                self.observe_scoped_callback_result()?;
+                self.reflect_admit_mutation_label(object_id)?;
+            }
+            let removed = self.remove_object_runtime_property(object_id, key)?;
+            if removed && let Some(key) = key.string() {
+                self.mark_deleted_for_in_iterators(object_id, key);
+            }
+            return Ok(removed);
         };
 
         if let Some(result) = self.invoke_proxy_trap(
@@ -50345,9 +50527,15 @@ impl InterpreterCore {
         let primitive = self.coerce_runtime_primitive(module, value, true)?;
         let result = match primitive {
             Value::Str(_) | Value::Symbol(_) => primitive,
+            Value::Int(number) => Value::str(ryu_js::Buffer::new().format(number as f64)),
             Value::Float(number) if number.inner().is_finite() => {
                 let mut buffer = ryu_js::Buffer::new();
                 Value::str(buffer.format(number.inner()))
+            }
+            Value::BigInt(digits) => {
+                self.check_string_limit(digits.len())?;
+                self.check_temporary_memory_budget((digits.len() as u64).saturating_mul(3))?;
+                Value::str(digits.as_ref())
             }
             other => Value::str(self.value_to_string(&other)),
         };
@@ -50373,6 +50561,7 @@ impl InterpreterCore {
                     &exotic_key,
                     value.clone(),
                 )?;
+                self.observe_scoped_callback_result()?;
                 let mut primitive = None;
                 if let Some(method) = exotic {
                     let (result, label) = self.invoke_inline_method_call_with_argument_label(
@@ -50388,6 +50577,7 @@ impl InterpreterCore {
                         .unwrap_or(&Label::Public)
                         .join(&label);
                     self.replace_pending_hostcall_result_label(Some(label))?;
+                    self.observe_scoped_callback_result()?;
                     if result.is_object_like() {
                         return Err(InterpreterError::TypeError {
                             expected: "primitive from Symbol.toPrimitive".to_string(),
@@ -50402,13 +50592,13 @@ impl InterpreterCore {
                         ["valueOf", "toString"]
                     };
                     for name in names {
-                        let method = self.proxy_aware_get_property(
+                        let method = self.iterator_protocol_property(
                             module,
                             object_id,
-                            name,
+                            &RuntimePropertyKey::String(JsString::from(name)),
                             value.clone(),
-                            0,
                         )?;
+                        self.observe_scoped_callback_result()?;
                         if !method.is_callable() {
                             continue;
                         }
@@ -50425,6 +50615,7 @@ impl InterpreterCore {
                             .unwrap_or(&Label::Public)
                             .join(&label);
                         self.replace_pending_hostcall_result_label(Some(label))?;
+                        self.observe_scoped_callback_result()?;
                         if !result.is_object_like() {
                             primitive = Some(result);
                             break;
@@ -59668,6 +59859,16 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Option<Value>, InterpreterError> {
+        Ok(self
+            .prototype_chain_find_runtime_property_owner(object_id, key)?
+            .map(|(_, value)| value))
+    }
+
+    fn prototype_chain_find_runtime_property_owner(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<(ObjectId, Value)>, InterpreterError> {
         self.validate_executable_property_key(key)?;
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -59682,7 +59883,7 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             if let Some(value) = object.own_runtime_property_value(key) {
-                return Ok(Some(value));
+                return Ok(Some((id, value)));
             }
             current = object.prototype;
             depth += 1;
@@ -59728,12 +59929,20 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         match value {
             Value::Accessor { set: Some(set), .. } => {
-                self.invoke_inline_method_call(
+                let (_, label) = self.invoke_inline_method_call_with_argument_label(
                     module,
                     set.as_ref().clone(),
                     receiver,
                     vec![assigned],
+                    None,
                 )?;
+                let label = self
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public)
+                    .join(&label);
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                self.observe_scoped_callback_result()?;
                 Ok(true)
             }
             Value::Accessor { set: None, .. } => Ok(false),
@@ -69659,66 +69868,13 @@ impl InterpreterCore {
                 Ok(Value::Object(result_id))
             }
             "builtin:ReflectGet" => {
-                let target = self.read_object_argument(args, 0, "Reflect.get target object")?;
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Reflect.get property key".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let key_value = self.read_reg(args.start + 1)?;
-                let key = self.executable_property_key_from_value(&key_value);
-                let receiver = if args.count > 2 {
-                    self.read_reg(args.start + 2)?
-                } else {
-                    Value::Object(target)
-                };
-                self.join_pending_hostcall_stream_label(target)?;
-                self.proxy_aware_get_runtime_property(module, target, &key, receiver, 0)
+                self.reflect_property_builtin(module, args, ReflectPropertyOperation::Get)
             }
             "builtin:ReflectSet" => {
-                let target = self.read_object_argument(args, 0, "Reflect.set target object")?;
-                if args.count < 3 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Reflect.set property key and value".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let key_value = self.read_reg(args.start + 1)?;
-                let value = self.read_reg(args.start + 2)?;
-                let key = self.executable_property_key_from_value(&key_value);
-                let receiver = if args.count > 3 {
-                    self.read_reg(args.start + 3)?
-                } else {
-                    Value::Object(target)
-                };
-                let receiver_object = match &receiver {
-                    Value::Object(receiver) => Some(*receiver),
-                    _ => None,
-                };
-                let assigned = self
-                    .proxy_aware_set_runtime_property(module, target, &key, value, receiver, 0)?;
-                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
-                self.join_object_mutation_label(target, &mutation_label)?;
-                if let Some(receiver) = receiver_object {
-                    self.join_object_mutation_label(receiver, &mutation_label)?;
-                }
-                Ok(Value::Bool(assigned))
+                self.reflect_property_builtin(module, args, ReflectPropertyOperation::Set)
             }
             "builtin:ReflectHas" => {
-                let target = self.read_object_argument(args, 0, "Reflect.has target object")?;
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Reflect.has property key".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let key_value = self.read_reg(args.start + 1)?;
-                let key = self.executable_property_key_from_value(&key_value);
-                self.join_pending_hostcall_stream_label(target)?;
-                Ok(Value::Bool(self.proxy_aware_has_runtime_property(
-                    module, target, &key, 0,
-                )?))
+                self.reflect_property_builtin(module, args, ReflectPropertyOperation::Has)
             }
             "builtin:ReflectOwnKeys" => {
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
@@ -69728,21 +69884,7 @@ impl InterpreterCore {
                 Ok(Value::Object(array_id))
             }
             "builtin:ReflectDeleteProperty" => {
-                let target =
-                    self.read_object_argument(args, 0, "Reflect.deleteProperty target object")?;
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Reflect.deleteProperty property key".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-                let key_value = self.read_reg(args.start + 1)?;
-                let key = self.executable_property_key_from_value(&key_value);
-                let deleted = self.proxy_aware_delete_runtime_property(module, target, &key, 0)?;
-                if deleted && let Some(key) = key.string() {
-                    self.mark_deleted_for_in_iterators(target, key);
-                }
-                Ok(Value::Bool(deleted))
+                self.reflect_property_builtin(module, args, ReflectPropertyOperation::Delete)
             }
             "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
             "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),

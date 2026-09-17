@@ -120,6 +120,16 @@ impl InterpreterCore {
                 PrimitiveConversion::Boolean => unreachable!("handled without coercion"),
             }
         })();
+        if let Err(error) = self.observe_scoped_callback_result() {
+            outcome = Err(error);
+        }
+        if let Err(error) = &outcome
+            && Self::js_catchable_error_name(error).is_some()
+        {
+            outcome = match self.scoped_native_error(error) {
+                Ok(error) | Err(error) => Err(error),
+            };
+        }
         let context = self
             .active_inline_callback_context_label
             .take()

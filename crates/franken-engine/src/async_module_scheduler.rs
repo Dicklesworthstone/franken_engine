@@ -271,6 +271,9 @@ impl AsyncModuleScheduler {
         Ok(())
     }
 
+    /// Register one module after its dependencies. Missing dependencies fail
+    /// before any Promise, evaluator state, witness, or runnable task is created.
+    /// Use `register_module_graph` for modules discovered in arbitrary order.
     pub fn register_module(
         &mut self,
         specifier: &str,
@@ -288,13 +291,30 @@ impl AsyncModuleScheduler {
                 max: self.config.max_registered_modules,
             });
         }
+        // Do not silently omit unknown dependencies from phase prediction or
+        // from the evaluator's pending set. That omission cannot be repaired
+        // by registering the dependency later: the importer may already run.
+        for dependency in dependencies {
+            if !self.bridge.evaluator().states().contains_key(dependency) {
+                return Err(AsyncModuleSchedulerError::Bridge {
+                    detail: format!(
+                        "module {specifier} precedes unregistered dependency {dependency}"
+                    ),
+                });
+            }
+        }
         // Match the evaluator's registration readiness before it creates a
         // Promise or emits events. Rejected dependencies produce a terminal
         // module and require no queue slot; pending dependencies defer it.
         let phase = registration_phase(
             has_top_level_await,
-            dependencies.iter().filter_map(|dependency| {
-                self.bridge.evaluator().states().get(dependency).map(|state| state.phase)
+            dependencies.iter().map(|dependency| {
+                self.bridge
+                    .evaluator()
+                    .states()
+                    .get(dependency)
+                    .expect("dependencies were checked before phase prediction")
+                    .phase
             }),
         );
         if registration_is_ready(phase) {

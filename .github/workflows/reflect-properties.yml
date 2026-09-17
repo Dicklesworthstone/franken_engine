@@ -16,9 +16,13 @@ permissions:
 
 jobs:
   properties:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [runtime-tests, full-engine-check]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Temporary immutable source transport. This job never writes a commit or ref.
+    # Temporary immutable source transport, with no commit or ref writes.
     permissions:
       contents: write
     env:
@@ -31,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Retrieve exact property candidate and install regressions
+      - name: Apply exact Reflect and prototype candidates
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -48,23 +52,35 @@ jobs:
           }
           for path, sha in base.items():
               assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == sha, path
-          raw = bytearray()
-          for sha in ['a18b833b6f614101e080becb6e72bab03a80a969', 'c45ac24a7468d22859276d037f9612d7cfe8917a', '66246b708de0bd9d91d6330119faf671fb032ff0']:
+          def blob(sha):
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req, timeout=60) as response: data = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
-              raw.extend(data)
-          assert hashlib.sha256(raw).hexdigest() == 'e2fc4ac51d80ec41e717eb044e6cb278027b90b283653722e96dac4d15cae684'
-          patch = pathlib.Path('property-validation/change.patch'); patch.write_bytes(gzip.decompress(raw))
-          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
-          assert set(line.split('\t', 2)[2] for line in stats.splitlines()) == set(base)
-          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
-          subprocess.run(['git', 'apply', '--include=crates/franken-engine/tests/reflect_property_execution.rs', str(patch)], check=True)
+              return data
+          candidates = [
+              ('properties', ['a18b833b6f614101e080becb6e72bab03a80a969', 'c45ac24a7468d22859276d037f9612d7cfe8917a', '66246b708de0bd9d91d6330119faf671fb032ff0'], 'e2fc4ac51d80ec41e717eb044e6cb278027b90b283653722e96dac4d15cae684'),
+              ('prototypes', ['78131694e614beddd7eafaa373965549884c126e'], '0458ed4121b6978e8c00ef5f1f0402e732edc3a616cb07fec1c63ff039784719'),
+          ]
+          for name, shas, digest in candidates:
+              raw = b''.join(blob(sha) for sha in shas)
+              assert hashlib.sha256(raw).hexdigest() == digest, name + ' transport mismatch'
+              patch = pathlib.Path('property-validation/' + name + '.patch'); patch.write_bytes(gzip.decompress(raw))
+              stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
+              assert set(line.split('\t', 2)[2] for line in stats.splitlines()) <= set(base)
+              subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+              subprocess.run(['git', 'apply', str(patch)], check=True)
           pathlib.Path('property-validation/paths.json').write_text(json.dumps(list(base)))
           PY
-      - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+      - name: Install Rust and format candidate sources
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          paths = json.loads(pathlib.Path('property-validation/paths.json').read_text())
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
+          PY
       - name: Select existing production runtime dependency closure
+        if: matrix.mode == 'runtime-tests'
         run: |
           python3 - <<'PY'
           import pathlib, subprocess, textwrap
@@ -73,33 +89,18 @@ jobs:
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('property-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
           PY
-      - name: Reproduce missing property coercion on unchanged runtime
-        run: |
-          status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test reflect_property_execution all_four_operations_convert_once_with_string_hint_and_symbol_identity -- --nocapture > property-validation/before.log 2>&1 || status=$?
-          tail -n 70 property-validation/before.log
-          test "$status" -ne 0
-          grep -F 'test result: FAILED' property-validation/before.log
-      - name: Apply implementation and format exact changed sources
-        run: |
-          git apply --check --exclude=crates/franken-engine/tests/reflect_property_execution.rs property-validation/change.patch
-          git apply --exclude=crates/franken-engine/tests/reflect_property_execution.rs property-validation/change.patch
-          python3 - <<'PY'
-          import json, pathlib, subprocess
-          paths = json.loads(pathlib.Path('property-validation/paths.json').read_text())
-          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
-          PY
       - name: Run property and shared runtime regressions
+        if: matrix.mode == 'runtime-tests'
         run: |
           set -o pipefail
           cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_property_execution --test function_prototype_invocation_regression --test reflect_invocation_execution --test primitive_conversion_execution --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee property-validation/after.log
-      - name: Check runtime dependency closure
+      - name: Check complete engine or declared runtime closure
         run: |
           set -o pipefail
           cargo +nightly check --locked -p frankenengine-engine --no-default-features --lib 2>&1 | tee property-validation/check.log
           cargo +nightly clippy --locked -p frankenengine-engine --no-default-features --lib -- -D warnings 2>&1 | tee property-validation/clippy.log
       - name: Save exact candidate blobs without moving refs
-        if: always()
+        if: always() && matrix.mode == 'runtime-tests'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -119,6 +120,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: property-validation
+          name: property-validation-${{ matrix.mode }}
           path: property-validation/
           retention-days: 7

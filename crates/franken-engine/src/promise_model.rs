@@ -24,6 +24,35 @@ use crate::closure_model::ClosureHandle;
 use crate::ifc_artifacts::Label;
 use crate::object_model::JsValue;
 
+#[cfg(test)]
+#[path = "promise_model_ifc_regressions.rs"]
+mod ifc_regressions;
+
+#[cfg(test)]
+#[path = "promise_model_replay_regressions.rs"]
+mod replay_regressions;
+
+#[cfg(test)]
+#[path = "promise_model_combinator_regressions.rs"]
+mod combinator_regressions;
+
+#[cfg(test)]
+#[path = "promise_model_fatal_adoption_regressions.rs"]
+mod fatal_adoption_regressions;
+
+/// Estimate the label that `Label::join` will clone, without allocating it.
+/// The full label order (including same-level custom-label tiebreaks) must
+/// match `Label::join`; looking only at levels or name lengths is unsound.
+fn estimate_joined_label_memory_bytes(left: &Label, right: &Label) -> u64 {
+    let joined = if left >= right { left } else { right };
+    match joined {
+        // Cloning an empty String retains no allocation, even when the
+        // source String has reserved capacity.
+        Label::Custom { name, .. } if name.is_empty() => 0,
+        _ => estimate_label_memory_bytes(joined),
+    }
+}
+
 /// Approximate allocation header carried by every retained string. Keep this
 /// aligned with the baseline interpreter's logical-owner accounting algebra.
 const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
@@ -184,7 +213,8 @@ pub struct PromiseRecord {
     pub creation_seq: u64,
     /// Whether an unhandled rejection has been observed.
     pub rejection_handled: bool,
-    /// Allocation-free marker for one fatal dependency-closure pass.
+    /// Completed fatal pass marker. During an exclusive terminal walk only,
+    /// newly rejected, unprocessed records temporarily store a worklist link.
     #[doc(hidden)]
     #[serde(skip)]
     pub terminal_epoch: u64,
@@ -531,13 +561,13 @@ impl PromiseStore {
             PromiseState::Fulfilled(value) => {
                 next_queue_bytes = queue.projected_enqueue_payload_memory_bytes(
                     estimate_js_value_memory_bytes(value),
-                    estimate_label_memory_bytes(label),
+                    estimate_joined_label_memory_bytes(&record.label, label),
                 );
             }
             PromiseState::Rejected(reason) => {
                 next_queue_bytes = queue.projected_enqueue_payload_memory_bytes(
                     estimate_js_value_memory_bytes(reason),
-                    estimate_label_memory_bytes(label),
+                    estimate_joined_label_memory_bytes(&record.label, label),
                 );
             }
         }
@@ -604,11 +634,11 @@ impl PromiseStore {
             .reactions
             .iter()
             .filter(|reaction| reaction.kind == selected_kind)
-            .fold(queue.estimated_memory_bytes(), |bytes, _| {
+            .fold(queue.estimated_memory_bytes(), |bytes, reaction| {
                 bytes
                     .saturating_add(std::mem::size_of::<Option<Microtask>>() as u64)
                     .saturating_add(payload_bytes)
-                    .saturating_add(label_bytes)
+                    .saturating_add(estimate_joined_label_memory_bytes(label, &reaction.label))
                     .saturating_add(2u64.saturating_mul(std::mem::size_of::<WitnessEvent>() as u64))
             });
         Ok((next_store_bytes, next_queue_bytes))
@@ -738,7 +768,7 @@ impl PromiseStore {
                     handler: reaction.handler,
                     argument: value.clone(),
                     result_promise: reaction.result_promise,
-                    label: label.clone(),
+                    label: label.join(&reaction.label),
                 });
             }
         }
@@ -783,13 +813,13 @@ impl PromiseStore {
                         handler: reaction.handler,
                         argument: reason.clone(),
                         result_promise: reaction.result_promise,
-                        label: label.clone(),
+                        label: label.join(&reaction.label),
                     });
                 } else {
                     queue.enqueue(Microtask::PromiseRejection {
                         reason: reason.clone(),
                         result_promise: reaction.result_promise,
-                        label: label.clone(),
+                        label: label.join(&reaction.label),
                     });
                 }
             }
@@ -802,12 +832,11 @@ impl PromiseStore {
     /// rejection path has refused its memory preflight.
     ///
     /// This operation performs no allocation and enqueues no reaction jobs. It
-    /// rejects the target and every still-pending Promise returned by its stored
-    /// `.then` reactions with `undefined`, then drops those now-unschedulable
-    /// reactions. Handles are monotonic, so a forward walk over the authoritative
-    /// retained reaction edges marks every descendant before it is visited; a
-    /// reverse pass then clears and settles the marked records. No temporary
-    /// worklist or newly serialized dependency metadata is needed.
+    /// rejects the target and every pending dependent reachable through stored
+    /// reactions, including native adoption, with `undefined`. An adopter may
+    /// predate its source, so handle order is not a dependency order. The walk
+    /// follows the actual edges in either direction and drops the reactions as
+    /// it processes each record. Unrelated and already-settled records survive.
     ///
     /// No witness is appended: this path exists precisely for the case where
     /// even one additional witness record cannot be admitted. The enclosing
@@ -823,19 +852,31 @@ impl PromiseStore {
     }
 
     /// Extend an existing fatal dependency-closure pass from another root.
+    ///
+    /// Pending records are rejected when discovered, so cycles and shared
+    /// dependents are visited once. Until a discovered record is processed, its
+    /// serde-skipped `terminal_epoch` temporarily links the intrusive worklist:
+    /// zero is the end, and a nonzero link is a handle plus one. Processing
+    /// restores the caller's epoch before following the record's reactions.
+    ///
+    /// The exclusive store borrow spans the entire walk, with no guest calls or
+    /// fallible operations after root admission. Thus temporary links cannot be
+    /// observed or persisted. This needs no allocation, recursion, extra arena
+    /// fields, or repeated whole-arena scans: work is linear in reachable
+    /// pending records and their retained reactions, regardless of handle order.
     pub(crate) fn extend_terminal_rejection_without_jobs(
         &mut self,
         handle: PromiseHandle,
         label: &Label,
         terminal_epoch: u64,
     ) -> Result<usize, PromiseError> {
-        let root_index = handle.0 as usize;
-        let root = self.get(handle)?;
-        if root.terminal_epoch == terminal_epoch {
-            return Ok(0);
-        }
+        let root = self.get_mut(handle)?;
         if root.state.is_settled() {
-            return Err(PromiseError::AlreadySettled { handle });
+            return if root.terminal_epoch == terminal_epoch {
+                Ok(0)
+            } else {
+                Err(PromiseError::AlreadySettled { handle })
+            };
         }
 
         let terminal_label = match label {
@@ -850,48 +891,44 @@ impl PromiseStore {
             },
         };
 
-        self.promises[root_index]
-            .as_mut()
-            .expect("validated fatal-rejection root remains occupied")
-            .terminal_epoch = terminal_epoch;
-        for parent_index in root_index..self.promises.len() {
-            let Some(parent) = self.promises[parent_index].as_ref() else {
-                continue;
-            };
-            if parent.terminal_epoch != terminal_epoch {
-                continue;
-            }
-            let reaction_count = parent.reactions.len();
-            for reaction_index in 0..reaction_count {
-                let child = self.promises[parent_index]
-                    .as_ref()
-                    .expect("marked fatal-rejection parent remains occupied")
-                    .reactions[reaction_index]
-                    .result_promise;
-                let child_index = child.0 as usize;
-                if child_index <= parent_index || child_index >= self.promises.len() {
+        root.state = PromiseState::Rejected(JsValue::Undefined);
+        root.label = terminal_label.clone();
+        root.rejection_handled = false;
+        root.terminal_epoch = 0;
+        let mut pending = Some(handle);
+        let mut rejected_count = 0usize;
+
+        while let Some(current) = pending {
+            // Only occupied slots are linked, and this walk never vacates one.
+            let record = self
+                .get_mut(current)
+                .expect("terminal-rejection worklist contains occupied slots");
+            pending = record
+                .terminal_epoch
+                .checked_sub(1)
+                .map(|index| PromiseHandle(index as u32));
+            record.terminal_epoch = terminal_epoch;
+            let reactions = std::mem::take(&mut record.reactions);
+            rejected_count = rejected_count.saturating_add(1);
+
+            for reaction in reactions {
+                let child_handle = reaction.result_promise;
+                let Some(child) = self
+                    .promises
+                    .get_mut(child_handle.0 as usize)
+                    .and_then(Option::as_mut)
+                else {
+                    continue;
+                };
+                if child.state.is_settled() {
                     continue;
                 }
-                if let Some(child) = self.promises[child_index].as_mut()
-                    && matches!(child.state, PromiseState::Pending)
-                {
-                    child.terminal_epoch = terminal_epoch;
-                }
-            }
-        }
 
-        let mut rejected_count = 0usize;
-        for candidate_index in (root_index..self.promises.len()).rev() {
-            if let Some(record) = self.promises[candidate_index].as_mut()
-                && record.terminal_epoch == terminal_epoch
-                && matches!(record.state, PromiseState::Pending)
-            {
-                record.state = PromiseState::Rejected(JsValue::Undefined);
-                record.label = terminal_label.clone();
-                record.rejection_handled = false;
-                record.reactions = Vec::new();
-                record.terminal_epoch = terminal_epoch;
-                rejected_count = rejected_count.saturating_add(1);
+                child.state = PromiseState::Rejected(JsValue::Undefined);
+                child.label = terminal_label.clone();
+                child.rejection_handled = false;
+                child.terminal_epoch = pending.map_or(0, |next| u64::from(next.0) + 1);
+                pending = Some(child_handle);
             }
         }
         Ok(rejected_count)
@@ -922,6 +959,7 @@ impl PromiseStore {
     ) -> Result<PromiseHandle, PromiseError> {
         let record = self.get(handle)?;
         let state = record.state.clone();
+        let settlement_label = record.label.clone();
         let result_promise = self.create();
 
         match state {
@@ -945,7 +983,7 @@ impl PromiseStore {
                     handler: on_fulfilled,
                     argument: value,
                     result_promise,
-                    label,
+                    label: settlement_label.join(&label),
                 });
             }
             PromiseState::Rejected(reason) => {
@@ -954,13 +992,13 @@ impl PromiseStore {
                         handler: on_rejected,
                         argument: reason,
                         result_promise,
-                        label,
+                        label: settlement_label.join(&label),
                     });
                 } else {
                     queue.enqueue(Microtask::PromiseRejection {
                         reason,
                         result_promise,
-                        label,
+                        label: settlement_label.join(&label),
                     });
                 }
             }
@@ -1045,7 +1083,9 @@ impl PromiseStore {
         label: Label,
         queue: &mut MicrotaskQueue,
     ) -> Result<PromiseHandle, PromiseError> {
-        let state = self.get(handle)?.state.clone();
+        let record = self.get(handle)?;
+        let state = record.state.clone();
+        let settlement_label = record.label.clone();
         let result_promise = self.create();
 
         match state {
@@ -1070,7 +1110,7 @@ impl PromiseStore {
                     handler: None,
                     argument: value,
                     result_promise,
-                    label,
+                    label: settlement_label.join(&label),
                 });
             }
             PromiseState::Rejected(reason) => {
@@ -1078,7 +1118,7 @@ impl PromiseStore {
                 queue.enqueue(Microtask::PromiseRejection {
                     reason,
                     result_promise,
-                    label,
+                    label: settlement_label.join(&label),
                 });
             }
         }
@@ -1244,7 +1284,9 @@ impl MicrotaskQueue {
     /// Dequeue the next microtask (FIFO).
     pub fn dequeue(&mut self) -> Option<Microtask> {
         while self.cursor < self.tasks.len() {
-            let index = self.cursor as u64;
+            // Buffer slots are a suffix of all enqueues. Compaction changes
+            // their local offsets, not the enqueue IDs used by replay.
+            let index = self.enqueue_count - self.tasks.len() as u64 + self.cursor as u64;
             let task = self.tasks[self.cursor].take();
             self.cursor += 1;
             if task.is_some() {
@@ -1739,17 +1781,15 @@ impl PromiseAllTracker {
         }))
     }
 
-    /// Record that input promise at `index` fulfilled with `value`.
-    /// Returns `true` if all promises are now resolved.
+    /// Record the first fulfillment of an input promise.
+    /// Returns `true` only on the transition to all inputs resolved.
+    /// Duplicate and out-of-range callbacks have no effect.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
-        if self.settled {
+        if self.settled || index >= self.total || self.values.contains_key(&index) {
             return false;
         }
-        // Only increment if this index is newly inserted (not a duplicate).
-        if !self.values.contains_key(&index) {
-            self.resolved_count += 1;
-        }
         self.values.insert(index, value);
+        self.resolved_count += 1;
         self.resolved_count == self.total
     }
 
@@ -1798,10 +1838,12 @@ impl PromiseAllSettledTracker {
         }))
     }
 
-    /// Record a fulfillment. Returns `true` if all settled.
+    /// Record the first outcome for this input; duplicates (including a
+    /// rejection after fulfillment) and out-of-range callbacks have no effect.
+    /// Returns `true` only on the transition to all inputs settled.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
-        if !self.outcomes.contains_key(&index) {
-            self.settled_count += 1;
+        if index >= self.total || self.outcomes.contains_key(&index) {
+            return false;
         }
         self.outcomes.insert(
             index,
@@ -1810,13 +1852,15 @@ impl PromiseAllSettledTracker {
                 value,
             },
         );
+        self.settled_count += 1;
         self.settled_count == self.total
     }
 
-    /// Record a rejection. Returns `true` if all settled.
+    /// Record the first outcome for this input, with the same shared one-shot
+    /// guard as fulfillment. Returns `true` only when all inputs just settled.
     pub fn record_rejection(&mut self, index: u32, reason: JsValue) -> bool {
-        if !self.outcomes.contains_key(&index) {
-            self.settled_count += 1;
+        if index >= self.total || self.outcomes.contains_key(&index) {
+            return false;
         }
         self.outcomes.insert(
             index,
@@ -1825,6 +1869,7 @@ impl PromiseAllSettledTracker {
                 value: reason,
             },
         );
+        self.settled_count += 1;
         self.settled_count == self.total
     }
 }
@@ -1877,15 +1922,15 @@ impl PromiseAnyTracker {
         }))
     }
 
-    /// Record a rejection. Returns `true` if all promises have rejected (AggregateError).
+    /// Record the first rejection of an input promise.
+    /// Returns `true` only on the transition to all inputs rejected.
+    /// Duplicate and out-of-range callbacks have no effect.
     pub fn record_rejection(&mut self, index: u32, reason: JsValue) -> bool {
-        if self.settled {
+        if self.settled || index >= self.total || self.errors.contains_key(&index) {
             return false;
         }
-        if !self.errors.contains_key(&index) {
-            self.rejected_count += 1;
-        }
         self.errors.insert(index, reason);
+        self.rejected_count += 1;
         self.rejected_count == self.total
     }
 
@@ -3368,6 +3413,7 @@ mod tests {
         store
             .reject(h, js_str("awaited"), Label::Public, &mut queue)
             .expect("Promise should reject before awaiting");
+
         assert_eq!(store.unhandled_rejections(), vec![h]);
 
         store

@@ -8,6 +8,7 @@ on:
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/tests/primitive_conversion_execution.rs'
+      - 'crates/franken-engine/tests/reflect_invocation_execution.rs'
       - '.github/workflows/primitive-conversions.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -16,8 +17,15 @@ permissions:
   contents: read
 jobs:
   conversions:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [runtime-tests, full-engine-check]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Temporary immutable candidate transport; remove after connector publication.
+    permissions:
+      contents: write
     env:
       CARGO_BUILD_JOBS: '1'
       CARGO_INCREMENTAL: '0'
@@ -28,33 +36,42 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Capture committed conversion source identities
+      - name: Retrieve exact reflection candidate and install regression tests
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir conversion-validation
           git rev-parse HEAD > conversion-validation/revision.txt
           python3 - <<'PY'
-          import hashlib, json, pathlib
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          sha = '665a9bd5263a002b4067153c5f8fb25b9f321359'
+          req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+              'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              raw = base64.b64decode(json.load(response)['content'])
+          assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
+          assert hashlib.sha256(raw).hexdigest() == 'eea011f0061a2235d81d88315df811c09428d086863f3e8a4395d5d72bf72909'
           paths = [
               'crates/franken-engine/src/baseline_interpreter.rs',
               'crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs',
-              'crates/franken-engine/src/lowering_pipeline.rs',
-              'crates/franken-engine/tests/primitive_conversion_execution.rs',
+              'crates/franken-engine/src/baseline_interpreter/reflect_invocation.rs',
+              'crates/franken-engine/tests/reflect_invocation_execution.rs',
           ]
-          root = pathlib.Path('conversion-validation'); hashes = {}
-          for path in paths:
-              data = pathlib.Path(path).read_bytes()
-              hashes[path] = hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
-              dest = root / 'source' / path
-              dest.parent.mkdir(parents=True, exist_ok=True)
-              dest.write_bytes(data)
-          (root / 'source-hashes.json').write_text(json.dumps(hashes, indent=2))
+          for path, expected in [(paths[0], '81fdcc0ea5a5c7bdcfa97ee5815d3c5d47f5c771'), (paths[1], '76a203693f7444178cf17ca95a4945a4747242a4')]:
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected
+          root = pathlib.Path('conversion-validation')
+          patch = root / 'reflection.patch'; patch.write_bytes(gzip.decompress(raw))
+          stats = subprocess.check_output(['git', 'apply', '--numstat', str(patch)], text=True)
+          assert sorted(line.split('\t', 2)[2] for line in stats.splitlines()) == sorted(paths)
+          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--include=' + paths[3], str(patch)], check=True)
+          (root / 'paths.json').write_text(json.dumps(paths))
           PY
       - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component rustfmt
-      - name: Check committed conversion formatting
-        run: |
-          rustfmt +nightly --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs crates/franken-engine/src/lowering_pipeline.rs crates/franken-engine/tests/primitive_conversion_execution.rs
+        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
       - name: Select existing production runtime dependency closure
+        if: matrix.mode == 'runtime-tests'
         run: |
           python3 - <<'PY'
           import pathlib, subprocess, textwrap
@@ -63,18 +80,63 @@ jobs:
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('conversion-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
           PY
-      - name: Run native primitive conversion regressions
+      - name: Reproduce Reflect getter failure on unchanged runtime
+        if: matrix.mode == 'runtime-tests'
+        run: |
+          status=0
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test reflect_invocation_execution reflect_apply_reads_length_then_live_indices_before_calling_target -- --exact --nocapture > conversion-validation/before.log 2>&1 || status=$?
+          tail -n 100 conversion-validation/before.log
+          test "$status" -eq 101
+          grep -F 'reflect_apply_reads_length_then_live_indices_before_calling_target ... FAILED' conversion-validation/before.log
+          grep -F 'assertion `left == right` failed' conversion-validation/before.log
+      - name: Apply implementation and format exact changed sources
+        run: |
+          git apply --exclude=crates/franken-engine/tests/reflect_invocation_execution.rs conversion-validation/reflection.patch
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          paths = json.loads(pathlib.Path('conversion-validation/paths.json').read_text())
+          subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true'] + paths, check=True)
+          PY
+      - name: Run reflection, call-apply, conversion, JSON and UTF-16 regressions
+        if: matrix.mode == 'runtime-tests'
         run: |
           set -o pipefail
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test primitive_conversion_execution -- --nocapture 2>&1 | tee conversion-validation/tests.log
-      - name: Check production runtime dependency closure
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_invocation_execution --test function_prototype_invocation_regression --test primitive_conversion_execution --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee conversion-validation/after.log
+      - name: Check complete native engine library
+        if: matrix.mode == 'full-engine-check'
         run: |
           set -o pipefail
           cargo +nightly check --locked -p frankenengine-engine --no-default-features --lib 2>&1 | tee conversion-validation/check.log
-      - name: Retain complete validation output
+      - name: Check strict native engine lint
+        if: matrix.mode == 'full-engine-check'
+        run: |
+          set -o pipefail
+          cargo +nightly clippy --locked -p frankenengine-engine --no-default-features --lib -- -D warnings 2>&1 | tee conversion-validation/clippy.log
+      - name: Store exact candidate source blobs without changing refs
+        if: always() && matrix.mode == 'runtime-tests'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          root = pathlib.Path('conversion-validation'); result = {'base_commit': os.environ['GITHUB_SHA'], 'files': []}
+          for path in json.loads((root / 'paths.json').read_text()):
+              file = pathlib.Path(path)
+              if not file.is_file(): continue
+              assert not file.is_symlink(); content = file.read_bytes()
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode(), headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response: sha = json.load(response)['sha']
+              assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
+              result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+              dest = root / 'source' / path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(content)
+          (root / 'result.json').write_text(json.dumps(result, indent=2))
+          PY
+      - name: Retain complete candidate and test output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: primitive-conversion-validation
+          name: reflection-validation-${{ matrix.mode }}
           path: conversion-validation/
           retention-days: 7

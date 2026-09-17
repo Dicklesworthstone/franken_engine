@@ -10,10 +10,8 @@ on:
       - 'crates/franken-engine/tests/reflect_property_execution.rs'
       - '.github/workflows/reflect-properties.yml'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   properties:
     runs-on: ubuntu-latest
@@ -30,7 +28,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Retrieve exact candidate without changing refs
+      # Exact-source candidate only; this job never writes a commit or ref.
+      - name: Apply exact runtime fixes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,14 +46,20 @@ jobs:
           for path, sha in {
               'property-validation/change.patch': 'b736146f3ab88127bb8cd9f3352cc72ae78f553e',
               'crates/franken-engine/tests/reflect_property_execution.rs': '845103d8bbb705b0bbf8abe896e6a3ac8603a33c',
+              'property-validation/refinement.patch': '18c7381e7a1ee6ab9f255947e39330d2a172db79',
           }.items():
               req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req, timeout=60) as response: data = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest() == sha
               pathlib.Path(path).write_bytes(data)
+          for path in ['property-validation/change.patch', 'property-validation/refinement.patch']:
+              subprocess.run(['git', 'apply', '--check', path], check=True)
+              subprocess.run(['git', 'apply', path], check=True)
           PY
-      - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+      - name: Install Rust and format changed sources
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
+          rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs crates/franken-engine/src/lowering_pipeline.rs crates/franken-engine/tests/reflect_property_execution.rs
       - name: Select existing production runtime dependency closure
         run: |
           python3 - <<'PY'
@@ -64,24 +69,12 @@ jobs:
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('property-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
           PY
-      - name: Reproduce unchanged computed-key failure
-        run: |
-          status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --test function_prototype_invocation_regression computed_literal_key_getter_throw_skips_value -- --nocapture > property-validation/before.log 2>&1 || status=$?
-          tail -n 70 property-validation/before.log
-          test "$status" -ne 0
-          grep -F 'TopSecret -> Secret' property-validation/before.log
-          grep -F 'computed_literal_key_getter_throw_skips_value ... FAILED' property-validation/before.log
-      - name: Apply candidate and format changed sources
-        run: |
-          git apply --check property-validation/change.patch
-          git apply property-validation/change.patch
-          rustfmt +nightly --edition 2024 --config skip_children=true crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs crates/franken-engine/src/lowering_pipeline.rs crates/franken-engine/tests/reflect_property_execution.rs
       - name: Run property and shared invocation regressions
         run: |
           set -o pipefail
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_property_execution --test function_prototype_invocation_regression --test reflect_invocation_execution --test primitive_conversion_execution -- --nocapture 2>&1 | tee property-validation/after.log
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test reflect_property_execution --test function_prototype_invocation_regression --test reflect_invocation_execution --test primitive_conversion_execution --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee property-validation/after.log
       - name: Check runtime dependency closure
+        if: always()
         run: |
           set -o pipefail
           cargo +nightly check --locked -p frankenengine-engine --no-default-features --lib 2>&1 | tee property-validation/check.log

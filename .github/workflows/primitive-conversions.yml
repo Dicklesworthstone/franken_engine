@@ -1,5 +1,4 @@
 name: Native Primitive Conversions
-
 on:
   push:
     branches: [main]
@@ -45,12 +44,7 @@ jobs:
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
           root = pathlib.Path('conversion-validation')
-          paths = [
-              'crates/franken-engine/src/baseline_interpreter.rs',
-              'crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs',
-              'crates/franken-engine/src/baseline_interpreter/reflect_invocation.rs',
-              'crates/franken-engine/tests/reflect_invocation_execution.rs',
-          ]
+          paths = ['crates/franken-engine/src/baseline_interpreter.rs', 'crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs', 'crates/franken-engine/src/baseline_interpreter/reflect_invocation.rs', 'crates/franken-engine/tests/reflect_invocation_execution.rs']
           (root / 'paths.json').write_text(json.dumps(paths))
           for path, expected in [(paths[0], '81fdcc0ea5a5c7bdcfa97ee5815d3c5d47f5c771'), (paths[1], '76a203693f7444178cf17ca95a4945a4747242a4')]:
               assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == expected
@@ -60,18 +54,14 @@ jobs:
               ('prototype', 'fcc5eded94c821f35e2d398bf238a762332af751', 'eb0232188b06c2e49063aad5f5aa7c9199f2cc82d8d82b9b07658587861d1a90'),
           ]
           for name, sha, digest in candidates:
-              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
-                  'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  raw = base64.b64decode(json.load(response)['content'])
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(req, timeout=60) as response: raw = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() == sha
               (root / (name + '.received')).write_bytes(raw)
               if name == 'prototype':
                   encoded = base64.b64encode(raw).decode()
-                  for old, new in [('IZvNvy3PoJOTu', 'IZvNvy3OoJOTu'), ('LqtwVbIGpIGp3EDWH', 'LqtwVbIGp3EDWH'), ('CebTT6piPeinx', 'CebTT6einx'), ('dl3h/c+vQEJ', 'dl3h/c+vqEJ')]:
-                      assert encoded.count(old) == 1, old
-                      encoded = encoded.replace(old, new)
+                  corrections = [(826, 827, 'O'), (1601, 1604, ''), (2468, 2471, ''), (3379, 3380, 'q'), (4512, 4512, 'A=')]
+                  for start, end, text in reversed(corrections): encoded = encoded[:start] + text + encoded[end:]
                   raw = base64.b64decode(encoded, validate=True)
               (root / (name + '.gz')).write_bytes(raw)
               assert hashlib.sha256(raw).hexdigest() == digest, name + ' transport checksum mismatch'
@@ -143,9 +133,7 @@ jobs:
               file = pathlib.Path(path)
               if not file.is_file(): continue
               assert not file.is_symlink(); content = file.read_bytes()
-              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode(), headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
-                  'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              req = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/blobs', data=json.dumps({'content': base64.b64encode(content).decode(), 'encoding': 'base64'}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
               with urllib.request.urlopen(req, timeout=60) as response: sha = json.load(response)['sha']
               assert sha == hashlib.sha1(('blob ' + str(len(content)) + '\0').encode() + content).hexdigest()
               result['files'].append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})

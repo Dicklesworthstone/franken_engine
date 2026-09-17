@@ -409,3 +409,165 @@ fn async_delegate_observes_done_before_value_once() {
         ],
     );
 }
+
+#[test]
+fn awaited_thenable_uses_inherited_getter_once_with_original_receiver() {
+    assert_output(
+        r#"
+        let gets = 0;
+        const prototype = { get then() {
+            console.log('get', ++gets, this.marker);
+            return function(resolve) { console.log('call', this.marker); resolve(7); };
+        } };
+        const source = Object.create(prototype);
+        source.marker = 'receiver';
+        async function* values() { yield source; return 8; }
+        const g = values();
+        g.next().then(r => console.log('first', r.value, r.done));
+        g.next().then(r => console.log('second', r.value, r.done, gets));
+        console.log('sync');
+        "#,
+        &["get 1 receiver", "sync", "call receiver", "first 7 false", "second 8 true 1"],
+    );
+}
+
+#[test]
+fn awaited_then_getter_throw_preserves_identity_and_enters_generator_catch() {
+    assert_output(
+        r#"
+        const original = { marker: 17 };
+        const source = { get then() { console.log('get'); throw original; } };
+        async function* values() {
+            try { await source; console.log('wrong'); }
+            catch (error) { console.log('caught', error === original); yield 18; }
+            return 19;
+        }
+        const g = values();
+        g.next().then(r => console.log('first', r.value, r.done));
+        g.next().then(r => console.log('second', r.value, r.done));
+        console.log('sync');
+        "#,
+        &["get", "sync", "caught true", "first 18 false", "second 19 true"],
+    );
+}
+
+#[test]
+fn noncallable_then_getter_preserves_the_awaited_object_identity() {
+    assert_output(
+        r#"
+        let gets = 0;
+        const source = { get then() { gets++; return 17; } };
+        async function* values() { const value = await source; yield value === source; }
+        values().next().then(r => console.log('result', r.value, r.done, gets));
+        console.log('sync');
+        "#,
+        &["sync", "result true false 1"],
+    );
+}
+
+#[test]
+fn then_getter_reentry_queues_next_until_pending_await_really_resolves() {
+    assert_output(
+        r#"
+        let g, release;
+        const source = { get then() {
+            console.log('get');
+            g.next(9).then(r => console.log('reentrant', r.value, r.done));
+            return function(resolve) { console.log('then'); release = resolve; };
+        } };
+        async function* values() {
+            const value = await source;
+            const sent = yield value;
+            return sent;
+        }
+        g = values();
+        g.next().then(r => console.log('first', r.value, r.done));
+        Promise.resolve().then(() => { console.log('release'); release(7); });
+        console.log('sync');
+        "#,
+        &["get", "sync", "then", "release", "first 7 false", "reentrant 9 true"],
+    );
+}
+
+#[test]
+fn completed_return_then_getter_cannot_drain_its_own_request_reentrantly() {
+    assert_output(
+        r#"
+        let g, release;
+        const source = { get then() {
+            console.log('get-return');
+            g.next().then(r => console.log('next', r.value, r.done));
+            return function(resolve) { console.log('then'); release = resolve; };
+        } };
+        async function* values() { console.log('body-must-not-run'); }
+        g = values();
+        g.return(source).then(r => console.log('return', r.value, r.done));
+        Promise.resolve().then(() => { console.log('release'); release(42); });
+        console.log('sync');
+        "#,
+        &["get-return", "sync", "then", "release", "return 42 true", "next undefined true"],
+    );
+}
+
+#[test]
+fn return_argument_getter_rejection_is_injected_at_the_suspended_yield() {
+    assert_output(
+        r#"
+        const original = { marker: 42 };
+        const source = { get then() { console.log('get-return'); throw original; } };
+        async function* values() {
+            try { yield 1; }
+            catch (error) { console.log('caught', error === original); yield 2; }
+            return 3;
+        }
+        const g = values();
+        g.next().then(r => console.log('first', r.value, r.done));
+        g.return(source).then(r => console.log('return', r.value, r.done));
+        g.next().then(r => console.log('last', r.value, r.done));
+        console.log('sync');
+        "#,
+        &["sync", "get-return", "first 1 false", "caught true", "return 2 false", "last 3 true"],
+    );
+}
+
+#[test]
+fn return_thenable_getter_is_awaited_before_finally_runs() {
+    assert_output(
+        r#"
+        let release;
+        const source = { get then() {
+            console.log('get-return');
+            return function(resolve) { release = resolve; };
+        } };
+        async function* values() {
+            try { return source; }
+            finally { console.log('finally'); }
+        }
+        values().next().then(r => console.log('result', r.value, r.done));
+        Promise.resolve().then(() => { console.log('release'); release(42); });
+        console.log('sync');
+        "#,
+        &["get-return", "sync", "release", "finally", "result 42 true"],
+    );
+}
+
+#[test]
+fn await_uses_the_selected_then_callable_even_if_the_getter_replaces_itself() {
+    assert_output(
+        r#"
+        let gets = 0;
+        const source = { get then() {
+            gets++;
+            Object.defineProperty(source, 'then', {
+                configurable: true,
+                value(resolve) { console.log('wrong-replacement'); resolve(99); }
+            });
+            return function(resolve) { console.log('selected', this === source); resolve(7); };
+        } };
+        async function* values() { yield source; }
+        values().next().then(r => console.log('result', r.value, r.done, gets));
+        console.log('sync');
+        "#,
+        &["sync", "selected true", "result 7 false 1"],
+    );
+}

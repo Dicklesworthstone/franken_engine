@@ -361,28 +361,23 @@ impl InterpreterCore {
         id: u32,
         kind: AwaitKind,
         value: Value,
-        label: Label,
+        mut label: Label,
     ) -> Result<(), InterpreterError> {
+        // Await argument conversion is observable. In particular, a completed
+        // generator's .return(thenable) must not let a reentrant .next() drain
+        // the still-active return request while its then getter is executing.
+        self.async_generators[id as usize].phase = AsyncGeneratorPhase::Executing;
         let exact_value;
         let source = match value {
             Value::Promise(handle) => {
                 exact_value = None;
                 PromiseHandle(handle)
             }
-            Value::Object(_) => {
+            Value::Object(object) => {
                 exact_value = None;
-                let promise = self.create_promise()?;
-                if let Err(error) = self.resolve_promise_with_value(promise, value, label.clone()) {
-                    // Thenable getters can throw a value more sensitive than
-                    // the awaited object. Preserve the exception's own label;
-                    // resource failures must still escape, not become JS errors.
-                    let rejection = self.async_generator_exception(error, &label)?;
-                    self.reject_promise(
-                        promise,
-                        Self::value_to_js_value(&rejection.value),
-                        rejection.label,
-                    )?;
-                }
+                let (promise, observed_label) =
+                    self.async_generator_thenable_source(id, object, &label)?;
+                label = observed_label;
                 promise
             }
             other => {
@@ -403,6 +398,114 @@ impl InterpreterCore {
         self.async_generators[id as usize].phase = AsyncGeneratorPhase::SuspendedAwait;
         self.sync_estimated_memory_bytes()?;
         Ok(())
+    }
+
+    /// PromiseResolve's Get(then) must use the native property machinery, not
+    /// the own-data-only helper used by the legacy Promise callback subset.
+    /// Read it exactly once under the await context, including prototype and
+    /// getter provenance, and feed closure thenables to the existing job queue.
+    /// Return the observation label separately: the await reaction must retain
+    /// it even when a resolving capability later supplies a public value.
+    fn async_generator_thenable_source(
+        &mut self,
+        id: u32,
+        object: ObjectId,
+        floor: &Label,
+    ) -> Result<(PromiseHandle, Label), InterpreterError> {
+        let backing = self.async_generators[id as usize].generator_id;
+        let owner = Arc::clone(&self.generators[backing as usize].owner_module);
+        let context = self.json_parse_context_label()?;
+        let context = self.join_owned_label_with_temporary_budget(context, floor)?;
+        let saved_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.json_reserve_temporary(saved_bytes)?;
+        if let Err(error) =
+            self.apply_memory_component_delta(saved_bytes, Self::estimate_label_bytes(&context))
+        {
+            self.json_release_temporary(saved_bytes);
+            return Err(error);
+        }
+        let saved_context = self.active_inline_callback_context_label.replace(context);
+        let outcome = (|| {
+            self.json_charge_work()?;
+            let promise = self.create_promise()?;
+            let resolution = (|| {
+                let key = self.executable_property_key_from_value(&Value::str("then"));
+                self.reflect_observe_selected_property(object, &key)?;
+                let then = self.iterator_protocol_property(
+                    Some(owner.as_ref()),
+                    object,
+                    &key,
+                    Value::Object(object),
+                )?;
+                let then_bytes = Self::estimate_value_bytes(&then);
+                self.json_reserve_temporary(then_bytes)?;
+                let resolution = (|| {
+                    self.observe_scoped_callback_result()?;
+                    let label = self.json_parse_context_label()?;
+                    if let Value::Closure(then_id) = then {
+                        self.enqueue_resolve_thenable(
+                            promise,
+                            crate::closure_model::ClosureHandle(then_id),
+                            Value::Object(object),
+                            label.clone(),
+                        )?;
+                    } else {
+                        // Preserve the shared Promise lane's callable coverage.
+                        // Never look up then twice: a getter can replace itself.
+                        self.fulfill_promise(
+                            promise,
+                            Self::value_to_js_value(&Value::Object(object)),
+                            label.clone(),
+                        )?;
+                    }
+                    Ok(label)
+                })();
+                self.json_release_temporary(then_bytes);
+                resolution
+            })();
+            let resolution = match resolution {
+                Ok(label) => Ok(label),
+                Err(error) => match self.async_generator_exception(error, floor) {
+                    Ok(rejection) => self
+                        .reject_promise(
+                            promise,
+                            Self::value_to_js_value(&rejection.value),
+                            rejection.label.clone(),
+                        )
+                        .map(|()| rejection.label),
+                    Err(error) => Err(error),
+                },
+            };
+            match resolution {
+                Ok(label) => Ok((promise, label)),
+                Err(error) => {
+                    // This internal Promise is not yet owned by an await
+                    // continuation. Close it explicitly on resource failure.
+                    if let Ok(epoch) = self
+                        .promise_store
+                        .terminally_reject_without_jobs(promise, floor)
+                    {
+                        self.close_terminal_async_promise_dependencies(epoch, floor);
+                    }
+                    Err(error)
+                }
+            }
+        })();
+        let context = self
+            .active_inline_callback_context_label
+            .take()
+            .expect("nested then getters restore the await context");
+        self.active_inline_callback_context_label = saved_context;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&context))
+            .saturating_add(saved_bytes);
+        self.json_release_temporary(saved_bytes);
+        outcome
     }
 
     pub(super) fn resume_async_generator_task(
@@ -892,6 +995,56 @@ mod tests {
         let Value::Object(public_id) = public else { panic!("object"); };
         assert_eq!(core.object_mutation_labels.get(&secret_id), Some(&Label::Secret));
         assert!(core.object_mutation_labels.get(&public_id).is_none_or(|label| *label == Label::Public));
+        assert_accounting(&core);
+    }
+
+    #[test]
+    fn thenable_source_keeps_observed_object_provenance_after_context_restoration() {
+        let (mut core, id, _) = request_core(Label::Public);
+        let value = core.generator_result_object(Value::Int(42), false).unwrap();
+        let Value::Object(object) = value else {
+            panic!("ordinary source object");
+        };
+        core.join_direct_object_mutation_label(object, &Label::Secret)
+            .unwrap();
+        assert!(core.active_inline_callback_context_label.is_none());
+        let (promise, label) = core
+            .async_generator_thenable_source(id, object, &Label::Public)
+            .unwrap();
+        assert_eq!(label, Label::Secret);
+        let record = core.promise_store.get(promise).unwrap();
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(
+            InterpreterCore::js_value_to_value(match &record.state {
+                PromiseState::Fulfilled(value) => value,
+                _ => panic!("non-thenable source must fulfill with its exact identity"),
+            }),
+            Value::Object(object)
+        );
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_accounting(&core);
+    }
+
+    #[test]
+    fn thenable_admission_failure_restores_context_and_keeps_the_request_pending() {
+        let (mut core, id, request) = request_core(Label::Public);
+        let value = core.generator_result_object(Value::Int(42), false).unwrap();
+        let Value::Object(object) = value else {
+            panic!("ordinary source object");
+        };
+        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None)
+            .unwrap();
+        let before = core.promise_store.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        assert!(matches!(
+            core.async_generator_thenable_source(id, object, &Label::Public),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.promise_store.estimated_memory_bytes(), before);
+        assert_eq!(core.promise_store.get(request).unwrap().state, PromiseState::Pending);
+        assert_eq!(core.async_generators[id as usize].requests.len(), 1);
+        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
         assert_accounting(&core);
     }
 }

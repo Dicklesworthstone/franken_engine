@@ -59,7 +59,7 @@ jobs:
               return data
           candidates = [
               ('properties', ['a18b833b6f614101e080becb6e72bab03a80a969', 'c45ac24a7468d22859276d037f9612d7cfe8917a', '66246b708de0bd9d91d6330119faf671fb032ff0'], 'e2fc4ac51d80ec41e717eb044e6cb278027b90b283653722e96dac4d15cae684'),
-              ('prototypes', ['78131694e614beddd7eafaa373965549884c126e'], '0458ed4121b6978e8c00ef5f1f0402e732edc3a616cb07fec1c63ff039784719'),
+              ('prototypes', ['d1ba97dc5dc53e539b00f2195ab814766edeb1c2', 'd42040731b7defbe6272c37bae85f37b0e06df69'], '36c7d8d1fc40be0d635c8afcaa091844c239c173be3acecf65e9d123731d6b7b'),
           ]
           for name, shas, digest in candidates:
               raw = b''.join(blob(sha) for sha in shas)

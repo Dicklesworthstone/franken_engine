@@ -164,6 +164,33 @@ fn runtime_terminal(phase: AsyncModulePhase) -> bool {
     matches!(phase, AsyncModulePhase::Settled | AsyncModulePhase::Rejected)
 }
 
+/// Predict the evaluator's registration phase without constructing a Promise,
+/// module record, or witness. Both single-module and whole-graph admission use
+/// this rule, including transitive blocking through a synchronous importer.
+fn registration_phase(
+    has_top_level_await: bool,
+    dependencies: impl Iterator<Item = AsyncModulePhase>,
+) -> AsyncModulePhase {
+    let mut phase = if has_top_level_await {
+        AsyncModulePhase::Suspended
+    } else {
+        AsyncModulePhase::Synchronous
+    };
+    for dependency in dependencies {
+        if dependency == AsyncModulePhase::Rejected {
+            return AsyncModulePhase::Rejected;
+        }
+        if !dependency.is_terminal() {
+            phase = AsyncModulePhase::AwaitingDependencies;
+        }
+    }
+    phase
+}
+
+fn registration_is_ready(phase: AsyncModulePhase) -> bool {
+    matches!(phase, AsyncModulePhase::Synchronous | AsyncModulePhase::Suspended)
+}
+
 pub struct AsyncModuleScheduler {
     bridge: AsyncModulePromiseBridge,
     config: AsyncModuleSchedulerConfig,
@@ -191,6 +218,59 @@ impl AsyncModuleScheduler {
         }
     }
 
+    /// Admit a complete dependency-first registration batch before the first
+    /// real mutation. The graph loader separately validates topology and input
+    /// limits; this checks collisions and the scheduler's remaining budgets.
+    /// Only names and predicted phases are retained, never cloned runtimes.
+    pub(crate) fn preflight_module_registrations<'a>(
+        &self,
+        modules: impl Iterator<Item = (&'a str, bool, &'a [String])>,
+    ) -> Result<(), AsyncModuleSchedulerError> {
+        let existing = self.bridge.evaluator().states();
+        let mut planned = BTreeMap::<&str, AsyncModulePhase>::new();
+        let mut ready_additions = 0usize;
+        for (specifier, has_tla, dependencies) in modules {
+            if existing.contains_key(specifier) || planned.contains_key(specifier) {
+                return Err(AsyncModulePromiseBridgeError::DuplicateModule {
+                    specifier: specifier.to_string(),
+                }
+                .into());
+            }
+            if existing.len().saturating_add(planned.len()) >= self.config.max_registered_modules {
+                return Err(AsyncModuleSchedulerError::RegisteredModuleLimitExceeded {
+                    max: self.config.max_registered_modules,
+                });
+            }
+            // An unchecked discovery order must not predict a missing
+            // dependency as already complete and accidentally admit its body.
+            for dependency in dependencies {
+                if !planned.contains_key(dependency.as_str()) && !existing.contains_key(dependency) {
+                    return Err(AsyncModuleSchedulerError::Bridge {
+                        detail: format!(
+                            "module {specifier} precedes unregistered dependency {dependency}"
+                        ),
+                    });
+                }
+            }
+            let phase = registration_phase(
+                has_tla,
+                dependencies.iter().map(|dependency| {
+                    planned
+                        .get(dependency.as_str())
+                        .copied()
+                        .or_else(|| existing.get(dependency).map(|state| state.phase))
+                        .expect("dependency-first batch was checked before prediction")
+                }),
+            );
+            if registration_is_ready(phase) {
+                ready_additions = ready_additions.saturating_add(1);
+            }
+            self.ensure_ready_capacity(ready_additions)?;
+            planned.insert(specifier, phase);
+        }
+        Ok(())
+    }
+
     pub fn register_module(
         &mut self,
         specifier: &str,
@@ -211,16 +291,13 @@ impl AsyncModuleScheduler {
         // Match the evaluator's registration readiness before it creates a
         // Promise or emits events. Rejected dependencies produce a terminal
         // module and require no queue slot; pending dependencies defer it.
-        let immediately_ready = dependencies.iter().all(|dependency| {
-            self.bridge
-                .evaluator()
-                .states()
-                .get(dependency)
-                .is_none_or(|state| {
-                    state.phase.is_terminal() && state.phase != AsyncModulePhase::Rejected
-                })
-        });
-        if immediately_ready {
+        let phase = registration_phase(
+            has_top_level_await,
+            dependencies.iter().filter_map(|dependency| {
+                self.bridge.evaluator().states().get(dependency).map(|state| state.phase)
+            }),
+        );
+        if registration_is_ready(phase) {
             self.ensure_ready_capacity(1)?;
         }
         let promise = self

@@ -15,6 +15,7 @@ pub(super) enum PrimitiveConversion {
     IsFinite,
     ParseInt,
     ParseFloat,
+    PropertyKey,
 }
 
 impl InterpreterCore {
@@ -48,6 +49,14 @@ impl InterpreterCore {
             self.json_charge_work()?;
             self.json_observe_reachable_value(&input)?;
             match conversion {
+                PrimitiveConversion::PropertyKey => {
+                    let key = self.coerce_runtime_property_key(module, input)?;
+                    self.conversion_observe_hooks()?;
+                    if let Value::Str(text) = &key {
+                        self.conversion_charge_text(text.len())?;
+                    }
+                    Ok(key)
+                }
                 PrimitiveConversion::Number => {
                     if args.count == 0 {
                         return Ok(Value::Int(0));
@@ -134,6 +143,55 @@ impl InterpreterCore {
             outcome = Err(error);
         }
         self.active_inline_callback_context_label = saved_context;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&context))
+            .saturating_add(saved_bytes);
+        self.json_release_temporary(saved_bytes);
+        outcome
+    }
+
+    /// Console is an Internal-clearance sink even when reached through a
+    /// first-class builtin. Check live argument/PC and reachable storage labels
+    /// before formatting or capturing output, not only the compiler's estimate.
+    pub(super) fn check_console_confidentiality(
+        &mut self,
+        args: RegRange,
+        capability: &str,
+    ) -> Result<(), InterpreterError> {
+        let context = self.join_arg_range_label(args)?;
+        let saved_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.json_reserve_temporary(saved_bytes)?;
+        if let Err(error) =
+            self.apply_memory_component_delta(saved_bytes, Self::estimate_label_bytes(&context))
+        {
+            self.json_release_temporary(saved_bytes);
+            return Err(error);
+        }
+        let previous = self.active_inline_callback_context_label.replace(context);
+        let outcome = (|| {
+            self.json_charge_work()?;
+            for offset in 0..args.count {
+                let value = self.builtin_arg(args, offset)?.unwrap_or(Value::Undefined);
+                self.json_observe_reachable_value(&value)?;
+            }
+            let label = self.json_parse_context_label()?;
+            if !label.can_flow_to(&Label::Internal) {
+                return Err(InterpreterError::CapabilityDenied {
+                    capability: format!("{capability}:confidentiality"),
+                });
+            }
+            Ok(())
+        })();
+        let context = self
+            .active_inline_callback_context_label
+            .take()
+            .expect("console provenance walk retains the active context");
+        self.active_inline_callback_context_label = previous;
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(Self::estimate_label_bytes(&context))

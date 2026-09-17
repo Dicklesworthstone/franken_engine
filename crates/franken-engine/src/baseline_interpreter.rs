@@ -29814,6 +29814,12 @@ impl InterpreterCore {
             }
         })?;
 
+        // Seed values are live before execute captures its replay snapshot.
+        // Admission must update the same incremental accounting as VM writes;
+        // otherwise a seeded string is invisible until a later resync (or
+        // remains uncharged when execution refuses before such a resync).
+        let previous_bytes = Self::estimate_value_bytes(&self.registers[reg as usize]);
+        self.apply_memory_component_delta(previous_bytes, Self::estimate_value_bytes(&value))?;
         self.last_pre_run_seed = None;
         self.last_post_run_epoch = None;
         self.mutate_registers(|r| r[reg as usize] = value);
@@ -59621,6 +59627,8 @@ impl InterpreterCore {
             _ => return Ok(Value::Undefined), // Unknown console method
         };
 
+        self.check_console_confidentiality(args, cap)?;
+
         // Collect arguments as strings
         let mut parts = Vec::new();
         for i in 0..args.count {
@@ -66426,7 +66434,7 @@ impl InterpreterCore {
                         got: format!("{} arguments", args.count),
                     });
                 }
-                self.coerce_runtime_property_key(module, self.read_reg(args.start)?)
+                self.primitive_conversion_builtin(module, args, PrimitiveConversion::PropertyKey)
             }
             "builtin:RequireObjectCoercible" => {
                 if args.count != 1 {
@@ -68255,60 +68263,9 @@ impl InterpreterCore {
                     _ => Ok(Value::Bool(false)), // Number.isFinite only returns true for finite numbers, not type coerced
                 }
             }
-            "builtin:ConsoleLog" => {
-                // console.log implementation - prints arguments to stdout/console
-                let mut output_parts = Vec::new();
-
-                // Convert all arguments to strings and collect them
-                for i in 0..args.count {
-                    let arg = self.read_reg(args.start + i)?;
-                    let str_representation = self.value_to_string(&arg);
-                    output_parts.push(str_representation);
-                }
-
-                // Join with spaces (standard console.log behavior)
-                let output = output_parts.join(" ");
-
-                self.push_console_output(ConsoleLevel::Log, output);
-
-                Ok(Value::Undefined)
-            }
-            "builtin:ConsoleError" => {
-                // console.error implementation - prints error arguments to stderr/console
-                let mut output_parts = Vec::new();
-
-                // Convert all arguments to strings and collect them
-                for i in 0..args.count {
-                    let arg = self.read_reg(args.start + i)?;
-                    let str_representation = self.value_to_string(&arg);
-                    output_parts.push(str_representation);
-                }
-
-                // Join with spaces
-                let output = output_parts.join(" ");
-
-                self.push_console_output(ConsoleLevel::Error, output);
-
-                Ok(Value::Undefined)
-            }
-            "builtin:ConsoleWarn" => {
-                // console.warn implementation - prints warning arguments to console
-                let mut output_parts = Vec::new();
-
-                // Convert all arguments to strings and collect them
-                for i in 0..args.count {
-                    let arg = self.read_reg(args.start + i)?;
-                    let str_representation = self.value_to_string(&arg);
-                    output_parts.push(str_representation);
-                }
-
-                // Join with spaces
-                let output = output_parts.join(" ");
-
-                self.push_console_output(ConsoleLevel::Warn, output);
-
-                Ok(Value::Undefined)
-            }
+            "builtin:ConsoleLog" => self.dispatch_console_hostcall_inner("console:log", args),
+            "builtin:ConsoleError" => self.dispatch_console_hostcall_inner("console:error", args),
+            "builtin:ConsoleWarn" => self.dispatch_console_hostcall_inner("console:warn", args),
             "builtin:DateNow" => {
                 // Date.now implementation - returns deterministic timestamp in milliseconds
                 // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
@@ -73682,24 +73639,7 @@ impl InterpreterCore {
             // Removed duplicate IsNaN - implementation at line 8326 has better JS compliance and explicit type conversion rules
 
             // Removed duplicate IsFinite - implementation at line 8354 has better JS compliance and explicit type conversion rules
-            "builtin:ConsoleInfo" => {
-                // console.info implementation - prints info arguments to console
-                let mut output_parts = Vec::new();
-
-                // Convert all arguments to strings and collect them
-                for i in 0..args.count {
-                    let arg = self.read_reg(args.start + i)?;
-                    let str_representation = self.value_to_string(&arg);
-                    output_parts.push(str_representation);
-                }
-
-                // Join with spaces (standard console behavior)
-                let output = output_parts.join(" ");
-
-                self.push_console_output(ConsoleLevel::Info, output);
-
-                Ok(Value::Undefined)
-            }
+            "builtin:ConsoleInfo" => self.dispatch_console_hostcall_inner("console:info", args),
 
             "builtin:StringPrototypeToLocaleLowerCase" => {
                 // String.prototype.toLocaleLowerCase() implementation - simplified locale-aware lowercase

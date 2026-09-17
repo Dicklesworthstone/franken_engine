@@ -28854,6 +28854,14 @@ fn infer_sink_clearance(
 }
 
 fn sink_clearance_from_capability(capability: &str) -> Label {
+    // This exact compiler intrinsic computes a labeled property name inside
+    // the VM; "Key" does not make it a credential/secret sink. Its observable
+    // conversion runs in the operand's callback context, retains observations
+    // on the returned key/exception, and actual callback effects gate at their
+    // own sinks. Do not extend this to arbitrary names containing PropertyKey.
+    if capability == "builtin:ToPropertyKey" {
+        return Label::TopSecret;
+    }
     // Authenticated builtin prototype membership is internal observation, not
     // egress. Share the runtime's exact finite-name recognizer rather than
     // allowing an unaudited future `instanceof:*` hostcall by prefix. The

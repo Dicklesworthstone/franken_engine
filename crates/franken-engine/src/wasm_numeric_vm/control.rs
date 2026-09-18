@@ -287,9 +287,15 @@ fn numeric_signature(opcode: u8) -> Option<(WasmValueType, usize, WasmValueType)
         0x6a..=0x78 => (I32, 2, I32),
         0x79..=0x7b | 0xc2..=0xc4 => (I64, 1, I64),
         0x7c..=0x8a => (I64, 2, I64),
-        0x8b | 0x8c | 0x91 => (F32, 1, F32), 0x92..=0x95 => (F32, 2, F32),
-        0x99 | 0x9a | 0x9f => (F64, 1, F64), 0xa0..=0xa3 => (F64, 2, F64),
+        0x8b..=0x91 => (F32, 1, F32), 0x92..=0x98 => (F32, 2, F32),
+        0x99..=0x9f => (F64, 1, F64), 0xa0..=0xa6 => (F64, 2, F64),
         0xa7 => (I64, 1, I32), 0xac | 0xad => (I32, 1, I64),
+        0xa8 | 0xa9 => (F32, 1, I32), 0xaa | 0xab => (F64, 1, I32),
+        0xae | 0xaf => (F32, 1, I64), 0xb0 | 0xb1 => (F64, 1, I64),
+        0xb2 | 0xb3 => (I32, 1, F32), 0xb4 | 0xb5 => (I64, 1, F32),
+        0xb6 => (F64, 1, F32),
+        0xb7 | 0xb8 => (I32, 1, F64), 0xb9 | 0xba => (I64, 1, F64),
+        0xbb => (F32, 1, F64),
         0xbc => (F32, 1, I32), 0xbd => (F64, 1, I64),
         0xbe => (I32, 1, F32), 0xbf => (I64, 1, F64),
         _ => return None,
@@ -399,8 +405,12 @@ pub(super) fn execute_numeric(opcode: u8, stack: &mut Vec<WasmBoundaryValue>, fu
         }
         0x6a..=0x70 => execute_i32_numeric(opcode, stack, function),
         0x7c..=0x82 => execute_i64_numeric(opcode, stack, function),
-        0x8b | 0x8c | 0x91..=0x95 => execute_f32_numeric(opcode, stack, function),
-        0x99 | 0x9a | 0x9f..=0xa3 => execute_f64_numeric(opcode, stack, function),
+        0x91..=0x95 => execute_f32_numeric(opcode, stack, function),
+        0x9f..=0xa3 => execute_f64_numeric(opcode, stack, function),
+        0x8b..=0x90 | 0x96..=0x9e | 0xa4..=0xa6 => {
+            execute_float_scalar(opcode, stack, function)
+        }
+        0xa8..=0xab | 0xae..=0xbb => execute_conversion(opcode, stack, function),
         0xa7 => {
             let value = expect_i64(pop_value(stack, function, opcode)?, function, 0)?;
             stack.push(WasmBoundaryValue::I32(value as i32));
@@ -495,6 +505,156 @@ fn execute_bit_numeric(
     Ok(())
 }
 
+/// IEEE arithmetic may canonicalize NaNs for replay, but abs, neg and
+/// copysign are bit operations and must retain the payload (even signaling).
+/// min/max propagate NaNs and explicitly order opposite signed zeros; Rust's
+/// host min/max rules alone are not the WebAssembly contract.
+fn execute_float_scalar(
+    opcode: u8,
+    stack: &mut Vec<WasmBoundaryValue>,
+    function: u32,
+) -> Result<(), WasmNumericVmError> {
+    use WasmBoundaryValue::{F32Bits, F64Bits};
+    let right = pop_value(stack, function, opcode)?;
+    let result = match opcode {
+        0x8b..=0x90 => {
+            let bits = expect_f32_bits(right, function, 0)?;
+            let value = f32::from_bits(bits);
+            F32Bits(match opcode {
+                0x8b => bits & 0x7fff_ffff,
+                0x8c => bits ^ 0x8000_0000,
+                0x8d => canonical_f32_bits(value.ceil()),
+                0x8e => canonical_f32_bits(value.floor()),
+                0x8f => canonical_f32_bits(value.trunc()),
+                0x90 => canonical_f32_bits(value.round_ties_even()),
+                _ => unreachable!("matched f32 unary opcode"),
+            })
+        }
+        0x99..=0x9e => {
+            let bits = expect_f64_bits(right, function, 0)?;
+            let value = f64::from_bits(bits);
+            F64Bits(match opcode {
+                0x99 => bits & 0x7fff_ffff_ffff_ffff,
+                0x9a => bits ^ 0x8000_0000_0000_0000,
+                0x9b => canonical_f64_bits(value.ceil()),
+                0x9c => canonical_f64_bits(value.floor()),
+                0x9d => canonical_f64_bits(value.trunc()),
+                0x9e => canonical_f64_bits(value.round_ties_even()),
+                _ => unreachable!("matched f64 unary opcode"),
+            })
+        }
+        0x96..=0x98 => {
+            let right = expect_f32_bits(right, function, 1)?;
+            let left = expect_f32_bits(pop_value(stack, function, opcode)?, function, 0)?;
+            let a = f32::from_bits(left);
+            let b = f32::from_bits(right);
+            F32Bits(if opcode == 0x98 {
+                (left & 0x7fff_ffff) | (right & 0x8000_0000)
+            } else if a.is_nan() || b.is_nan() {
+                CANONICAL_F32_NAN
+            } else if a == 0.0 && b == 0.0 {
+                if opcode == 0x96 { left | right } else { left & right }
+            } else if (opcode == 0x96 && a < b) || (opcode == 0x97 && a > b) {
+                left
+            } else {
+                right
+            })
+        }
+        0xa4..=0xa6 => {
+            let right = expect_f64_bits(right, function, 1)?;
+            let left = expect_f64_bits(pop_value(stack, function, opcode)?, function, 0)?;
+            let a = f64::from_bits(left);
+            let b = f64::from_bits(right);
+            F64Bits(if opcode == 0xa6 {
+                (left & 0x7fff_ffff_ffff_ffff) | (right & 0x8000_0000_0000_0000)
+            } else if a.is_nan() || b.is_nan() {
+                CANONICAL_F64_NAN
+            } else if a == 0.0 && b == 0.0 {
+                if opcode == 0xa4 { left | right } else { left & right }
+            } else if (opcode == 0xa4 && a < b) || (opcode == 0xa5 && a > b) {
+                left
+            } else {
+                right
+            })
+        }
+        _ => return Err(WasmNumericVmError::UnsupportedOpcode {
+            function_index: function, opcode, offset: 0,
+        }),
+    };
+    stack.push(result);
+    Ok(())
+}
+
+fn execute_conversion(
+    opcode: u8,
+    stack: &mut Vec<WasmBoundaryValue>,
+    function: u32,
+) -> Result<(), WasmNumericVmError> {
+    use WasmBoundaryValue::{F32Bits, F64Bits};
+    let value = pop_value(stack, function, opcode)?;
+    let result = match opcode {
+        0xa8..=0xab | 0xae..=0xb1 => {
+            let number = if matches!(opcode, 0xa8 | 0xa9 | 0xae | 0xaf) {
+                f64::from(f32::from_bits(expect_f32_bits(value, function, 0)?))
+            } else {
+                f64::from_bits(expect_f64_bits(value, function, 0)?)
+            };
+            trunc_integer(number, opcode <= 0xab, opcode & 1 == 0, function)?
+        }
+        0xb2 | 0xb3 => {
+            let value = expect_i32(value, function, 0)?;
+            F32Bits((if opcode == 0xb2 { value as f32 } else { (value as u32) as f32 }).to_bits())
+        }
+        0xb4 | 0xb5 => {
+            let value = expect_i64(value, function, 0)?;
+            // A direct integer-to-f32 conversion rounds once. Going through
+            // f64 first can double-round integers on an f32 midpoint boundary.
+            F32Bits((if opcode == 0xb4 { value as f32 } else { (value as u64) as f32 }).to_bits())
+        }
+        0xb6 => F32Bits(canonical_f32_bits(f64::from_bits(expect_f64_bits(value, function, 0)?) as f32)),
+        0xb7 | 0xb8 => {
+            let value = expect_i32(value, function, 0)?;
+            F64Bits((if opcode == 0xb7 { f64::from(value) } else { f64::from(value as u32) }).to_bits())
+        }
+        0xb9 | 0xba => {
+            let value = expect_i64(value, function, 0)?;
+            F64Bits((if opcode == 0xb9 { value as f64 } else { (value as u64) as f64 }).to_bits())
+        }
+        0xbb => F64Bits(canonical_f64_bits(f64::from(f32::from_bits(expect_f32_bits(value, function, 0)?)))),
+        _ => return Err(WasmNumericVmError::UnsupportedOpcode {
+            function_index: function, opcode, offset: 0,
+        }),
+    };
+    stack.push(result);
+    Ok(())
+}
+
+/// Check the truncated value against exact power-of-two bounds BEFORE any
+/// Rust float-to-int cast, which would otherwise silently saturate. In
+/// particular (i64::MAX as f64) is 2^63, not a valid inclusive upper bound.
+/// NaN and out-of-range conversions use the VM's existing IntegerOverflow
+/// trap channel; neither can produce a fabricated integer result.
+fn trunc_integer(number: f64, i32_result: bool, signed: bool, function: u32)
+    -> Result<WasmBoundaryValue, WasmNumericVmError>
+{
+    let truncated = number.trunc();
+    let (minimum, exclusive_maximum) = match (i32_result, signed) {
+        (true, true) => (-2_147_483_648.0, 2_147_483_648.0),
+        (true, false) => (0.0, 4_294_967_296.0),
+        (false, true) => (-9_223_372_036_854_775_808.0, 9_223_372_036_854_775_808.0),
+        (false, false) => (0.0, 18_446_744_073_709_551_616.0),
+    };
+    if !number.is_finite() || truncated < minimum || truncated >= exclusive_maximum {
+        return Err(WasmNumericVmError::IntegerOverflow { function_index: function });
+    }
+    Ok(match (i32_result, signed) {
+        (true, true) => WasmBoundaryValue::I32(truncated as i32),
+        (true, false) => WasmBoundaryValue::I32((truncated as u32) as i32),
+        (false, true) => WasmBoundaryValue::I64(truncated as i64),
+        (false, false) => WasmBoundaryValue::I64((truncated as u64) as i64),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +710,263 @@ mod tests {
         }
         code.extend([opcode, 0x0b]);
         module(params, &[result], 0, &code, &[])
+    }
+
+    #[test]
+    fn f32_rounding_is_ties_even_and_preserves_zero_sign() {
+        for (value, expected) in [
+            (-0.0_f32, [-0.0, -0.0, -0.0, -0.0]),
+            (-0.25, [-0.0, -1.0, -0.0, -0.0]),
+            (0.25, [1.0, 0.0, 0.0, 0.0]),
+            (-0.5, [-0.0, -1.0, -0.0, -0.0]),
+            (0.5, [1.0, 0.0, 0.0, 0.0]),
+            (-1.5, [-1.0, -2.0, -1.0, -2.0]),
+            (1.5, [2.0, 1.0, 1.0, 2.0]),
+            (-2.5, [-2.0, -3.0, -2.0, -2.0]),
+            (2.5, [3.0, 2.0, 2.0, 2.0]),
+        ] {
+            for (opcode, expected) in (0x8d..=0x90).zip(expected) {
+                let expected: f32 = expected;
+                assert_eq!(run(&numeric_module(opcode, &[0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(value.to_bits())]), [WasmBoundaryValue::F32Bits(expected.to_bits())]);
+            }
+        }
+        for opcode in 0x8d..=0x90 {
+            for value in [f32::INFINITY, f32::NEG_INFINITY, 16_777_216.0] {
+                assert_eq!(run(&numeric_module(opcode, &[0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(value.to_bits())]), [WasmBoundaryValue::F32Bits(value.to_bits())]);
+            }
+            assert_eq!(run(&numeric_module(opcode, &[0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(0xff80_0001)]), [WasmBoundaryValue::F32Bits(CANONICAL_F32_NAN)]);
+        }
+    }
+
+    #[test]
+    fn f64_rounding_is_ties_even_and_preserves_zero_sign() {
+        for (value, expected) in [
+            (-0.0_f64, [-0.0, -0.0, -0.0, -0.0]),
+            (-0.25, [-0.0, -1.0, -0.0, -0.0]),
+            (0.25, [1.0, 0.0, 0.0, 0.0]),
+            (-0.5, [-0.0, -1.0, -0.0, -0.0]),
+            (0.5, [1.0, 0.0, 0.0, 0.0]),
+            (-1.5, [-1.0, -2.0, -1.0, -2.0]),
+            (1.5, [2.0, 1.0, 1.0, 2.0]),
+            (-2.5, [-2.0, -3.0, -2.0, -2.0]),
+            (2.5, [3.0, 2.0, 2.0, 2.0]),
+        ] {
+            for (opcode, expected) in (0x9b..=0x9e).zip(expected) {
+                let expected: f64 = expected;
+                assert_eq!(run(&numeric_module(opcode, &[0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(value.to_bits())]), [WasmBoundaryValue::F64Bits(expected.to_bits())]);
+            }
+        }
+        for opcode in 0x9b..=0x9e {
+            for value in [f64::INFINITY, f64::NEG_INFINITY, 4_503_599_627_370_496.0] {
+                assert_eq!(run(&numeric_module(opcode, &[0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(value.to_bits())]), [WasmBoundaryValue::F64Bits(value.to_bits())]);
+            }
+            assert_eq!(run(&numeric_module(opcode, &[0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(0xfff0_0000_0000_0001)]), [WasmBoundaryValue::F64Bits(CANONICAL_F64_NAN)]);
+        }
+    }
+
+    #[test]
+    fn min_max_order_signed_zeros_and_propagate_either_nan() {
+        for (op32, op64, minimum) in [(0x96, 0xa4, true), (0x97, 0xa5, false)] {
+            for (left, right) in [(0.0_f64, -0.0_f64), (-0.0, 0.0), (-0.0, -0.0), (0.0, 0.0), (3.0, -2.0), (-2.0, 3.0), (f64::INFINITY, f64::NEG_INFINITY)] {
+                let expected = if minimum {
+                    if left == 0.0 && right == 0.0 {
+                        f64::from_bits(left.to_bits() | right.to_bits())
+                    } else if left < right { left } else { right }
+                } else if left == 0.0 && right == 0.0 {
+                    f64::from_bits(left.to_bits() & right.to_bits())
+                } else if left > right { left } else { right };
+                assert_eq!(run(&numeric_module(op32, &[0x7d, 0x7d], 0x7d), &[WasmBoundaryValue::F32Bits((left as f32).to_bits()), WasmBoundaryValue::F32Bits((right as f32).to_bits())]), [WasmBoundaryValue::F32Bits((expected as f32).to_bits())]);
+                assert_eq!(run(&numeric_module(op64, &[0x7c, 0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(left.to_bits()), WasmBoundaryValue::F64Bits(right.to_bits())]), [WasmBoundaryValue::F64Bits(expected.to_bits())]);
+            }
+            for (left, right) in [(0x7f80_0001, 0), (0, 0xffc1_2345), (0x7fc0_0000, 0xffc1_2345)] {
+                assert_eq!(run(&numeric_module(op32, &[0x7d, 0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(left), WasmBoundaryValue::F32Bits(right)]), [WasmBoundaryValue::F32Bits(CANONICAL_F32_NAN)]);
+            }
+            for (left, right) in [(0x7ff0_0000_0000_0001, 0), (0, 0xfff8_1234_5678_9abc), (0x7ff8_0000_0000_0000, 0xfff8_1234_5678_9abc)] {
+                assert_eq!(run(&numeric_module(op64, &[0x7c, 0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(left), WasmBoundaryValue::F64Bits(right)]), [WasmBoundaryValue::F64Bits(CANONICAL_F64_NAN)]);
+            }
+        }
+    }
+
+    #[test]
+    fn float_sign_instructions_do_not_canonicalize_nan_payloads() {
+        for bits in [0_u32, 0x8000_0000, 0x7f80_0001, 0xffc1_2345] {
+            assert_eq!(run(&numeric_module(0x8b, &[0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(bits)]), [WasmBoundaryValue::F32Bits(bits & 0x7fff_ffff)]);
+            assert_eq!(run(&numeric_module(0x8c, &[0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(bits)]), [WasmBoundaryValue::F32Bits(bits ^ 0x8000_0000)]);
+            for sign in [0_u32, 0x8000_0000, 0xff80_0001] {
+                assert_eq!(run(&numeric_module(0x98, &[0x7d, 0x7d], 0x7d), &[WasmBoundaryValue::F32Bits(bits), WasmBoundaryValue::F32Bits(sign)]), [WasmBoundaryValue::F32Bits((bits & 0x7fff_ffff) | (sign & 0x8000_0000))]);
+            }
+        }
+        for bits in [0_u64, 0x8000_0000_0000_0000, 0x7ff0_0000_0000_0001, 0xfff8_1234_5678_9abc] {
+            assert_eq!(run(&numeric_module(0x99, &[0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(bits)]), [WasmBoundaryValue::F64Bits(bits & 0x7fff_ffff_ffff_ffff)]);
+            assert_eq!(run(&numeric_module(0x9a, &[0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(bits)]), [WasmBoundaryValue::F64Bits(bits ^ 0x8000_0000_0000_0000)]);
+            for sign in [0_u64, 0x8000_0000_0000_0000, 0xfff0_0000_0000_0001] {
+                assert_eq!(run(&numeric_module(0xa6, &[0x7c, 0x7c], 0x7c), &[WasmBoundaryValue::F64Bits(bits), WasmBoundaryValue::F64Bits(sign)]), [WasmBoundaryValue::F64Bits((bits & 0x7fff_ffff_ffff_ffff) | (sign & 0x8000_0000_0000_0000))]);
+            }
+        }
+    }
+
+    #[test]
+    fn integer_to_float_conversions_respect_signedness() {
+        use WasmBoundaryValue::{F32Bits, F64Bits, I32, I64};
+        for (opcode, input_type, output_type, input, expected) in [
+            (0xb2, 0x7f, 0x7d, I32(-1), F32Bits(0xbf80_0000)),
+            (0xb3, 0x7f, 0x7d, I32(-1), F32Bits(0x4f80_0000)),
+            (0xb4, 0x7e, 0x7d, I64(-1), F32Bits(0xbf80_0000)),
+            (0xb5, 0x7e, 0x7d, I64(-1), F32Bits(0x5f80_0000)),
+            (0xb7, 0x7f, 0x7c, I32(-1), F64Bits(0xbff0_0000_0000_0000)),
+            (0xb8, 0x7f, 0x7c, I32(-1), F64Bits(0x41ef_ffff_ffe0_0000)),
+            (0xb9, 0x7e, 0x7c, I64(-1), F64Bits(0xbff0_0000_0000_0000)),
+            (0xba, 0x7e, 0x7c, I64(-1), F64Bits(0x43f0_0000_0000_0000)),
+        ] {
+            assert_eq!(run(&numeric_module(opcode, &[input_type], output_type), &[input]), [expected]);
+        }
+    }
+
+    #[test]
+    fn integer_to_float_rounds_once_at_precision_boundaries() {
+        use WasmBoundaryValue::{F32Bits, F64Bits, I32, I64};
+        for (opcode, input_type, output_type, input, expected) in [
+            (0xb2, 0x7f, 0x7d, I32(16_777_217), F32Bits(0x4b80_0000)),
+            (0xb2, 0x7f, 0x7d, I32(16_777_219), F32Bits(0x4b80_0002)),
+            (0xb4, 0x7e, 0x7d, I64((1_i64 << 62) + (1_i64 << 38) + 1), F32Bits(0x5e80_0001)),
+            (0xb5, 0x7e, 0x7d, I64(((1_u64 << 63) + (1_u64 << 39) + 1) as i64), F32Bits(0x5f00_0001)),
+            (0xb9, 0x7e, 0x7c, I64(9_007_199_254_740_993), F64Bits(0x4340_0000_0000_0000)),
+        ] {
+            assert_eq!(run(&numeric_module(opcode, &[input_type], output_type), &[input]), [expected]);
+        }
+    }
+
+    #[test]
+    fn demotion_and_promotion_handle_underflow_overflow_and_nan() {
+        for (value, expected) in [
+            (-0.0_f64, 0x8000_0000), (1.5, 0x3fc0_0000),
+            (f64::MAX, 0x7f80_0000), (-f64::MAX, 0xff80_0000),
+            (f64::from_bits(1), 0), (-f64::from_bits(1), 0x8000_0000),
+            (f64::from(f32::from_bits(1)), 1),
+            (1.0 + 2_f64.powi(-24), 0x3f80_0000),
+            (f64::NAN, CANONICAL_F32_NAN),
+        ] {
+            assert_eq!(run(&numeric_module(0xb6, &[0x7c], 0x7d), &[WasmBoundaryValue::F64Bits(value.to_bits())]), [WasmBoundaryValue::F32Bits(expected)]);
+        }
+        for (bits, expected) in [
+            (0_u32, 0_u64), (0x8000_0000, 0x8000_0000_0000_0000),
+            (0x3fc0_0000, 0x3ff8_0000_0000_0000), (1, 0x36a0_0000_0000_0000),
+            (0x7f80_0000, 0x7ff0_0000_0000_0000),
+            (0xff80_0001, CANONICAL_F64_NAN),
+        ] {
+            assert_eq!(run(&numeric_module(0xbb, &[0x7d], 0x7c), &[WasmBoundaryValue::F32Bits(bits)]), [WasmBoundaryValue::F64Bits(expected)]);
+        }
+    }
+
+    #[test]
+    fn truncation_to_i32_checks_truncated_not_original_value() {
+        for (opcode, input_type) in [(0xa8, 0x7d), (0xa9, 0x7d), (0xaa, 0x7c), (0xab, 0x7c)] {
+            let bytes = numeric_module(opcode, &[input_type], 0x7f);
+            let vm = WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).unwrap();
+            for (value, expected) in [(-0.0_f64, 0), (-0.75, 0), (0.75, 0), (42.75, 42)] {
+                let value = if input_type == 0x7d { WasmBoundaryValue::F32Bits((value as f32).to_bits()) } else { WasmBoundaryValue::F64Bits(value.to_bits()) };
+                assert_eq!(vm.call_export("f", &[value]).unwrap().results, [WasmBoundaryValue::I32(expected)]);
+            }
+        }
+        for (opcode, value, expected) in [
+            (0xaa, -2_147_483_648.75_f64, i32::MIN),
+            (0xaa, 2_147_483_647.75, i32::MAX),
+            (0xab, 4_294_967_295.75, -1),
+        ] {
+            assert_eq!(run(&numeric_module(opcode, &[0x7c], 0x7f), &[WasmBoundaryValue::F64Bits(value.to_bits())]), [WasmBoundaryValue::I32(expected)]);
+        }
+        for (opcode, bits, expected) in [
+            (0xa8, 0xcf00_0000, i32::MIN),
+            (0xa8, 0x4eff_ffff, i32::MAX - 127),
+            (0xa9, 0x4f7f_ffff, -256),
+        ] {
+            assert_eq!(run(&numeric_module(opcode, &[0x7d], 0x7f), &[WasmBoundaryValue::F32Bits(bits)]), [WasmBoundaryValue::I32(expected)]);
+        }
+        for (opcode, bits) in [(0xa8, 0xcf00_0001), (0xa8, 0x4f00_0000), (0xa9, 0xbf80_0000), (0xa9, 0x4f80_0000)] {
+            let vm = WasmNumericVm::parse(&numeric_module(opcode, &[0x7d], 0x7f), WasmNumericLimits::default()).unwrap();
+            assert!(matches!(vm.call_export("f", &[WasmBoundaryValue::F32Bits(bits)]), Err(WasmNumericVmError::IntegerOverflow { .. })));
+        }
+        for (opcode, value) in [(0xaa, -2_147_483_649.0_f64), (0xaa, 2_147_483_648.0), (0xab, -1.0), (0xab, 4_294_967_296.0)] {
+            let vm = WasmNumericVm::parse(&numeric_module(opcode, &[0x7c], 0x7f), WasmNumericLimits::default()).unwrap();
+            assert!(matches!(vm.call_export("f", &[WasmBoundaryValue::F64Bits(value.to_bits())]), Err(WasmNumericVmError::IntegerOverflow { .. })));
+        }
+    }
+
+    #[test]
+    fn truncation_to_i64_uses_exclusive_exact_power_of_two_bounds() {
+        for (opcode, input_type) in [(0xae, 0x7d), (0xaf, 0x7d), (0xb0, 0x7c), (0xb1, 0x7c)] {
+            let vm = WasmNumericVm::parse(&numeric_module(opcode, &[input_type], 0x7e), WasmNumericLimits::default()).unwrap();
+            let unsigned = opcode & 1 != 0;
+            let upper = if unsigned { 18_446_744_073_709_551_616.0_f64 } else { 9_223_372_036_854_775_808.0 };
+            let at_upper = if input_type == 0x7d { WasmBoundaryValue::F32Bits((upper as f32).to_bits()) } else { WasmBoundaryValue::F64Bits(upper.to_bits()) };
+            assert!(matches!(vm.call_export("f", &[at_upper]), Err(WasmNumericVmError::IntegerOverflow { .. })));
+            let (below_upper, expected) = match (input_type, unsigned) {
+                (0x7d, false) => (WasmBoundaryValue::F32Bits(0x5eff_ffff), i64::MAX - (1_i64 << 39) + 1),
+                (0x7d, true) => (WasmBoundaryValue::F32Bits(0x5f7f_ffff), -(1_i64 << 40)),
+                (0x7c, false) => (WasmBoundaryValue::F64Bits(0x43df_ffff_ffff_ffff), i64::MAX - 1023),
+                (0x7c, true) => (WasmBoundaryValue::F64Bits(0x43ef_ffff_ffff_ffff), -2048),
+                _ => unreachable!(),
+            };
+            assert_eq!(vm.call_export("f", &[below_upper]).unwrap().results, [WasmBoundaryValue::I64(expected)]);
+            let lower = if unsigned { -0.75_f64 } else { -9_223_372_036_854_775_808.0 };
+            let lower = if input_type == 0x7d { WasmBoundaryValue::F32Bits((lower as f32).to_bits()) } else { WasmBoundaryValue::F64Bits(lower.to_bits()) };
+            assert_eq!(vm.call_export("f", &[lower]).unwrap().results, [WasmBoundaryValue::I64(if unsigned { 0 } else { i64::MIN })]);
+            let below_lower = match (input_type, unsigned) {
+                (0x7d, false) => WasmBoundaryValue::F32Bits(0xdf00_0001),
+                (0x7d, true) => WasmBoundaryValue::F32Bits((-1.0_f32).to_bits()),
+                (0x7c, false) => WasmBoundaryValue::F64Bits(0xc3e0_0000_0000_0001),
+                (0x7c, true) => WasmBoundaryValue::F64Bits((-1.0_f64).to_bits()),
+                _ => unreachable!(),
+            };
+            assert!(matches!(vm.call_export("f", &[below_lower]), Err(WasmNumericVmError::IntegerOverflow { .. })));
+        }
+    }
+
+    #[test]
+    fn all_trapping_conversions_reject_nan_and_infinity_without_saturation() {
+        for (opcode, input_type, output_type) in [
+            (0xa8, 0x7d, 0x7f), (0xa9, 0x7d, 0x7f), (0xaa, 0x7c, 0x7f), (0xab, 0x7c, 0x7f),
+            (0xae, 0x7d, 0x7e), (0xaf, 0x7d, 0x7e), (0xb0, 0x7c, 0x7e), (0xb1, 0x7c, 0x7e),
+        ] {
+            let vm = WasmNumericVm::parse(&numeric_module(opcode, &[input_type], output_type), WasmNumericLimits::default()).unwrap();
+            for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let input = if input_type == 0x7d { WasmBoundaryValue::F32Bits((number as f32).to_bits()) } else { WasmBoundaryValue::F64Bits(number.to_bits()) };
+                assert!(matches!(vm.call_export("f", &[input]), Err(WasmNumericVmError::IntegerOverflow { .. })));
+            }
+            let input = if input_type == 0x7d { WasmBoundaryValue::F32Bits(42.75_f32.to_bits()) } else { WasmBoundaryValue::F64Bits(42.75_f64.to_bits()) };
+            assert_eq!(vm.call_export("f", &[input]).unwrap().results, [if output_type == 0x7f { WasmBoundaryValue::I32(42) } else { WasmBoundaryValue::I64(42) }]);
+        }
+    }
+
+    #[test]
+    fn numeric_validation_covers_all_unprefixed_scalar_opcodes() {
+        for opcode in 0x45..=0xc4 {
+            let (input, count, output) = numeric_signature(opcode).expect("unprefixed scalar opcode");
+            let encode = |ty| match ty { WasmValueType::I32 => 0x7f, WasmValueType::I64 => 0x7e, WasmValueType::F32 => 0x7d, WasmValueType::F64 => 0x7c };
+            let bytes = numeric_module(opcode, &vec![encode(input); count], encode(output));
+            let vm = WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).unwrap();
+            let one = match input { WasmValueType::I32 => WasmBoundaryValue::I32(1), WasmValueType::I64 => WasmBoundaryValue::I64(1), WasmValueType::F32 => WasmBoundaryValue::F32Bits(1.0_f32.to_bits()), WasmValueType::F64 => WasmBoundaryValue::F64Bits(1.0_f64.to_bits()) };
+            let result = vm.call_export("f", &vec![one; count]).unwrap();
+            assert_eq!(result.results.len(), 1, "opcode {opcode:#x}");
+            assert_eq!(result.results[0].value_type(), output);
+            assert_eq!(result.instructions_executed, count as u64 + 2);
+        }
+        for code in [vec![0x00,0x41,1,0x90,0x0b], vec![0x00,0x42,1,0xaa,0x0b], vec![0x41,1,0xbb,0x0b]] {
+            assert!(WasmNumericVm::parse(&module(&[], &[0x7f], 0, &code, &[]), WasmNumericLimits::default()).is_err());
+        }
+    }
+
+    #[test]
+    fn conversion_is_metered_before_it_can_trap() {
+        let bytes = numeric_module(0xaa, &[0x7c], 0x7f);
+        let limits = WasmNumericLimits { max_instructions: 1, ..WasmNumericLimits::default() };
+        let vm = WasmNumericVm::parse(&bytes, limits).unwrap();
+        assert_eq!(vm.call_export("f", &[WasmBoundaryValue::F64Bits(f64::NAN.to_bits())]), Err(WasmNumericVmError::InstructionBudgetExceeded { max: 1 }));
+        let limits = WasmNumericLimits { max_instructions: 3, ..WasmNumericLimits::default() };
+        let vm = WasmNumericVm::parse(&bytes, limits).unwrap();
+        let result = vm.call_export("f", &[WasmBoundaryValue::F64Bits(42.75_f64.to_bits())]).unwrap();
+        assert_eq!(result.instructions_executed, 3);
+        assert_eq!(result.results, [WasmBoundaryValue::I32(42)]);
     }
 
     #[test]

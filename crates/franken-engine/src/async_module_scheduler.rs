@@ -449,6 +449,51 @@ impl AsyncModuleScheduler {
         Ok(update)
     }
 
+    /// Cancel queued, in-flight, suspended, or dependency-blocked evaluation.
+    /// No task is dispatched and no ready-queue slot is needed. All task leases
+    /// made terminal by propagation are revoked before returning, including on
+    /// an error after partial rejection. Repeated cancellation is a no-op.
+    pub fn cancel_module(
+        &mut self,
+        specifier: &str,
+        reason: JsValue,
+        label: Label,
+    ) -> Result<bool, AsyncModuleSchedulerError> {
+        let outcome = self.bridge.cancel_module(specifier, reason, label);
+        self.purge_runtime_terminal_modules();
+        outcome.map_err(Into::into)
+    }
+
+    /// Cancel every unfinished module, even when transitive rejection is
+    /// disabled or a runtime wait cycle has no runnable task. Already settled
+    /// values and earlier failures are preserved. The count includes modules
+    /// rejected by propagation, not only the explicitly visited roots.
+    ///
+    /// This cancels module work only; shared external-operation Promises remain
+    /// owned by their providers and may still settle after their waiters detach.
+    pub fn cancel_all(
+        &mut self,
+        reason: JsValue,
+        label: Label,
+    ) -> Result<usize, AsyncModuleSchedulerError> {
+        let modules: Vec<String> = self
+            .bridge
+            .evaluator()
+            .states()
+            .iter()
+            .filter(|(_, state)| !runtime_terminal(state.phase))
+            .map(|(specifier, _)| specifier.clone())
+            .collect();
+        let outcome = modules.iter().try_for_each(|specifier| {
+            self.bridge
+                .cancel_module(specifier, reason.clone(), label.clone())
+                .map(|_| ())
+        });
+        self.purge_runtime_terminal_modules();
+        outcome?;
+        Ok(modules.len())
+    }
+
     pub fn fulfill_awaited_promise(
         &mut self,
         promise: PromiseHandle,

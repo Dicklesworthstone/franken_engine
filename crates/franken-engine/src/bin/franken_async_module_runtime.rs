@@ -70,6 +70,17 @@ enum Operation {
         #[serde(default = "public_label")]
         label: Label,
     },
+    Cancel {
+        module: String,
+        reason: JsValue,
+        #[serde(default = "public_label")]
+        label: Label,
+    },
+    CancelAll {
+        reason: JsValue,
+        #[serde(default = "public_label")]
+        label: Label,
+    },
     FulfillAwaited {
         promise: String,
         #[serde(default = "undefined_value")]
@@ -203,6 +214,16 @@ fn run(scenario: Scenario) -> Result<Output, String> {
                     .reject_task(&task, reason, label)
                     .map_err(|error| error.to_string())?;
             }
+            Operation::Cancel { module, reason, label } => {
+                scheduler
+                    .cancel_module(&module, reason, label)
+                    .map_err(|error| error.to_string())?;
+            }
+            Operation::CancelAll { reason, label } => {
+                scheduler
+                    .cancel_all(reason, label)
+                    .map_err(|error| error.to_string())?;
+            }
             Operation::FulfillAwaited {
                 promise,
                 value,
@@ -291,6 +312,82 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancel_scenario_rejects_queued_evaluation_without_a_task_alias() {
+        let scenario = serde_json::from_value(serde_json::json!({
+            "modules": [
+                {"specifier": "root", "has_top_level_await": true},
+                {"specifier": "child", "has_top_level_await": true, "dependencies": ["root"]}
+            ],
+            "scheduler_config": {"max_dispatched_tasks": 0},
+            "evaluation_promise_aliases": {"root_result": "root", "child_result": "child"},
+            "operations": [{"kind": "cancel", "module": "root",
+                "reason": JsValue::Int(7), "label": Label::Secret}]
+        })).unwrap();
+        let output = run(scenario).unwrap();
+        assert!(output.dispatched.is_empty());
+        assert_eq!(output.snapshot.ready_tasks, 0);
+        assert_eq!(output.snapshot.in_flight_tasks, 0);
+        for name in ["root_result", "child_result"] {
+            assert_eq!(output.named_promise_results[name].state, PromiseState::Rejected(JsValue::Int(7)));
+            assert_eq!(output.named_promise_results[name].label, Label::Secret);
+        }
+    }
+
+    #[test]
+    fn cancel_scenario_breaks_a_real_evaluation_promise_wait_cycle() {
+        let scenario = serde_json::from_value(serde_json::json!({
+            "modules": [
+                {"specifier": "a", "has_top_level_await": true},
+                {"specifier": "b", "has_top_level_await": true}
+            ],
+            "evaluation_promise_aliases": {"pa": "a", "pb": "b"},
+            "operations": [
+                {"kind": "dispatch", "save_as": "ta"},
+                {"kind": "dispatch", "save_as": "tb"},
+                {"kind": "suspend", "task": "ta", "promise": "pb"},
+                {"kind": "suspend", "task": "tb", "promise": "pa"},
+                {"kind": "cancel", "module": "a", "reason": JsValue::Int(8)}
+            ]
+        })).unwrap();
+        let output = run(scenario).unwrap();
+        assert_eq!(output.dispatched.len(), 2);
+        assert_eq!(output.snapshot.ready_tasks, 0);
+        assert_eq!(output.snapshot.in_flight_tasks, 0);
+        for name in ["pa", "pb"] {
+            assert_eq!(output.named_promise_results[name].state, PromiseState::Rejected(JsValue::Int(8)));
+            assert_eq!(output.named_promise_results[name].label, Label::Public);
+        }
+    }
+
+    #[test]
+    fn cancel_all_scenario_preserves_success_and_first_cancellation() {
+        let scenario = serde_json::from_value(serde_json::json!({
+            "modules": [
+                {"specifier": "done", "has_top_level_await": true},
+                {"specifier": "pending", "has_top_level_await": true}
+            ],
+            "scheduler_config": {"max_dispatched_tasks": 1},
+            "evaluation_promise_aliases": {"done_result": "done", "pending_result": "pending"},
+            "operations": [
+                {"kind": "dispatch", "save_as": "done_task"},
+                {"kind": "complete", "task": "done_task", "value": JsValue::Int(42)},
+                {"kind": "cancel_all", "reason": JsValue::Int(7), "label": Label::Secret},
+                {"kind": "cancel_all", "reason": JsValue::Int(99)}
+            ]
+        })).unwrap();
+        let output = run(scenario).unwrap();
+        assert_eq!(output.snapshot.ready_tasks, 0);
+        assert_eq!(output.snapshot.in_flight_tasks, 0);
+        assert_eq!(output.dispatched.len(), 1);
+        assert_eq!(output.named_promise_results["done_result"].state,
+            PromiseState::Fulfilled(JsValue::Int(42)));
+        assert_eq!(output.named_promise_results["done_result"].label, Label::Public);
+        assert_eq!(output.named_promise_results["pending_result"].state,
+            PromiseState::Rejected(JsValue::Int(7)));
+        assert_eq!(output.named_promise_results["pending_result"].label, Label::Secret);
+    }
 
     #[test]
     fn out_of_order_graph_executes_dependency_first() {

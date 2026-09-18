@@ -504,6 +504,40 @@ impl AsyncModulePromiseBridge {
         Ok(linkage)
     }
 
+    /// Cancel an unfinished evaluation without requiring its body to be running.
+    ///
+    /// This is a host/supervisor operation, not a guest completion callback.
+    /// Unlike synchronous rejection it is valid while dependencies are pending.
+    /// It follows the configured rejection propagation policy and closes runtime
+    /// evaluation-Promise wait edges through the existing rejection worklist.
+    /// Terminal modules are unchanged; `false` means no transition was needed.
+    /// Host-operation Promises are not cancelled: other modules may share them.
+    pub fn cancel_module(
+        &mut self,
+        specifier: &str,
+        reason: JsValue,
+        label: Label,
+    ) -> Result<bool, AsyncModulePromiseBridgeError> {
+        let state = self.module_state(specifier)?;
+        if state.phase.is_terminal() {
+            return Ok(false);
+        }
+        // Check the Promise before detaching a continuation or changing the
+        // evaluator. A malformed terminal record must not lose its await edge.
+        if state.has_top_level_await {
+            self.ensure_evaluation_promise_pending(specifier)?;
+        }
+        self.detach_active_await(specifier);
+        self.module_rejections
+            .insert(specifier.to_string(), (reason.clone(), label.clone()));
+        let linkage = self
+            .evaluator
+            .reject_module(specifier, &reason, &mut self.live_bindings)
+            .map_err(|error| self.module_error(specifier, error))?;
+        self.propagate_runtime_rejection(&linkage, reason, label)?;
+        Ok(true)
+    }
+
     pub fn synchronize_module(
         &mut self,
         specifier: &str,

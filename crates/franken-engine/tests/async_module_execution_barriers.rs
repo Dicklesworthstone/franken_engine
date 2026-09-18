@@ -61,6 +61,217 @@ fn complete(scheduler: &mut AsyncModuleScheduler, task: &ModuleTask) {
         .expect("admitted body completes");
 }
 
+fn assert_cancelled(
+    scheduler: &AsyncModuleScheduler,
+    module: &str,
+    reason: &JsValue,
+    label: &Label,
+) {
+    let bridge = scheduler.bridge();
+    assert_eq!(bridge.evaluator().states()[module].phase, AsyncModulePhase::Rejected);
+    assert_eq!(bridge.active_await(module), None);
+    assert!(scheduler.in_flight_task(module).is_none());
+    if let Some(promise) = bridge.module_promise(module) {
+        let record = bridge.promise_store().get(promise).unwrap();
+        assert_eq!(&record.state, &PromiseState::Rejected(reason.clone()));
+        assert_eq!(&record.label, label);
+    }
+}
+
+#[test]
+fn cancel_queued_module_needs_neither_dispatch_nor_queue_capacity() {
+    for tla in [false, true] {
+        let mut scheduler = AsyncModuleScheduler::new(AsyncModuleSchedulerConfig {
+            max_ready_tasks: 1,
+            max_dispatched_tasks: 0,
+            ..AsyncModuleSchedulerConfig::default()
+        });
+        scheduler.register_module("root", tla, &[]).unwrap();
+        scheduler.register_module("child", true, &["root".into()]).unwrap();
+        assert!(matches!(
+            scheduler.next_task(),
+            Err(AsyncModuleSchedulerError::DispatchBudgetExceeded { max: 0 })
+        ));
+        let before = scheduler.snapshot();
+        let reason = JsValue::Int(17);
+        assert!(scheduler.cancel_module("root", reason.clone(), Label::Secret).unwrap());
+        for name in ["root", "child"] {
+            assert_cancelled(&scheduler, name, &reason, &Label::Secret);
+        }
+        assert!(scheduler.next_task().unwrap().is_none());
+        let after = scheduler.snapshot();
+        assert_eq!(after.dispatched_tasks, 0);
+        assert_eq!(after.started_modules, 0);
+        assert_eq!(after.next_sequence, before.next_sequence);
+    }
+}
+
+#[test]
+fn cancel_dependency_blocked_sync_body_preserves_its_provider() {
+    let mut scheduler = AsyncModuleScheduler::default();
+    scheduler.register_module("provider", true, &[]).unwrap();
+    scheduler.register_module("blocked", false, &["provider".into()]).unwrap();
+    scheduler.register_module("child", true, &["blocked".into()]).unwrap();
+    let reason = JsValue::Str("revoked".into());
+    assert!(scheduler.cancel_module("blocked", reason.clone(), Label::Confidential).unwrap());
+    for name in ["blocked", "child"] {
+        assert_cancelled(&scheduler, name, &reason, &Label::Confidential);
+    }
+    let provider = scheduler.next_task().unwrap().unwrap();
+    assert_eq!(provider.module_specifier, "provider");
+    complete(&mut scheduler, &provider);
+    assert!(scheduler.next_task().unwrap().is_none());
+    scheduler.register_module("late", true, &["blocked".into()]).unwrap();
+    assert_cancelled(&scheduler, "late", &reason, &Label::Confidential);
+    assert!(scheduler.next_task().unwrap().is_none());
+}
+
+#[test]
+fn cancel_running_module_revokes_every_completion_route() {
+    let mut scheduler = AsyncModuleScheduler::default();
+    scheduler.register_module("running", true, &[]).unwrap();
+    scheduler.register_module("unrelated", false, &[]).unwrap();
+    let task = scheduler.next_task().unwrap().unwrap();
+    let host = scheduler.create_pending_promise();
+    let reason = JsValue::Str("stopped".into());
+    scheduler.cancel_module("running", reason.clone(), Label::Secret).unwrap();
+    let after = state(&scheduler);
+    assert!(scheduler.complete_task(&task, JsValue::Int(99), Label::Public).is_err());
+    assert_eq!(state(&scheduler), after);
+    assert!(scheduler.reject_task(&task, JsValue::Int(98), Label::Public).is_err());
+    assert_eq!(state(&scheduler), after);
+    assert!(scheduler.suspend_task(&task, host).is_err());
+    assert_eq!(state(&scheduler), after);
+    assert_cancelled(&scheduler, "running", &reason, &Label::Secret);
+    let unrelated = scheduler.next_task().unwrap().unwrap();
+    assert_eq!(unrelated.module_specifier, "unrelated");
+    complete(&mut scheduler, &unrelated);
+    assert!(scheduler.next_task().unwrap().is_none());
+}
+
+#[test]
+fn cancel_suspended_waiter_does_not_cancel_a_shared_host_promise() {
+    let mut scheduler = AsyncModuleScheduler::default();
+    for name in ["a", "b"] {
+        scheduler.register_module(name, true, &[]).unwrap();
+    }
+    let a = scheduler.next_task().unwrap().unwrap();
+    let b = scheduler.next_task().unwrap().unwrap();
+    let host = scheduler.create_pending_promise();
+    scheduler.suspend_task(&a, host).unwrap();
+    scheduler.suspend_task(&b, host).unwrap();
+    let reason = JsValue::Int(7);
+    scheduler.cancel_module("a", reason.clone(), Label::Confidential).unwrap();
+    assert_eq!(scheduler.bridge().promise_store().get(host).unwrap().state, PromiseState::Pending);
+    assert_eq!(scheduler.bridge().active_await("b"), Some(host));
+    assert_eq!(
+        scheduler.fulfill_awaited_promise(host, JsValue::Int(42), Label::Secret).unwrap(),
+        vec!["b"]
+    );
+    let resumed = scheduler.next_task().unwrap().unwrap();
+    assert_eq!(resumed.module_specifier, "b");
+    assert_eq!(resumed.kind, ModuleTaskKind::Resume);
+    scheduler.complete_task(&resumed, JsValue::Int(43), Label::Secret).unwrap();
+    assert_cancelled(&scheduler, "a", &reason, &Label::Confidential);
+    assert!(scheduler.next_task().unwrap().is_none());
+}
+
+#[test]
+fn cancel_breaks_evaluation_wait_cycle_without_another_dispatch() {
+    let mut scheduler = AsyncModuleScheduler::default();
+    let mut promises = Vec::new();
+    for name in ["a", "b", "c"] {
+        promises.push(scheduler.register_module(name, true, &[]).unwrap().unwrap());
+    }
+    let tasks: Vec<_> = (0..3).map(|_| scheduler.next_task().unwrap().unwrap()).collect();
+    for (index, task) in tasks.iter().enumerate() {
+        scheduler.suspend_task(task, promises[(index + 1) % promises.len()]).unwrap();
+    }
+    assert!(scheduler.next_task().unwrap().is_none());
+    let reason = JsValue::Str("cycle cancelled".into());
+    scheduler.cancel_module("a", reason.clone(), Label::Secret).unwrap();
+    for name in ["a", "b", "c"] {
+        assert_cancelled(&scheduler, name, &reason, &Label::Secret);
+    }
+    assert!(scheduler.next_task().unwrap().is_none());
+    assert_eq!(scheduler.snapshot().dispatched_tasks, 3);
+    let after = state(&scheduler);
+    assert!(!scheduler.cancel_module("a", JsValue::Int(0), Label::Public).unwrap());
+    assert_eq!(state(&scheduler), after);
+}
+
+#[test]
+fn cancel_all_quiesces_all_phases_even_without_transitive_rejection() {
+    let config = AsyncModuleSchedulerConfig {
+        max_dispatched_tasks: 4,
+        evaluator: module_async_evaluation::AsyncEvalConfig {
+            transitive_rejection_propagation: false,
+            ..module_async_evaluation::AsyncEvalConfig::default()
+        },
+        ..AsyncModuleSchedulerConfig::default()
+    };
+    let mut scheduler = AsyncModuleScheduler::new(config);
+    let done = scheduler.register_module("done", true, &[]).unwrap().unwrap();
+    let task = scheduler.next_task().unwrap().unwrap();
+    scheduler.complete_task(&task, JsValue::Int(42), Label::Public).unwrap();
+    scheduler.register_module("failed", true, &[]).unwrap();
+    let task = scheduler.next_task().unwrap().unwrap();
+    let old_reason = JsValue::Int(1);
+    scheduler.reject_task(&task, old_reason.clone(), Label::Confidential).unwrap();
+    scheduler.register_module("suspended", true, &[]).unwrap();
+    let task = scheduler.next_task().unwrap().unwrap();
+    let host = scheduler.create_pending_promise();
+    scheduler.suspend_task(&task, host).unwrap();
+    scheduler.register_module("running", true, &[]).unwrap();
+    let stale = scheduler.next_task().unwrap().unwrap();
+    scheduler.register_module("queued", false, &[]).unwrap();
+    scheduler.register_module("blocked", false, &["running".into()]).unwrap();
+    scheduler.register_module("tail", true, &["blocked".into()]).unwrap();
+    assert!(matches!(
+        scheduler.next_task(),
+        Err(AsyncModuleSchedulerError::DispatchBudgetExceeded { max: 4 })
+    ));
+    let reason = JsValue::Str("shutdown".into());
+    assert_eq!(scheduler.cancel_all(reason.clone(), Label::Secret).unwrap(), 5);
+    for name in ["suspended", "running", "queued", "blocked", "tail"] {
+        assert_cancelled(&scheduler, name, &reason, &Label::Secret);
+    }
+    assert_cancelled(&scheduler, "failed", &old_reason, &Label::Confidential);
+    assert_eq!(scheduler.bridge().promise_store().get(done).unwrap().state,
+        PromiseState::Fulfilled(JsValue::Int(42)));
+    assert_eq!(scheduler.snapshot().ready_tasks, 0);
+    assert_eq!(scheduler.snapshot().in_flight_tasks, 0);
+    assert_eq!(scheduler.snapshot().dispatched_tasks, 4);
+    assert!(scheduler.next_task().unwrap().is_none());
+    let after = state(&scheduler);
+    assert_eq!(scheduler.cancel_all(JsValue::Int(0), Label::Public).unwrap(), 0);
+    assert_eq!(state(&scheduler), after);
+    assert!(scheduler.complete_task(&stale, JsValue::Undefined, Label::Public).is_err());
+    assert_eq!(state(&scheduler), after);
+    assert!(scheduler.fulfill_awaited_promise(host, JsValue::Int(9), Label::Public).unwrap().is_empty());
+    assert!(scheduler.next_task().unwrap().is_none());
+}
+
+#[test]
+fn cancel_unknown_or_successful_module_preserves_runtime_state() {
+    let mut scheduler = AsyncModuleScheduler::default();
+    let empty = state(&scheduler);
+    assert_eq!(scheduler.cancel_all(JsValue::Undefined, Label::Public).unwrap(), 0);
+    assert_eq!(state(&scheduler), empty);
+    scheduler.register_module("done", true, &[]).unwrap();
+    let done = scheduler.next_task().unwrap().unwrap();
+    complete(&mut scheduler, &done);
+    scheduler.register_module("keep", true, &[]).unwrap();
+    let before = state(&scheduler);
+    assert!(scheduler.cancel_module("missing", JsValue::Int(1), Label::Secret).is_err());
+    assert_eq!(state(&scheduler), before);
+    assert!(!scheduler.cancel_module("done", JsValue::Int(1), Label::Secret).unwrap());
+    assert_eq!(state(&scheduler), before);
+    let keep = scheduler.next_task().unwrap().unwrap();
+    assert_eq!(keep.module_specifier, "keep");
+    complete(&mut scheduler, &keep);
+}
+
 #[test]
 fn missing_dependency_refusal_is_atomic_and_retry_preserves_identifiers() {
     for tla in [false, true] {

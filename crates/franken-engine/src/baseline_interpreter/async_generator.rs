@@ -57,6 +57,9 @@ pub(super) enum AwaitKind {
 pub(super) struct AsyncGeneratorContinuation {
     generator_id: u32,
     kind: AwaitKind,
+    /// Set before publication. Retain the ticket after the dispatcher removes
+    /// this context from the index so cancellation can close that Promise too.
+    ticket: Option<PromiseHandle>,
     /// A non-Promise primitive need not travel through the narrower JsValue
     /// carrier. Preserve exact UTF-16, callable identity and BigInt while the
     /// internal Promise reaction supplies the mandatory asynchronous boundary.
@@ -155,6 +158,7 @@ impl InterpreterCore {
                 details: format!("missing async generator {id}"),
             });
         }
+        self.check_async_generator_cancellation(id)?;
         let promise = self.create_promise()?;
         let previous = self.async_generators_memory_bytes();
         self.async_generators[id as usize]
@@ -184,6 +188,7 @@ impl InterpreterCore {
         id: u32,
     ) -> Result<(), InterpreterError> {
         loop {
+            self.check_async_generator_cancellation(id)?;
             let generator = &self.async_generators[id as usize];
             if matches!(
                 generator.phase,
@@ -363,6 +368,7 @@ impl InterpreterCore {
         value: Value,
         mut label: Label,
     ) -> Result<(), InterpreterError> {
+        self.check_async_generator_cancellation(id)?;
         // Await argument conversion is observable. In particular, a completed
         // generator's .return(thenable) must not let a reentrant .next() drain
         // the still-active return request while its then getter is executing.
@@ -385,13 +391,15 @@ impl InterpreterCore {
                 self.create_fulfilled_promise(JsValue::Undefined, label.clone())?
             }
         };
-        let context = AsyncGeneratorContinuation {
+        let mut context = AsyncGeneratorContinuation {
             generator_id: id,
             kind,
+            ticket: None,
             exact_value,
         };
         self.check_temporary_memory_budget(Self::async_generator_continuation_bytes(&context))?;
         let ticket = self.register_promise_then_for_await(source, label)?;
+        context.ticket = Some(ticket);
         self.async_generator_runtime
             .continuations
             .insert(ticket.0, context);
@@ -516,6 +524,19 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
         let id = context.generator_id;
+        if let Err(error) = self.check_async_generator_cancellation(id) {
+            // The dispatcher already removed this context from its map. It
+            // cannot be found by abort_async_generator's parked-ticket scan.
+            if let Some(ticket) = context.ticket
+                && let Ok(epoch) = self
+                    .promise_store
+                    .terminally_reject_without_jobs(ticket, &label)
+            {
+                self.close_terminal_async_promise_dependencies(epoch, &label);
+            }
+            self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
+            return Err(error);
+        }
         let backing = self.async_generators[id as usize].generator_id;
         let owner = Arc::clone(&self.generators[backing as usize].owner_module);
         let module = module.unwrap_or(owner.as_ref());
@@ -624,6 +645,7 @@ impl InterpreterCore {
         done: bool,
         label: Label,
     ) -> Result<(), InterpreterError> {
+        self.check_async_generator_cancellation(id)?;
         let request = self.async_generators[id as usize]
             .requests
             .front()
@@ -708,11 +730,25 @@ impl InterpreterCore {
         backing.resume_dst = None;
     }
 
+    /// Async requests may finish or suspend without executing enough bytecode
+    /// to reach the dispatch checkpoint density. Honor the same host token at
+    /// those boundaries, before argument getters, body resumption, or settlement.
+    /// Cancellation remains an uncatchable interpreter failure, not .return().
+    fn check_async_generator_cancellation(&mut self, id: u32) -> Result<(), InterpreterError> {
+        if self
+            .config
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            self.abort_async_generator(id);
+            return Err(InterpreterError::Cancelled);
+        }
+        Ok(())
+    }
+
     fn abort_async_generator(&mut self, id: u32) {
         self.complete_async_generator_activation(id);
-        self.async_generator_runtime
-            .continuations
-            .retain(|_, context| context.generator_id != id);
         let mut epoch = None;
         for request in self.async_generators[id as usize].requests.drain(..) {
             match epoch {
@@ -731,6 +767,30 @@ impl InterpreterCore {
                 }
             }
         }
+        // Removing a saved continuation alone strands its internal Promise.
+        // Close only this generator's child tickets, not their awaited sources:
+        // another generator or ordinary Promise reaction may share a source.
+        let promise_store = &mut self.promise_store;
+        self.async_generator_runtime.continuations.retain(|ticket, context| {
+            if context.generator_id != id {
+                return true;
+            }
+            match epoch {
+                Some(epoch) => {
+                    let _ = promise_store.extend_terminal_rejection_without_jobs(
+                        PromiseHandle(*ticket),
+                        &Label::Public,
+                        epoch,
+                    );
+                }
+                None => {
+                    epoch = promise_store
+                        .terminally_reject_without_jobs(PromiseHandle(*ticket), &Label::Public)
+                        .ok();
+                }
+            }
+            false
+        });
         if let Some(epoch) = epoch {
             self.close_terminal_async_promise_dependencies(epoch, &Label::Public);
         }
@@ -1045,6 +1105,163 @@ mod tests {
         assert_eq!(core.promise_store.get(request).unwrap().state, PromiseState::Pending);
         assert_eq!(core.async_generators[id as usize].requests.len(), 1);
         assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert_accounting(&core);
+    }
+
+    fn cancel_token(core: &mut InterpreterCore) {
+        let token = CancellationToken::new();
+        core.config.cancellation_token = Some(token.clone());
+        // No dependence on wall time, threads, or bytecode checkpoint density.
+        core.config.checkpoint_density = u64::MAX;
+        token.cancel();
+    }
+
+    fn assert_aborted(core: &InterpreterCore, id: u32, request: PromiseHandle) {
+        let generator = &core.async_generators[id as usize];
+        assert_eq!(generator.phase, AsyncGeneratorPhase::Completed);
+        assert!(generator.requests.is_empty());
+        assert!(generator.awaited.is_none());
+        assert!(generator.delegation.is_none());
+        assert!(core.async_generator_runtime.continuations.values().all(|entry| {
+            entry.generator_id != id
+        }));
+        let backing = &core.generators[generator.generator_id as usize];
+        assert_eq!(backing.phase, GeneratorPhase::Completed);
+        assert!(backing.invocation.is_none());
+        assert!(backing.execution.is_none());
+        assert!(backing.resume_dst.is_none());
+        assert!(core.promise_store.get(request).unwrap().state.is_rejected());
+        assert_accounting(core);
+    }
+
+    #[test]
+    fn cancelled_native_request_allocates_no_new_promise_or_result_object() {
+        for kind in [GeneratorResumeKind::Next, GeneratorResumeKind::Return, GeneratorResumeKind::Throw] {
+            let (mut core, id, request) = request_core(Label::Secret);
+            let backing = core.async_generators[id as usize].generator_id;
+            let owner = Arc::clone(&core.generators[backing as usize].owner_module);
+            let marker = core.create_promise().unwrap();
+            let heap_len = core.heap.len();
+            cancel_token(&mut core);
+            assert!(matches!(
+                core.enqueue_async_generator_request(
+                    owner.as_ref(), id, kind, Value::Int(42), Label::Public,
+                ),
+                Err(InterpreterError::Cancelled)
+            ));
+            assert_aborted(&core, id, request);
+            assert_eq!(core.heap.len(), heap_len);
+            assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
+            assert_eq!(core.promise_store.get(marker).unwrap().state, PromiseState::Pending);
+            assert_eq!(core.create_promise().unwrap().0, marker.0 + 1);
+        }
+    }
+
+    #[test]
+    fn cancellation_closes_parked_await_tickets_but_preserves_shared_sources() {
+        let (mut core, id, request) = request_core(Label::Secret);
+        let source = core.create_promise().unwrap();
+        core.await_async_generator_value(
+            id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Secret,
+        ).unwrap();
+        let ticket = *core.async_generator_runtime.continuations.keys().next().unwrap();
+        // A second, independent consumer of precisely the same source.
+        let other = core.register_promise_then_for_await(source, Label::Public).unwrap();
+        let backing = core.async_generators[id as usize].generator_id;
+        let owner = Arc::clone(&core.generators[backing as usize].owner_module);
+        cancel_token(&mut core);
+        let limit = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = limit;
+        assert!(matches!(
+            core.drain_async_generator_requests(owner.as_ref(), id),
+            Err(InterpreterError::Cancelled)
+        ));
+        assert_aborted(&core, id, request);
+        assert!(core.promise_store.get(PromiseHandle(ticket)).unwrap().state.is_rejected());
+        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        assert_eq!(core.promise_store.get(other).unwrap().state, PromiseState::Pending);
+        assert_eq!(core.config.max_total_memory_bytes, limit);
+    }
+
+    #[test]
+    fn cancelled_dequeued_continuation_closes_its_ticket_before_resumption() {
+        for rejected in [false, true] {
+            let (mut core, id, request) = request_core(Label::Public);
+            let source = core.create_promise().unwrap();
+            core.await_async_generator_value(
+                id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Secret,
+            ).unwrap();
+            let ticket = *core.async_generator_runtime.continuations.keys().next().unwrap();
+            // Mirror the dispatcher's ownership transfer before it invokes
+            // resume_async_generator_task, including the no-longer-indexed ticket.
+            let context = core.async_generator_runtime.continuations.remove(&ticket).unwrap();
+            core.sync_estimated_memory_bytes().unwrap();
+            cancel_token(&mut core);
+            assert!(matches!(
+                core.resume_async_generator_task(
+                    context,
+                    if rejected { Err(JsValue::Int(42)) } else { Ok(JsValue::Int(42)) },
+                    Label::Secret,
+                    None,
+                ),
+                Err(InterpreterError::Cancelled)
+            ));
+            assert_aborted(&core, id, request);
+            let record = core.promise_store.get(PromiseHandle(ticket)).unwrap();
+            assert!(record.state.is_rejected());
+            assert_eq!(record.label, Label::Secret);
+            assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        }
+    }
+
+    #[test]
+    fn cancellation_before_await_conversion_preserves_guest_exception_and_heap() {
+        let (mut core, id, request) = request_core(Label::Secret);
+        let object = core.generator_result_object(Value::Int(42), false).unwrap();
+        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None).unwrap();
+        let marker = core.create_promise().unwrap();
+        let heap_len = core.heap.len();
+        cancel_token(&mut core);
+        assert!(matches!(
+            core.await_async_generator_value(id, AwaitKind::ReturnResult, object, Label::Public),
+            Err(InterpreterError::Cancelled)
+        ));
+        assert_aborted(&core, id, request);
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert_eq!(core.create_promise().unwrap().0, marker.0 + 1);
+    }
+
+    #[test]
+    fn cancellation_prevents_fulfillment_even_without_a_bytecode_dispatch() {
+        for done in [false, true] {
+            let (mut core, id, request) = request_core(Label::Secret);
+            let heap_len = core.heap.len();
+            cancel_token(&mut core);
+            assert!(matches!(
+                core.settle_async_generator_request(id, Ok(Value::Int(42)), done, Label::Public),
+                Err(InterpreterError::Cancelled)
+            ));
+            assert_aborted(&core, id, request);
+            assert_eq!(core.heap.len(), heap_len);
+            assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
+        }
+    }
+
+    #[test]
+    fn live_cancellation_token_preserves_successful_native_settlement() {
+        let (mut core, id, request) = request_core(Label::Public);
+        core.config.cancellation_token = Some(CancellationToken::new());
+        core.settle_async_generator_request(id, Ok(Value::Int(42)), true, Label::Secret).unwrap();
+        let record = core.promise_store.get(request).unwrap();
+        let PromiseState::Fulfilled(value) = &record.state else {
+            panic!("a live token must not cancel execution");
+        };
+        let Value::Object(object) = InterpreterCore::js_value_to_value(value) else {
+            panic!("native iterator result object");
+        };
+        assert_eq!(core.heap[object.0 as usize].properties.get("value"), Some(&Value::Int(42)));
+        assert_eq!(record.label, Label::Secret);
         assert_accounting(&core);
     }
 }

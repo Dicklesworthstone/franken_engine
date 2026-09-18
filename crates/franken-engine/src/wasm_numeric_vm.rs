@@ -1,15 +1,12 @@
 #![forbid(unsafe_code)]
 
-//! Deterministic bounded execution for straight-line numeric WebAssembly.
+//! Deterministic bounded execution for numeric WebAssembly.
 //!
-//! This is deliberately not a general WASM VM. It executes a useful native
-//! subset that closes the gap between the existing binary parser's
-//! constant-return support and real parameterized functions while keeping every
-//! unsupported semantic fail-closed. Supported operations include numeric
-//! constants, locals, direct local-function calls, drop/select, integer and
-//! floating arithmetic, comparisons, and a small conversion set. Structured
-//! control flow, memory, globals, tables, indirect calls, SIMD, atomics, and
-//! imported-function execution are rejected.
+//! Functions support validated structured blocks, loops, if/else, branches,
+//! branch tables and returns, as well as locals, direct calls and numeric
+//! operations. Every body, including untaken arms and unreachable code, is
+//! validated before publication. Memory, globals, tables, indirect calls,
+//! SIMD, atomics and imported-function execution remain explicitly unsupported.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,6 +14,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::wasm_runtime_lane::{WasmBoundaryValue, WasmValueType};
+
+#[path = "wasm_numeric_vm/control.rs"]
+mod control;
 
 pub const WASM_NUMERIC_VM_COMPONENT: &str = "wasm_numeric_vm";
 pub const WASM_NUMERIC_VM_SCHEMA_VERSION: &str = "franken-engine.wasm-numeric-vm.v1";
@@ -33,6 +33,8 @@ pub struct WasmNumericLimits {
     pub max_exports: usize,
     pub max_locals_per_call: usize,
     pub max_stack_values: usize,
+    /// Maximum nested structured labels, excluding the implicit function label.
+    pub max_control_depth: usize,
     pub max_call_depth: u32,
     pub max_instructions: u64,
 }
@@ -46,6 +48,7 @@ impl Default for WasmNumericLimits {
             max_exports: 65_536,
             max_locals_per_call: 65_536,
             max_stack_values: 65_536,
+            max_control_depth: 1024,
             max_call_depth: 256,
             max_instructions: 1_000_000,
         }
@@ -75,6 +78,7 @@ pub enum WasmNumericVmError {
     ExportLimitExceeded { actual: usize, max: usize },
     LocalLimitExceeded { actual: usize, max: usize },
     StackLimitExceeded { max: usize },
+    ControlDepthExceeded { max: usize },
     CallDepthExceeded { max: u32 },
     InstructionBudgetExceeded { max: u64 },
     ArityMismatch { function_index: u32, expected: usize, actual: usize },
@@ -92,6 +96,7 @@ pub enum WasmNumericVmError {
     ResultStackMismatch { function_index: u32, expected: usize, actual: usize },
     IntegerDivideByZero { function_index: u32 },
     IntegerOverflow { function_index: u32 },
+    Unreachable { function_index: u32 },
 }
 
 impl fmt::Display for WasmNumericVmError {
@@ -128,6 +133,7 @@ impl fmt::Display for WasmNumericVmError {
                 write!(f, "wasm local count {actual} exceeds limit {max}")
             }
             Self::StackLimitExceeded { max } => write!(f, "wasm value stack exceeds limit {max}"),
+            Self::ControlDepthExceeded { max } => write!(f, "wasm control depth exceeds limit {max}"),
             Self::CallDepthExceeded { max } => write!(f, "wasm call depth exceeds limit {max}"),
             Self::InstructionBudgetExceeded { max } => {
                 write!(f, "wasm instruction budget {max} exhausted")
@@ -196,6 +202,9 @@ impl fmt::Display for WasmNumericVmError {
             Self::IntegerOverflow { function_index } => {
                 write!(f, "wasm function {function_index} trapped on integer division overflow")
             }
+            Self::Unreachable { function_index } => {
+                write!(f, "wasm function {function_index} executed unreachable")
+            }
         }
     }
 }
@@ -220,6 +229,7 @@ struct FunctionBody {
     type_index: u32,
     locals: Vec<WasmValueType>,
     code: Vec<u8>,
+    control: control::ControlMap,
 }
 
 #[derive(Debug, Clone)]
@@ -246,13 +256,21 @@ impl WasmNumericVm {
         }
         let mut parser = ModuleParser::new(bytes, limits.clone());
         parser.parse()?;
-        Ok(Self {
+        let mut vm = Self {
             types: parser.types,
             imports: parser.imports,
             functions: parser.functions,
             exports: parser.exports,
             limits,
-        })
+        };
+        // Validate every function, not merely the export selected by the caller.
+        // This also constructs jump destinations without scanning code at runtime.
+        for index in 0..vm.functions.len() {
+            let function_index = (vm.imports.len() + index) as u32;
+            let control = control::validate(&vm, function_index)?;
+            vm.functions[index].control = control;
+        }
+        Ok(vm)
     }
 
     pub fn call_export(
@@ -320,16 +338,21 @@ impl WasmNumericVm {
 
         let mut stack = Vec::<WasmBoundaryValue>::new();
         let mut reader = CodeReader::new(&body.code);
+        let mut controls = vec![control::Frame::function(signature.results.len(), body.code.len() - 1)];
         let mut returned = false;
         while !reader.finished() {
             let opcode_offset = reader.offset();
             let opcode = reader.read_u8(function_index)?;
             meter.tick()?;
             match opcode {
-                0x0b => break,
-                0x0f => {
-                    returned = true;
-                    break;
+                0x00..=0x05 | 0x0b..=0x0f => {
+                    if control::execute(
+                        opcode, &body.control, &mut controls, &mut stack,
+                        &mut reader, meter, function_index,
+                    )? {
+                        returned = true;
+                        break;
+                    }
                 }
                 0x1a => {
                     pop_value(&mut stack, function_index, opcode)?;
@@ -419,41 +442,8 @@ impl WasmNumericVm {
                     WasmBoundaryValue::F64Bits(reader.read_u64_le(function_index)?),
                     meter,
                 )?,
-                0x45..=0x5a => {
-                    execute_integer_comparison(opcode, &mut stack, function_index)?
-                }
-                0x5b..=0x66 => execute_float_comparison(opcode, &mut stack, function_index)?,
-                0x6a..=0x78 => execute_i32_numeric(opcode, &mut stack, function_index)?,
-                0x7c..=0x8a => execute_i64_numeric(opcode, &mut stack, function_index)?,
-                0x8b..=0x98 => execute_f32_numeric(opcode, &mut stack, function_index)?,
-                0x99..=0xa6 => execute_f64_numeric(opcode, &mut stack, function_index)?,
-                0xa7 => {
-                    let value = expect_i64(
-                        pop_value(&mut stack, function_index, opcode)?,
-                        function_index,
-                        0,
-                    )?;
-                    push_value(&mut stack, WasmBoundaryValue::I32(value as i32), meter)?;
-                }
-                0xac => {
-                    let value = expect_i32(
-                        pop_value(&mut stack, function_index, opcode)?,
-                        function_index,
-                        0,
-                    )?;
-                    push_value(&mut stack, WasmBoundaryValue::I64(i64::from(value)), meter)?;
-                }
-                0xad => {
-                    let value = expect_i32(
-                        pop_value(&mut stack, function_index, opcode)?,
-                        function_index,
-                        0,
-                    )?;
-                    push_value(
-                        &mut stack,
-                        WasmBoundaryValue::I64((value as u32) as i64),
-                        meter,
-                    )?;
+                0x45..=0xc4 => {
+                    control::execute_numeric(opcode, &mut stack, function_index)?;
                 }
                 _ => {
                     return Err(WasmNumericVmError::UnsupportedOpcode {
@@ -465,7 +455,7 @@ impl WasmNumericVm {
             }
         }
 
-        if !returned && !reader.finished() {
+        if !returned {
             return Err(WasmNumericVmError::InvalidModule {
                 detail: format!("function {function_index} did not terminate with end"),
             });
@@ -753,6 +743,7 @@ impl<'a> ModuleParser<'a> {
                 type_index: self.function_type_indices[local_function_index],
                 locals,
                 code,
+                control: control::ControlMap::default(),
             });
         }
         Ok(())
@@ -1583,7 +1574,8 @@ fn read_signed_leb(
             let used_in_final = bits.saturating_sub((index as u32) * 7).min(7);
             if used_in_final < 7 {
                 let payload_u8 = byte & 0x7f;
-                let unused_mask = 0x7f_u8 << used_in_final;
+                // Bit 7 is the continuation flag, never a sign-extension bit.
+                let unused_mask = (0x7f_u8 << used_in_final) & 0x7f;
                 let sign_bit = 1_u8 << (used_in_final - 1);
                 let unused = payload_u8 & unused_mask;
                 let valid = if payload_u8 & sign_bit == 0 {
@@ -1599,6 +1591,10 @@ fn read_signed_leb(
             }
             if shift < bits && (byte & 0x40) != 0 {
                 result |= !0i64 << shift;
+            }
+            // Padded s33 block types must sign-extend from bit 32 too.
+            if bits < 64 {
+                result = (result << (64 - bits)) >> (64 - bits);
             }
             return Ok((result, index + 1));
         }
@@ -1686,18 +1682,15 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_control_flow_fails_closed() {
+    fn malformed_control_flow_fails_before_execution() {
         let mut module = ADD_I32_MODULE.to_vec();
         let opcode = module.iter_mut().find(|byte| **byte == 0x6a).unwrap();
+        // Replacing add with if without a valid block type/body is malformed,
+        // even though properly typed conditional functions are now executable.
         *opcode = 0x04;
-        let vm = WasmNumericVm::parse(&module, WasmNumericLimits::default()).unwrap();
         assert!(matches!(
-            vm.call_export(
-                "add",
-                &[WasmBoundaryValue::I32(1), WasmBoundaryValue::I32(2)]
-            )
-            .unwrap_err(),
-            WasmNumericVmError::UnsupportedOpcode { opcode: 0x04, .. }
+            WasmNumericVm::parse(&module, WasmNumericLimits::default()).unwrap_err(),
+            WasmNumericVmError::InvalidModule { .. }
         ));
     }
 

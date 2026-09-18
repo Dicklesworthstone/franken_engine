@@ -256,6 +256,11 @@ pub(super) fn validate(vm: &WasmNumericVm, function: u32) -> Result<ControlMap, 
                 if opcode != 0x20 { validator.expect(ty)?; }
                 if opcode != 0x21 { validator.push(Some(ty))?; }
             }
+            0x23..=0x40 => {
+                let effect = vm.state.validate_instruction(opcode, &mut reader, function)?;
+                for ty in effect.pop.into_iter().flatten() { validator.expect(ty)?; }
+                if let Some(ty) = effect.push { validator.push(Some(ty))?; }
+            }
             0x41 => { reader.read_i32_leb(function)?; validator.push(Some(WasmValueType::I32))?; }
             0x42 => { reader.read_i64_leb(function)?; validator.push(Some(WasmValueType::I64))?; }
             0x43 => { reader.read_u32_le(function)?; validator.push(Some(WasmValueType::F32))?; }

@@ -5,7 +5,8 @@
 //! Functions support validated structured blocks, loops, if/else, branches,
 //! branch tables and returns, as well as locals, direct calls and numeric
 //! operations. Every body, including untaken arms and unreachable code, is
-//! validated before publication. Memory, globals, tables, indirect calls,
+//! validated before publication. Instance-owned linear memory and active data
+//! segments execute through the bounded state module. Tables, indirect calls,
 //! SIMD, atomics and imported-function execution remain explicitly unsupported.
 
 use std::collections::BTreeMap;
@@ -17,6 +18,9 @@ use crate::wasm_runtime_lane::{WasmBoundaryValue, WasmValueType};
 
 #[path = "wasm_numeric_vm/control.rs"]
 mod control;
+#[path = "wasm_numeric_vm/state.rs"]
+mod state;
+pub use state::{WasmNumericInstance, WasmStateError};
 
 pub const WASM_NUMERIC_VM_COMPONENT: &str = "wasm_numeric_vm";
 pub const WASM_NUMERIC_VM_SCHEMA_VERSION: &str = "franken-engine.wasm-numeric-vm.v1";
@@ -37,6 +41,10 @@ pub struct WasmNumericLimits {
     pub max_control_depth: usize,
     pub max_call_depth: u32,
     pub max_instructions: u64,
+    /// Per-instance linear-memory ceiling, in 64 KiB WebAssembly pages.
+    pub max_memory_pages: u32,
+    /// Maximum retained records in the module's instance-state plan.
+    pub max_state_entries: usize,
 }
 
 impl Default for WasmNumericLimits {
@@ -51,6 +59,8 @@ impl Default for WasmNumericLimits {
             max_control_depth: 1024,
             max_call_depth: 256,
             max_instructions: 1_000_000,
+            max_memory_pages: 256,
+            max_state_entries: 65_536,
         }
     }
 }
@@ -65,6 +75,7 @@ pub struct WasmNumericExecution {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WasmNumericVmError {
+    State(WasmStateError),
     ModuleTooLarge { actual: usize, max: usize },
     InvalidModule { detail: String },
     UnsupportedSection { section_id: u8 },
@@ -102,6 +113,7 @@ pub enum WasmNumericVmError {
 impl fmt::Display for WasmNumericVmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::State(error) => write!(f, "{error}"),
             Self::ModuleTooLarge { actual, max } => {
                 write!(f, "wasm module has {actual} bytes; limit is {max}")
             }
@@ -244,6 +256,7 @@ pub struct WasmNumericVm {
     functions: Vec<FunctionBody>,
     exports: BTreeMap<String, FunctionExport>,
     limits: WasmNumericLimits,
+    state: state::ModuleState,
 }
 
 impl WasmNumericVm {
@@ -261,6 +274,7 @@ impl WasmNumericVm {
             imports: parser.imports,
             functions: parser.functions,
             exports: parser.exports,
+            state: parser.state,
             limits,
         };
         // Validate every function, not merely the export selected by the caller.
@@ -273,11 +287,25 @@ impl WasmNumericVm {
         Ok(vm)
     }
 
+    /// Invoke in a fresh instance. Use `instantiate()` and the instance's
+    /// `call_export()` when writes must persist between exported calls.
     pub fn call_export(
         &self,
         name: &str,
         arguments: &[WasmBoundaryValue],
     ) -> Result<WasmNumericExecution, WasmNumericVmError> {
+        self.instantiate()?.call_export(name, arguments)
+    }
+
+    fn call_export_in_instance(
+        &self,
+        name: &str,
+        arguments: &[WasmBoundaryValue],
+        state: &mut state::InstanceState,
+    ) -> Result<WasmNumericExecution, WasmNumericVmError> {
+        if let Some(kind) = self.state.export_kind(name) {
+            return Err(WasmNumericVmError::ExportIsNotFunction { name: name.into(), kind });
+        }
         let export = self
             .exports
             .get(name)
@@ -285,7 +313,7 @@ impl WasmNumericVm {
                 name: name.to_string(),
             })?;
         let mut meter = ExecutionMeter::new(&self.limits);
-        let results = self.invoke(export.function_index, arguments, 1, &mut meter)?;
+        let results = self.invoke(export.function_index, arguments, 1, &mut meter, state)?;
         Ok(WasmNumericExecution {
             results,
             instructions_executed: meter.instructions,
@@ -304,6 +332,7 @@ impl WasmNumericVm {
         arguments: &[WasmBoundaryValue],
         depth: u32,
         meter: &mut ExecutionMeter<'_>,
+        state: &mut state::InstanceState,
     ) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError> {
         meter.enter_call(depth)?;
         if function_index < self.imports.len() as u32 {
@@ -417,10 +446,13 @@ impl WasmNumericVm {
                     call_args.reverse();
                     validate_arguments(callee, callee_type, &call_args)?;
                     let results =
-                        self.invoke(callee, &call_args, depth.saturating_add(1), meter)?;
+                        self.invoke(callee, &call_args, depth.saturating_add(1), meter, state)?;
                     for value in results {
                         push_value(&mut stack, value, meter)?;
                     }
+                }
+                0x23..=0x40 => {
+                    state.execute(opcode, &mut reader, &mut stack, meter, function_index)?;
                 }
                 0x41 => push_value(
                     &mut stack,
@@ -515,6 +547,7 @@ struct ModuleParser<'a> {
     functions: Vec<FunctionBody>,
     exports: BTreeMap<String, FunctionExport>,
     last_non_custom_section: u8,
+    state: state::ModuleState,
 }
 
 impl<'a> ModuleParser<'a> {
@@ -529,6 +562,7 @@ impl<'a> ModuleParser<'a> {
             functions: Vec::new(),
             exports: BTreeMap::new(),
             last_non_custom_section: 0,
+            state: state::ModuleState::default(),
         }
     }
 
@@ -559,15 +593,11 @@ impl<'a> ModuleParser<'a> {
                 1 => self.parse_types(&mut reader)?,
                 2 => self.parse_imports(&mut reader)?,
                 3 => self.parse_functions(&mut reader)?,
-                // This VM has no table, memory, global, start, element, data,
-                // or data-count state. Accepting those sections while ignoring
-                // their instantiation semantics would be a silent weakening.
-                4 | 5 | 6 | 8 | 9 | 11 | 12 => {
-                    return Err(WasmNumericVmError::UnsupportedSection { section_id });
-                }
                 7 => self.parse_exports(&mut reader)?,
                 10 => self.parse_code(&mut reader)?,
-                _ => return Err(WasmNumericVmError::UnsupportedSection { section_id }),
+                // State sections must implement their instantiation semantics;
+                // unsupported sections are rejected, never silently skipped.
+                _ => self.state.parse_section(section_id, &mut reader, &self.limits)?,
             }
             reader.ensure_finished()?;
         }
@@ -682,14 +712,15 @@ impl<'a> ModuleParser<'a> {
             let name = reader.read_name()?;
             let kind = reader.read_u8()?;
             let index = reader.read_u32_leb()?;
-            if kind != 0x00 {
-                return Err(WasmNumericVmError::ExportIsNotFunction { name, kind });
-            }
-            if self.exports.contains_key(&name) {
+            if self.exports.contains_key(&name) || self.state.export_kind(&name).is_some() {
                 return Err(WasmNumericVmError::DuplicateExport { name });
             }
-            self.function_type_index(index)?;
-            self.exports.insert(name, FunctionExport { function_index: index });
+            if kind == 0x00 {
+                self.function_type_index(index)?;
+                self.exports.insert(name, FunctionExport { function_index: index });
+            } else {
+                self.state.parse_export(name, kind, index)?;
+            }
         }
         Ok(())
     }
@@ -970,12 +1001,16 @@ impl<'a> ExecutionMeter<'a> {
     }
 
     fn tick(&mut self) -> Result<(), WasmNumericVmError> {
-        self.instructions = self.instructions.saturating_add(1);
-        if self.instructions > self.limits.max_instructions {
-            return Err(WasmNumericVmError::InstructionBudgetExceeded {
+        self.charge_work(1)
+    }
+
+    fn charge_work(&mut self, units: u64) -> Result<(), WasmNumericVmError> {
+        let next = self.instructions.checked_add(units)
+            .filter(|next| *next <= self.limits.max_instructions)
+            .ok_or(WasmNumericVmError::InstructionBudgetExceeded {
                 max: self.limits.max_instructions,
-            });
-        }
+            })?;
+        self.instructions = next;
         Ok(())
     }
 
@@ -1724,13 +1759,13 @@ mod tests {
     }
 
     #[test]
-    fn memory_section_is_rejected_in_numeric_only_vm() {
+    fn out_of_order_memory_section_is_rejected() {
         let mut module = ADD_I32_MODULE[..17].to_vec();
         module.extend_from_slice(&[0x05, 0x03, 0x01, 0x00, 0x01]);
         module.extend_from_slice(&ADD_I32_MODULE[17..]);
         assert!(matches!(
             WasmNumericVm::parse(&module, WasmNumericLimits::default()).unwrap_err(),
-            WasmNumericVmError::UnsupportedSection { section_id: 5 }
+            WasmNumericVmError::InvalidModule { .. }
         ));
     }
 }

@@ -1,8 +1,8 @@
-//! Bounded, instance-owned WebAssembly linear memory.
+//! Bounded, instance-owned WebAssembly linear memory and numeric globals.
 //!
 //! The compiled module is immutable. Instantiation validates every active data
 //! segment before allocating or publishing state; calls on one instance share
-//! writes, while independently instantiated modules never share memory. Failed
+//! writes, while independent instances never share memory or globals. Failed
 //! stores and growth do not partially mutate memory. Earlier completed guest
 //! writes are deliberately retained when a later instruction traps.
 
@@ -17,15 +17,19 @@ pub enum WasmStateError {
     AllocationFailed { bytes: u64 },
     MemoryOutOfBounds { address: u64, width: u64, memory_bytes: u64 },
     DataSegmentOutOfBounds { segment: usize, offset: u32, length: usize, memory_bytes: u64 },
+    UnknownGlobal { global_index: u32 },
+    ImmutableGlobal { global_index: u32 },
 }
 
 impl fmt::Display for WasmStateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LimitExceeded { resource, actual, max } => write!(f, "wasm {resource} {actual} exceeds limit {max}"),
-            Self::AllocationFailed { bytes } => write!(f, "cannot allocate {bytes} bytes of wasm memory"),
+            Self::AllocationFailed { bytes } => write!(f, "cannot allocate {bytes} bytes of wasm instance state"),
             Self::MemoryOutOfBounds { address, width, memory_bytes } => write!(f, "wasm memory access [{address}, +{width}) exceeds {memory_bytes} bytes"),
             Self::DataSegmentOutOfBounds { segment, offset, length, memory_bytes } => write!(f, "wasm data segment {segment} at {offset} with {length} bytes exceeds {memory_bytes}-byte memory"),
+            Self::UnknownGlobal { global_index } => write!(f, "unknown wasm global {global_index}"),
+            Self::ImmutableGlobal { global_index } => write!(f, "cannot assign immutable wasm global {global_index}"),
         }
     }
 }
@@ -46,11 +50,15 @@ struct MemoryType { minimum: u32, maximum: u32 }
 #[derive(Debug, Clone)]
 struct DataSegment { offset: u32, bytes: Vec<u8> }
 
+#[derive(Debug, Clone)]
+struct Global { value: WasmBoundaryValue, mutable: bool }
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct ModuleState {
     memory: Option<MemoryType>,
     data: Vec<DataSegment>,
-    exports: BTreeMap<String, u8>,
+    globals: Vec<Global>,
+    exports: BTreeMap<String, (u8, u32)>,
 }
 
 pub(super) struct StackEffect {
@@ -63,6 +71,7 @@ impl ModuleState {
     pub(super) fn parse_section(&mut self, id: u8, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
         match id {
             5 => self.parse_memory(reader),
+            6 => self.parse_globals(reader, limits),
             11 => self.parse_data(reader, limits),
             _ => Err(WasmNumericVmError::UnsupportedSection { section_id: id }),
         }
@@ -85,9 +94,7 @@ impl ModuleState {
 
     fn parse_data(&mut self, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
         let count = reader.read_u32_leb()? as usize;
-        if count > limits.max_state_entries {
-            return Err(WasmStateError::LimitExceeded { resource: "data segment count".into(), actual: count as u64, max: limits.max_state_entries as u64 }.into());
-        }
+        self.check_entry_count(count, limits)?;
         for _ in 0..count {
             let mode = reader.read_u32_leb()?;
             match mode {
@@ -109,18 +116,70 @@ impl ModuleState {
         Ok(())
     }
 
-    pub(super) fn export_kind(&self, name: &str) -> Option<u8> { self.exports.get(name).copied() }
+    fn check_entry_count(&self, additional: usize, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
+        let actual = self.globals.len().saturating_add(self.data.len()).saturating_add(additional);
+        if actual > limits.max_state_entries {
+            return Err(WasmStateError::LimitExceeded { resource: "instance state records".into(), actual: actual as u64, max: limits.max_state_entries as u64 }.into());
+        }
+        Ok(())
+    }
+
+    fn parse_globals(&mut self, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
+        let count = reader.read_u32_leb()? as usize;
+        self.check_entry_count(count, limits)?;
+        for index in 0..count {
+            let ty = read_value_type(reader.read_u8()?)?;
+            let mutable = match reader.read_u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(invalid("global mutability must be zero or one")),
+            };
+            // Defined globals have no access to imported host state. Only the
+            // numeric constant-expression subset is admitted, with exact bits.
+            let value = numeric_constant(reader)?;
+            if value.value_type() != ty {
+                return Err(invalid(format!("global {index} initializer expected {ty}, got {}", value.value_type())));
+            }
+            self.globals.try_reserve(1).map_err(|_| WasmStateError::AllocationFailed {
+                bytes: (count as u64).saturating_mul(std::mem::size_of::<Global>() as u64),
+            })?;
+            self.globals.push(Global { value, mutable });
+        }
+        Ok(())
+    }
+
+    pub(super) fn export_kind(&self, name: &str) -> Option<u8> { self.exports.get(name).map(|(kind, _)| *kind) }
 
     pub(super) fn parse_export(&mut self, name: String, kind: u8, index: u32) -> Result<(), WasmNumericVmError> {
-        if kind != 2 { return Err(WasmNumericVmError::ExportIsNotFunction { name, kind }); }
-        if index != 0 || self.memory.is_none() { return Err(invalid("memory export references missing memory")); }
-        self.exports.insert(name, kind);
+        match kind {
+            2 if index == 0 && self.memory.is_some() => {},
+            2 => return Err(invalid("memory export references missing memory")),
+            3 => { self.global(index)?; }
+            _ => return Err(WasmNumericVmError::ExportIsNotFunction { name, kind }),
+        }
+        self.exports.insert(name, (kind, index));
         Ok(())
+    }
+
+    fn global(&self, index: u32) -> Result<&Global, WasmNumericVmError> {
+        self.globals.get(index as usize).ok_or_else(|| WasmStateError::UnknownGlobal { global_index: index }.into())
     }
 
     pub(super) fn validate_instruction(&self, opcode: u8, reader: &mut CodeReader<'_>, function: u32) -> Result<StackEffect, WasmNumericVmError> {
         use WasmValueType::I32;
         let offset = reader.offset().saturating_sub(1);
+        if matches!(opcode, 0x23 | 0x24) {
+            let index = reader.read_u32_leb(function)?;
+            let global = self.global(index)?;
+            let ty = global.value.value_type();
+            if opcode == 0x24 && !global.mutable {
+                return Err(WasmStateError::ImmutableGlobal { global_index: index }.into());
+            }
+            return Ok(StackEffect {
+                pop: [if opcode == 0x24 { Some(ty) } else { None }, None],
+                push: if opcode == 0x23 { Some(ty) } else { None },
+            });
+        }
         let Some((ty, width, store)) = memory_access(opcode) else {
             if matches!(opcode, 0x3f | 0x40) {
                 if self.memory.is_none() { return Err(invalid("memory instruction requires memory zero")); }
@@ -160,7 +219,12 @@ impl ModuleState {
             }
             Some(LinearMemory { bytes: buffer, maximum })
         } else { None };
-        Ok(InstanceState { memory })
+        let mut globals = Vec::new();
+        globals.try_reserve_exact(self.globals.len()).map_err(|_| WasmStateError::AllocationFailed {
+            bytes: (self.globals.len() as u64).saturating_mul(std::mem::size_of::<Global>() as u64),
+        })?;
+        globals.extend(self.globals.iter().cloned());
+        Ok(InstanceState { memory, globals })
     }
 }
 
@@ -168,10 +232,10 @@ impl ModuleState {
 struct LinearMemory { bytes: Vec<u8>, maximum: u32 }
 
 #[derive(Debug)]
-pub(super) struct InstanceState { memory: Option<LinearMemory> }
+pub(super) struct InstanceState { memory: Option<LinearMemory>, globals: Vec<Global> }
 
 /// A separately instantiated module. Repeated calls share only this instance's
-/// memory; traps do not roll back writes by previously completed instructions.
+/// memory and globals. Traps retain writes by previously completed instructions.
 #[derive(Debug)]
 pub struct WasmNumericInstance<'a> { vm: &'a WasmNumericVm, state: InstanceState }
 
@@ -192,6 +256,33 @@ impl WasmNumericInstance<'_> {
         if self.vm.state.export_kind(name) != Some(2) { return None; }
         self.state.memory.as_ref().map(|memory| memory.bytes.as_slice())
     }
+
+    /// Inspect the current value of a declared numeric global export. Mutable
+    /// globals still change only through validated guest global.set operations.
+    pub fn global_export(&self, name: &str) -> Option<&WasmBoundaryValue> {
+        let &(3, index) = self.vm.state.exports.get(name)? else { return None; };
+        self.state.globals.get(index as usize).map(|global| &global.value)
+    }
+}
+
+fn numeric_constant(reader: &mut ByteReader<'_>) -> Result<WasmBoundaryValue, WasmNumericVmError> {
+    let value = match reader.read_u8()? {
+        0x41 => {
+            let (value, length) = read_i32_leb(reader.remaining())?;
+            reader.offset += length;
+            WasmBoundaryValue::I32(value)
+        }
+        0x42 => {
+            let (value, length) = read_i64_leb(reader.remaining())?;
+            reader.offset += length;
+            WasmBoundaryValue::I64(value)
+        }
+        0x43 => WasmBoundaryValue::F32Bits(u32::from_le_bytes(reader.read_bytes(4)?.try_into().map_err(|_| invalid("invalid f32 initializer"))?)),
+        0x44 => WasmBoundaryValue::F64Bits(u64::from_le_bytes(reader.read_bytes(8)?.try_into().map_err(|_| invalid("invalid f64 initializer"))?)),
+        _ => return Err(invalid("unsupported global constant expression")),
+    };
+    if reader.read_u8()? != 0x0b { return Err(invalid("global initializer has trailing instructions")); }
+    Ok(value)
 }
 
 fn memory_index(reader: &mut CodeReader<'_>, function: u32) -> Result<(), WasmNumericVmError> {
@@ -252,6 +343,16 @@ impl LinearMemory {
 
 impl InstanceState {
     pub(super) fn execute(&mut self, opcode: u8, reader: &mut CodeReader<'_>, stack: &mut Vec<WasmBoundaryValue>, meter: &mut ExecutionMeter<'_>, function: u32) -> Result<(), WasmNumericVmError> {
+        if matches!(opcode, 0x23 | 0x24) {
+            let index = reader.read_u32_leb(function)?;
+            let global = self.globals.get_mut(index as usize).ok_or(WasmStateError::UnknownGlobal { global_index: index })?;
+            if opcode == 0x23 { return push_value(stack, global.value.clone(), meter); }
+            if !global.mutable { return Err(WasmStateError::ImmutableGlobal { global_index: index }.into()); }
+            let value = pop_value(stack, function, opcode)?;
+            ensure_same_type(function, index as usize, global.value.value_type(), value.value_type())?;
+            global.value = value;
+            return Ok(());
+        }
         let memory = self.memory.as_mut().ok_or_else(|| invalid("missing validated memory"))?;
         if matches!(opcode, 0x3f | 0x40) {
             memory_index(reader, function)?;
@@ -346,6 +447,10 @@ mod tests {
     }
 
     fn module(params: &[u8], results: &[u8], code: &[u8], memory: Option<&[u8]>, data: Option<&[u8]>) -> Vec<u8> {
+        module_with_globals(params, results, code, memory, data, None)
+    }
+
+    fn module_with_globals(params: &[u8], results: &[u8], code: &[u8], memory: Option<&[u8]>, data: Option<&[u8]>, globals: Option<&[u8]>) -> Vec<u8> {
         let mut bytes = b"\0asm\x01\0\0\0".to_vec();
         let mut types = vec![1, 0x60];
         types.extend(leb(params.len()));
@@ -355,9 +460,10 @@ mod tests {
         section(&mut bytes, 1, &types);
         section(&mut bytes, 3, &[1, 0]);
         if let Some(memory) = memory { section(&mut bytes, 5, memory); }
-        let exports = if memory.is_some() {
-            vec![2, 1, b'f', 0, 0, 1, b'm', 2, 0]
-        } else { vec![1, 1, b'f', 0, 0] };
+        if let Some(globals) = globals { section(&mut bytes, 6, globals); }
+        let mut exports = vec![1 + u8::from(memory.is_some()) + u8::from(globals.is_some()), 1, b'f', 0, 0];
+        if memory.is_some() { exports.extend([1, b'm', 2, 0]); }
+        if globals.is_some() { exports.extend([1, b'g', 3, 0]); }
         section(&mut bytes, 7, &exports);
         let mut bodies = vec![1];
         bodies.extend(leb(code.len() + 1));
@@ -537,5 +643,183 @@ mod tests {
         assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits { max_state_entries: 0, ..WasmNumericLimits::default() }), Err(WasmNumericVmError::State(WasmStateError::LimitExceeded { .. }))));
         let passive = module(&[], &[], &[0x0b], Some(&[1, 0, 1]), Some(&[1, 1, 1, 42]));
         assert!(WasmNumericVm::parse(&passive, WasmNumericLimits::default()).is_err());
+    }
+
+    fn global_section(ty: u8, mutable: bool, expression: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![1, ty, u8::from(mutable)];
+        bytes.extend(expression);
+        bytes
+    }
+
+    #[test]
+    fn numeric_global_initializers_and_get_preserve_exact_bits() {
+        use WasmBoundaryValue::{F32Bits, F64Bits, I32, I64};
+        for (ty, expression, expected) in [
+            (0x7f, vec![0x41, 0x80, 0x80, 0x80, 0x80, 0x78, 0x0b], I32(i32::MIN)),
+            (0x7e, vec![0x42, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f, 0x0b], I64(i64::MIN)),
+            (0x7d, vec![0x43, 0, 0, 0, 0x80, 0x0b], F32Bits(0x8000_0000)),
+            (0x7d, vec![0x43, 0x45, 0x23, 0xa1, 0x7f, 0x0b], F32Bits(0x7fa1_2345)),
+            (0x7c, vec![0x44, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x0b], F64Bits(0x8000_0000_0000_0000)),
+            (0x7c, vec![0x44, 0x42, 0, 0, 0, 0, 0, 0xf0, 0x7f, 0x0b], F64Bits(0x7ff0_0000_0000_0042)),
+        ] {
+            let bytes = module_with_globals(&[], &[ty], &[0x23, 0, 0x0b], None, None, Some(&global_section(ty, false, &expression)));
+            let vm = parse(&bytes);
+            let mut instance = vm.instantiate().unwrap();
+            assert_eq!(instance.global_export("g"), Some(&expected));
+            assert_eq!(instance.call_export("f", &[]).unwrap().results, [expected]);
+            assert!(instance.global_export("hidden").is_none());
+            assert!(instance.global_export("f").is_none());
+            assert!(instance.memory_export("g").is_none());
+            assert!(matches!(instance.call_export("g", &[]), Err(WasmNumericVmError::ExportIsNotFunction { kind: 3, .. })));
+        }
+    }
+
+    #[test]
+    fn global_set_supports_all_numeric_types_and_keeps_instances_isolated() {
+        use WasmBoundaryValue::{F32Bits, F64Bits, I32, I64};
+        for (ty, initializer, input, initial) in [
+            (0x7f, vec![0x41, 0, 0x0b], I32(-99), I32(0)),
+            (0x7e, vec![0x42, 0, 0x0b], I64(i64::MAX), I64(0)),
+            (0x7d, vec![0x43, 0, 0, 0, 0, 0x0b], F32Bits(0x7fa1_2345), F32Bits(0)),
+            (0x7c, vec![0x44, 0, 0, 0, 0, 0, 0, 0, 0, 0x0b], F64Bits(0x7ff0_0000_0000_0042), F64Bits(0)),
+        ] {
+            let bytes = module_with_globals(&[ty], &[ty], &[0x20, 0, 0x24, 0, 0x23, 0, 0x0b], None, None, Some(&global_section(ty, true, &initializer)));
+            let vm = parse(&bytes);
+            let mut a = vm.instantiate().unwrap();
+            let b = vm.instantiate().unwrap();
+            assert_eq!(a.call_export("f", std::slice::from_ref(&input)).unwrap().results, [input.clone()]);
+            assert_eq!(a.global_export("g"), Some(&input));
+            assert_eq!(b.global_export("g"), Some(&initial));
+            assert_eq!(vm.instantiate().unwrap().global_export("g"), Some(&initial));
+        }
+    }
+
+    #[test]
+    fn direct_calls_share_globals_and_replay_from_fresh_instances() {
+        let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+        section(&mut bytes, 1, &[1, 0x60, 0, 1, 0x7f]);
+        section(&mut bytes, 3, &[2, 0, 0]);
+        section(&mut bytes, 6, &global_section(0x7f, true, &[0x41, 0, 0x0b]));
+        section(&mut bytes, 7, &[2, 1, b'f', 0, 1, 1, b'g', 3, 0]);
+        let increment = [0, 0x23, 0, 0x41, 1, 0x6a, 0x24, 0, 0x23, 0, 0x0b];
+        let caller = [0, 0x10, 0, 0x10, 0, 0x6a, 0x0b];
+        let mut bodies = vec![2];
+        bodies.extend(leb(increment.len()));
+        bodies.extend(increment);
+        bodies.extend(leb(caller.len()));
+        bodies.extend(caller);
+        section(&mut bytes, 10, &bodies);
+        let vm = parse(&bytes);
+        let mut instance = vm.instantiate().unwrap();
+        assert_eq!(instance.call_export("f", &[]).unwrap().results, [WasmBoundaryValue::I32(3)]);
+        assert_eq!(instance.global_export("g"), Some(&WasmBoundaryValue::I32(2)));
+        assert_eq!(instance.call_export("f", &[]).unwrap().results, [WasmBoundaryValue::I32(7)]);
+        assert_eq!(instance.global_export("g"), Some(&WasmBoundaryValue::I32(4)));
+        let first = vm.call_export("f", &[]).unwrap();
+        assert_eq!(first.results, [WasmBoundaryValue::I32(3)]);
+        assert_eq!(first.max_call_depth, 2);
+        assert_eq!(first, vm.call_export("f", &[]).unwrap());
+    }
+
+    #[test]
+    fn stack_pointer_global_composes_with_linear_memory() {
+        let code = [
+            0x23, 0, 0x41, 4, 0x6b, 0x24, 0, // reserve four stack bytes
+            0x23, 0, 0x20, 0, 0x36, 2, 0, // store the argument
+            0x23, 0, 0x28, 2, 0, // load the eventual return value
+            0x23, 0, 0x41, 4, 0x6a, 0x24, 0, // restore stack pointer
+            0x0b,
+        ];
+        let bytes = module_with_globals(&[0x7f], &[0x7f], &code, Some(&[1, 0, 1]), None, Some(&global_section(0x7f, true, &[0x41, 32, 0x0b])));
+        let vm = parse(&bytes);
+        let mut instance = vm.instantiate().unwrap();
+        for value in [42_i32, -99] {
+            assert_eq!(instance.call_export("f", &[WasmBoundaryValue::I32(value)]).unwrap().results, [WasmBoundaryValue::I32(value)]);
+            assert_eq!(instance.global_export("g"), Some(&WasmBoundaryValue::I32(32)));
+            assert_eq!(&instance.memory_export("m").unwrap()[28..32], &value.to_le_bytes());
+        }
+        assert!(vm.instantiate().unwrap().memory_export("m").unwrap().iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn immutable_global_assignment_is_rejected_in_dead_code_too() {
+        for code in [vec![0x41, 7, 0x24, 0, 0x0b], vec![0x00, 0x24, 0, 0x0b]] {
+            let bytes = module_with_globals(&[], &[], &code, None, None, Some(&global_section(0x7f, false, &[0x41, 0, 0x0b])));
+            assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()), Err(WasmNumericVmError::State(WasmStateError::ImmutableGlobal { global_index: 0 }))));
+        }
+    }
+
+    #[test]
+    fn missing_global_indices_and_assignment_types_fail_validation() {
+        let globals = global_section(0x7f, true, &[0x41, 0, 0x0b]);
+        for code in [vec![0x00, 0x23, 1, 0x0b], vec![0x00, 0x24, 1, 0x0b]] {
+            let bytes = module_with_globals(&[], &[], &code, None, None, Some(&globals));
+            assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()), Err(WasmNumericVmError::State(WasmStateError::UnknownGlobal { global_index: 1 }))));
+        }
+        let bytes = module_with_globals(&[], &[], &[0x42, 1, 0x24, 0, 0x0b], None, None, Some(&globals));
+        assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()), Err(WasmNumericVmError::TypeMismatch { expected: WasmValueType::I32, actual: WasmValueType::I64, .. })));
+        let bytes = module(&[], &[0x7f], &[0x23, 0, 0x0b], None, None);
+        assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()), Err(WasmNumericVmError::State(WasmStateError::UnknownGlobal { global_index: 0 }))));
+    }
+
+    #[test]
+    fn invalid_global_initializers_are_never_published() {
+        for globals in [
+            vec![1, 0x7f, 2, 0x41, 0, 0x0b], // invalid mutability
+            vec![1, 0x7f, 0, 0x42, 0, 0x0b], // mismatched numeric type
+            vec![1, 0x7d, 0, 0x43, 0, 0x0b], // truncated float payload
+            vec![1, 0x7f, 0, 0x23, 0, 0x0b], // no imported global source
+            vec![1, 0x7f, 0, 0x41, 0, 0x41, 1, 0x6a, 0x0b], // extended const not implemented
+            vec![1, 0x7f, 0, 0x41, 0], // no expression end
+        ] {
+            let bytes = module_with_globals(&[], &[], &[0x0b], None, None, Some(&globals));
+            assert!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).is_err(), "{globals:?}");
+        }
+    }
+
+    #[test]
+    fn global_writes_survive_later_traps_but_not_pre_instruction_refusal() {
+        let globals = global_section(0x7f, true, &[0x41, 0, 0x0b]);
+        let bytes = module_with_globals(&[0x7f], &[], &[0x20, 0, 0x24, 0, 0x00, 0x0b], None, None, Some(&globals));
+        let vm = parse(&bytes);
+        let mut instance = vm.instantiate().unwrap();
+        assert!(matches!(instance.call_export("f", &[WasmBoundaryValue::I32(7)]), Err(WasmNumericVmError::Unreachable { .. })));
+        assert_eq!(instance.global_export("g"), Some(&WasmBoundaryValue::I32(7)));
+        let vm = WasmNumericVm::parse(&bytes, WasmNumericLimits { max_instructions: 1, ..WasmNumericLimits::default() }).unwrap();
+        let mut instance = vm.instantiate().unwrap();
+        assert!(matches!(instance.call_export("f", &[WasmBoundaryValue::I32(7)]), Err(WasmNumericVmError::InstructionBudgetExceeded { .. })));
+        assert_eq!(instance.global_export("g"), Some(&WasmBoundaryValue::I32(0)));
+    }
+
+    #[test]
+    fn global_and_data_records_share_one_embedding_ceiling() {
+        let globals = global_section(0x7f, true, &[0x41, 0, 0x0b]);
+        let bytes = module_with_globals(&[], &[], &[0x0b], None, None, Some(&globals));
+        assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits { max_state_entries: 0, ..WasmNumericLimits::default() }), Err(WasmNumericVmError::State(WasmStateError::LimitExceeded { actual: 1, max: 0, .. }))));
+        let bytes = module_with_globals(&[], &[], &[0x0b], Some(&[1, 0, 1]), Some(&data(&[(0, b"x")])), Some(&globals));
+        assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()), Ok(_)));
+        assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits { max_state_entries: 1, ..WasmNumericLimits::default() }), Err(WasmNumericVmError::State(WasmStateError::LimitExceeded { actual: 2, max: 1, .. }))));
+        assert!(WasmNumericVm::parse(&bytes, WasmNumericLimits { max_state_entries: 2, ..WasmNumericLimits::default() }).unwrap().instantiate().is_ok());
+    }
+
+    #[test]
+    fn global_exports_resolve_indices_and_reject_duplicate_names() {
+        let build = |exports: &[u8]| {
+            let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+            section(&mut bytes, 1, &[1, 0x60, 0, 1, 0x7e]);
+            section(&mut bytes, 3, &[1, 0]);
+            section(&mut bytes, 6, &[2, 0x7f, 0, 0x41, 3, 0x0b, 0x7e, 1, 0x42, 9, 0x0b]);
+            section(&mut bytes, 7, exports);
+            section(&mut bytes, 10, &[1, 4, 0, 0x23, 1, 0x0b]);
+            bytes
+        };
+        let vm = parse(&build(&[2, 1, b'f', 0, 0, 1, b'g', 3, 1]));
+        let mut instance = vm.instantiate().unwrap();
+        assert_eq!(instance.global_export("g"), Some(&WasmBoundaryValue::I64(9)));
+        assert_eq!(instance.call_export("f", &[]).unwrap().results, [WasmBoundaryValue::I64(9)]);
+        assert!(matches!(WasmNumericVm::parse(&build(&[1, 1, b'g', 3, 2]), WasmNumericLimits::default()), Err(WasmNumericVmError::State(WasmStateError::UnknownGlobal { global_index: 2 }))));
+        for exports in [vec![2, 1, b'f', 0, 0, 1, b'f', 3, 0], vec![2, 1, b'g', 3, 0, 1, b'g', 3, 1]] {
+            assert!(matches!(WasmNumericVm::parse(&build(&exports), WasmNumericLimits::default()), Err(WasmNumericVmError::DuplicateExport { .. })));
+        }
     }
 }

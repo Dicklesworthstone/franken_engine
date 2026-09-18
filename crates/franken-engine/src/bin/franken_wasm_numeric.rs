@@ -4,12 +4,7 @@ use std::io::{self, Read};
 
 use serde::{Deserialize, Serialize};
 
-pub use frankenengine_engine::wasm_runtime_lane;
-
-#[path = "../wasm_numeric_vm.rs"]
-mod wasm_numeric_vm;
-
-use frankenengine_engine::wasm_runtime_lane::WasmBoundaryValue;
+use frankenengine_engine::wasm_runtime_lane::{WasmBoundaryValue, numeric as wasm_numeric_vm};
 use wasm_numeric_vm::{WasmNumericExecution, WasmNumericLimits, WasmNumericVm};
 
 #[derive(Debug, Deserialize)]

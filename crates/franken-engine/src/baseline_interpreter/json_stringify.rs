@@ -207,6 +207,20 @@ impl InterpreterCore {
             }
             self.json_stringify_document(module, input, replacer, space)
         })();
+        // BigInt, cycles and invalid Proxy results produce native TypeErrors.
+        // Materialize them while the monotone observation context is still
+        // live: a later public callback may have replaced the pending-result
+        // label, but must not declassify the exception seen by catch.
+        if let Err(error) = self.observe_scoped_callback_result() {
+            outcome = Err(error);
+        }
+        if let Err(error) = &outcome
+            && Self::js_catchable_error_name(error).is_some()
+        {
+            outcome = match self.scoped_native_error(error) {
+                Ok(error) | Err(error) => Err(error),
+            };
+        }
         let context = self
             .active_inline_callback_context_label
             .take()
@@ -635,5 +649,136 @@ impl InterpreterCore {
             Value::Str(text) => Ok(Some(text.to_string())),
             _ => unreachable!("JSON result is String or undefined"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        InterpreterCore::new(config, "json-stringify-abrupt-provenance")
+    }
+
+    fn stringify(core: &mut InterpreterCore) -> Result<Value, InterpreterError> {
+        core.dispatch_builtin_hostcall(
+            "builtin:JsonStringify",
+            RegRange { start: 0, count: 1 },
+            None,
+        )
+    }
+
+    fn assert_accounted(core: &InterpreterCore) {
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    fn assert_type_error(core: &InterpreterCore, label: &Label) {
+        let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
+            panic!("native JSON failure must materialize a guest error object");
+        };
+        assert_eq!(
+            core.heap[error.0 as usize].properties.get("name"),
+            Some(&Value::str("TypeError"))
+        );
+        assert_eq!(&core.pending_exception_label, label);
+        assert_accounted(core);
+    }
+
+    #[test]
+    fn bigint_failure_retains_selected_property_label_and_caller_context() {
+        let mut core = core();
+        let object = core
+            .alloc_object_with_properties(&[("payload", Value::BigInt("1".into()))])
+            .unwrap();
+        let observed = Label::Custom {
+            name: "secret-property".repeat(16),
+            level: 9,
+        };
+        core.set_own_property_label(object, "payload", &observed)
+            .unwrap();
+        let caller = Label::Custom {
+            name: "outer-json-caller".repeat(8),
+            level: 7,
+        };
+        core.active_inline_callback_context_label = Some(caller.clone());
+        core.sync_estimated_memory_bytes().unwrap();
+        core.set_register(0, Value::Object(object)).unwrap();
+        assert!(matches!(
+            stringify(&mut core),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.active_inline_callback_context_label, Some(caller));
+        assert_type_error(&core, &observed);
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get("payload"),
+            Some(&Value::BigInt("1".into()))
+        );
+    }
+
+    #[test]
+    fn circular_failure_preserves_secret_shape_and_live_heap() {
+        let mut core = core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object, "self".into(), Value::Object(object))
+            .unwrap();
+        core.join_direct_object_mutation_label(object, &Label::Secret)
+            .unwrap();
+        core.set_register(0, Value::Object(object)).unwrap();
+        assert!(matches!(
+            stringify(&mut core),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_type_error(&core, &Label::Secret);
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get("self"),
+            Some(&Value::Object(object))
+        );
+        assert_eq!(core.object_mutation_labels.get(&object), Some(&Label::Secret));
+    }
+
+    #[test]
+    fn public_native_failure_does_not_poison_the_next_serialization() {
+        let mut core = core();
+        core.set_register(0, Value::BigInt("1".into())).unwrap();
+        assert!(matches!(
+            stringify(&mut core),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_type_error(&core, &Label::Public);
+        core.replace_pending_abrupt_slots(None, None).unwrap();
+        core.set_register(0, Value::str("public")).unwrap();
+        assert_eq!(stringify(&mut core).unwrap(), Value::str("\"public\""));
+        assert!(core.pending_exception.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Public));
+        assert_accounted(&core);
+    }
+
+    #[test]
+    fn instruction_refusal_is_not_materialized_as_a_language_error() {
+        let mut core = core();
+        core.set_register(0, Value::BigInt("1".into())).unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        core.config.instruction_budget = core.instructions_executed;
+        assert!(matches!(
+            stringify(&mut core),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert!(core.pending_exception.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_accounted(&core);
     }
 }

@@ -273,6 +273,43 @@ fn cancel_unknown_or_successful_module_preserves_runtime_state() {
 }
 
 #[test]
+fn global_suspension_refusal_preserves_task_lease_and_cancellation_remains_available() {
+    let config = AsyncModuleSchedulerConfig {
+        evaluator: module_async_evaluation::AsyncEvalConfig {
+            max_total_suspensions: 1,
+            max_suspensions_per_module: 4,
+            ..module_async_evaluation::AsyncEvalConfig::default()
+        },
+        ..AsyncModuleSchedulerConfig::default()
+    };
+    let mut scheduler = AsyncModuleScheduler::new(config);
+    for name in ["a", "b"] {
+        scheduler.register_module(name, true, &[]).unwrap();
+    }
+    let a = scheduler.next_task().unwrap().unwrap();
+    let b = scheduler.next_task().unwrap().unwrap();
+    let first = scheduler.create_pending_promise();
+    let second = scheduler.create_pending_promise();
+    scheduler.suspend_task(&a, first).unwrap();
+    let before = state(&scheduler);
+    let error = scheduler.suspend_task(&b, second).unwrap_err();
+    assert!(matches!(error, AsyncModuleSchedulerError::Bridge { detail }
+        if detail.contains("suspension limit 1 exceeded")));
+    assert_eq!(state(&scheduler), before);
+    assert_eq!(scheduler.in_flight_task("b"), Some(&b));
+    assert_eq!(scheduler.bridge().active_await("a"), Some(first));
+    assert_eq!(scheduler.bridge().active_await("b"), None);
+    assert_eq!(scheduler.bridge().promise_store().get(second).unwrap().state, PromiseState::Pending);
+    let reason = JsValue::Str("budget cancelled".into());
+    assert_eq!(scheduler.cancel_all(reason.clone(), Label::Secret).unwrap(), 2);
+    for name in ["a", "b"] {
+        assert_cancelled(&scheduler, name, &reason, &Label::Secret);
+    }
+    assert_eq!(scheduler.snapshot().ready_tasks, 0);
+    assert_eq!(scheduler.snapshot().in_flight_tasks, 0);
+}
+
+#[test]
 fn missing_dependency_refusal_is_atomic_and_retry_preserves_identifiers() {
     for tla in [false, true] {
         let mut scheduler = AsyncModuleScheduler::default();

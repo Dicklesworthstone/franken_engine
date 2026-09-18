@@ -484,7 +484,8 @@ impl AsyncEvalResult {
 pub struct AsyncEvalConfig {
     /// Maximum number of suspensions per module.
     pub max_suspensions_per_module: u64,
-    /// Maximum total suspension records.
+    /// Maximum retained suspension records across all registered modules.
+    /// Resolved records still count while retained for replay.
     pub max_total_suspensions: u64,
     /// Whether to propagate rejections transitively.
     pub transitive_rejection_propagation: bool,
@@ -521,6 +522,9 @@ pub struct AsyncModuleEvaluator {
     witness_events: Vec<AsyncEvalWitnessEvent>,
     /// Global sequence counter.
     global_seq: u64,
+    /// Sum of retained suspension records, including resolved history.
+    /// Updated only when a record is added or a module record is replaced.
+    retained_suspension_count: u64,
     /// Configuration.
     config: AsyncEvalConfig,
 }
@@ -535,6 +539,7 @@ impl AsyncModuleEvaluator {
             rejection_linkages: Vec::new(),
             witness_events: Vec::new(),
             global_seq: 0,
+            retained_suspension_count: 0,
             config,
         }
     }
@@ -613,6 +618,10 @@ impl AsyncModuleEvaluator {
     ) {
         self.replace_declared_dependencies(specifier, dependencies);
         self.remove_pending_index_for_module(specifier);
+        if let Some(previous) = self.states.get(specifier) {
+            // Re-registration drops this history, unlike resuming or settling.
+            self.retained_suspension_count -= previous.suspensions.len() as u64;
+        }
 
         let mut state = if has_top_level_await {
             AsyncModuleState::async_pending(
@@ -694,12 +703,47 @@ impl AsyncModuleEvaluator {
         }
     }
 
+    /// Admit a retained record before touching state, reverse indexes, or replay
+    /// sequence numbers. Both suspension entry points use the same accounting.
+    fn preflight_suspension(
+        &self,
+        specifier: &str,
+        to: AsyncModulePhase,
+    ) -> Result<(), AsyncEvalError> {
+        let state = self.states.get(specifier).ok_or_else(|| {
+            AsyncEvalError::ModuleNotFound {
+                specifier: specifier.to_string(),
+            }
+        })?;
+        if state.phase.is_terminal() {
+            return Err(AsyncEvalError::InvalidPhaseTransition {
+                specifier: specifier.to_string(),
+                from: state.phase,
+                to,
+            });
+        }
+        if state.suspensions.len() as u64 >= self.config.max_suspensions_per_module {
+            return Err(AsyncEvalError::SuspensionLimitExceeded {
+                specifier: specifier.to_string(),
+                limit: self.config.max_suspensions_per_module,
+            });
+        }
+        if self.retained_suspension_count >= self.config.max_total_suspensions {
+            return Err(AsyncEvalError::SuspensionLimitExceeded {
+                specifier: specifier.to_string(),
+                limit: self.config.max_total_suspensions,
+            });
+        }
+        Ok(())
+    }
+
     /// Record a top-level await suspension for a module.
     pub fn suspend_at_top_level_await(
         &mut self,
         specifier: &str,
         awaiting_promise: PromiseHandle,
     ) -> Result<(), AsyncEvalError> {
+        self.preflight_suspension(specifier, AsyncModulePhase::Suspended)?;
         let detail = format!("promise={awaiting_promise}");
         {
             let state =
@@ -709,15 +753,10 @@ impl AsyncModuleEvaluator {
                         specifier: specifier.to_string(),
                     })?;
 
-            if state.suspensions.len() as u64 >= self.config.max_suspensions_per_module {
-                return Err(AsyncEvalError::SuspensionLimitExceeded {
-                    specifier: specifier.to_string(),
-                    limit: self.config.max_suspensions_per_module,
-                });
-            }
-
             state.record_suspension(awaiting_promise, SuspensionContext::TopLevelAwait);
         }
+        // Admission proved the old count is below the configured u64 limit.
+        self.retained_suspension_count += 1;
         self.emit_event(
             specifier,
             AsyncEvalEventType::TopLevelAwaitSuspended,
@@ -733,6 +772,7 @@ impl AsyncModuleEvaluator {
         dependency: &str,
         awaiting_promise: PromiseHandle,
     ) -> Result<(), AsyncEvalError> {
+        self.preflight_suspension(specifier, AsyncModulePhase::AwaitingDependencies)?;
         let detail = format!("awaiting={dependency}");
         {
             let state =
@@ -750,6 +790,7 @@ impl AsyncModuleEvaluator {
             );
             state.add_pending_dependency(dependency.to_string());
         }
+        self.retained_suspension_count += 1;
         self.index_pending_dependency(specifier, dependency);
         self.emit_event(specifier, AsyncEvalEventType::DependencySuspended, detail);
         Ok(())
@@ -1144,6 +1185,210 @@ pub fn compute_async_evaluation_order(
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod suspension_budget_tests {
+    use super::*;
+
+    fn evaluator(per_module: u64, total: u64) -> AsyncModuleEvaluator {
+        AsyncModuleEvaluator::new(AsyncEvalConfig {
+            max_suspensions_per_module: per_module,
+            max_total_suspensions: total,
+            ..AsyncEvalConfig::default()
+        })
+    }
+
+    fn snapshot(eval: &AsyncModuleEvaluator) -> serde_json::Value {
+        serde_json::json!({
+            "states": &eval.states,
+            "declared": &eval.declared_dependencies,
+            "reverse_declared": &eval.reverse_declared_dependencies,
+            "pending": &eval.pending_dependents,
+            "linkages": &eval.rejection_linkages,
+            "events": &eval.witness_events,
+            "sequence": eval.global_seq,
+            "retained": eval.retained_suspension_count,
+        })
+    }
+
+    fn check_count(eval: &AsyncModuleEvaluator) {
+        let retained: u64 = eval.states().values().map(|state| state.suspensions.len() as u64).sum();
+        assert_eq!(eval.retained_suspension_count, retained);
+        assert!(retained <= eval.config.max_total_suspensions);
+        assert!(eval.states().values().all(|state| {
+            state.suspensions.len() as u64 <= eval.config.max_suspensions_per_module
+        }));
+    }
+
+    #[test]
+    fn global_budget_is_shared_by_modules_and_suspension_kinds() {
+        let mut eval = evaluator(10, 2);
+        for name in ["a", "b", "c", "dep"] {
+            eval.register_module(name, true, &[], Some(PromiseHandle(1)));
+        }
+        eval.suspend_at_top_level_await("a", PromiseHandle(2)).unwrap();
+        eval.suspend_on_dependency("b", "dep", PromiseHandle(3)).unwrap();
+        let before = snapshot(&eval);
+        for dependency in [false, true] {
+            let error = if dependency {
+                eval.suspend_on_dependency("c", "dep", PromiseHandle(4))
+            } else {
+                eval.suspend_at_top_level_await("c", PromiseHandle(4))
+            }.unwrap_err();
+            assert_eq!(error, AsyncEvalError::SuspensionLimitExceeded {
+                specifier: "c".into(), limit: 2,
+            });
+            assert_eq!(snapshot(&eval), before);
+        }
+        check_count(&eval);
+    }
+
+    #[test]
+    fn per_module_budget_cannot_be_bypassed_through_dependency_suspension() {
+        for dependency_first in [false, true] {
+            let mut eval = evaluator(1, 10);
+            eval.register_module("a", true, &[], Some(PromiseHandle(1)));
+            eval.register_module("dep", true, &[], Some(PromiseHandle(2)));
+            if dependency_first {
+                eval.suspend_on_dependency("a", "dep", PromiseHandle(3)).unwrap();
+            } else {
+                eval.suspend_at_top_level_await("a", PromiseHandle(3)).unwrap();
+            }
+            let before = snapshot(&eval);
+            let error = if dependency_first {
+                eval.suspend_at_top_level_await("a", PromiseHandle(4))
+            } else {
+                eval.suspend_on_dependency("a", "dep", PromiseHandle(4))
+            }.unwrap_err();
+            assert_eq!(error, AsyncEvalError::SuspensionLimitExceeded {
+                specifier: "a".into(), limit: 1,
+            });
+            assert_eq!(snapshot(&eval), before);
+            check_count(&eval);
+        }
+    }
+
+    #[test]
+    fn zero_global_budget_refuses_without_events_indexes_or_identifier_changes() {
+        let mut eval = evaluator(10, 0);
+        eval.register_module("a", true, &[], Some(PromiseHandle(1)));
+        let before = snapshot(&eval);
+        assert!(matches!(eval.suspend_at_top_level_await("a", PromiseHandle(2)),
+            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 0, .. })));
+        assert_eq!(snapshot(&eval), before);
+        assert!(matches!(eval.suspend_on_dependency("a", "dep", PromiseHandle(2)),
+            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 0, .. })));
+        assert_eq!(snapshot(&eval), before);
+        assert!(matches!(eval.suspend_at_top_level_await("missing", PromiseHandle(2)),
+            Err(AsyncEvalError::ModuleNotFound { .. })));
+        assert_eq!(snapshot(&eval), before);
+    }
+
+    #[test]
+    fn resolved_or_rejected_history_remains_charged_until_replaced() {
+        let mut eval = evaluator(10, 2);
+        eval.register_module("a", true, &[], Some(PromiseHandle(1)));
+        eval.register_module("b", true, &[], Some(PromiseHandle(2)));
+        for promise in [3, 4] {
+            eval.suspend_at_top_level_await("a", PromiseHandle(promise)).unwrap();
+            eval.resume_evaluation("a").unwrap();
+        }
+        assert!(eval.states()["a"].suspensions.iter().all(|record| record.resolved));
+        let mut bindings = LiveBindingMap::new();
+        eval.reject_module("a", &JsValue::Int(7), &mut bindings).unwrap();
+        let before = snapshot(&eval);
+        assert!(matches!(eval.suspend_at_top_level_await("b", PromiseHandle(5)),
+            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 2, .. })));
+        assert_eq!(snapshot(&eval), before);
+        check_count(&eval);
+    }
+
+    #[test]
+    fn replacing_a_module_releases_exactly_its_retained_records() {
+        let mut eval = evaluator(2, 3);
+        for name in ["a", "b", "dep"] {
+            eval.register_module(name, true, &[], Some(PromiseHandle(1)));
+        }
+        eval.suspend_at_top_level_await("a", PromiseHandle(2)).unwrap();
+        eval.suspend_on_dependency("a", "dep", PromiseHandle(3)).unwrap();
+        eval.suspend_at_top_level_await("b", PromiseHandle(4)).unwrap();
+        assert_eq!(eval.retained_suspension_count, 3);
+        let b = eval.states()["b"].clone();
+        eval.register_module("a", false, &[], None);
+        assert_eq!(eval.retained_suspension_count, 1);
+        assert_eq!(eval.states()["b"], b);
+        assert!(!eval.pending_dependents.get("dep").is_some_and(|names| names.contains("a")));
+        eval.suspend_on_dependency("a", "dep", PromiseHandle(5)).unwrap();
+        eval.suspend_at_top_level_await("b", PromiseHandle(6)).unwrap();
+        assert_eq!(eval.retained_suspension_count, 3);
+        let before = snapshot(&eval);
+        assert!(eval.suspend_at_top_level_await("dep", PromiseHandle(7)).is_err());
+        assert_eq!(snapshot(&eval), before);
+        eval.register_module("b", true, &[], Some(PromiseHandle(8)));
+        assert_eq!(eval.retained_suspension_count, 1);
+        check_count(&eval);
+    }
+
+    #[test]
+    fn suspension_never_resurrects_terminal_modules() {
+        let mut eval = evaluator(10, 10);
+        for name in ["done", "failed"] {
+            eval.register_module(name, true, &[], Some(PromiseHandle(1)));
+            eval.suspend_at_top_level_await(name, PromiseHandle(2)).unwrap();
+        }
+        eval.settle_module("done").unwrap();
+        eval.reject_module("failed", &JsValue::Int(9), &mut LiveBindingMap::new()).unwrap();
+        let before = snapshot(&eval);
+        for (name, from) in [("done", AsyncModulePhase::Settled), ("failed", AsyncModulePhase::Rejected)] {
+            assert_eq!(eval.suspend_at_top_level_await(name, PromiseHandle(3)).unwrap_err(),
+                AsyncEvalError::InvalidPhaseTransition {
+                    specifier: name.into(), from, to: AsyncModulePhase::Suspended,
+                });
+            assert_eq!(snapshot(&eval), before);
+            assert_eq!(eval.suspend_on_dependency(name, "dep", PromiseHandle(3)).unwrap_err(),
+                AsyncEvalError::InvalidPhaseTransition {
+                    specifier: name.into(), from, to: AsyncModulePhase::AwaitingDependencies,
+                });
+            assert_eq!(snapshot(&eval), before);
+        }
+        check_count(&eval);
+    }
+
+    #[test]
+    fn mixed_lifecycles_keep_counter_equal_to_retained_storage() {
+        for seed in 1u64..=16 {
+            let mut rng = seed;
+            let mut eval = evaluator(4, 7);
+            let names: Vec<String> = (0..8).map(|index| format!("m{index}")).collect();
+            for name in &names {
+                eval.register_module(name, true, &[], Some(PromiseHandle(1)));
+            }
+            for step in 0..256u32 {
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let name = &names[(rng >> 32) as usize % names.len()];
+                let before = snapshot(&eval);
+                let result = match rng % 7 {
+                    0 => eval.suspend_at_top_level_await(name, PromiseHandle(step)),
+                    1 => eval.suspend_on_dependency(name, "m0", PromiseHandle(step)),
+                    2 if !eval.states()[name].phase.is_terminal() => eval.resume_evaluation(name),
+                    3 => {
+                        eval.register_module(name, true, &[], Some(PromiseHandle(step)));
+                        Ok(())
+                    }
+                    4 if !eval.states()[name].phase.is_terminal() => eval.settle_module(name).map(|_| ()),
+                    5 if !eval.states()[name].phase.is_terminal() => eval.reject_module(name, &JsValue::Int(i64::from(step)),
+                        &mut LiveBindingMap::new()).map(|_| ()),
+                    6 => eval.notify_dependency_settled("m0").map(|_| ()),
+                    _ => Ok(()),
+                };
+                if result.is_err() {
+                    assert_eq!(snapshot(&eval), before, "seed={seed} step={step}");
+                }
+                check_count(&eval);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

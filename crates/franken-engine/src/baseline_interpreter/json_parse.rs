@@ -37,6 +37,19 @@ impl InterpreterCore {
             }
             self.json_parse_builtin_inner(module, input, reviver)
         })();
+        // Coercion and reviver traversal can fail with native TypeErrors as
+        // well as guest throws. Materialize language errors before removing
+        // the observation context; resource refusals must remain host faults.
+        if let Err(error) = self.observe_scoped_callback_result() {
+            outcome = Err(error);
+        }
+        if let Err(error) = &outcome
+            && Self::js_catchable_error_name(error).is_some()
+        {
+            outcome = match self.scoped_native_error(error) {
+                Ok(error) | Err(error) => Err(error),
+            };
+        }
         let context = self
             .active_inline_callback_context_label
             .take()
@@ -369,17 +382,13 @@ impl InterpreterCore {
                     }
                     self.json_charge_work()?;
                     let key = RuntimePropertyKey::String(name.clone());
-                    if let Some(module) = module {
-                        self.run_pre_runtime_property_access_hook(module, holder, &key)?;
-                    }
-                    let label = self.runtime_property_label(holder, &key);
-                    self.json_observe_label(label)?;
-                    let value = self.proxy_aware_get_runtime_property(
+                    // Preserve inherited/Proxy selection provenance before
+                    // Get can throw or reenter and replace the pending label.
+                    let value = self.iterator_protocol_property(
                         module,
                         holder,
                         &key,
                         Value::Object(holder),
-                        0,
                     )?;
                     let label = self.json_parse_context_label()?;
                     self.json_observe_label(label)?;
@@ -497,11 +506,13 @@ impl InterpreterCore {
         receiver: Value,
     ) -> Result<u64, InterpreterError> {
         let key = RuntimePropertyKey::String(JsString::from("length"));
-        let label = self.runtime_property_label(object, &key);
-        self.json_observe_label(label)?;
-        let value = self.proxy_aware_get_runtime_property(module, object, &key, receiver, 0)?;
+        // Shared with stringify and replacer-list extraction. Use the same
+        // receiver-preserving Get as element reads, including the access hook
+        // and the shape labels of an inherited or proxied length property.
+        let value = self.iterator_protocol_property(module, object, &key, receiver)?;
         let observed = self.json_parse_context_label()?;
         self.json_observe_label(observed)?;
+        self.json_observe_reachable_value(&value)?;
         let value = self.coerce_runtime_primitive(module, value, false)?;
         let observed = self.json_parse_context_label()?;
         self.json_observe_label(observed)?;
@@ -892,6 +903,139 @@ mod tests {
             Err(InterpreterError::StringLimitExceeded { length: 4, max: 3 })
         ));
         assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+
+    #[test]
+    fn symbol_input_type_error_retains_context_and_allows_subsequent_parse() {
+        let mut core = core();
+        // IDs 1..=13 are the runtime's reserved well-known Symbols.
+        core.set_register(0, Value::Symbol(SymbolId(1))).unwrap();
+        let input_label = Label::Custom {
+            name: "json-symbol-input".repeat(16),
+            level: 9,
+        };
+        let caller = Label::Custom {
+            name: "outer-json-call".repeat(8),
+            level: 7,
+        };
+        core.set_register_label(0, input_label.clone()).unwrap();
+        core.active_inline_callback_context_label = Some(caller.clone());
+        core.sync_estimated_memory_bytes().unwrap();
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:JsonParse",
+                RegRange { start: 0, count: 1 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
+            panic!("coercion must create a guest TypeError, not a SyntaxError");
+        };
+        assert_eq!(
+            core.heap[error.0 as usize].properties.get("name"),
+            Some(&Value::str("TypeError"))
+        );
+        assert_eq!(core.pending_exception_label, input_label);
+        assert_eq!(core.active_inline_callback_context_label, Some(caller));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.replace_pending_abrupt_slots(None, None).unwrap();
+        core.active_inline_callback_context_label = None;
+        core.sync_estimated_memory_bytes().unwrap();
+        core.set_register_label(0, Label::Public).unwrap();
+        assert_eq!(parse(&mut core, Value::str("123")).unwrap(), Value::Int(123));
+        assert!(core.pending_exception.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Public));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn array_length_preserves_inherited_owner_shape_provenance() {
+        let mut core = core();
+        let owner = core
+            .alloc_object_with_properties(&[("length", Value::Int(3))])
+            .unwrap();
+        let receiver = core.alloc_object_with_prototype(Some(owner)).unwrap();
+        core.join_direct_object_mutation_label(owner, &Label::Secret)
+            .unwrap();
+        // The value is public; selection of its owner is the secret input.
+        assert_eq!(core.own_property_label(owner, "length"), Label::Public);
+        core.json_observe_label(Label::Public).unwrap();
+        assert_eq!(
+            core.json_reviver_array_length(None, receiver, Value::Object(receiver))
+                .unwrap(),
+            3
+        );
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn array_length_own_shadow_does_not_observe_unused_prototype() {
+        let mut core = core();
+        let prototype = core
+            .alloc_object_with_properties(&[("length", Value::Int(99))])
+            .unwrap();
+        core.join_direct_object_mutation_label(prototype, &Label::Secret)
+            .unwrap();
+        let receiver = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+        core.set_object_property(receiver, "length".into(), Value::Int(2))
+            .unwrap();
+        core.json_observe_label(Label::Public).unwrap();
+        assert_eq!(
+            core.json_reviver_array_length(None, receiver, Value::Object(receiver))
+                .unwrap(),
+            2
+        );
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Public));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn invalid_inherited_length_keeps_shape_label_on_abrupt_exit() {
+        let mut core = core();
+        let owner = core
+            .alloc_object_with_properties(&[("length", Value::BigInt("1".into()))])
+            .unwrap();
+        let receiver = core.alloc_object_with_prototype(Some(owner)).unwrap();
+        core.join_direct_object_mutation_label(owner, &Label::Secret)
+            .unwrap();
+        core.json_observe_label(Label::Public).unwrap();
+        assert!(matches!(
+            core.json_reviver_array_length(None, receiver, Value::Object(receiver)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        // The owning JSON boundary materializes this error while the label
+        // is still live. No guest heap mutation or scratch may be rolled back.
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            core.heap[owner.0 as usize].properties.get("length"),
+            Some(&Value::BigInt("1".into()))
+        );
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(
             core.estimated_memory_bytes(),

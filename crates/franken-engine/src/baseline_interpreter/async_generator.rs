@@ -60,6 +60,9 @@ pub(super) struct AsyncGeneratorContinuation {
     /// Set before publication. Retain the ticket after the dispatcher removes
     /// this context from the index so cancellation can close that Promise too.
     ticket: Option<PromiseHandle>,
+    /// Internal PromiseResolve/primitive wrapper owned by this await. A caller's
+    /// existing Promise is borrowed and must never be cancelled with its waiter.
+    owned_source: Option<PromiseHandle>,
     /// A non-Promise primitive need not travel through the narrower JsValue
     /// carrier. Preserve exact UTF-16, callable identity and BigInt while the
     /// internal Promise reaction supplies the mandatory asynchronous boundary.
@@ -373,39 +376,77 @@ impl InterpreterCore {
         // generator's .return(thenable) must not let a reentrant .next() drain
         // the still-active return request while its then getter is executing.
         self.async_generators[id as usize].phase = AsyncGeneratorPhase::Executing;
-        let exact_value;
-        let source = match value {
-            Value::Promise(handle) => {
-                exact_value = None;
-                PromiseHandle(handle)
+        let mut owned_source = None;
+        let outcome = (|| {
+            let exact_value;
+            let source = match value {
+                Value::Promise(handle) => {
+                    exact_value = None;
+                    PromiseHandle(handle)
+                }
+                Value::Object(object) => {
+                    exact_value = None;
+                    let (promise, observed_label) =
+                        self.async_generator_thenable_source(id, object, &label)?;
+                    label = observed_label;
+                    owned_source = Some(promise);
+                    promise
+                }
+                other => {
+                    exact_value = Some(other);
+                    let promise =
+                        self.create_fulfilled_promise(JsValue::Undefined, label.clone())?;
+                    owned_source = Some(promise);
+                    promise
+                }
+            };
+            // A getter may have run since the entry check. Its effects remain
+            // real, but a now-cancelled evaluation must not install a new await.
+            self.check_async_generator_cancellation(id)?;
+            let mut context = AsyncGeneratorContinuation {
+                generator_id: id,
+                kind,
+                ticket: None,
+                owned_source,
+                exact_value,
+            };
+            let context_bytes = Self::async_generator_continuation_bytes(&context);
+            // A mere temporary check lets the Promise reaction consume the
+            // same headroom before the context is installed. Reserve ownership
+            // first, so the reaction preflight sees their combined footprint.
+            self.apply_memory_component_delta(0, context_bytes)?;
+            let ticket = match self.register_promise_then_for_await(source, label) {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(context_bytes);
+                    return Err(error);
+                }
+            };
+            context.ticket = Some(ticket);
+            self.async_generator_runtime
+                .continuations
+                .insert(ticket.0, context);
+            self.async_generators[id as usize].phase = AsyncGeneratorPhase::SuspendedAwait;
+            // The reserved bytes now belong to the published continuation.
+            // Reconcile any operand ownership transferred out of the activation.
+            self.sync_estimated_memory_bytes()?;
+            Ok(())
+        })();
+        if outcome.is_err() {
+            // PromiseResolve can succeed before continuation admission fails.
+            // Do not roll back the heap or newer getter-created Promises; close
+            // only our internal source, then retire the failed activation.
+            if let Some(source) = owned_source
+                && let Ok(epoch) = self
+                    .promise_store
+                    .terminally_reject_without_jobs(source, &Label::Public)
+            {
+                self.close_terminal_async_promise_dependencies(epoch, &Label::Public);
             }
-            Value::Object(object) => {
-                exact_value = None;
-                let (promise, observed_label) =
-                    self.async_generator_thenable_source(id, object, &label)?;
-                label = observed_label;
-                promise
-            }
-            other => {
-                exact_value = Some(other);
-                self.create_fulfilled_promise(JsValue::Undefined, label.clone())?
-            }
-        };
-        let mut context = AsyncGeneratorContinuation {
-            generator_id: id,
-            kind,
-            ticket: None,
-            exact_value,
-        };
-        self.check_temporary_memory_budget(Self::async_generator_continuation_bytes(&context))?;
-        let ticket = self.register_promise_then_for_await(source, label)?;
-        context.ticket = Some(ticket);
-        self.async_generator_runtime
-            .continuations
-            .insert(ticket.0, context);
-        self.async_generators[id as usize].phase = AsyncGeneratorPhase::SuspendedAwait;
-        self.sync_estimated_memory_bytes()?;
-        Ok(())
+            self.abort_async_generator(id);
+        }
+        outcome
     }
 
     /// PromiseResolve's Get(then) must use the native property machinery, not
@@ -527,11 +568,22 @@ impl InterpreterCore {
         if let Err(error) = self.check_async_generator_cancellation(id) {
             // The dispatcher already removed this context from its map. It
             // cannot be found by abort_async_generator's parked-ticket scan.
-            if let Some(ticket) = context.ticket
-                && let Ok(epoch) = self
-                    .promise_store
-                    .terminally_reject_without_jobs(ticket, &label)
-            {
+            let mut epoch = None;
+            for promise in [context.ticket, context.owned_source].into_iter().flatten() {
+                match epoch {
+                    Some(epoch) => {
+                        let _ = self.promise_store.extend_terminal_rejection_without_jobs(
+                            promise, &label, epoch,
+                        );
+                    }
+                    None => {
+                        epoch = self.promise_store
+                            .terminally_reject_without_jobs(promise, &label)
+                            .ok();
+                    }
+                }
+            }
+            if let Some(epoch) = epoch {
                 self.close_terminal_async_promise_dependencies(epoch, &label);
             }
             self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
@@ -775,18 +827,23 @@ impl InterpreterCore {
             if context.generator_id != id {
                 return true;
             }
-            match epoch {
-                Some(epoch) => {
-                    let _ = promise_store.extend_terminal_rejection_without_jobs(
-                        PromiseHandle(*ticket),
-                        &Label::Public,
-                        epoch,
-                    );
-                }
-                None => {
-                    epoch = promise_store
-                        .terminally_reject_without_jobs(PromiseHandle(*ticket), &Label::Public)
-                        .ok();
+            for promise in [Some(PromiseHandle(*ticket)), context.owned_source]
+                .into_iter()
+                .flatten()
+            {
+                match epoch {
+                    Some(epoch) => {
+                        let _ = promise_store.extend_terminal_rejection_without_jobs(
+                            promise,
+                            &Label::Public,
+                            epoch,
+                        );
+                    }
+                    None => {
+                        epoch = promise_store
+                            .terminally_reject_without_jobs(promise, &Label::Public)
+                            .ok();
+                    }
                 }
             }
             false
@@ -884,11 +941,21 @@ mod tests {
     // Allocate the activation through real parsing, lowering and execution.
     // The tests then isolate the request-settlement boundary with labeled input.
     fn request_core(label: Label) -> (InterpreterCore, u32, PromiseHandle) {
+        request_core_with_source(
+            label,
+            "async function* values() { yield 1; } const it = values();",
+        )
+    }
+
+    fn request_core_with_source(
+        label: Label,
+        source: &str,
+    ) -> (InterpreterCore, u32, PromiseHandle) {
         let tree = CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
                     label: "async-generator-provenance.js".into(),
-                    text: "async function* values() { yield 1; } const it = values();".into(),
+                    text: source.into(),
                 },
                 ParseGoal::Script,
                 &ParserOptions::default(),
@@ -1263,5 +1330,138 @@ mod tests {
         assert_eq!(core.heap[object.0 as usize].properties.get("value"), Some(&Value::Int(42)));
         assert_eq!(record.label, Label::Secret);
         assert_accounting(&core);
+    }
+
+    fn await_registration_costs() -> (u64, u64) {
+        let (mut probe, id, _) = request_core(Label::Public);
+        let source = probe.create_promise().unwrap();
+        let context = AsyncGeneratorContinuation {
+            generator_id: id,
+            kind: AwaitKind::ReturnResult,
+            ticket: None,
+            owned_source: None,
+            exact_value: None,
+        };
+        let before = probe.estimated_memory_bytes();
+        probe.register_promise_then_for_await(source, Label::Public).unwrap();
+        (
+            InterpreterCore::async_generator_continuation_bytes(&context),
+            probe.estimated_memory_bytes() - before,
+        )
+    }
+
+    #[test]
+    fn await_admission_reserves_context_and_reaction_together() {
+        let (context_bytes, reaction_bytes) = await_registration_costs();
+        assert!(context_bytes > 0 && reaction_bytes > 0);
+        let (mut core, id, request) = request_core(Label::Public);
+        let source = core.create_promise().unwrap();
+        let source_before = core.promise_store.get(source).unwrap().clone();
+        let count = core.promise_store.len();
+        let queue = serde_json::to_value(&core.event_loop.microtasks).unwrap();
+        // Either allocation fits alone, but the two cannot share one reserve.
+        let limit = core.estimated_memory_bytes() + context_bytes.max(reaction_bytes);
+        core.config.max_total_memory_bytes = limit;
+        assert!(matches!(
+            core.await_async_generator_value(
+                id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Public,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_aborted(&core, id, request);
+        assert_eq!(core.promise_store.len(), count, "no orphan await ticket");
+        assert_eq!(core.promise_store.get(source).unwrap(), &source_before);
+        assert_eq!(serde_json::to_value(&core.event_loop.microtasks).unwrap(), queue);
+        assert_eq!(core.config.max_total_memory_bytes, limit);
+        assert!(core.estimated_memory_bytes() <= limit);
+    }
+
+    #[test]
+    fn exact_combined_await_budget_admits_a_fully_owned_continuation() {
+        let (context_bytes, reaction_bytes) = await_registration_costs();
+        let (mut core, id, _) = request_core(Label::Public);
+        let source = core.create_promise().unwrap();
+        let limit = core.estimated_memory_bytes() + context_bytes + reaction_bytes;
+        core.config.max_total_memory_bytes = limit;
+        core.await_async_generator_value(
+            id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Public,
+        ).unwrap();
+        assert_eq!(core.estimated_memory_bytes(), limit);
+        assert_eq!(core.async_generators[id as usize].phase, AsyncGeneratorPhase::SuspendedAwait);
+        let (&ticket, context) = core.async_generator_runtime.continuations.iter().next().unwrap();
+        assert_eq!(context.ticket, Some(PromiseHandle(ticket)));
+        assert_eq!(context.owned_source, None);
+        assert_eq!(context.generator_id, id);
+        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        assert_accounting(&core);
+    }
+
+    fn thenable_request_core() -> (InterpreterCore, u32, PromiseHandle, ObjectId) {
+        let (core, id, request) = request_core_with_source(
+            Label::Public,
+            "async function* values() { yield 1; } const it = values();
+             const input = { marker: 991, then: function(resolve) {} };",
+        );
+        let object = core.heap.iter().position(|object| {
+            object.properties.get("marker") == Some(&Value::Int(991))
+        }).expect("thenable allocated by native execution");
+        assert!(matches!(core.heap[object].properties.get("then"), Some(Value::Closure(_))));
+        (core, id, request, ObjectId(object as u32))
+    }
+
+    #[test]
+    fn failed_await_registration_closes_the_fresh_thenable_source() {
+        let (context_bytes, reaction_bytes) = await_registration_costs();
+        let (mut probe, probe_id, _, object) = thenable_request_core();
+        let before = probe.estimated_memory_bytes();
+        let (source, _) = probe.async_generator_thenable_source(probe_id, object, &Label::Public).unwrap();
+        assert_eq!(probe.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        let source_bytes = probe.estimated_memory_bytes() - before;
+
+        let (mut core, id, request, object) = thenable_request_core();
+        let before_count = core.promise_store.len();
+        let limit = core.estimated_memory_bytes() + source_bytes + context_bytes.max(reaction_bytes);
+        core.config.max_total_memory_bytes = limit;
+        assert!(matches!(
+            core.await_async_generator_value(id, AwaitKind::ReturnResult, Value::Object(object), Label::Public),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.promise_store.len(), before_count + 1, "source exists, ticket was refused");
+        assert!(core.promise_store.get(source).unwrap().state.is_rejected());
+        assert_aborted(&core, id, request);
+        assert_eq!(core.config.max_total_memory_bytes, limit);
+        assert!(core.estimated_memory_bytes() <= limit);
+    }
+
+    #[test]
+    fn abort_retires_owned_thenable_source_as_well_as_its_ticket() {
+        let (mut core, id, request, object) = thenable_request_core();
+        let unrelated = core.create_promise().unwrap();
+        core.await_async_generator_value(id, AwaitKind::ReturnResult, Value::Object(object), Label::Public).unwrap();
+        let context = core.async_generator_runtime.continuations.values().next().unwrap();
+        let ticket = context.ticket.unwrap();
+        let source = context.owned_source.expect("internal PromiseResolve source");
+        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        core.abort_async_generator(id);
+        assert_aborted(&core, id, request);
+        for handle in [ticket, source] {
+            assert!(core.promise_store.get(handle).unwrap().state.is_rejected());
+        }
+        assert_eq!(core.promise_store.get(unrelated).unwrap().state, PromiseState::Pending);
+    }
+
+    #[test]
+    fn invalid_await_source_releases_reservation_and_terminates_the_request() {
+        let (mut core, id, request) = request_core(Label::Secret);
+        let count = core.promise_store.len();
+        let queue = serde_json::to_value(&core.event_loop.microtasks).unwrap();
+        assert!(core.await_async_generator_value(
+            id, AwaitKind::ReturnResult, Value::Promise(u32::MAX), Label::Public,
+        ).is_err());
+        assert_aborted(&core, id, request);
+        assert_eq!(core.promise_store.len(), count);
+        assert_eq!(serde_json::to_value(&core.event_loop.microtasks).unwrap(), queue);
+        assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
     }
 }

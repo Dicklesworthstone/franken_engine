@@ -283,10 +283,15 @@ fn numeric_signature(opcode: u8) -> Option<(WasmValueType, usize, WasmValueType)
         0x45 => (I32, 1, I32), 0x46..=0x4f => (I32, 2, I32),
         0x50 => (I64, 1, I32), 0x51..=0x5a => (I64, 2, I32),
         0x5b..=0x60 => (F32, 2, I32), 0x61..=0x66 => (F64, 2, I32),
-        0x6a..=0x70 => (I32, 2, I32), 0x7c..=0x82 => (I64, 2, I64),
+        0x67..=0x69 | 0xc0 | 0xc1 => (I32, 1, I32),
+        0x6a..=0x78 => (I32, 2, I32),
+        0x79..=0x7b | 0xc2..=0xc4 => (I64, 1, I64),
+        0x7c..=0x8a => (I64, 2, I64),
         0x8b | 0x8c | 0x91 => (F32, 1, F32), 0x92..=0x95 => (F32, 2, F32),
         0x99 | 0x9a | 0x9f => (F64, 1, F64), 0xa0..=0xa3 => (F64, 2, F64),
         0xa7 => (I64, 1, I32), 0xac | 0xad => (I32, 1, I64),
+        0xbc => (F32, 1, I32), 0xbd => (F64, 1, I64),
+        0xbe => (I32, 1, F32), 0xbf => (I64, 1, F64),
         _ => return None,
     })
 }
@@ -389,6 +394,9 @@ pub(super) fn execute_numeric(opcode: u8, stack: &mut Vec<WasmBoundaryValue>, fu
     match opcode {
         0x45..=0x5a => execute_integer_comparison(opcode, stack, function),
         0x5b..=0x66 => execute_float_comparison(opcode, stack, function),
+        0x67..=0x69 | 0x71..=0x7b | 0x83..=0x8a | 0xbc..=0xc4 => {
+            execute_bit_numeric(opcode, stack, function)
+        }
         0x6a..=0x70 => execute_i32_numeric(opcode, stack, function),
         0x7c..=0x82 => execute_i64_numeric(opcode, stack, function),
         0x8b | 0x8c | 0x91..=0x95 => execute_f32_numeric(opcode, stack, function),
@@ -405,6 +413,86 @@ pub(super) fn execute_numeric(opcode: u8, stack: &mut Vec<WasmBoundaryValue>, fu
         }
         _ => Err(WasmNumericVmError::UnsupportedOpcode { function_index: function, opcode, offset: 0 }),
     }
+}
+
+/// These instructions operate on the stored bits, not on host floating-point
+/// values. In particular reinterpretation must preserve signaling NaNs and
+/// payloads, and shifts mask their counts even in overflow-checked builds.
+fn execute_bit_numeric(
+    opcode: u8,
+    stack: &mut Vec<WasmBoundaryValue>,
+    function: u32,
+) -> Result<(), WasmNumericVmError> {
+    use WasmBoundaryValue::{F32Bits, F64Bits, I32, I64};
+    let right = pop_value(stack, function, opcode)?;
+    let result = match opcode {
+        0x67..=0x69 | 0xc0 | 0xc1 => {
+            let value = expect_i32(right, function, 0)?;
+            I32(match opcode {
+                0x67 => value.leading_zeros() as i32,
+                0x68 => value.trailing_zeros() as i32,
+                0x69 => value.count_ones() as i32,
+                0xc0 => i32::from(value as i8),
+                0xc1 => i32::from(value as i16),
+                _ => unreachable!("matched i32 bit unary opcode"),
+            })
+        }
+        0x79..=0x7b | 0xc2..=0xc4 => {
+            let value = expect_i64(right, function, 0)?;
+            I64(match opcode {
+                0x79 => i64::from(value.leading_zeros()),
+                0x7a => i64::from(value.trailing_zeros()),
+                0x7b => i64::from(value.count_ones()),
+                0xc2 => i64::from(value as i8),
+                0xc3 => i64::from(value as i16),
+                0xc4 => i64::from(value as i32),
+                _ => unreachable!("matched i64 bit unary opcode"),
+            })
+        }
+        0x71..=0x78 => {
+            let right = expect_i32(right, function, 1)?;
+            let left = expect_i32(pop_value(stack, function, opcode)?, function, 0)?;
+            let shift = (right as u32) & 31;
+            I32(match opcode {
+                0x71 => left & right,
+                0x72 => left | right,
+                0x73 => left ^ right,
+                0x74 => left.wrapping_shl(shift),
+                0x75 => left >> shift,
+                0x76 => ((left as u32) >> shift) as i32,
+                0x77 => left.rotate_left(shift),
+                0x78 => left.rotate_right(shift),
+                _ => unreachable!("matched i32 bit binary opcode"),
+            })
+        }
+        0x83..=0x8a => {
+            let right = expect_i64(right, function, 1)?;
+            let left = expect_i64(pop_value(stack, function, opcode)?, function, 0)?;
+            let shift = (right as u32) & 63;
+            I64(match opcode {
+                0x83 => left & right,
+                0x84 => left | right,
+                0x85 => left ^ right,
+                0x86 => left.wrapping_shl(shift),
+                0x87 => left >> shift,
+                0x88 => ((left as u64) >> shift) as i64,
+                0x89 => left.rotate_left(shift),
+                0x8a => left.rotate_right(shift),
+                _ => unreachable!("matched i64 bit binary opcode"),
+            })
+        }
+        0xbc => I32(expect_f32_bits(right, function, 0)? as i32),
+        0xbd => I64(expect_f64_bits(right, function, 0)? as i64),
+        0xbe => F32Bits(expect_i32(right, function, 0)? as u32),
+        0xbf => F64Bits(expect_i64(right, function, 0)? as u64),
+        _ => return Err(WasmNumericVmError::UnsupportedOpcode {
+            function_index: function, opcode, offset: 0,
+        }),
+    };
+    // Every admitted numeric opcode consumes at least one operand and produces
+    // one, so it cannot increase the metered stack high-water mark.
+    stack.push(result);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -452,6 +540,146 @@ mod tests {
     fn run(bytes: &[u8], args: &[WasmBoundaryValue]) -> Vec<WasmBoundaryValue> {
         WasmNumericVm::parse(bytes, WasmNumericLimits::default()).unwrap()
             .call_export("f", args).unwrap().results
+    }
+
+    fn numeric_module(opcode: u8, params: &[u8], result: u8) -> Vec<u8> {
+        let mut code = Vec::new();
+        for index in 0..params.len() {
+            code.push(0x20);
+            code.extend(leb(index));
+        }
+        code.extend([opcode, 0x0b]);
+        module(params, &[result], 0, &code, &[])
+    }
+
+    #[test]
+    fn i32_bit_counts_cover_zero_sign_bit_and_all_ones() {
+        for (value, expected) in [
+            (0, [32, 32, 0]), (1, [31, 0, 1]),
+            (i32::MIN, [0, 31, 1]), (-1, [0, 0, 32]),
+        ] {
+            for (opcode, expected) in (0x67..=0x69).zip(expected) {
+                assert_eq!(run(&numeric_module(opcode, &[0x7f], 0x7f), &[WasmBoundaryValue::I32(value)]), [WasmBoundaryValue::I32(expected)]);
+            }
+        }
+    }
+
+    #[test]
+    fn i64_bit_counts_return_i64_not_i32() {
+        for (value, expected) in [
+            (0, [64, 64, 0]), (1, [63, 0, 1]),
+            (i64::MIN, [0, 63, 1]), (-1, [0, 0, 64]),
+        ] {
+            for (opcode, expected) in (0x79..=0x7b).zip(expected) {
+                assert_eq!(run(&numeric_module(opcode, &[0x7e], 0x7e), &[WasmBoundaryValue::I64(value)]), [WasmBoundaryValue::I64(expected)]);
+            }
+        }
+    }
+
+    #[test]
+    fn i32_bitwise_shift_and_rotate_preserve_width_and_mask_counts() {
+        let left = 0x8000_0003_u32 as i32;
+        let expected = [1_u32, 0x8000_0003, 0x8000_0002, 6, 0xc000_0001, 0x4000_0001, 7, 0xc000_0001];
+        for (opcode, expected) in (0x71..=0x78).zip(expected) {
+            let bytes = numeric_module(opcode, &[0x7f, 0x7f], 0x7f);
+            assert_eq!(run(&bytes, &[WasmBoundaryValue::I32(left), WasmBoundaryValue::I32(1)]), [WasmBoundaryValue::I32(expected as i32)]);
+        }
+        for count in [0, 32, 64, i32::MIN] {
+            for opcode in 0x74..=0x78 {
+                let bytes = numeric_module(opcode, &[0x7f, 0x7f], 0x7f);
+                assert_eq!(run(&bytes, &[WasmBoundaryValue::I32(left), WasmBoundaryValue::I32(count)]), [WasmBoundaryValue::I32(left)]);
+            }
+        }
+        for (opcode, expected) in (0x74..=0x78).zip([0x8000_0000_u32, 0xffff_ffff, 1, 0xc000_0001, 7]) {
+            let bytes = numeric_module(opcode, &[0x7f, 0x7f], 0x7f);
+            assert_eq!(run(&bytes, &[WasmBoundaryValue::I32(left), WasmBoundaryValue::I32(-1)]), [WasmBoundaryValue::I32(expected as i32)]);
+        }
+    }
+
+    #[test]
+    fn i64_bitwise_shift_and_rotate_preserve_high_bits() {
+        let left = 0x8000_0000_0000_0003_u64 as i64;
+        let expected = [1_u64, 0x8000_0000_0000_0003, 0x8000_0000_0000_0002, 6, 0xc000_0000_0000_0001, 0x4000_0000_0000_0001, 7, 0xc000_0000_0000_0001];
+        for (opcode, expected) in (0x83..=0x8a).zip(expected) {
+            let bytes = numeric_module(opcode, &[0x7e, 0x7e], 0x7e);
+            assert_eq!(run(&bytes, &[WasmBoundaryValue::I64(left), WasmBoundaryValue::I64(1)]), [WasmBoundaryValue::I64(expected as i64)]);
+        }
+        for count in [0, 64, 128, i64::MIN, 1_i64 << 32] {
+            for opcode in 0x86..=0x8a {
+                let bytes = numeric_module(opcode, &[0x7e, 0x7e], 0x7e);
+                assert_eq!(run(&bytes, &[WasmBoundaryValue::I64(left), WasmBoundaryValue::I64(count)]), [WasmBoundaryValue::I64(left)]);
+            }
+        }
+        for (opcode, expected) in (0x86..=0x8a).zip([0x8000_0000_0000_0000_u64, u64::MAX, 1, 0xc000_0000_0000_0001, 7]) {
+            let bytes = numeric_module(opcode, &[0x7e, 0x7e], 0x7e);
+            assert_eq!(run(&bytes, &[WasmBoundaryValue::I64(left), WasmBoundaryValue::I64(-1)]), [WasmBoundaryValue::I64(expected as i64)]);
+        }
+    }
+
+    #[test]
+    fn narrow_sign_extensions_discard_high_bits() {
+        for (opcode, value, expected) in [
+            (0xc0, 0x1234_ff80, -128), (0xc0, 0x1234_ff7f, 127),
+            (0xc1, 0x1234_8000, -32768), (0xc1, 0x1234_7fff, 32767),
+        ] {
+            assert_eq!(run(&numeric_module(opcode, &[0x7f], 0x7f), &[WasmBoundaryValue::I32(value)]), [WasmBoundaryValue::I32(expected)]);
+        }
+        for (opcode, value, expected) in [
+            (0xc2, 0x1234_5678_ffff_ff80, -128), (0xc2, 0x1234_5678_ffff_ff7f, 127),
+            (0xc3, 0x1234_5678_ffff_8000, -32768), (0xc3, 0x1234_5678_ffff_7fff, 32767),
+            (0xc4, 0x1234_5678_8000_0000, -2_147_483_648), (0xc4, 0x1234_5678_7fff_ffff, 2_147_483_647),
+        ] {
+            assert_eq!(run(&numeric_module(opcode, &[0x7e], 0x7e), &[WasmBoundaryValue::I64(value)]), [WasmBoundaryValue::I64(expected)]);
+        }
+    }
+
+    #[test]
+    fn reinterpretation_keeps_exact_nan_payloads_and_signed_zero() {
+        for bits in [0_u32, 0x8000_0000, 1, 0x7f80_0000, 0xff80_0000, 0x7f80_0001, 0xffc1_2345] {
+            assert_eq!(run(&numeric_module(0xbc, &[0x7d], 0x7f), &[WasmBoundaryValue::F32Bits(bits)]), [WasmBoundaryValue::I32(bits as i32)]);
+            assert_eq!(run(&numeric_module(0xbe, &[0x7f], 0x7d), &[WasmBoundaryValue::I32(bits as i32)]), [WasmBoundaryValue::F32Bits(bits)]);
+        }
+        for bits in [0_u64, 0x8000_0000_0000_0000, 1, 0x7ff0_0000_0000_0000, 0xfff0_0000_0000_0000, 0x7ff0_0000_0000_0001, 0xfff8_1234_5678_9abc] {
+            assert_eq!(run(&numeric_module(0xbd, &[0x7c], 0x7e), &[WasmBoundaryValue::F64Bits(bits)]), [WasmBoundaryValue::I64(bits as i64)]);
+            assert_eq!(run(&numeric_module(0xbf, &[0x7e], 0x7c), &[WasmBoundaryValue::I64(bits as i64)]), [WasmBoundaryValue::F64Bits(bits)]);
+        }
+    }
+
+    #[test]
+    fn xorshift_workload_executes_and_replays_under_the_instruction_meter() {
+        let bytes = module(&[0x7f], &[0x7f], 0, &[
+            0x20,0,0x20,0,0x41,13,0x74,0x73,0x21,0,
+            0x20,0,0x20,0,0x41,17,0x76,0x73,0x21,0,
+            0x20,0,0x20,0,0x41,5,0x74,0x73,0x0b,
+        ], &[]);
+        let limits = WasmNumericLimits { max_instructions: 18, ..WasmNumericLimits::default() };
+        let vm = WasmNumericVm::parse(&bytes, limits).unwrap();
+        let mut value = 1;
+        for expected in [270369_u32, 67634689, 2647435461, 307599695, 2398689233] {
+            let args = [WasmBoundaryValue::I32(value)];
+            let result = vm.call_export("f", &args).unwrap();
+            assert_eq!(result, vm.call_export("f", &args).unwrap());
+            assert_eq!(result.results, [WasmBoundaryValue::I32(expected as i32)]);
+            assert_eq!(result.instructions_executed, 18);
+            value = expected as i32;
+        }
+        let limits = WasmNumericLimits { max_instructions: 17, ..WasmNumericLimits::default() };
+        let vm = WasmNumericVm::parse(&bytes, limits).unwrap();
+        assert_eq!(vm.call_export("f", &[WasmBoundaryValue::I32(1)]), Err(WasmNumericVmError::InstructionBudgetExceeded { max: 17 }));
+    }
+
+    #[test]
+    fn bit_opcodes_validate_operand_types_in_dead_and_live_code() {
+        for code in [
+            vec![0x42,1,0x67,0x0b],
+            vec![0x00,0x42,1,0x67,0x0b],
+            vec![0x41,1,0x79,0x0b],
+            vec![0x00,0x41,1,0xbd,0x0b],
+            vec![0x41,1,0x41,1,0x86,0x0b],
+            vec![0x00,0xc5,0x0b],
+        ] {
+            assert!(WasmNumericVm::parse(&module(&[], &[0x7f], 0, &code, &[]), WasmNumericLimits::default()).is_err(), "{code:?}");
+        }
     }
 
     #[test]

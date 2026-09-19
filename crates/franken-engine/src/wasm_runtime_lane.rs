@@ -10,8 +10,11 @@
 //! The ABI-routing and reactive-signal surfaces remain available at their
 //! existing public paths. In particular, [`WasmModuleImportRoute::call_export`]
 //! remains the constant-body compatibility route, not an alias for the numeric
-//! VM. This module does not grant imported host capabilities or expose a new
-//! JavaScript module-loader route.
+//! VM. [`crate::module_resolver::DeterministicModuleResolver::load_wasm`] resolves
+//! capability-gated imports into [`WasmNativeModule`] for native execution.
+//! [`WasmNativeInstance`] rechecks the current policy before startup, calls and
+//! state inspection. This is an embedding API, not JavaScript import-expression
+//! evaluation or automatic ESM namespace binding. Host imports remain unbound.
 
 #[path = "wasm_runtime_lane/lane.rs"]
 mod lane;
@@ -19,3 +22,7 @@ pub use lane::*;
 
 #[path = "wasm_numeric_vm.rs"]
 pub mod numeric;
+
+#[path = "wasm_runtime_lane/imports.rs"]
+mod imports;
+pub use imports::{WasmNativeInstance, WasmNativeLoadError, WasmNativeModule};

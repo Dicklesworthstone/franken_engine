@@ -380,3 +380,296 @@ fn recorded_revocation_replays_its_refusal_without_revoking_an_unrelated_live_po
     assert!(!pool.is_revoked());
     assert_eq!(pool.reserved_pages(), 2);
 }
+
+mod interrupted_hosts {
+    use super::*;
+    use std::num::NonZeroUsize;
+    use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
+    use frankenengine_engine::module_resolver::{
+        CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
+        ModuleRequest, ResolutionContext, wasm_module_required_capabilities,
+    };
+    use frankenengine_engine::wasm_runtime_lane::{WasmNativeLoadError, WasmNativeModule};
+    use frankenengine_engine::wasm_runtime_lane::scheduler::{WasmNativeScheduler, WasmTaskOutcome};
+
+    fn interrupted() -> WasmNumericVmError { WasmHostError::HostCallInterrupted.into() }
+    fn context() -> ResolutionContext { ResolutionContext::new("unwind", "contain", "current") }
+    fn policy() -> CapabilityPolicyHook {
+        let mut capabilities = wasm_module_required_capabilities();
+        capabilities.insert(Builtin);
+        CapabilityPolicyHook::new(capabilities)
+    }
+    fn module(host: bool, start: bool) -> WasmNativeModule {
+        let limits = WasmNumericLimits::default();
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        let definition = ModuleDefinition::wasm_binary(&program(host, start, Some((1, 2))), &limits)
+            .unwrap().require_capability(Builtin);
+        resolver.register_workspace_module("/app/guest.wasm", definition).unwrap();
+        resolver.load_wasm(&ModuleRequest::new("/app/guest.wasm", ImportStyle::Import),
+            &context(), &policy(), limits).unwrap()
+    }
+
+    #[test]
+    fn caught_native_panics_keep_payload_and_retire_every_reentry_surface() {
+        let vm = vm(true, false);
+        for export in ["run", "indirect", "tail", "host"] {
+            let pool = WasmMemoryPool::new(2);
+            let count = Arc::new(AtomicUsize::new(0)); let calls = count.clone();
+            let mut instance = vm.instantiate_with_imports(provider(&pool, move |caller, _| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                caller.write_memory(8, b"kept")?;
+                panic_any("provider exploded");
+            })).unwrap();
+            let payload = catch_unwind(AssertUnwindSafe(|| instance.call_export(export, &[]))).unwrap_err();
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"provider exploded"));
+            let before = instance.memory_export("memory").unwrap().to_vec();
+            assert_eq!(&before[8..12], b"kept");
+            assert_eq!(&before[4..8], &[0; 4]); // Interrupted caller never resumed.
+            for next in ["run", "indirect", "tail", "host", "spin"] {
+                assert_eq!(instance.call_export(next, &[]).unwrap_err(), interrupted());
+            }
+            assert_eq!(instance.call_export("grow", &[I32(1)]).unwrap_err(), interrupted());
+            let sliced = instance.begin_call("grow", &[I32(1)])
+                .and_then(|call| call.resume(work(100)));
+            assert!(matches!(sliced, Err(error) if error == interrupted()));
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            assert_eq!(instance.memory_export("memory").unwrap(), before);
+            assert!(!pool.is_revoked()); assert_eq!(pool.reserved_pages(), 2);
+            drop(instance); assert_eq!(pool.reserved_pages(), 0);
+        }
+    }
+
+    #[test]
+    fn interrupted_instance_does_not_revoke_siblings_or_release_live_memory() {
+        let vm = vm(true, false);
+        let root = WasmMemoryPool::new(4);
+        let tenant = root.partition(4).unwrap();
+        let mut broken = vm.instantiate_with_imports(provider(&tenant, |caller, _| {
+            caller.write_memory(0, b"kept")?; panic!("provider failed");
+        })).unwrap();
+        let mut healthy = vm.instantiate_with_imports(provider(&tenant, |_, _| Ok(vec![]))).unwrap();
+        assert!(catch_unwind(AssertUnwindSafe(|| broken.call_export("host", &[]))).is_err());
+        assert!(!root.is_revoked()); assert!(!tenant.is_revoked());
+        assert_eq!(tenant.reserved_pages(), 4);
+        healthy.call_export("run", &[]).unwrap();
+        assert_eq!(&healthy.memory_export("memory").unwrap()[4..8], &9_i32.to_le_bytes());
+        assert_eq!(broken.call_export("run", &[]).unwrap_err(), interrupted());
+        drop(broken); assert_eq!(tenant.reserved_pages(), 2);
+        let replacement = vm.instantiate_with_imports(provider(&tenant, |_, _| Ok(vec![]))).unwrap();
+        drop(healthy); drop(replacement);
+        assert_eq!(tenant.reserved_pages(), 0); assert_eq!(root.reserved_pages(), 4);
+        drop(tenant); assert_eq!(root.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn ordinary_returned_faults_are_not_interrupted_host_boundaries() {
+        let vm = vm(true, false);
+        for kind in 0..3 {
+            let pool = WasmMemoryPool::new(2);
+            let mut entered = false;
+            let mut instance = vm.instantiate_with_imports(provider(&pool, move |caller, _| {
+                if !entered {
+                    entered = true;
+                    return match kind {
+                        0 => Err(WasmHostError::trap("ordinary failure").into()),
+                        1 => caller.write_memory(u32::MAX, b"bad").map(|()| vec![]),
+                        _ => caller.charge_work(u64::MAX).map(|()| vec![]),
+                    };
+                }
+                caller.write_memory(8, b"next")?; Ok(vec![])
+            })).unwrap();
+            let error = instance.call_export("host", &[]).unwrap_err();
+            assert_ne!(error, interrupted());
+            match kind {
+                0 => assert!(matches!(error, WasmNumericVmError::State(WasmStateError::Host(WasmHostError::Trap { .. })))),
+                1 => assert!(matches!(error, WasmNumericVmError::State(WasmStateError::MemoryOutOfBounds { .. }))),
+                _ => assert!(matches!(error, WasmNumericVmError::InstructionBudgetExceeded { .. })),
+            }
+            instance.call_export("host", &[]).unwrap();
+            assert_eq!(&instance.memory_export("memory").unwrap()[8..12], b"next");
+            assert_eq!(instance.call_export("grow", &[I32(1)]).unwrap().results, [I32(1)]);
+            assert_eq!(pool.reserved_pages(), 2);
+        }
+    }
+
+    #[test]
+    fn trusted_provider_internal_recovery_is_not_engine_boundary_interruption() {
+        let vm = vm(true, false);
+        let pool = WasmMemoryPool::new(2);
+        let mut instance = vm.instantiate_with_imports(provider(&pool, |caller, _| {
+            assert!(catch_unwind(|| panic!("caught inside trusted provider")).is_err());
+            caller.write_memory(8, b"safe")?; Ok(vec![])
+        })).unwrap();
+        for _ in 0..2 { instance.call_export("run", &[]).unwrap(); }
+        assert_eq!(&instance.memory_export("memory").unwrap()[8..12], b"safe");
+        assert_eq!(&instance.memory_export("memory").unwrap()[4..8], &9_i32.to_le_bytes());
+    }
+
+    #[test]
+    fn cooperative_unwind_cannot_leave_a_resumable_instance() {
+        let vm = vm(true, false);
+        let pool = WasmMemoryPool::new(2);
+        let mut instance = vm.instantiate_with_imports(provider(&pool, |_, _| panic!("sliced host"))).unwrap();
+        let call = instance.begin_call("run", &[]).unwrap();
+        let WasmCallStep::Pending(call) = call.resume(work(3)).unwrap() else { panic!("missing yield"); };
+        assert!(catch_unwind(AssertUnwindSafe(|| call.resume(work(100)))).is_err());
+        assert_eq!(&instance.memory_export("memory").unwrap()[..4], &7_i32.to_le_bytes());
+        assert_eq!(&instance.memory_export("memory").unwrap()[4..8], &[0; 4]);
+        assert_eq!(instance.call_export("run", &[]).unwrap_err(), interrupted());
+        assert_eq!(pool.reserved_pages(), 2);
+    }
+
+    #[test]
+    fn incomplete_recording_cannot_be_escaped_by_guest_only_reentry() {
+        let vm = vm(true, false);
+        let pool = WasmMemoryPool::new(2);
+        let mut bindings = provider(&pool, |caller, _| {
+            caller.write_memory(0, b"kept")?; panic!("recorded provider failed");
+        });
+        let observer = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+        let mut instance = vm.instantiate_with_imports(bindings).unwrap();
+        assert!(catch_unwind(AssertUnwindSafe(|| instance.call_export("host", &[]))).is_err());
+        assert!(observer.snapshot().is_err());
+        assert_eq!(instance.call_export("grow", &[I32(1)]).unwrap_err(), interrupted());
+        assert_eq!(instance.memory_export("memory").unwrap().len(), 65_536);
+        assert_eq!(&instance.memory_export("memory").unwrap()[..4], b"kept");
+        drop(instance); assert_eq!(pool.reserved_pages(), 0);
+        assert!(observer.snapshot().is_err());
+    }
+
+    #[test]
+    fn startup_unwind_never_publishes_state_or_repeats_a_provider_on_repoll() {
+        let vm = vm(true, true);
+        let pool = WasmMemoryPool::new(2);
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            vm.instantiate_with_imports(provider(&pool, |_, _| panic!("startup")))
+        })).is_err());
+        assert_eq!(pool.reserved_pages(), 0);
+        let calls = Arc::new(AtomicUsize::new(0)); let entered = calls.clone();
+        let mut future = Box::pin(vm.instantiate_cooperatively_with_imports(
+            provider(&pool, move |_, _| { entered.fetch_add(1, Ordering::SeqCst); panic!("future startup"); }), work(100)));
+        let waker = Waker::from(Arc::new(WakeCount::default()));
+        let mut cx = Context::from_waker(&waker);
+        assert!(catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx))).is_err());
+        assert_eq!(pool.reserved_pages(), 2); // Future still owns unpublished memory.
+        assert!(catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx))).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        drop(future); assert_eq!(pool.reserved_pages(), 0);
+        assert!(!pool.is_revoked());
+    }
+
+    #[test]
+    fn exit_then_unwind_does_not_masquerade_as_successful_exit_on_reentry() {
+        let vm = vm(true, false);
+        let pool = WasmMemoryPool::new(2);
+        let mut instance = vm.instantiate_with_imports(provider(&pool, |caller, _| {
+            assert_eq!(caller.exit(7), WasmHostError::ProcessExit { code: 7 }.into());
+            panic!("provider panicked after requesting exit");
+        })).unwrap();
+        assert!(catch_unwind(AssertUnwindSafe(|| instance.call_export("host", &[]))).is_err());
+        assert_eq!(instance.process_exit_status(), Some(7)); // Historical observation, not success.
+        assert_eq!(instance.call_export("host", &[]).unwrap_err(), interrupted());
+        pool.revoke(); // Cannot hide the incomplete native boundary either.
+        assert_eq!(instance.call_export("run", &[]).unwrap_err(), interrupted());
+        assert_eq!(pool.reserved_pages(), 2);
+    }
+
+    #[test]
+    fn resolved_scheduler_retires_panicked_work_not_healthy_sibling_instances() {
+        let module = module(true, false);
+        let pool = WasmMemoryPool::new(4);
+        let context = context(); let policy = policy();
+        let mut broken = module.instantiate_with_imports(&context, &policy,
+            provider(&pool, |caller, _| { caller.write_memory(8, b"kept")?; panic!("scheduled host"); })).unwrap();
+        let mut healthy = module.instantiate_with_imports(&context, &policy, provider(&pool, |_, _| Ok(vec![]))).unwrap();
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(2).unwrap());
+        scheduler.submit(broken.begin_call("run", &[], &context, &policy).unwrap()).unwrap();
+        let next = scheduler.submit(healthy.begin_call("run", &[], &context, &policy).unwrap()).unwrap();
+        assert!(catch_unwind(AssertUnwindSafe(|| scheduler.run_next(work(100), &context, &policy))).is_err());
+        assert_eq!(scheduler.next_task(), Some(next.id()));
+        assert_eq!(pool.reserved_pages(), 4); assert!(!pool.is_revoked());
+        assert!(matches!(scheduler.run_next(work(100), &context, &policy).unwrap().outcome, WasmTaskOutcome::Complete(_)));
+        assert!(scheduler.is_empty()); drop(scheduler);
+        assert!(matches!(broken.call_export("grow", &[I32(1)], &context, &policy),
+            Err(WasmNativeLoadError::Execution(error)) if error == interrupted()));
+        assert_eq!(&broken.memory_export("memory", &context, &policy).unwrap().unwrap()[8..12], b"kept");
+        healthy.call_export("run", &[], &context, &policy).unwrap();
+        drop(broken); drop(healthy); assert_eq!(pool.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn owned_command_unwind_releases_private_state_without_revoking_tenant() {
+        let context = context(); let policy = policy();
+        for start in [false, true] {
+            let module = module(true, start);
+            let pool = WasmMemoryPool::new(2);
+            let mut task = module.prepare_command(provider(&pool, |_, _| panic!("command provider")));
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                for _ in 0..2 {
+                    match task.resume(work(100), &context, &policy).unwrap() {
+                        frankenengine_engine::wasm_runtime_lane::command::WasmCommandStep::Pending(pending) => task = pending,
+                        frankenengine_engine::wasm_runtime_lane::command::WasmCommandStep::Complete(_) => panic!("unexpected command success"),
+                    }
+                }
+            }));
+            let payload = result.unwrap_err();
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"command provider"));
+            assert_eq!(pool.reserved_pages(), 0); assert!(!pool.is_revoked());
+            let replacement = module.prepare_command(provider(&pool, |_, _| Ok(vec![])));
+            assert!(matches!(replacement.resume(work(100), &context, &policy).unwrap(),
+                frankenengine_engine::wasm_runtime_lane::command::WasmCommandStep::Pending(_)));
+            assert_eq!(pool.reserved_pages(), 0); // Discarded pending replacement releases its lease.
+        }
+    }
+
+    #[test]
+    fn interrupted_host_without_pool_memory_or_recording_is_still_terminal() {
+        let vm = WasmNumericVm::parse(&program(true, false, None), WasmNumericLimits::default()).unwrap();
+        let mut bindings = WasmHostImports::new(BTreeSet::from([Builtin, VmDispatch]));
+        bindings.define("h", "f", WasmFunctionSignature { params: vec![], results: vec![] },
+            BTreeSet::from([Builtin]), 1, |_, _| panic!("unpooled host")).unwrap();
+        let mut instance = vm.instantiate_with_imports(bindings).unwrap();
+        let payload = catch_unwind(AssertUnwindSafe(|| instance.call_export("host", &[]))).unwrap_err();
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"unpooled host"));
+        assert!(instance.memory_export("memory").is_none());
+        assert_eq!(instance.call_export("grow", &[I32(0)]).unwrap_err(), interrupted());
+        assert_eq!(instance.call_export("spin", &[]).unwrap_err(), interrupted());
+    }
+
+    #[test]
+    fn subtree_revocation_retires_all_three_task_kinds_without_stopping_a_sibling() {
+        use frankenengine_engine::wasm_runtime_lane::command::WasmCommandStep;
+        use frankenengine_engine::wasm_runtime_lane::scheduler::WasmStartupStep;
+        let starting = module(false, true);
+        let running = module(false, false);
+        let context = context(); let policy = policy();
+        let root = WasmMemoryPool::new(8);
+        let tenant = root.partition(6).unwrap(); let sibling = root.partition(2).unwrap();
+        let mut instance = running.instantiate_with_imports(&context, &policy, imports(&tenant)).unwrap();
+        let mut healthy = running.instantiate_with_imports(&context, &policy, imports(&sibling)).unwrap();
+        let WasmStartupStep::Pending(startup) = starting.prepare_startup_with_imports(imports(&tenant))
+            .resume(work(1), &context, &policy).unwrap() else { panic!("startup must yield"); };
+        let WasmCommandStep::Pending(command) = running.prepare_command(imports(&tenant))
+            .resume(work(1), &context, &policy).unwrap() else { panic!("command must yield before entry"); };
+        assert_eq!(tenant.reserved_pages(), 6);
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(4).unwrap());
+        scheduler.submit_startup(startup).unwrap();
+        scheduler.submit_command(command).unwrap();
+        scheduler.submit(instance.begin_call("run", &[], &context, &policy).unwrap()).unwrap();
+        let next = scheduler.submit(healthy.begin_call("run", &[], &context, &policy).unwrap()).unwrap();
+        tenant.revoke();
+        for _ in 0..3 {
+            assert!(matches!(scheduler.run_next(work(100), &context, &policy).unwrap().outcome,
+                WasmTaskOutcome::Failed(WasmNativeLoadError::Execution(error)) if error == revoked()));
+        }
+        assert_eq!(tenant.reserved_pages(), 2); // Retained export instance, not cancelled work.
+        assert_eq!(scheduler.next_task(), Some(next.id()));
+        assert!(matches!(scheduler.run_next(work(100), &context, &policy).unwrap().outcome,
+            WasmTaskOutcome::Complete(_)));
+        drop(scheduler);
+        assert!(instance.memory_export("memory", &context, &policy).unwrap().unwrap().iter().all(|byte| *byte == 0));
+        assert!(!root.is_revoked()); assert!(!sibling.is_revoked());
+        healthy.call_export("run", &[], &context, &policy).unwrap();
+        drop(instance); assert_eq!(tenant.reserved_pages(), 0);
+    }
+}

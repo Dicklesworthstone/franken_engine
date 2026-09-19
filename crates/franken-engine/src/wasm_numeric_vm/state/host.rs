@@ -39,6 +39,8 @@ pub enum WasmHostError {
     MemoryPoolRevoked,
     MemoryPoolDepthExceeded { max: usize },
     MemoryPoolExhausted { requested_pages: u64, available_pages: u64 },
+    /// A prior native callback unwound without completing its host boundary.
+    HostCallInterrupted,
     /// Normal termination of this guest instance, never the embedding process.
     ProcessExit { code: u32 },
     Cancelled,
@@ -75,6 +77,7 @@ impl fmt::Display for WasmHostError {
             Self::MemoryPoolExhausted { requested_pages, available_pages } => {
                 write!(f, "wasm memory reservation needs {requested_pages} pages, only {available_pages} available")
             }
+            Self::HostCallInterrupted => f.write_str("wasm instance cannot execute after an interrupted host callback"),
             Self::ProcessExit { code } => write!(f, "wasm guest exited with status {code}"),
             Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
             Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
@@ -170,6 +173,10 @@ pub struct WasmHostImports {
     execution_cancellation: Option<HostCancellation>,
     revocations: BTreeMap<RuntimeCapability, HostCancellation>,
     exit_status: Option<u32>,
+    // Set across provider entry and trace finalization. Unwinding leaves this
+    // true even if an embedder catches the original panic and keeps the instance.
+    // No public operation can clear it or replace the owned provider registry.
+    host_call_in_progress: bool,
     memory_pool: Option<WasmMemoryPool>,
     // InstanceState drops its linear memory before its owned host registry.
     // Keep this lease until that memory and all provider state have been freed.
@@ -184,6 +191,7 @@ impl WasmHostImports {
             execution_cancellation: None,
             revocations: BTreeMap::new(),
             exit_status: None,
+            host_call_in_progress: false,
             memory_pool: None,
             memory_reservation: None,
         }
@@ -288,6 +296,7 @@ impl WasmHostImports {
     }
 
     fn check_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
+        self.check_host_integrity()?;
         check_exit(self.exit_status)?;
         check_execution_scope(&mut self.execution_cancellation)?;
         if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
@@ -295,6 +304,11 @@ impl WasmHostImports {
         }
         check_memory_pool(self.memory_pool.as_ref())?;
         Ok(())
+    }
+
+    fn check_host_integrity(&self) -> Result<(), WasmNumericVmError> {
+        if self.host_call_in_progress { Err(WasmHostError::HostCallInterrupted.into()) }
+        else { Ok(()) }
     }
 
     /// Record entered providers, including startup. The observer survives a
@@ -630,6 +644,8 @@ impl WasmNumericVm {
 impl WasmNumericInstance<'_> {
     /// Inspect the first normal guest exit, including one followed by a trace
     /// finalization failure. State remains inspectable but cannot execute again.
+    /// A provider that panicked after requesting exit still has an interrupted
+    /// host boundary; this stored status must not be treated as successful completion.
     pub fn process_exit_status(&self) -> Option<u32> {
         self.state.host_imports.as_ref().and_then(|imports| imports.exit_status)
     }
@@ -648,6 +664,7 @@ impl InstanceState {
     /// for all guest execution. No registry means neither kind of subscription.
     pub(in super::super) fn check_execution_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
         if let Some(imports) = self.host_imports.as_mut() {
+            imports.check_host_integrity()?;
             check_exit(imports.exit_status)?;
             check_execution_scope(&mut imports.execution_cancellation)?;
             check_memory_pool(imports.memory_pool.as_ref())?;
@@ -731,6 +748,11 @@ impl InstanceState {
             playback.complete()?;
             playback.call.outcome.clone()
         } else {
+            // Do not catch a native panic or turn it into a guest trap. Retain
+            // an interrupted-boundary marker so an embedder's catch_unwind
+            // cannot resume possibly inconsistent guest/provider state. This
+            // is instance-local: other tasks and pool siblings remain runnable.
+            imports.host_call_in_progress = true;
             let outcome = {
                 let mut caller = WasmHostCaller {
                     meter, memory: &mut self.memory, failure: None,
@@ -750,7 +772,11 @@ impl InstanceState {
                 }
             };
             remember_exit(&mut imports.exit_status, &outcome);
-            trace.finish(meter.instructions - entry_work, &outcome)?;
+            let recorded = trace.finish(meter.instructions - entry_work, &outcome);
+            // Returned errors (including trace refusal) are ordinary completed
+            // boundaries, not unwinding. Preserve their existing error semantics.
+            imports.host_call_in_progress = false;
+            recorded?;
             outcome
         };
         let results = outcome?;

@@ -45,3 +45,4 @@ jobs:
           --test wasm_wasi_preview1 --test wasm_wasi_stdio
           --test wasm_scheduled_startup
           --test wasm_wasi_command
+          --test wasm_wasi_command_runner

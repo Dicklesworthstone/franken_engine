@@ -11,6 +11,27 @@ use std::pin::Pin;
 use std::task::Poll;
 
 impl WasmNativeModule {
+    /// Run a one-shot WASI command under the caller's current policy snapshot.
+    /// This consumes the provider registry and never exposes a live instance
+    /// after `_start` returns, exits or fails. Validate the command ABI before
+    /// binary startup effects; retain the ordinary manifest/provider intersection
+    /// and pinned recording/replay scope. Completed external effects survive.
+    ///
+    /// The supplied policy is a snapshot, not a subscription. Bind the existing
+    /// live execution/service tokens for revocation during this synchronous run.
+    /// Startup and `_start` retain their separate hard invocation budgets.
+    pub fn run_wasi_command(
+        &self,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
+        mut imports: WasmHostImports,
+    ) -> Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError> {
+        self.authorize(context, policy)?;
+        imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+        imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+        Ok(super::super::wasi_preview1::run_command_with_outcome(&self.vm, imports)?)
+    }
+
     /// Create a lazy, executor-driven instantiation with no host services.
     /// `current_policy` is a trusted embedding callback that reads the CURRENT
     /// resolution context and capability policy, not a grant cached at loading.

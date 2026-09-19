@@ -90,12 +90,13 @@ impl WasiStdio {
 impl WasiPreview1Config {
     /// Add fd_read for explicit stdin (fd 0) and fd_write for captured stdout
     /// and stderr (fds 1 and 2). This installs no file/path operations, preopens,
-    /// clocks, random source or process exit. It never touches process stdio.
+    /// clocks or random sources. proc_exit remains guest-only; it never exits
+    /// the host process or touches process stdio.
     ///
     /// fd_read requires FsRead; fd_write requires Console; neither is granted
     /// by configuration. Resolver-backed modules must also declare the required
-    /// capabilities. Builtin and EnvRead are needed only for imported args/env
-    /// functions. All six services use the existing typed/replay/live-control gate.
+    /// capabilities. Builtin is needed for imported args/proc_exit functions;
+    /// EnvRead is needed only for environment access. All use the host gate.
     pub fn into_imports_with_stdio(
         self,
         granted: BTreeSet<RuntimeCapability>,

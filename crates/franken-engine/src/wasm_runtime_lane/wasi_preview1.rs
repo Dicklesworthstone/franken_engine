@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::capability::RuntimeCapability;
 use super::{WasmBoundaryValue, WasmFunctionSignature, WasmValueType};
-use super::numeric::{WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericVm, WasmNumericVmError, WasmStateError};
+use super::numeric::{WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericVm, WasmNumericVmError};
 
 pub const WASI_PREVIEW1_MODULE: &str = "wasi_snapshot_preview1";
 const SUCCESS: i32 = 0;
@@ -153,19 +153,7 @@ impl WasiPreview1Config {
 /// This synchronous embedding API neither exits the host nor installs services;
 /// resolver-backed callers retain their existing policy-checked execution API.
 pub fn run_command(vm: &WasmNumericVm, imports: WasmHostImports) -> Result<u32, WasmNumericVmError> {
-    let signature = vm.export_signature("_start")?;
-    if !signature.params.is_empty() || !signature.results.is_empty() {
-        return Err(WasmNumericVmError::InvalidModule {
-            detail: "WASI command _start must have no parameters or results".into(),
-        });
-    }
-    let outcome = vm.instantiate_with_imports(imports)
-        .and_then(|mut instance| instance.call_export("_start", &[]));
-    match outcome {
-        Ok(_) => Ok(0),
-        Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code }))) => Ok(code),
-        Err(error) => Err(error),
-    }
+    run_command_with_outcome(vm, imports).map(|outcome| outcome.exit_code())
 }
 
 #[derive(Debug)]
@@ -267,3 +255,7 @@ fn require_work(caller: &mut WasmHostCaller<'_, '_>, work: u64) -> Result<(), Wa
 #[path = "wasi_preview1/stdio.rs"]
 mod stdio;
 pub use stdio::{WasiCapturedOutput, WasiStdio, WasiStdioAccessError, WasiStdioLimits};
+
+#[path = "wasi_preview1/command.rs"]
+mod command;
+pub use command::{WasiCommandOutcome, WasiCommandPhase, run_command_with_outcome};

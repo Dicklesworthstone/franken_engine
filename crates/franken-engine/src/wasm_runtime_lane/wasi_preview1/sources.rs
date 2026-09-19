@@ -166,3 +166,7 @@ impl WasmHostImports {
         Ok(self)
     }
 }
+
+#[path = "clocks.rs"]
+mod clocks;
+pub use clocks::{WasiClockId, WasiClockLimits, WasiClockRequest, WasiClockSource};

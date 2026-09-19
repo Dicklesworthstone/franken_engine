@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::wasm_runtime_lane::{WasmBoundaryValue, WasmValueType};
 
+#[path = "wasm_numeric_vm/activation.rs"]
+mod activation;
 #[path = "wasm_numeric_vm/control.rs"]
 mod control;
 #[path = "wasm_numeric_vm/state.rs"]
@@ -39,6 +41,9 @@ pub struct WasmNumericLimits {
     pub max_exports: usize,
     pub max_locals_per_call: usize,
     pub max_stack_values: usize,
+    /// Total live locals and operand values across all active/suspended calls.
+    /// Does not count allocator capacity or memory owned by native callbacks.
+    pub max_live_values: usize,
     /// Maximum nested structured labels, excluding the implicit function label.
     pub max_control_depth: usize,
     pub max_call_depth: u32,
@@ -58,6 +63,7 @@ impl Default for WasmNumericLimits {
             max_exports: 65_536,
             max_locals_per_call: 65_536,
             max_stack_values: 65_536,
+            max_live_values: 1_048_576,
             max_control_depth: 1024,
             max_call_depth: 256,
             max_instructions: 1_000_000,
@@ -91,6 +97,7 @@ pub enum WasmNumericVmError {
     ExportLimitExceeded { actual: usize, max: usize },
     LocalLimitExceeded { actual: usize, max: usize },
     StackLimitExceeded { max: usize },
+    LiveValueLimitExceeded { actual: usize, max: usize },
     ControlDepthExceeded { max: usize },
     CallDepthExceeded { max: u32 },
     InstructionBudgetExceeded { max: u64 },
@@ -147,6 +154,7 @@ impl fmt::Display for WasmNumericVmError {
                 write!(f, "wasm local count {actual} exceeds limit {max}")
             }
             Self::StackLimitExceeded { max } => write!(f, "wasm value stack exceeds limit {max}"),
+            Self::LiveValueLimitExceeded { actual, max } => write!(f, "wasm live activation values {actual} exceed limit {max}"),
             Self::ControlDepthExceeded { max } => write!(f, "wasm control depth exceeds limit {max}"),
             Self::CallDepthExceeded { max } => write!(f, "wasm call depth exceeds limit {max}"),
             Self::InstructionBudgetExceeded { max } => {
@@ -337,184 +345,7 @@ impl WasmNumericVm {
         meter: &mut ExecutionMeter<'_>,
         state: &mut state::InstanceState,
     ) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError> {
-        meter.enter_call(depth)?;
-        if function_index < self.imports.len() as u32 {
-            return state.invoke_import(self, function_index, arguments, meter);
-        }
-        let local_index = function_index
-            .checked_sub(self.imports.len() as u32)
-            .ok_or(WasmNumericVmError::UnknownFunction { function_index })?
-            as usize;
-        let body = self
-            .functions
-            .get(local_index)
-            .ok_or(WasmNumericVmError::UnknownFunction { function_index })?;
-        let signature = self.function_type(body.type_index)?;
-        validate_arguments(function_index, signature, arguments)?;
-
-        let local_count = arguments.len().saturating_add(body.locals.len());
-        if local_count > self.limits.max_locals_per_call {
-            return Err(WasmNumericVmError::LocalLimitExceeded {
-                actual: local_count,
-                max: self.limits.max_locals_per_call,
-            });
-        }
-        let mut locals = Vec::with_capacity(local_count);
-        locals.extend_from_slice(arguments);
-        locals.extend(body.locals.iter().copied().map(zero_value));
-
-        let mut stack = Vec::<WasmBoundaryValue>::new();
-        let mut reader = CodeReader::new(&body.code);
-        let mut controls = vec![control::Frame::function(signature.results.len(), body.code.len() - 1)];
-        let mut returned = false;
-        while !reader.finished() {
-            let opcode_offset = reader.offset();
-            let opcode = reader.read_u8(function_index)?;
-            meter.tick()?;
-            match opcode {
-                0x00..=0x05 | 0x0b..=0x0f => {
-                    if control::execute(
-                        opcode, &body.control, &mut controls, &mut stack,
-                        &mut reader, meter, function_index,
-                    )? {
-                        returned = true;
-                        break;
-                    }
-                }
-                0x1a => {
-                    pop_value(&mut stack, function_index, opcode)?;
-                }
-                0x1b => execute_select(&mut stack, function_index, opcode)?,
-                0x20 => {
-                    let index = reader.read_u32_leb(function_index)?;
-                    let value = locals.get(index as usize).cloned().ok_or(
-                        WasmNumericVmError::InvalidLocal {
-                            function_index,
-                            local_index: index,
-                        },
-                    )?;
-                    push_value(&mut stack, value, meter)?;
-                }
-                0x21 => {
-                    let index = reader.read_u32_leb(function_index)?;
-                    let value = pop_value(&mut stack, function_index, opcode)?;
-                    let slot = locals.get_mut(index as usize).ok_or(
-                        WasmNumericVmError::InvalidLocal {
-                            function_index,
-                            local_index: index,
-                        },
-                    )?;
-                    ensure_same_type(
-                        function_index,
-                        index as usize,
-                        slot.value_type(),
-                        value.value_type(),
-                    )?;
-                    *slot = value;
-                }
-                0x22 => {
-                    let index = reader.read_u32_leb(function_index)?;
-                    let value = stack.last().cloned().ok_or(
-                        WasmNumericVmError::StackUnderflow {
-                            function_index,
-                            opcode,
-                        },
-                    )?;
-                    let slot = locals.get_mut(index as usize).ok_or(
-                        WasmNumericVmError::InvalidLocal {
-                            function_index,
-                            local_index: index,
-                        },
-                    )?;
-                    ensure_same_type(
-                        function_index,
-                        index as usize,
-                        slot.value_type(),
-                        value.value_type(),
-                    )?;
-                    *slot = value;
-                }
-                0x10 | 0x11 => {
-                    let index = reader.read_u32_leb(function_index)?;
-                    let callee = if opcode == 0x10 {
-                        index
-                    } else {
-                        let table = reader.read_u32_leb(function_index)?;
-                        let element = expect_i32(
-                            pop_value(&mut stack, function_index, opcode)?, function_index, 0,
-                        )? as u32;
-                        state.indirect_callee(self, index, table, element, meter)?
-                    };
-                    let callee_type = self.function_signature(callee)?;
-                    let mut call_args = Vec::with_capacity(callee_type.params.len());
-                    for _ in 0..callee_type.params.len() {
-                        call_args.push(pop_value(&mut stack, function_index, opcode)?);
-                    }
-                    call_args.reverse();
-                    validate_arguments(callee, callee_type, &call_args)?;
-                    let results =
-                        self.invoke(callee, &call_args, depth.saturating_add(1), meter, state)?;
-                    for value in results {
-                        push_value(&mut stack, value, meter)?;
-                    }
-                }
-                0x23..=0x40 | 0xfc => {
-                    state.execute(opcode, &mut reader, &mut stack, meter, function_index)?;
-                }
-                0x41 => push_value(
-                    &mut stack,
-                    WasmBoundaryValue::I32(reader.read_i32_leb(function_index)?),
-                    meter,
-                )?,
-                0x42 => push_value(
-                    &mut stack,
-                    WasmBoundaryValue::I64(reader.read_i64_leb(function_index)?),
-                    meter,
-                )?,
-                0x43 => push_value(
-                    &mut stack,
-                    WasmBoundaryValue::F32Bits(reader.read_u32_le(function_index)?),
-                    meter,
-                )?,
-                0x44 => push_value(
-                    &mut stack,
-                    WasmBoundaryValue::F64Bits(reader.read_u64_le(function_index)?),
-                    meter,
-                )?,
-                0x45..=0xc4 => {
-                    control::execute_numeric(opcode, &mut stack, function_index)?;
-                }
-                _ => {
-                    return Err(WasmNumericVmError::UnsupportedOpcode {
-                        function_index,
-                        opcode,
-                        offset: opcode_offset,
-                    });
-                }
-            }
-        }
-
-        if !returned {
-            return Err(WasmNumericVmError::InvalidModule {
-                detail: format!("function {function_index} did not terminate with end"),
-            });
-        }
-        if stack.len() != signature.results.len() {
-            return Err(WasmNumericVmError::ResultStackMismatch {
-                function_index,
-                expected: signature.results.len(),
-                actual: stack.len(),
-            });
-        }
-        for (index, (expected, actual)) in signature
-            .results
-            .iter()
-            .zip(stack.iter().map(WasmBoundaryValue::value_type))
-            .enumerate()
-        {
-            ensure_same_type(function_index, index, *expected, actual)?;
-        }
-        Ok(stack)
+        activation::invoke(self, function_index, arguments, depth, meter, state)
     }
 
     fn function_type(&self, type_index: u32) -> Result<&FunctionType, WasmNumericVmError> {
@@ -1005,6 +836,8 @@ struct ExecutionMeter<'a> {
     instructions: u64,
     peak_stack_values: usize,
     max_call_depth: u32,
+    // All live locals plus operand prefixes belonging to suspended callers.
+    live_value_base: usize,
 }
 
 impl<'a> ExecutionMeter<'a> {
@@ -1014,6 +847,7 @@ impl<'a> ExecutionMeter<'a> {
             instructions: 0,
             peak_stack_values: 0,
             max_call_depth: 0,
+            live_value_base: 0,
         }
     }
 
@@ -1045,6 +879,15 @@ impl<'a> ExecutionMeter<'a> {
         if len > self.limits.max_stack_values {
             return Err(WasmNumericVmError::StackLimitExceeded {
                 max: self.limits.max_stack_values,
+            });
+        }
+        let actual = self.live_value_base.checked_add(len)
+            .ok_or(WasmNumericVmError::LiveValueLimitExceeded {
+                actual: usize::MAX, max: self.limits.max_live_values,
+            })?;
+        if actual > self.limits.max_live_values {
+            return Err(WasmNumericVmError::LiveValueLimitExceeded {
+                actual, max: self.limits.max_live_values,
             });
         }
         self.peak_stack_values = self.peak_stack_values.max(len);
@@ -1117,11 +960,13 @@ fn push_value(
     value: WasmBoundaryValue,
     meter: &mut ExecutionMeter<'_>,
 ) -> Result<(), WasmNumericVmError> {
+    let next = stack.len().checked_add(1)
+        .ok_or(WasmNumericVmError::StackLimitExceeded { max: meter.limits.max_stack_values })?;
+    meter.observe_stack(next)?;
+    stack.try_reserve(1).map_err(|_| WasmStateError::AllocationFailed {
+        bytes: (next as u64).saturating_mul(std::mem::size_of::<WasmBoundaryValue>() as u64),
+    })?;
     stack.push(value);
-    if let Err(error) = meter.observe_stack(stack.len()) {
-        stack.pop();
-        return Err(error);
-    }
     Ok(())
 }
 

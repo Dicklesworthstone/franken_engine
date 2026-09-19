@@ -13,6 +13,8 @@
 
 #[path = "cooperative.rs"]
 mod cooperative;
+#[path = "prepaid.rs"]
+mod prepaid;
 
 use super::*;
 use crate::capability::RuntimeCapability;
@@ -42,6 +44,8 @@ pub enum WasmHostError {
     MemoryPoolExhausted { requested_pages: u64, available_pages: u64 },
     WorkPoolAlreadyBound,
     WorkPool(WasmWorkPoolExhausted),
+    PrepaidWorkExceeded { requested: u64, remaining: u64 },
+    PrepaidWorkInterrupted,
     /// A prior native callback unwound without completing its host boundary.
     HostCallInterrupted,
     /// Normal termination of this guest instance, never the embedding process.
@@ -77,6 +81,10 @@ impl fmt::Display for WasmHostError {
             Self::MemoryPoolAlreadyBound => f.write_str("wasm memory pool is already bound"),
             Self::WorkPoolAlreadyBound => f.write_str("wasm work pool is already bound"),
             Self::WorkPool(error) => write!(f, "{error}"),
+            Self::PrepaidWorkExceeded { requested, remaining } => {
+                write!(f, "wasm prepaid host work needs {requested} units, only {remaining} remain")
+            }
+            Self::PrepaidWorkInterrupted => f.write_str("wasm prepaid host operation unwound"),
             Self::MemoryPoolRevoked => f.write_str("wasm memory pool execution scope was revoked"),
             Self::MemoryPoolDepthExceeded { max } => write!(f, "wasm memory pool nesting exceeds {max}"),
             Self::MemoryPoolExhausted { requested_pages, available_pages } => {
@@ -84,7 +92,7 @@ impl fmt::Display for WasmHostError {
             }
             Self::HostCallInterrupted => f.write_str("wasm instance cannot execute after an interrupted host callback"),
             Self::ProcessExit { code } => write!(f, "wasm guest exited with status {code}"),
-            Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
+            Self::Cancelled => f.write_str("wasm host cancellation scope was cancelled"),
             Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
             Self::ExecutionCancelled => f.write_str("wasm instance execution was cancelled"),
             Self::ExecutionCancellationAlreadyBound => f.write_str("wasm instance execution cancellation is already bound"),
@@ -509,6 +517,9 @@ pub struct WasmHostCaller<'call, 'vm> {
     import: &'call FunctionImport,
     exit_status: &'call mut Option<u32>,
     memory_pool: Option<&'call WasmMemoryPool>,
+    // Remaining credit in the innermost synchronous prepaid scope. The meter
+    // already owns the debit; this credit never escapes or funds guest opcodes.
+    prepaid_work: Option<u64>,
 }
 
 impl WasmHostCaller<'_, '_> {
@@ -618,15 +629,28 @@ impl WasmHostCaller<'_, '_> {
         Ok(range)
     }
 
-    /// Current upper bound, not a reservation against other instances. A
-    /// provider must still charge before work; the actual debit is atomic.
+    /// Inside a prepaid scope, its private remaining credit. Outside a scope,
+    /// a current upper bound, not a reservation against other instances.
+    /// A provider must still charge before work; the actual debit is atomic.
     pub fn remaining_work(&self) -> u64 {
+        if let Some(remaining) = self.prepaid_work { return remaining; }
         let local = self.meter.limits.max_instructions.saturating_sub(self.meter.instructions);
         self.meter.work_pool.as_ref().map_or(local, |pool| local.min(pool.remaining()))
     }
 
     pub fn charge_work(&mut self, units: u64) -> Result<(), WasmNumericVmError> {
         self.checkpoint()?;
+        if let Some(remaining) = self.prepaid_work.as_mut() {
+            let Some(next) = remaining.checked_sub(units) else {
+                let error: WasmNumericVmError = WasmHostError::PrepaidWorkExceeded {
+                    requested: units, remaining: *remaining,
+                }.into();
+                self.failure = Some(error.clone());
+                return Err(error);
+            };
+            *remaining = next;
+            return Ok(());
+        }
         if let Err(error) = self.meter.charge_work(units) {
             self.failure = Some(error.clone());
             return Err(error);
@@ -795,6 +819,7 @@ impl InstanceState {
                     revocations: &mut imports.revocations, required: &binding.required, import,
                     exit_status: &mut imports.exit_status,
                     memory_pool: imports.memory_pool.as_ref(),
+                    prepaid_work: None,
                 };
                 let outcome = (binding.callback)(&mut caller, arguments);
                 // Finish the recording even when cancellation or a latched

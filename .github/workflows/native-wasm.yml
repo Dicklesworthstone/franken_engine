@@ -62,6 +62,7 @@ jobs:
           --test wasm_pool_revocation
           --test wasm_wasi_sources
           --test wasm_wasi_clocks
+          --test wasm_host_prepaid_work
       - name: Verify typed core execution failures
         run: >-
           cargo +stable test --locked -p frankenengine-core --no-default-features

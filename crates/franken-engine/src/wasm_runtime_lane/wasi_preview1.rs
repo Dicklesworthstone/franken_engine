@@ -1,7 +1,8 @@
 //! Explicit WASI Preview 1 providers for the native executor.
 //!
-//! Only caller-supplied arguments and environment are installed here, under
-//! `wasi_snapshot_preview1`. Nothing reads the process arguments/environment,
+//! The default registry supplies arguments and environment; an explicit stdio
+//! factory adds bounded memory-backed streams under `wasi_snapshot_preview1`.
+//! Nothing reads the process arguments/environment,
 //! opens files, or installs clocks, entropy or sockets. This is an implemented
 //! subset, not a full WASI runtime; undeclared services remain unbound.
 //!
@@ -229,3 +230,7 @@ fn require_work(caller: &mut WasmHostCaller<'_, '_>, work: u64) -> Result<(), Wa
     if work > caller.remaining_work() { caller.charge_work(work)?; }
     Ok(())
 }
+
+#[path = "wasi_preview1/stdio.rs"]
+mod stdio;
+pub use stdio::{WasiCapturedOutput, WasiStdio, WasiStdioAccessError, WasiStdioLimits};

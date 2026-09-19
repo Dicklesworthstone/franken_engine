@@ -42,4 +42,4 @@ jobs:
           --test wasm_cooperative_calls --test wasm_native_scheduler
           --test wasm_cooperative_startup
           --test wasm_resolved_startup
-          --test wasm_wasi_preview1
+          --test wasm_wasi_preview1 --test wasm_wasi_stdio

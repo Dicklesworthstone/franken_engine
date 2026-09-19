@@ -24,6 +24,7 @@ pub enum WasmHostError {
     CapabilityDenied { module: String, name: String, capability: RuntimeCapability },
     MissingAuthority,
     ZeroCallCost,
+    MissingMemory,
     Trap { message: String },
 }
 
@@ -45,6 +46,7 @@ impl fmt::Display for WasmHostError {
             Self::CapabilityDenied { module, name, capability } => write!(f, "wasm host binding {module}.{name} requires {capability}"),
             Self::MissingAuthority => f.write_str("wasm host binding requires explicit capability authority"),
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
+            Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
             Self::Trap { message } => write!(f, "wasm host trap: {message}"),
         }
     }
@@ -159,12 +161,73 @@ fn check_authority(
 /// Scoped access to the same budget as the enclosing Wasm invocation. A
 /// provider cannot erase a refusal by ignoring the returned Result: failures
 /// are latched and take precedence when the callback returns.
+/// Guest-memory borrows cannot outlive this call or overlap a later write.
+/// Access does not require a memory export (notably during startup), but is
+/// available only inside an explicitly linked, authorized host callback.
 pub struct WasmHostCaller<'call, 'vm> {
     meter: &'call mut ExecutionMeter<'vm>,
+    memory: &'call mut Option<LinearMemory>,
     failure: Option<WasmNumericVmError>,
 }
 
 impl WasmHostCaller<'_, '_> {
+    /// Size of the caller's memory zero, or None when the module has no memory.
+    /// This neither grows memory nor exposes the underlying allocation.
+    pub fn memory_size_bytes(&self) -> Option<usize> {
+        self.memory.as_ref().map(|memory| memory.bytes.len())
+    }
+
+    /// Borrow a checked guest buffer. Interpret Wasm i32 pointers as u32, not
+    /// signed host offsets. The full range is checked without wrapping; an
+    /// empty range is valid at, but never beyond, the end of an existing memory.
+    /// Charge one work unit per 64 bytes before exposing any bytes. Processing
+    /// beyond this access charge still needs the provider's own work metering.
+    pub fn read_memory(
+        &mut self,
+        address: u32,
+        length: u32,
+    ) -> Result<&[u8], WasmNumericVmError> {
+        let range = self.prepare_memory_access(address, length as usize)?;
+        let memory = self.memory.as_ref().ok_or(WasmHostError::MissingMemory)?;
+        Ok(&memory.bytes[range])
+    }
+
+    /// Copy host output into guest memory after checking the entire range and
+    /// precharging copy work. Refusal never leaves a partial write. Completed
+    /// writes remain visible if a later host operation or guest instruction
+    /// traps, just like completed guest stores; this is not a transaction.
+    pub fn write_memory(
+        &mut self,
+        address: u32,
+        bytes: &[u8],
+    ) -> Result<(), WasmNumericVmError> {
+        let range = self.prepare_memory_access(address, bytes.len())?;
+        let memory = self.memory.as_mut().ok_or(WasmHostError::MissingMemory)?;
+        memory.bytes[range].copy_from_slice(bytes);
+        Ok(())
+    }
+
+    fn prepare_memory_access(
+        &mut self,
+        address: u32,
+        length: usize,
+    ) -> Result<std::ops::Range<usize>, WasmNumericVmError> {
+        if let Some(error) = &self.failure { return Err(error.clone()); }
+        let checked = match self.memory.as_ref() {
+            Some(memory) => memory.range(address, 0, length),
+            None => Err(WasmHostError::MissingMemory.into()),
+        };
+        let range = match checked {
+            Ok(range) => range,
+            Err(error) => {
+                self.failure = Some(error.clone());
+                return Err(error);
+            }
+        };
+        self.charge_work((length as u64).div_ceil(64))?;
+        Ok(range)
+    }
+
     pub fn remaining_work(&self) -> u64 {
         self.meter.limits.max_instructions.saturating_sub(self.meter.instructions)
     }
@@ -233,7 +296,7 @@ impl InstanceState {
             .ok_or(WasmNumericVmError::InstructionBudgetExceeded { max: meter.limits.max_instructions })?;
         meter.charge_work(cost)?;
         let outcome = {
-            let mut caller = WasmHostCaller { meter, failure: None };
+            let mut caller = WasmHostCaller { meter, memory: &mut self.memory, failure: None };
             let outcome = (binding.callback)(&mut caller, arguments);
             match caller.failure {
                 Some(error) => Err(error),

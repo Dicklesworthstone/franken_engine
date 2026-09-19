@@ -65,3 +65,22 @@ impl WasmWorkPool {
         }).map(|_| ()).map_err(|remaining| WasmWorkPoolExhausted { requested: units, remaining })
     }
 }
+
+impl WasmWorkPool {
+    /// Transfer an allotment into an independent tenant or execution-cell pool.
+    /// The complete allotment is debited atomically before the child is returned;
+    /// siblings cannot spend it, even while that child is idle. Nested transfers
+    /// obey the same rule and cannot increase the original aggregate budget.
+    ///
+    /// This transfer is deliberately IRREVOCABLE. Unlike a memory reservation,
+    /// dropping the child does not refund unspent fuel to the parent. A new
+    /// execution epoch needs a newly authorized pool, not a reset of an existing
+    /// scope. There is no parent-handle escape, reparenting or refill operation.
+    pub fn partition(&self, units: u64) -> Result<Self, WasmWorkPoolExhausted> {
+        // Allocate the child before debiting: allocation failure must not lose
+        // credits. This child remains private until the atomic transfer succeeds.
+        let child = Self::new(units);
+        self.charge(units)?;
+        Ok(child)
+    }
+}

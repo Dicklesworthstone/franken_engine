@@ -368,3 +368,219 @@ fn imported_start_is_charged_before_and_inside_the_provider() {
         assert_eq!(entered.load(Ordering::SeqCst), 1);
     }
 }
+
+mod scoped {
+    use super::*;
+    use std::future::Future;
+    use std::num::NonZeroUsize;
+    use std::task::{Context, Poll, Wake, Waker};
+    use frankenengine_engine::module_resolver::{
+        CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
+        ModuleRequest, ResolutionContext, wasm_module_required_capabilities,
+    };
+    use frankenengine_engine::wasm_runtime_lane::{WasmNativeLoadError, WasmNativeModule};
+    use frankenengine_engine::wasm_runtime_lane::command::WasmCommandStep;
+    use frankenengine_engine::wasm_runtime_lane::scheduler::{WasmNativeScheduler, WasmTaskOutcome};
+    use frankenengine_engine::wasm_runtime_lane::memory_pool::WasmMemoryPool;
+
+    fn context() -> ResolutionContext { ResolutionContext::new("quota-trace", "quota-decision", "quota-policy") }
+    fn policy() -> CapabilityPolicyHook { CapabilityPolicyHook::new(wasm_module_required_capabilities()) }
+    fn load(start: bool) -> WasmNativeModule {
+        let limits = WasmNumericLimits { max_instructions: 10000, ..WasmNumericLimits::default() };
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver.register_workspace_module("/app/quota.wasm", ModuleDefinition::wasm_binary(&fixture(start, false, false), &limits).unwrap()).unwrap();
+        resolver.load_wasm(&ModuleRequest::new("/app/quota.wasm", ImportStyle::Import), &context(), &policy(), limits).unwrap()
+    }
+    fn work(n: u64) -> NonZeroU64 { NonZeroU64::new(n).unwrap() }
+    struct WakeCounter(AtomicUsize);
+    impl Wake for WakeCounter {
+        fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::SeqCst); }
+        fn wake_by_ref(self: &Arc<Self>) { self.0.fetch_add(1, Ordering::SeqCst); }
+    }
+    fn drive<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        for _ in 0..200 {
+            if let Poll::Ready(result) = future.as_mut().poll(&mut context) { return result; }
+        }
+        panic!("finite fixture did not finish");
+    }
+
+    #[test]
+    fn delegated_tenant_fuel_is_protected_and_cannot_return_on_drop() {
+        let parent = WasmWorkPool::new(20);
+        let a = parent.partition(6).unwrap();
+        let b = parent.partition(10).unwrap();
+        assert_eq!(parent.remaining(), 4);
+        assert_eq!(parent.partition(5).unwrap_err(), WasmWorkPoolExhausted { requested: 5, remaining: 4 });
+        let vm = vm(false, false, false, 100);
+        let mut instance = vm.instantiate_with_imports(imports(&a)).unwrap();
+        instance.call_export("inc", &[]).unwrap();
+        depleted(instance.call_export("unit", &[]));
+        assert_eq!(b.remaining(), 10);
+        drop(a); drop(b); drop(instance);
+        assert_eq!(parent.remaining(), 4); // Unused tenant allotments are NOT a refill.
+    }
+
+    #[test]
+    fn nested_zero_and_maximum_transfers_do_not_wrap_or_duplicate_credits() {
+        let root = WasmWorkPool::new(u64::MAX);
+        let child = root.partition(u64::MAX).unwrap();
+        assert_eq!(root.remaining(), 0);
+        assert!(root.partition(1).is_err());
+        let empty = root.partition(0).unwrap();
+        assert_eq!(empty.limit(), 0);
+        let grandchild = child.partition(u64::MAX - 1).unwrap();
+        assert_eq!(child.remaining(), 1);
+        assert_eq!(grandchild.remaining(), u64::MAX - 1);
+        assert_eq!(child.clone().partition(1).unwrap().limit(), 1);
+        assert_eq!(child.remaining(), 0);
+        drop(grandchild);
+        assert_eq!(root.remaining(), 0);
+    }
+
+    #[test]
+    fn current_policy_denial_and_lazy_preparation_do_not_spend_or_replace_fuel() {
+        let module = load(true);
+        let pool = WasmWorkPool::new(10);
+        let command = module.prepare_command(imports(&pool));
+        assert_eq!(pool.remaining(), 10);
+        assert!(matches!(command.resume(work(100), &context(), &CapabilityPolicyHook::new(BTreeSet::new())), Err(WasmNativeLoadError::Resolution(_))));
+        assert_eq!(pool.remaining(), 10);
+        let command = module.prepare_command(imports(&pool));
+        let WasmCommandStep::Pending(command) = command.resume(work(100), &context(), &policy()).unwrap() else { panic!("phase boundary"); };
+        assert_eq!(pool.remaining(), 5);
+        assert!(matches!(command.resume(work(100), &context(), &CapabilityPolicyHook::new(BTreeSet::new())), Err(WasmNativeLoadError::Resolution(_))));
+        assert_eq!(pool.remaining(), 5);
+    }
+
+    #[test]
+    fn both_command_phases_and_later_commands_pay_one_shared_allotment() {
+        let module = load(true);
+        let pool = WasmWorkPool::new(20);
+        for _ in 0..2 {
+            let mut command = module.prepare_command(imports(&pool));
+            loop {
+                match command.resume(work(1), &context(), &policy()).unwrap() {
+                    WasmCommandStep::Pending(next) => command = next,
+                    WasmCommandStep::Complete(done) => {
+                        assert_eq!(done.exit_code, 0); assert_eq!(done.instructions_executed, 10); break;
+                    }
+                }
+            }
+        }
+        assert_eq!(pool.remaining(), 0);
+        assert!(matches!(module.prepare_command(imports(&pool)).resume(work(1), &context(), &policy()),
+            Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::WorkPool(_)))))));
+    }
+
+    #[test]
+    fn synchronous_and_future_commands_cannot_reset_fuel_between_phases() {
+        let module = load(true);
+        for asynchronous in [false, true] {
+            let pool = WasmWorkPool::new(9);
+            let result = if asynchronous {
+                drive(module.run_wasi_command_cooperatively(imports(&pool), work(1), || Ok((context(), policy()))))
+            } else {
+                module.run_wasi_command(&context(), &policy(), imports(&pool))
+            };
+            assert!(matches!(result, Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::WorkPool(_)))))));
+            assert_eq!(pool.remaining(), 0);
+        }
+    }
+
+    #[test]
+    fn future_startup_yields_without_refilling_and_preserves_fuel_after_drop() {
+        let vm = vm(true, false, false, 100);
+        let pool = WasmWorkPool::new(20);
+        let mut future = Box::pin(vm.instantiate_cooperatively_with_imports(imports(&pool), work(2)));
+        let wakes = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let waker = Waker::from(wakes.clone()); let mut context = Context::from_waker(&waker);
+        assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending));
+        assert_eq!(pool.remaining(), 18);
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+        drop(future);
+        assert_eq!(pool.remaining(), 18);
+        let instance = drive(vm.instantiate_cooperatively_with_imports(imports(&pool), work(1))).unwrap();
+        assert_eq!(instance.start_execution().unwrap().instructions_executed, 5);
+        assert_eq!(pool.remaining(), 13);
+    }
+
+    #[test]
+    fn scheduler_withdrawal_requeue_and_task_cancellation_never_refund_spending() {
+        let module = load(false);
+        let pool = WasmWorkPool::new(20);
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(1).unwrap());
+        let old = scheduler.submit_command(module.prepare_command(imports(&pool))).unwrap();
+        assert!(matches!(scheduler.run_next(work(2), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        assert_eq!(pool.remaining(), 20); // no binary start, mandatory phase yield
+        assert!(matches!(scheduler.run_next(work(2), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        assert_eq!(pool.remaining(), 18);
+        let command = scheduler.take_command(old.id()).unwrap();
+        assert_eq!(command.instructions_executed(), 2);
+        let new = scheduler.submit_command(command).unwrap();
+        old.cancel();
+        assert!(matches!(scheduler.run_next(work(1), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        new.cancel();
+        assert!(matches!(scheduler.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Cancelled));
+        assert_eq!(pool.remaining(), 17);
+        drop(scheduler);
+        assert_eq!(pool.remaining(), 17);
+    }
+
+    #[test]
+    fn depleted_tenant_tasks_cannot_stop_an_independently_budgeted_command() {
+        let module = load(false);
+        let depleted_pool = WasmWorkPool::new(0); let healthy_pool = WasmWorkPool::new(5);
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(2).unwrap());
+        let denied = scheduler.submit_command(module.prepare_command(imports(&depleted_pool))).unwrap();
+        let healthy = scheduler.submit_command(module.prepare_command(imports(&healthy_pool))).unwrap();
+        let mut failed = false; let mut completed = false;
+        for _ in 0..50 {
+            let Some(turn) = scheduler.run_next(work(1), &context(), &policy()) else { break; };
+            match turn.outcome {
+                WasmTaskOutcome::Pending => {},
+                WasmTaskOutcome::Failed(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::WorkPool(_))))) => {
+                    assert_eq!(turn.task_id, denied.id()); failed = true;
+                }
+                WasmTaskOutcome::Exited(execution) => {
+                    assert_eq!(turn.task_id, healthy.id()); assert_eq!(execution.exit_code, 0); completed = true;
+                }
+                other => panic!("unexpected turn: {other:?}"),
+            }
+        }
+        assert!(failed && completed); assert!(scheduler.is_empty());
+        assert_eq!(healthy_pool.remaining(), 0);
+    }
+
+    #[test]
+    fn memory_capacity_returns_on_destruction_but_work_capacity_does_not() {
+        let vm = vm(false, false, false, 100);
+        let memory = WasmMemoryPool::new(2);
+        let work = WasmWorkPool::new(6);
+        let mut registry = imports(&work); registry.bind_memory_pool(memory.clone()).unwrap();
+        let mut instance = vm.instantiate_with_imports(registry).unwrap();
+        instance.call_export("inc", &[]).unwrap();
+        assert_eq!(work.remaining(), 0);
+        drop(instance);
+        // Admission of another full two-page envelope demonstrates release.
+        let mut registry = imports(&work); registry.bind_memory_pool(memory).unwrap();
+        let mut next = vm.instantiate_with_imports(registry).unwrap();
+        depleted(next.call_export("unit", &[]));
+    }
+
+    #[test]
+    fn typed_process_exit_keeps_all_prior_metered_work_spent() {
+        let vm = vm(false, true, false, 100);
+        let pool = WasmWorkPool::new(100);
+        let registry = host_imports(&pool, |caller, _| { caller.charge_work(3)?; Err(caller.exit(u32::MAX)) });
+        let mut instance = vm.instantiate_with_imports(registry).unwrap();
+        assert!(matches!(instance.call_export("host", &[]), Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code: u32::MAX })))));
+        assert_eq!(pool.remaining(), 92);
+        assert_eq!(instance.process_exit_status(), Some(u32::MAX));
+        assert!(instance.call_export("unit", &[]).is_err());
+        drop(instance);
+        assert_eq!(pool.remaining(), 92);
+    }
+}

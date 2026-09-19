@@ -194,3 +194,139 @@ impl WasmNativeModule {
         })
     }
 }
+
+impl WasmNativeModule {
+    /// Run binary startup and `_start` cooperatively without exposing a partial
+    /// or reusable command instance. Construction is lazy: the first poll checks
+    /// CURRENT policy and the entry signature before any guest allocation or
+    /// callback. Every subsequent startup/entry slice uses a new policy read;
+    /// a final read also gates normal return and typed exit status publication.
+    /// A reader may be called more than once per poll and must not block.
+    ///
+    /// Startup and entry retain their separate original hard invocation budgets;
+    /// neither budget is replenished by yielding. A mandatory yield separates
+    /// startup from entry so both cannot spend a whole quantum in one poll.
+    /// Individual allocations, bulk operations and native callbacks remain
+    /// indivisible: this is not a wall-clock or native-code preemption bound.
+    ///
+    /// The same resolved linker, activation machine and scoped host replay path
+    /// execute both phases. Drop, denial and failure destroy private state but
+    /// do not undo external effects already completed. A completed or panicked
+    /// future cannot be polled again to repeat a provider or command entry.
+    pub fn run_wasi_command_cooperatively<'vm, P>(
+        &'vm self,
+        imports: WasmHostImports,
+        work: NonZeroU64,
+        mut current_policy: P,
+    ) -> impl Future<Output = Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError>> + Send + 'vm
+    where
+        P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError>
+            + Send + 'vm,
+    {
+        use super::super::wasi_preview1::{WasiCommandOutcome, WasiCommandPhase};
+        let command = async move {
+            authorize_current(self, &mut current_policy)?;
+            self.validate_command_entry()?;
+            let mut imports = imports;
+            imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+            imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+            let startup = {
+                let mut future = self.vm.instantiate_cooperatively_with_imports(imports, work);
+                poll_fn(|cx| {
+                    if let Err(error) = authorize_current(self, &mut current_policy) {
+                        return Poll::Ready(Err(error));
+                    }
+                    match Pin::new(&mut future).poll(cx) {
+                        Poll::Pending => Poll::Pending,
+                        Poll::Ready(result) => Poll::Ready(result.map_err(WasmNativeLoadError::from)),
+                    }
+                }).await
+            };
+            let mut instance = match startup {
+                Ok(instance) => WasmNativeInstance { module: self, instance },
+                Err(error) => {
+                    // Ordinary failures keep precedence. Only a genuine exit
+                    // reaches the final fresh-policy publication check.
+                    let outcome = command_exit(error, WasiCommandPhase::Instantiation)?;
+                    authorize_current(self, &mut current_policy)?;
+                    return Ok(outcome);
+                }
+            };
+            authorize_current(self, &mut current_policy)?;
+            let startup_metrics = instance.instance.start_execution().cloned();
+            let mut yielded = false;
+            poll_fn(|cx| {
+                if yielded { return Poll::Ready(()); }
+                yielded = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }).await;
+
+            let outcome = {
+                let (context, policy) = current_policy()?;
+                let mut pending = Some(instance.begin_call("_start", &[], &context, &policy)?);
+                poll_fn(|cx| {
+                    let (context, policy) = match current_policy() {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => { pending = None; return Poll::Ready(Err(error)); }
+                    };
+                    let call = pending.take().expect("unfinished command entry");
+                    match call.resume(work, &context, &policy) {
+                        Ok(WasmNativeCallStep::Pending(call)) => {
+                            pending = Some(call);
+                            cx.waker().wake_by_ref();
+                            Poll::Pending
+                        }
+                        Ok(WasmNativeCallStep::Complete(execution)) => Poll::Ready(Ok(execution)),
+                        Err(error) => Poll::Ready(Err(error)),
+                    }
+                }).await
+            };
+            let outcome = match outcome {
+                Ok(execution) => WasiCommandOutcome::Returned { startup: startup_metrics, execution },
+                Err(error) => command_exit(error, WasiCommandPhase::Command)?,
+            };
+            // In particular, a final provider may revoke policy and then exit.
+            // It cannot turn that revocation into an authorized status result.
+            authorize_current(self, &mut current_policy)?;
+            Ok(outcome)
+        };
+        let mut active = Some(Box::pin(command));
+        let mut finished = false;
+        poll_fn(move |cx| {
+            assert!(!finished, "command future polled after completion or panic");
+            // Also covers a panicking policy reader, callback or executor waker.
+            finished = true;
+            match active.as_mut().expect("unfinished command").as_mut().poll(cx) {
+                Poll::Pending => { finished = false; Poll::Pending }
+                Poll::Ready(result) => {
+                    active = None; // Release private instance/providers now.
+                    Poll::Ready(result)
+                }
+            }
+        })
+    }
+
+    fn validate_command_entry(&self) -> Result<(), WasmNativeLoadError> {
+        let signature = self.vm.export_signature("_start")?;
+        if !signature.params.is_empty() || !signature.results.is_empty() {
+            return Err(WasmNumericVmError::InvalidModule {
+                detail: "WASI command _start must have no parameters or results".into(),
+            }.into());
+        }
+        Ok(())
+    }
+}
+
+fn command_exit(
+    error: WasmNativeLoadError,
+    phase: super::super::wasi_preview1::WasiCommandPhase,
+) -> Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError> {
+    use super::super::numeric::{WasmHostError, WasmStateError};
+    match error {
+        WasmNativeLoadError::Execution(WasmNumericVmError::State(
+            WasmStateError::Host(WasmHostError::ProcessExit { code }),
+        )) => Ok(super::super::wasi_preview1::WasiCommandOutcome::Exited { code, phase }),
+        error => Err(error),
+    }
+}

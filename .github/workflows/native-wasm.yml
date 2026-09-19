@@ -46,3 +46,4 @@ jobs:
           --test wasm_scheduled_startup
           --test wasm_wasi_command
           --test wasm_wasi_command_runner
+          --test wasm_resolved_commands

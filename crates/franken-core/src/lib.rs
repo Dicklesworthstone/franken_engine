@@ -23,6 +23,7 @@ pub mod entropy_evidence_compressor;
 pub mod evidence_ledger;
 pub mod execution_cell;
 pub mod execution_orchestrator;
+pub mod execution_work_budget;
 pub mod expected_loss_selector;
 pub mod fleet_convergence;
 pub mod fleet_immune_protocol;

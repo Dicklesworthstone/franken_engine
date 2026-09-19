@@ -249,6 +249,35 @@ impl AsyncModuleRuntime {
         self.scheduler.reject_task(task, reason, label)
     }
 
+    /// Cancel one unfinished module without needing a live execution lease.
+    ///
+    /// Queued, running, suspended, and dependency-blocked modules are all valid
+    /// targets. Rejection follows the configured propagation policy and revokes
+    /// affected leases. Terminal modules are unchanged and return `false`;
+    /// unknown modules return an error. Shared host Promises are not cancelled.
+    pub fn cancel_module(
+        &mut self,
+        specifier: &str,
+        reason: JsValue,
+        label: Label,
+    ) -> Result<bool, AsyncModuleSchedulerError> {
+        self.scheduler.cancel_module(specifier, reason, label)
+    }
+
+    /// Cancel all unfinished work, including modules in runtime await cycles.
+    ///
+    /// Returns the number of newly cancelled modules, including propagation.
+    /// Existing successful values and earlier failures keep their values and
+    /// labels. No guest task is dispatched; shared host Promises remain owned
+    /// by their providers. Calling this again after shutdown returns zero.
+    pub fn cancel_all(
+        &mut self,
+        reason: JsValue,
+        label: Label,
+    ) -> Result<usize, AsyncModuleSchedulerError> {
+        self.scheduler.cancel_all(reason, label)
+    }
+
     pub fn fulfill_awaited_promise(
         &mut self,
         promise: PromiseHandle,

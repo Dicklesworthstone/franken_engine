@@ -499,9 +499,9 @@ mod queue {
     #[test]
     fn denied_partial_startup_retires_independently_and_reports_current_context() {
         let module = module(&program(0, 0, 2, false, true));
+        let healthy = super::module(&program(0, 0, 0, false, false));
         let effects = Arc::new(AtomicUsize::new(0));
         let task = first_effect(&module, effects.clone());
-        let healthy = super::module(&program(0, 0, 0, false, false));
         let mut scheduler = WasmNativeScheduler::new(slots(2));
         let denied_id = scheduler.submit_startup(task).unwrap().id();
         let healthy_id = scheduler.submit_startup(healthy.prepare_startup()).unwrap().id();

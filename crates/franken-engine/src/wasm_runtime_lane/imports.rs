@@ -720,3 +720,6 @@ mod tests {
         assert_eq!(first, second);
     }
 }
+
+#[path = "imports/startup.rs"]
+mod startup;

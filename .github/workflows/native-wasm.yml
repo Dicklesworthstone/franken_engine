@@ -43,3 +43,4 @@ jobs:
           --test wasm_cooperative_startup
           --test wasm_resolved_startup
           --test wasm_wasi_preview1 --test wasm_wasi_stdio
+          --test wasm_scheduled_startup

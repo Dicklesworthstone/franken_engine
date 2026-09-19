@@ -17,7 +17,7 @@ use crate::checkpoint::CancellationToken;
 use crate::module_resolver::{CapabilityPolicyHook, ResolutionContext};
 
 use super::numeric::WasmNumericExecution;
-use super::{WasmNativeCall, WasmNativeCallStep, WasmNativeLoadError};
+use super::{WasmNativeCall, WasmNativeCallStep, WasmNativeInstance, WasmNativeLoadError};
 
 pub const WASM_NATIVE_SCHEDULER_COMPONENT: &str = "wasm_native_scheduler";
 
@@ -234,4 +234,73 @@ impl<'call, 'vm> WasmNativeScheduler<'call, 'vm> {
             outcome,
         })
     }
+}
+
+// Type erasure is confined to this scheduling seam; only the resolver can
+// construct a driver. It owns one numeric startup state machine, not a second
+// evaluator or a caller-provided arbitrary Future with an unenforced quantum.
+type StartupAdvance<'vm> = dyn FnMut(
+    NonZeroU64, &ResolutionContext, &CapabilityPolicyHook,
+) -> Result<(u64, Option<WasmNativeInstance<'vm>>), WasmNativeLoadError> + Send + Sync + 'vm;
+
+/// Lazy, resolver-created initialization. Preparing a task neither allocates
+/// guest memory nor enters a provider. Each consuming resume needs the current
+/// policy snapshot. Completed/failed attempts cannot be resumed or cloned.
+///
+/// Only Complete exposes an instance; Pending grants no memory/global/export
+/// access. Drop discards unpublished guest state, never completed external I/O.
+#[must_use = "resume the startup task or explicitly drop it to cancel"]
+pub struct WasmStartupTask<'vm> {
+    advance: Box<StartupAdvance<'vm>>,
+    instructions: u64,
+}
+
+impl fmt::Debug for WasmStartupTask<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WasmStartupTask")
+            .field("instructions_executed", &self.instructions)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+#[must_use = "retain pending initialization or consume the completed instance"]
+pub enum WasmStartupStep<'vm> {
+    Pending(WasmStartupTask<'vm>),
+    Complete(WasmNativeInstance<'vm>),
+}
+
+impl<'vm> WasmStartupTask<'vm> {
+    pub(crate) fn new<F>(advance: F) -> Self
+    where
+        F: FnMut(NonZeroU64, &ResolutionContext, &CapabilityPolicyHook)
+            -> Result<(u64, Option<WasmNativeInstance<'vm>>), WasmNativeLoadError> + Send + Sync + 'vm,
+    {
+        Self { advance: Box::new(advance), instructions: 0 }
+    }
+
+    /// Run one soft quantum using the caller's current policy, including first
+    /// allocation and no-start publication. The original startup hard budget
+    /// spans all slices. Setup, bulk instructions and native callbacks remain
+    /// indivisible; this is not native-code preemption or a wall-clock deadline.
+    /// Use live execution/host controls for cancellation within a running slice.
+    pub fn resume(
+        mut self,
+        work: NonZeroU64,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
+    ) -> Result<WasmStartupStep<'vm>, WasmNativeLoadError> {
+        let (instructions, instance) = (self.advance)(work, context, policy)?;
+        self.instructions = instructions;
+        Ok(match instance {
+            Some(instance) => WasmStartupStep::Complete(instance),
+            None => WasmStartupStep::Pending(self),
+        })
+    }
+
+    /// Charged startup work, not allocation/copying outside guest execution.
+    pub fn instructions_executed(&self) -> u64 { self.instructions }
+
+    /// Discard unfinished initialization; completed host effects remain real.
+    pub fn cancel(self) {}
 }

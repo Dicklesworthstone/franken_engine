@@ -56,6 +56,23 @@ impl WasmNumericVm {
            + Send + Sync + Unpin + '_ {
         Startup::new(self, Some(imports), work)
     }
+
+    /// Internal scheduler seam over the very same state owner as the Future.
+    /// The caller supplies each quantum; neither path resets the startup meter.
+    /// No linking, allocation or guest instruction runs while creating a driver.
+    pub(crate) fn cooperative_startup_driver<'vm>(
+        &'vm self,
+        imports: Option<WasmHostImports>,
+    ) -> impl FnMut(NonZeroU64) -> Result<
+        (u64, Option<WasmNumericInstance<'vm>>), WasmNumericVmError,
+    > + Send + Sync + 'vm {
+        let mut startup = Startup::new(self, imports, NonZeroU64::MIN);
+        move |work| {
+            startup.work = work;
+            let instance = startup.advance()?;
+            Ok((startup.meter.instructions, instance))
+        }
+    }
 }
 
 struct Startup<'vm> {
@@ -109,33 +126,47 @@ impl<'vm> Startup<'vm> {
     }
 }
 
+impl<'vm> Startup<'vm> {
+    fn advance(&mut self) -> Result<Option<WasmNumericInstance<'vm>>, WasmNumericVmError> {
+        assert!(!self.finished, "startup future polled after completion or panic");
+        // Pessimistic terminal state prevents reentry after a provider panic.
+        self.finished = true;
+        match self.run_slice() {
+            Ok(false) => {
+                self.finished = false;
+                Ok(None)
+            }
+            Ok(true) => {
+                self.machine = None;
+                Ok(Some(self.instance.take().expect("completed startup state")))
+            }
+            Err(error) => {
+                // Release unpublished state immediately. Independently retained
+                // host recordings outlive both drivers, including a failed start.
+                self.machine = None;
+                self.instance = None;
+                self.imports = None;
+                Err(error)
+            }
+        }
+    }
+}
+
 impl<'vm> Future for Startup<'vm> {
     type Output = Result<WasmNumericInstance<'vm>, WasmNumericVmError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        assert!(!this.finished, "startup future polled after completion or panic");
-        // Pessimistic terminal state: unwinding a native callback (or waker)
-        // must never make a partially consumed host call resumable a second time.
-        this.finished = true;
-        match this.run_slice() {
-            Ok(false) => {
+        match this.advance() {
+            Ok(None) => {
+                // A panicking waker must not leave this future resumable either.
+                this.finished = true;
                 cx.waker().wake_by_ref();
                 this.finished = false;
                 Poll::Pending
             }
-            Ok(true) => {
-                this.machine = None;
-                Poll::Ready(Ok(this.instance.take().expect("completed startup state")))
-            }
-            Err(error) => {
-                // Release all unpublished state immediately, not on a later
-                // poll. Host recording observers remain independently owned.
-                this.machine = None;
-                this.instance = None;
-                this.imports = None;
-                Poll::Ready(Err(error))
-            }
+            Ok(Some(instance)) => Poll::Ready(Ok(instance)),
+            Err(error) => Poll::Ready(Err(error)),
         }
     }
 }

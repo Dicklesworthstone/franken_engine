@@ -132,3 +132,44 @@ where
         }
     })
 }
+
+impl WasmNativeModule {
+    /// Prepare lazy startup for an embedder-driven scheduler. Unlike the Future
+    /// API's policy-reader callback, this task takes a current policy SNAPSHOT
+    /// and soft quantum on each resume. No grant is retained between turns.
+    pub fn prepare_startup(&self) -> super::super::scheduler::WasmStartupTask<'_> {
+        self.prepare_startup_bindings(None)
+    }
+
+    /// Prepare startup with owned providers. All import signatures, provider
+    /// grants, manifest capabilities and transcript identity are checked before
+    /// state allocation on the first authorized resume. Later resumes recheck
+    /// the entire pinned module declaration; live host controls remain active.
+    pub fn prepare_startup_with_imports(
+        &self,
+        imports: WasmHostImports,
+    ) -> super::super::scheduler::WasmStartupTask<'_> {
+        self.prepare_startup_bindings(Some(imports))
+    }
+
+    fn prepare_startup_bindings(
+        &self,
+        imports: Option<WasmHostImports>,
+    ) -> super::super::scheduler::WasmStartupTask<'_> {
+        let mut pending_imports = Some(imports);
+        let mut driver = None;
+        super::super::scheduler::WasmStartupTask::new(move |work, context, policy| {
+            self.authorize(context, policy)?;
+            if driver.is_none() {
+                let mut imports = pending_imports.take().expect("unstarted scheduled initialization");
+                if let Some(imports) = imports.as_mut() {
+                    imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+                    imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+                }
+                driver = Some(self.vm.cooperative_startup_driver(imports));
+            }
+            let (instructions, instance) = driver.as_mut().expect("prepared startup driver")(work)?;
+            Ok((instructions, instance.map(|instance| WasmNativeInstance { module: self, instance })))
+        })
+    }
+}

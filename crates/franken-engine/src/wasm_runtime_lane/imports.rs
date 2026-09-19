@@ -311,6 +311,72 @@ impl WasmNativeInstance<'_> {
     }
 }
 
+/// One resolver-backed invocation. Every resume rechecks the supplied current
+/// policy before executing even one more guest opcode or pending host call.
+/// Cancelling/dropping it releases the instance without undoing earlier effects.
+#[derive(Debug)]
+#[must_use = "resume the call or explicitly drop it to cancel"]
+pub struct WasmNativeCall<'call, 'vm> {
+    module: &'vm WasmNativeModule,
+    call: super::numeric::WasmCall<'call, 'vm>,
+}
+
+#[derive(Debug)]
+#[must_use = "retain a pending continuation or drop it to cancel"]
+pub enum WasmNativeCallStep<'call, 'vm> {
+    Pending(WasmNativeCall<'call, 'vm>),
+    Complete(WasmNumericExecution),
+}
+
+impl<'vm> WasmNativeInstance<'vm> {
+    /// Prepare an export without executing it. The exclusive instance borrow
+    /// prevents a second call from changing state underneath this continuation.
+    /// Startup has already run. A fresh policy is required on EVERY resume.
+    pub fn begin_call<'call>(
+        &'call mut self,
+        name: &str,
+        arguments: &[WasmBoundaryValue],
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
+    ) -> Result<WasmNativeCall<'call, 'vm>, WasmNativeLoadError> {
+        self.module.authorize(context, policy)?;
+        let call = self.instance.begin_call(name, arguments)?;
+        Ok(WasmNativeCall { module: self.module, call })
+    }
+}
+
+impl<'call, 'vm> WasmNativeCall<'call, 'vm> {
+    /// Consume one cooperative work slice. Policy denial cancels the unfinished
+    /// invocation before any new guest effects; previous slices stay committed.
+    /// A pending host callback therefore cannot use a grant cached before yield.
+    /// Native callbacks and individual bulk instructions remain indivisible and
+    /// may overrun this soft quantum, but never the VM's hard invocation budget.
+    pub fn resume(
+        self,
+        work: std::num::NonZeroU64,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
+    ) -> Result<WasmNativeCallStep<'call, 'vm>, WasmNativeLoadError> {
+        self.module.authorize(context, policy)?;
+        match self.call.resume(work)? {
+            super::numeric::WasmCallStep::Pending(call) => {
+                Ok(WasmNativeCallStep::Pending(Self { module: self.module, call }))
+            }
+            super::numeric::WasmCallStep::Complete(execution) => {
+                Ok(WasmNativeCallStep::Complete(execution))
+            }
+        }
+    }
+
+    pub fn instructions_executed(&self) -> u64 { self.call.instructions_executed() }
+
+    pub fn peak_stack_values(&self) -> usize { self.call.peak_stack_values() }
+
+    pub fn max_call_depth(&self) -> u32 { self.call.max_call_depth() }
+
+    pub fn cancel(self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

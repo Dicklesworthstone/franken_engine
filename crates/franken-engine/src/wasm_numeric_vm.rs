@@ -20,6 +20,7 @@ use crate::wasm_runtime_lane::{WasmBoundaryValue, WasmValueType};
 
 #[path = "wasm_numeric_vm/activation.rs"]
 mod activation;
+pub use activation::{WasmCall, WasmCallStep};
 #[path = "wasm_numeric_vm/control.rs"]
 mod control;
 #[path = "wasm_numeric_vm/state.rs"]

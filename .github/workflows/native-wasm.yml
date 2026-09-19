@@ -39,3 +39,4 @@ jobs:
           --test wasm_resolved_host_imports --test wasm_host_replay
           --test wasm_call_frames --test wasm_host_cancellation
           --test wasm_execution_cancellation
+          --test wasm_cooperative_calls

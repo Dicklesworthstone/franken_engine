@@ -397,6 +397,20 @@ impl WasmNumericVm {
     }
 }
 
+impl<'vm> WasmNumericInstance<'vm> {
+    /// Prepare a cooperatively scheduled export invocation without running any
+    /// guest instruction. The returned handle owns its argument values, borrows
+    /// this instance exclusively, and retains one budget across all resumes.
+    /// Dropping it cancels unfinished work without rolling back completed effects.
+    pub fn begin_call<'call>(
+        &'call mut self,
+        name: &str,
+        arguments: &[WasmBoundaryValue],
+    ) -> Result<activation::WasmCall<'call, 'vm>, WasmNumericVmError> {
+        activation::WasmCall::new_export(self.vm, &mut self.state, name, arguments)
+    }
+}
+
 impl WasmNumericInstance<'_> {
     /// Execution of the binary start function, distinct from later export-call
     /// metrics. None means no start section. State allocation/segment copying is

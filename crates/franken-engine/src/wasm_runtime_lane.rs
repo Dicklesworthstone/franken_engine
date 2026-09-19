@@ -6,6 +6,9 @@
 //! [`numeric::WasmNumericVm::instantiate`] creates isolated persistent state;
 //! repeated [`numeric::WasmNumericInstance::call_export`] calls retain that
 //! instance's completed writes, including writes preceding a later trap.
+//! [`numeric::WasmNumericInstance::begin_call`] prepares a cooperatively sliced
+//! export invocation. [`WasmNativeInstance::begin_call`] preserves the resolver
+//! policy boundary and reauthorizes every resume; startup remains synchronous.
 //!
 //! The ABI-routing and reactive-signal surfaces remain available at their
 //! existing public paths. In particular, [`WasmModuleImportRoute::call_export`]
@@ -27,7 +30,9 @@ pub mod numeric;
 
 #[path = "wasm_runtime_lane/imports.rs"]
 mod imports;
-pub use imports::{WasmNativeInstance, WasmNativeLoadError, WasmNativeModule};
+pub use imports::{
+    WasmNativeCall, WasmNativeCallStep, WasmNativeInstance, WasmNativeLoadError, WasmNativeModule,
+};
 
 #[path = "wasm_runtime_lane/host_replay.rs"]
 pub mod host_replay;

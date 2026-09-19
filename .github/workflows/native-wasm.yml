@@ -1,0 +1,39 @@
+name: Native Wasm execution
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-engine/src/wasm_numeric_vm*'
+      - 'crates/franken-engine/src/wasm_numeric_vm/**'
+      - 'crates/franken-engine/src/wasm_runtime_lane*'
+      - 'crates/franken-engine/src/wasm_runtime_lane/**'
+      - 'crates/franken-engine/tests/wasm_*.rs'
+      - 'Cargo.lock'
+      - '.github/workflows/native-wasm.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-wasm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  host-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Execute production native host boundaries
+        run: >-
+          cargo +stable test --locked -p frankenengine-engine --no-default-features
+          --test wasm_host_imports --test wasm_host_memory
+          --test wasm_resolved_host_imports --test wasm_host_replay

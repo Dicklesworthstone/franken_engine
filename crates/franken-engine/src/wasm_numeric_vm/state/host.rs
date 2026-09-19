@@ -15,6 +15,11 @@ use super::*;
 use crate::capability::RuntimeCapability;
 use crate::wasm_runtime_lane::WasmFunctionSignature;
 use std::collections::BTreeSet;
+use crate::hash_tiers::ContentHash;
+use crate::wasm_runtime_lane::host_replay::{
+    self, WasmHostRecording, WasmHostReplay, WasmHostTraceError,
+    WasmHostTraceLimits, WasmHostTranscript,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WasmHostError {
@@ -25,6 +30,7 @@ pub enum WasmHostError {
     MissingAuthority,
     ZeroCallCost,
     MissingMemory,
+    Trace(WasmHostTraceError),
     Trap { message: String },
 }
 
@@ -47,6 +53,7 @@ impl fmt::Display for WasmHostError {
             Self::MissingAuthority => f.write_str("wasm host binding requires explicit capability authority"),
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
+            Self::Trace(error) => write!(f, "{error}"),
             Self::Trap { message } => write!(f, "wasm host trap: {message}"),
         }
     }
@@ -88,11 +95,26 @@ impl fmt::Debug for Binding {
 pub struct WasmHostImports {
     bindings: BTreeMap<String, BTreeMap<String, Binding>>,
     granted: BTreeSet<RuntimeCapability>,
+    trace: host_replay::TraceMode,
 }
 
 impl WasmHostImports {
     pub fn new(granted: BTreeSet<RuntimeCapability>) -> Self {
-        Self { bindings: BTreeMap::new(), granted }
+        Self { bindings: BTreeMap::new(), granted, trace: host_replay::TraceMode::default() }
+    }
+
+    /// Record entered providers, including startup. The observer survives a
+    /// failed start. Recording is opt-in and adds metered memory hashing;
+    /// callers must protect the resulting buffers as sensitive incident data.
+    pub fn record_calls(&mut self, limits: WasmHostTraceLimits) -> Result<WasmHostRecording, WasmHostTraceError> {
+        self.trace.record(limits)
+    }
+
+    /// Replay trusted recorded effects instead of invoking providers. Existing
+    /// binding signatures, fixed costs and capability requirements still apply.
+    /// Verify the returned observer's complete consumption after the run.
+    pub fn replay_calls(&mut self, transcript: WasmHostTranscript, limits: WasmHostTraceLimits) -> Result<WasmHostReplay, WasmHostTraceError> {
+        self.trace.replay(transcript, limits)
     }
 
     /// Narrow a provider envelope to a resolved module's declared authority.
@@ -174,6 +196,7 @@ pub struct WasmHostCaller<'call, 'vm> {
     meter: &'call mut ExecutionMeter<'vm>,
     memory: &'call mut Option<LinearMemory>,
     failure: Option<WasmNumericVmError>,
+    recording: Option<&'call mut host_replay::CallRecording>,
 }
 
 impl WasmHostCaller<'_, '_> {
@@ -208,6 +231,15 @@ impl WasmHostCaller<'_, '_> {
         bytes: &[u8],
     ) -> Result<(), WasmNumericVmError> {
         let range = self.prepare_memory_access(address, bytes.len())?;
+        // Retain the effect before mutation. A recorder refusal is latched
+        // just like a bounds/budget refusal and cannot be ignored by providers.
+        if let Some(recording) = self.recording.as_mut()
+            && let Err(error) = recording.write(address, bytes)
+        {
+            let error = WasmNumericVmError::from(error);
+            self.failure = Some(error.clone());
+            return Err(error);
+        }
         let memory = self.memory.as_mut().ok_or(WasmHostError::MissingMemory)?;
         memory.bytes[range].copy_from_slice(bytes);
         Ok(())
@@ -301,13 +333,49 @@ impl InstanceState {
         let cost = binding.call_cost.checked_add(abi_work)
             .ok_or(WasmNumericVmError::InstructionBudgetExceeded { max: meter.limits.max_instructions })?;
         meter.charge_work(cost)?;
-        let outcome = {
-            let mut caller = WasmHostCaller { meter, memory: &mut self.memory, failure: None };
-            let outcome = (binding.callback)(&mut caller, arguments);
-            match caller.failure {
-                Some(error) => Err(error),
-                None => outcome,
+        let memory_identity = if imports.trace.enabled() {
+            if let Some(memory) = &self.memory {
+                meter.charge_work((memory.bytes.len() as u64).div_ceil(64))?;
+                Some((memory.bytes.len() as u64, ContentHash::compute(&memory.bytes)))
+            } else { None }
+        } else { None };
+        let entry_work = meter.instructions;
+        let mut trace = imports.trace.begin(host_replay::CallContext {
+            module: &import.module, name: &import.name, function_index, arguments,
+            signature: &binding.signature, required: &binding.required,
+            call_cost: binding.call_cost, limits: meter.limits, entry_work,
+            call_depth: meter.max_call_depth, memory: memory_identity,
+        })?;
+        let outcome = if let host_replay::TraceCall::Replay(mut playback) = trace {
+            // Validate every destination and charge all recorded provider work
+            // before the first replay write. Divergence never partly replays a
+            // callback. Earlier completed guest instructions remain intact.
+            for write in &playback.call.writes {
+                self.memory.as_ref().ok_or(WasmHostError::MissingMemory)?
+                    .range(write.address, 0, write.bytes.len())?;
             }
+            meter.charge_work(playback.call.work)?;
+            for write in &playback.call.writes {
+                let memory = self.memory.as_mut().ok_or(WasmHostError::MissingMemory)?;
+                let range = memory.range(write.address, 0, write.bytes.len())?;
+                memory.bytes[range].copy_from_slice(&write.bytes);
+            }
+            playback.complete()?;
+            playback.call.outcome.clone()
+        } else {
+            let outcome = {
+                let mut caller = WasmHostCaller {
+                    meter, memory: &mut self.memory, failure: None,
+                    recording: trace.recording(),
+                };
+                let outcome = (binding.callback)(&mut caller, arguments);
+                match caller.failure {
+                    Some(error) => Err(error),
+                    None => outcome,
+                }
+            };
+            trace.finish(meter.instructions - entry_work, &outcome)?;
+            outcome
         };
         let results = outcome?;
         if results.len() != signature.results.len() {

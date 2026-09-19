@@ -28,3 +28,6 @@ pub mod numeric;
 #[path = "wasm_runtime_lane/imports.rs"]
 mod imports;
 pub use imports::{WasmNativeInstance, WasmNativeLoadError, WasmNativeModule};
+
+#[path = "wasm_runtime_lane/host_replay.rs"]
+pub mod host_replay;

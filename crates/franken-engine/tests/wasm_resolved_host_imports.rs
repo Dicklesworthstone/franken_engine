@@ -6,7 +6,7 @@ use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::module_resolver::{
     CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
-    ModuleRequest, ResolutionContext, ResolutionErrorCode, wasm_module_required_capabilities,
+    ModuleRequest, ModuleSyntax, ResolutionContext, ResolutionErrorCode, wasm_module_required_capabilities,
 };
 use frankenengine_engine::wasm_runtime_lane::{
     WasmBoundaryValue, WasmFunctionSignature, WasmNativeLoadError, WasmNativeModule, WasmValueType,
@@ -80,6 +80,9 @@ fn load(bytes: &[u8], declared: &[RuntimeCapability], policy: &CapabilityPolicyH
     let mut definition = ModuleDefinition::wasm_binary(bytes, &WasmNumericLimits::default()).unwrap();
     definition.required_capabilities.extend(declared.iter().copied());
     let mut resolver = DeterministicModuleResolver::new("/app");
+    // Relative imports require a real registered referrer, not just a path.
+    resolver.register_workspace_module("/app/main.mjs",
+        ModuleDefinition::new(ModuleSyntax::EsModule, "import './host.wasm';")).unwrap();
     resolver.register_workspace_module("/app/host.wasm", definition.with_provenance("resolved-host-fixture")).unwrap();
     resolver.load_wasm(&request(), &context(), policy, limits)
 }
@@ -309,4 +312,22 @@ fn deterministic_host_provider_replays_start_and_export_metrics_with_pinned_iden
         assert_eq!(a.instructions_executed, 12);
     }
     assert_eq!(first.memory_export("m", &context(), &grants).unwrap(), second.memory_export("m", &context(), &grants).unwrap());
+}
+
+#[test]
+fn relative_host_imports_require_a_registered_referrer_before_linking() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver.register_workspace_module("/app/host.wasm",
+        ModuleDefinition::wasm_binary(&fixture(false, false, false), &WasmNumericLimits::default())
+            .unwrap().require_capability(Builtin)).unwrap();
+    let grants = policy(&[Builtin]);
+    assert!(matches!(resolver.load_wasm(&request(), &context(), &grants, WasmNumericLimits::default()),
+        Err(WasmNativeLoadError::Resolution(error)) if error.code == ResolutionErrorCode::InvalidReferrer));
+    resolver.register_workspace_module("/app/main.mjs",
+        ModuleDefinition::new(ModuleSyntax::EsModule, "import './host.wasm';")).unwrap();
+    let module = resolver.load_wasm(&request(), &context(), &grants, WasmNumericLimits::default()).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut instance = module.instantiate_with_imports(&context(), &grants, ordinary(calls.clone())).unwrap();
+    assert_eq!(instance.call_export("f", &[I32(8), I32(3)], &context(), &grants).unwrap().results, [I32(1)]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

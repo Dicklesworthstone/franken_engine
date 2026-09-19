@@ -360,8 +360,15 @@ mod tests {
         ModuleRequest::new("./state.wasm", ImportStyle::Import).with_referrer("/app/main.mjs")
     }
 
-    fn resolver(bytes: &[u8]) -> DeterministicModuleResolver {
+    fn registry_with_referrer() -> DeterministicModuleResolver {
         let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver.register_workspace_module("/app/main.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './state.wasm';")).unwrap();
+        resolver
+    }
+
+    fn resolver(bytes: &[u8]) -> DeterministicModuleResolver {
+        let mut resolver = registry_with_referrer();
         resolver.register_workspace_module(
             "/app/state.wasm",
             ModuleDefinition::wasm_binary(bytes, &WasmNumericLimits::default())
@@ -395,7 +402,7 @@ mod tests {
         assert_eq!(definition.required_capabilities, wasm_module_required_capabilities());
         assert!(std::str::from_utf8(STATE_MODULE).is_err());
         let raw = "\0asm\x01\0\0\0";
-        let mut registry = DeterministicModuleResolver::new("/app");
+        let mut registry = registry_with_referrer();
         registry.register_workspace_module("/app/state.wasm", ModuleDefinition::new(ModuleSyntax::Wasm, raw)).unwrap();
         let module = load(&registry);
         assert!(module.export_names().next().is_none());
@@ -425,7 +432,7 @@ mod tests {
 
     #[test]
     fn missing_intrinsic_grants_fail_before_decoding_or_executing_source() {
-        let mut registry = DeterministicModuleResolver::new("/app");
+        let mut registry = registry_with_referrer();
         registry.register_workspace_module(
             "/app/state.wasm", ModuleDefinition::new(ModuleSyntax::Wasm, "not wasm"),
         ).unwrap();
@@ -476,7 +483,7 @@ mod tests {
 
     #[test]
     fn declared_additional_capabilities_are_not_lost_at_native_dispatch() {
-        let mut registry = DeterministicModuleResolver::new("/app");
+        let mut registry = registry_with_referrer();
         registry.register_workspace_module("/app/state.wasm",
             ModuleDefinition::wasm_binary(STATE_MODULE, &WasmNumericLimits::default()).unwrap()
                 .require_capability(RuntimeCapability::FsRead)).unwrap();
@@ -586,7 +593,7 @@ mod tests {
     #[test]
     fn malformed_envelopes_and_size_limits_fail_before_compilation() {
         for payload in ["0", "gg", "FF", "00 0", "é"] {
-            let mut registry = DeterministicModuleResolver::new("/app");
+            let mut registry = registry_with_referrer();
             registry.register_workspace_module("/app/state.wasm", ModuleDefinition::new(
                 ModuleSyntax::Wasm, format!("{BINARY_SOURCE_PREFIX}{payload}"),
             )).unwrap();

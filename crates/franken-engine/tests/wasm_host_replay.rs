@@ -6,7 +6,7 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::wasm_runtime_lane::{WasmBoundaryValue, WasmFunctionSignature, WasmValueType};
 use frankenengine_engine::module_resolver::{
     CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
-    ModuleRequest, ResolutionContext, ResolutionErrorCode,
+    ModuleRequest, ModuleSyntax, ResolutionContext, ResolutionErrorCode,
 };
 use frankenengine_engine::wasm_runtime_lane::{WasmNativeLoadError, WasmNativeModule};
 use frankenengine_engine::wasm_runtime_lane::host_replay::{WasmHostTraceError, WasmHostTraceLimits, WasmHostTranscript};
@@ -571,6 +571,8 @@ fn registry_updates_do_not_rebind_an_already_loaded_replay_identity() {
 #[test]
 fn aliases_share_canonical_identity_but_their_current_denials_still_apply() {
     let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver.register_workspace_module("/app/main.mjs",
+        ModuleDefinition::new(ModuleSyntax::EsModule, "import './replay.wasm';")).unwrap();
     resolver.register_workspace_module("/app/replay.wasm",
         ModuleDefinition::wasm_binary(&fixture(false, false), &WasmNumericLimits::default()).unwrap()
             .require_capability(RuntimeCapability::Builtin)).unwrap();

@@ -36,3 +36,6 @@ pub use imports::{
 
 #[path = "wasm_runtime_lane/host_replay.rs"]
 pub mod host_replay;
+
+#[path = "wasm_runtime_lane/scheduler.rs"]
+pub mod scheduler;

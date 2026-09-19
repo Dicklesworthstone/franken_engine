@@ -47,7 +47,9 @@ mod command_exit {
             name(&mut imports, WASI_PREVIEW1_MODULE); name(&mut imports, function); imports.extend([0, ty]);
         }
         section(&mut bytes, 2, &imports);
-        section(&mut bytes, 3, if startup.is_some() { &[3, command_type, 1, 1] } else { &[2, command_type, 1] });
+        let declarations = [if startup.is_some() { 3 } else { 2 }, command_type, 1, 1];
+        let declaration_length = if startup.is_some() { 4 } else { 3 };
+        section(&mut bytes, 3, &declarations[..declaration_length]);
         section(&mut bytes, 4, &[1, 0x70, 0, 1]);
         section(&mut bytes, 5, &[1, 0, 1]);
         section(&mut bytes, 6, &[1, 0x7f, 1, 0x41, 0, 0x0b]);

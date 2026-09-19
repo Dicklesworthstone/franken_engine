@@ -4,6 +4,8 @@
 //! offset. Host calls still use the existing authorized import boundary. All
 //! frames share one meter, including a live-value ceiling across suspended
 //! operands and locals; this is not a sandbox for trusted native callbacks.
+//! Tail calls release the current activation before admitting its replacement,
+//! retaining only the older suspended callers and their accounted values.
 
 use super::*;
 use std::borrow::Cow;
@@ -19,7 +21,7 @@ struct Activation<'vm> {
 }
 
 enum Transfer {
-    Call { function: u32, arguments: Vec<WasmBoundaryValue> },
+    Call { function: u32, arguments: Vec<WasmBoundaryValue>, tail: bool },
     Return,
 }
 
@@ -148,9 +150,9 @@ impl<'vm> Activation<'vm> {
                     ensure_same_type(function, index as usize, slot.value_type(), value.value_type())?;
                     *slot = value;
                 }
-                0x10 | 0x11 => {
+                0x10..=0x13 => {
                     let index = self.reader.read_u32_leb(function)?;
-                    let callee = if opcode == 0x10 {
+                    let callee = if matches!(opcode, 0x10 | 0x12) {
                         index
                     } else {
                         let table = self.reader.read_u32_leb(function)?;
@@ -167,7 +169,7 @@ impl<'vm> Activation<'vm> {
                     // Move in ABI order, retaining only the caller's prefix.
                     arguments.extend(self.stack.drain(begin..));
                     validate_arguments(callee, signature, &arguments)?;
-                    return Ok(Transfer::Call { function: callee, arguments });
+                    return Ok(Transfer::Call { function: callee, arguments, tail: opcode >= 0x12 });
                 }
                 0x23..=0x40 | 0xfc => {
                     state.execute(opcode, &mut self.reader, &mut self.stack, meter, function)?;
@@ -254,12 +256,27 @@ pub(super) fn invoke(
                     frames.push(Activation::new(vm, callee, arguments, meter)?);
                 }
             }
-            let frame = frames.last_mut().ok_or_else(|| WasmNumericVmError::InvalidModule {
+            let transfer = frames.last_mut().ok_or_else(|| WasmNumericVmError::InvalidModule {
                 detail: "missing guest activation".into(),
-            })?;
-            match frame.run(vm, meter, state)? {
-                Transfer::Call { function, arguments } => {
-                    add_base(meter, frame.stack.len())?;
+            })?.run(vm, meter, state)?;
+            match transfer {
+                Transfer::Call { function, arguments, tail } => {
+                    if tail {
+                        // Validation has checked the enclosing result contract;
+                        // indirect dispatch has also checked the actual target.
+                        // The active operands are not in live_value_base. Only
+                        // this frame's locals need releasing; older suspended
+                        // prefixes remain charged until their own continuation.
+                        let frame = frames.pop().expect("tail-calling guest activation");
+                        remove_base(meter, frame.locals.len())?;
+                        drop(frame);
+                    } else {
+                        let frame = frames.last().expect("suspending guest activation");
+                        add_base(meter, frame.stack.len())?;
+                    }
+                    // With the tail caller removed, ordinary admission computes
+                    // the same depth and checks the replacement's own live-value
+                    // and setup-work costs. Host tails use this same pending path.
                     pending = Some((function, Cow::Owned(arguments)));
                 }
                 Transfer::Return => {

@@ -540,4 +540,358 @@ mod continuation_regressions {
         assert_eq!(instance.start_execution(), Some(&start));
         assert_eq!(instance.global_export("g"), Some(&I32(1275)));
     }
+
+    fn tail_sum_code(call: &[u8]) -> Vec<u8> {
+        let mut code = vec![0x20,0,0x45,0x04,0x7f,0x20,1,0x05,
+            0x20,0,0x41,1,0x6b,0x20,1,0x20,0,0x6a];
+        code.extend_from_slice(call);
+        // This instruction is valid dead code, but must never execute after a tail call.
+        code.extend([0x00,0x0b,0x0b]);
+        code
+    }
+
+    fn tail_sum(indirect: bool) -> Program {
+        let call: &[u8] = if indirect { &[0x41,0,0x13,0,0] } else { &[0x12,0] };
+        Program {
+            types: vec![(vec![0x7f,0x7f], vec![0x7f])],
+            functions: vec![function(0, &tail_sum_code(call))],
+            table: indirect.then(|| vec![0]),
+            ..Program::default()
+        }
+    }
+
+    #[test]
+    fn direct_and_indirect_tail_recursion_reuse_a_single_activation() {
+        for indirect in [false, true] {
+            std::thread::Builder::new().stack_size(128 * 1024).spawn(move || {
+                let vm = tail_sum(indirect).vm(WasmNumericLimits {
+                    max_call_depth: 1, ..WasmNumericLimits::default()
+                });
+                let result = vm.call_export("f0", &[I32(50_000), I32(0)]).unwrap();
+                assert_eq!(result.results, [I32(1_250_025_000)]);
+                assert_eq!(result.max_call_depth, 1);
+                assert_eq!(result.instructions_executed, if indirect { 600_006 } else { 500_006 });
+                assert_eq!(result.peak_stack_values, 3);
+            }).unwrap().join().unwrap();
+        }
+    }
+
+    #[test]
+    fn mutual_tail_calls_switch_functions_without_growing_depth() {
+        let mut program = tail_sum(false);
+        program.functions[0].code = tail_sum_code(&[0x12,1]);
+        program.functions.push(function(0, &tail_sum_code(&[0x12,0])));
+        let vm = program.vm(WasmNumericLimits { max_call_depth: 1, ..WasmNumericLimits::default() });
+        let result = vm.call_export("f0", &[I32(10_001), I32(0)]).unwrap();
+        assert_eq!(result.results, [I32(50_015_001)]);
+        assert_eq!(result.max_call_depth, 1);
+    }
+
+    #[test]
+    fn tail_calls_allow_different_parameter_arities_and_reset_callee_locals() {
+        let program = Program {
+            types: vec![(vec![], vec![0x7f]), (vec![0x7f], vec![0x7f])],
+            functions: vec![
+                Function { ty: 0, locals: vec![0x7f], code: vec![
+                    0x41,9,0x21,0,0x41,7,0x41,42,0x12,1,0x00,0x0b,
+                ] },
+                Function { ty: 1, locals: vec![0x7f], code: vec![0x20,0,0x20,1,0x6a,0x0b] },
+            ], ..Program::default()
+        };
+        let vm = program.vm(WasmNumericLimits { max_call_depth: 1, ..WasmNumericLimits::default() });
+        assert_eq!(vm.call_export("f0", &[]).unwrap().results, [I32(42)]);
+    }
+
+    #[test]
+    fn nested_tail_calls_discard_old_labels_and_operands_not_the_callers_prefix() {
+        for tail in [vec![0x12,2], vec![0x41,0,0x13,1,0]] {
+            let mut middle = vec![0x41,10,0x02,0x7f,0x41,42];
+            middle.extend(tail); middle.extend([0x0b,0x00,0x0b]);
+            let program = Program {
+                types: vec![(vec![], vec![0x7f]), (vec![0x7f], vec![0x7f])],
+                functions: vec![
+                    function(0, &[0x41,7,0x10,1,0x6a,0x0b]),
+                    function(0, &middle),
+                    function(1, &[0x20,0,0x0b]),
+                ], table: Some(vec![2]), ..Program::default()
+            };
+            let vm = program.vm(WasmNumericLimits { max_call_depth: 2, ..WasmNumericLimits::default() });
+            let result = vm.call_export("f0", &[]).unwrap();
+            assert_eq!(result.results, [I32(49)]);
+            assert_eq!(result.max_call_depth, 2);
+        }
+    }
+
+    #[test]
+    fn tail_call_result_contracts_are_validated_even_in_unreachable_code() {
+        for (params, results, code) in [
+            (vec![], vec![0x7e], vec![0x00,0x12,1,0x0b]),
+            (vec![], vec![], vec![0x00,0x12,1,0x0b]),
+            (vec![], vec![0x7e], vec![0x00,0x13,1,0,0x0b]),
+        ] {
+            let callee = if results.is_empty() { vec![0x0b] } else { vec![0x42,0,0x0b] };
+            let program = Program {
+                types: vec![(vec![], vec![0x7f]), (params, results)],
+                functions: vec![function(0, &code), function(1, &callee)],
+                table: Some(vec![1]), ..Program::default()
+            };
+            assert!(WasmNumericVm::parse(&program.bytes(), WasmNumericLimits::default()).is_err());
+        }
+    }
+
+    #[test]
+    fn tail_immediates_and_concrete_operand_types_cannot_hide_in_dead_code() {
+        for code in [
+            vec![0x00,0x12,99,0x0b],
+            vec![0x00,0x13,99,0,0x0b],
+            vec![0x00,0x13,0,1,0x0b],
+            vec![0x00,0x12,0x80,0x80,0x80,0x80,0x10,0x0b],
+            vec![0x00,0x42,0,0x12,0,0x0b],
+            vec![0x00,0x42,0,0x13,0,0,0x0b],
+        ] {
+            let mut program = triangle(false);
+            program.table = Some(vec![0]);
+            program.functions[0].code = code;
+            assert!(WasmNumericVm::parse(&program.bytes(), WasmNumericLimits::default()).is_err());
+        }
+    }
+
+    #[test]
+    fn tail_indirect_type_and_bounds_traps_precede_target_effects() {
+        let program = Program {
+            types: vec![(vec![0x7f], vec![0x7f]), (vec![0x7f], vec![0x7e])],
+            functions: vec![
+                function(0, &[0x41,7,0x24,0,0x41,0,0x20,0,0x13,0,0,0x0b]),
+                function(1, &[0x41,9,0x24,0,0x42,1,0x0b]),
+            ], table: Some(vec![1]), ..Program::default()
+        };
+        let vm = program.vm(WasmNumericLimits::default());
+        let mut instance = vm.instantiate().unwrap();
+        for index in [0, 1, -1] {
+            assert!(instance.call_export("f0", &[I32(index)]).is_err());
+            assert_eq!(instance.global_export("g"), Some(&I32(7)));
+        }
+    }
+
+    #[test]
+    fn tail_host_import_returns_directly_under_the_existing_host_contract() {
+        let mut program = host_program();
+        program.functions[0].code = vec![0x41,9,0x12,0,0x00,0x0b];
+        let vm = program.vm(WasmNumericLimits { max_call_depth: 1, ..WasmNumericLimits::default() });
+        let mut imports = WasmHostImports::new([RuntimeCapability::VmDispatch, RuntimeCapability::Builtin].into_iter().collect());
+        imports.define("h", "f", WasmFunctionSignature { params: vec![], results: vec![WasmValueType::I32] },
+            [RuntimeCapability::Builtin].into_iter().collect(), 3, |_, _| Ok(vec![I32(42)])).unwrap();
+        let mut instance = vm.instantiate_with_imports(imports).unwrap();
+        let result = instance.call_export("f0", &[I32(0)]).unwrap();
+        assert_eq!(result.results, [I32(42)]);
+        assert_eq!(result.max_call_depth, 1);
+        assert_eq!(result.instructions_executed, 6);
+        assert!(matches!(vm.call_export("f0", &[I32(0)]), Err(WasmNumericVmError::ImportedFunctionUnsupported { function_index: 0, .. })));
+    }
+
+    #[test]
+    fn an_infinite_tail_cycle_exhausts_work_not_native_stack_or_call_depth() {
+        let program = Program {
+            types: vec![(vec![], vec![])],
+            functions: vec![function(0, &[0x12,0,0x0b])],
+            ..Program::default()
+        };
+        let vm = program.vm(WasmNumericLimits {
+            max_call_depth: 1, max_instructions: 10_000, ..WasmNumericLimits::default()
+        });
+        let mut instance = vm.instantiate().unwrap();
+        for _ in 0..2 {
+            assert_eq!(instance.call_export("f0", &[]), Err(WasmNumericVmError::InstructionBudgetExceeded { max: 10_000 }));
+        }
+    }
+
+    #[test]
+    fn full_leb_tail_indices_execute_without_becoming_spurious_opcodes() {
+        for instruction in [vec![0x12,0x80,0], vec![0x41,0,0x13,0x80,0,0x80,0]] {
+            let mut program = tail_sum(false);
+            program.table = Some(vec![0]);
+            program.functions[0].code = tail_sum_code(&instruction);
+            let result = program.vm(WasmNumericLimits { max_call_depth: 1, ..WasmNumericLimits::default() })
+                .call_export("f0", &[I32(100), I32(0)]).unwrap();
+            assert_eq!(result.results, [I32(5050)]);
+            assert_eq!(result.max_call_depth, 1);
+        }
+    }
+
+    #[test]
+    fn tail_loops_reuse_live_value_capacity_without_bypassing_the_limit() {
+        for indirect in [false, true] {
+            let program = tail_sum(indirect);
+            let exact = program.vm(WasmNumericLimits {
+                max_call_depth: 1, max_live_values: 5, ..WasmNumericLimits::default()
+            });
+            let mut instance = exact.instantiate().unwrap();
+            for _ in 0..3 {
+                let result = instance.call_export("f0", &[I32(5_000), I32(0)]).unwrap();
+                assert_eq!(result.results, [I32(12_502_500)]);
+                assert_eq!(result.max_call_depth, 1);
+            }
+            let tight = program.vm(WasmNumericLimits {
+                max_call_depth: 1, max_live_values: 4, ..WasmNumericLimits::default()
+            });
+            assert!(matches!(tight.call_export("f0", &[I32(1), I32(0)]),
+                Err(WasmNumericVmError::LiveValueLimitExceeded { actual: 5, max: 4 })));
+            assert_eq!(tight.call_export("f0", &[I32(0), I32(7)]).unwrap().results, [I32(7)]);
+        }
+    }
+
+    #[test]
+    fn tail_replacement_keeps_older_suspended_prefixes_charged_exactly_once() {
+        for indirect in [false, true] {
+            let call: &[u8] = if indirect { &[0x41,0,0x13,1,0] } else { &[0x12,1] };
+            let program = Program {
+                types: vec![(vec![], vec![0x7f]), (vec![0x7f; 2], vec![0x7f])],
+                functions: vec![
+                    function(0, &[0x41,7,0x41,20,0x41,0,0x10,1,0x6a,0x0b]),
+                    function(1, &tail_sum_code(call)),
+                ], table: Some(vec![1]), ..Program::default()
+            };
+            let exact = program.vm(WasmNumericLimits {
+                max_call_depth: 2, max_live_values: 6, ..WasmNumericLimits::default()
+            });
+            let mut instance = exact.instantiate().unwrap();
+            for _ in 0..3 {
+                let result = instance.call_export("f0", &[]).unwrap();
+                assert_eq!(result.results, [I32(217)]);
+                assert_eq!(result.max_call_depth, 2);
+            }
+            let tight = program.vm(WasmNumericLimits {
+                max_call_depth: 2, max_live_values: 5, ..WasmNumericLimits::default()
+            });
+            assert!(matches!(tight.call_export("f0", &[]),
+                Err(WasmNumericVmError::LiveValueLimitExceeded { actual: 6, max: 5 })));
+        }
+    }
+
+    #[test]
+    fn tail_callee_local_admission_precedes_effects_and_releases_old_locals() {
+        let program = Program {
+            types: vec![(vec![], vec![0x7f]), (vec![0x7f], vec![0x7f])],
+            functions: vec![
+                Function { ty: 0, locals: vec![0x7f; 2], code: vec![
+                    0x41,7,0x24,0,0x41,7,0x41,42,0x12,1,0x0b,
+                ] },
+                Function { ty: 1, locals: vec![0x7f; 4], code: vec![
+                    0x41,9,0x24,0,0x20,0,0x0b,
+                ] },
+            ], ..Program::default()
+        };
+        let tight = program.vm(WasmNumericLimits {
+            max_call_depth: 1, max_live_values: 4, ..WasmNumericLimits::default()
+        });
+        let mut instance = tight.instantiate().unwrap();
+        assert!(matches!(instance.call_export("f0", &[]),
+            Err(WasmNumericVmError::LiveValueLimitExceeded { actual: 5, max: 4 })));
+        assert_eq!(instance.global_export("g"), Some(&I32(7)));
+        let exact = program.vm(WasmNumericLimits {
+            max_call_depth: 1, max_live_values: 6, ..WasmNumericLimits::default()
+        });
+        let mut instance = exact.instantiate().unwrap();
+        assert_eq!(instance.call_export("f0", &[]).unwrap().results, [I32(42)]);
+        assert_eq!(instance.global_export("g"), Some(&I32(9)));
+    }
+
+    #[test]
+    fn zero_result_host_tails_resume_older_callers_and_cannot_bypass_revocation() {
+        use frankenengine_engine::wasm_runtime_lane::numeric::{WasmHostError, WasmStateError};
+        for indirect in [false, true] {
+            let tail: &[u8] = if indirect { &[0x41,0,0x13,1,0,0x0b] } else { &[0x12,0,0x0b] };
+            let program = Program {
+                types: vec![(vec![], vec![0x7f]), (vec![], vec![])],
+                imports: vec![1],
+                functions: vec![
+                    function(0, &[0x41,42,0x10,2,0x0b]),
+                    Function { ty: 1, locals: vec![0x7f; 3], code: tail.to_vec() },
+                ], table: Some(vec![0]), ..Program::default()
+            };
+            let vm = program.vm(WasmNumericLimits {
+                max_call_depth: 2, max_live_values: 5, ..WasmNumericLimits::default()
+            });
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&calls);
+            let mut imports = WasmHostImports::new([RuntimeCapability::VmDispatch, RuntimeCapability::Builtin].into_iter().collect());
+            imports.define("h", "f", WasmFunctionSignature { params: vec![], results: vec![] },
+                [RuntimeCapability::Builtin].into_iter().collect(), 1, move |_, _| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![])
+                }).unwrap();
+            let mut instance = vm.instantiate_with_imports(imports).unwrap();
+            for _ in 0..3 {
+                let result = instance.call_export("f0", &[]).unwrap();
+                assert_eq!(result.results, [I32(42)]);
+                assert_eq!(result.max_call_depth, 2);
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 3);
+            instance.revoke_host_capability(RuntimeCapability::Builtin);
+            assert!(matches!(instance.call_export("f0", &[]),
+                Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::CapabilityDenied {
+                    capability: RuntimeCapability::Builtin, ..
+                })))));
+            assert_eq!(calls.load(Ordering::SeqCst), 3);
+        }
+    }
+
+    #[test]
+    fn tail_host_refusal_never_resumes_the_older_guest_continuation() {
+        let program = Program {
+            types: vec![(vec![], vec![0x7f])], imports: vec![0],
+            functions: vec![
+                function(0, &[0x10,2,0x41,9,0x24,0,0x0b]),
+                function(0, &[0x12,0,0x00,0x0b]),
+            ], ..Program::default()
+        };
+        let vm = program.vm(WasmNumericLimits { max_call_depth: 2, ..WasmNumericLimits::default() });
+        for bad_type in [false, true] {
+            let mut imports = WasmHostImports::new([RuntimeCapability::VmDispatch, RuntimeCapability::Builtin].into_iter().collect());
+            imports.define("h", "f", WasmFunctionSignature { params: vec![], results: vec![WasmValueType::I32] },
+                [RuntimeCapability::Builtin].into_iter().collect(), 1, move |caller, _| {
+                    if bad_type { return Ok(vec![I64(42)]); }
+                    let _ = caller.charge_work(u64::MAX);
+                    Ok(vec![I32(42)])
+                }).unwrap();
+            let mut instance = vm.instantiate_with_imports(imports).unwrap();
+            let result = instance.call_export("f0", &[]);
+            if bad_type {
+                assert!(matches!(result, Err(WasmNumericVmError::TypeMismatch { .. })));
+            } else {
+                assert!(matches!(result, Err(WasmNumericVmError::InstructionBudgetExceeded { .. })));
+            }
+            assert_eq!(instance.global_export("g"), Some(&I32(0)));
+        }
+    }
+
+    #[test]
+    fn startup_tail_calls_and_multivalue_tails_keep_the_existing_boundaries() {
+        let startup = Program {
+            types: vec![(vec![], vec![])],
+            functions: vec![function(0, &[0x12,1,0x0b]), function(0, &[0x41,7,0x24,0,0x0b])],
+            start: Some(0), ..Program::default()
+        };
+        let vm = startup.vm(WasmNumericLimits { max_call_depth: 1, ..WasmNumericLimits::default() });
+        let instance = vm.instantiate().unwrap();
+        assert_eq!(instance.global_export("g"), Some(&I32(7)));
+        let start = instance.start_execution().unwrap();
+        assert_eq!(start.max_call_depth, 1);
+        assert_eq!(start.instructions_executed, 4);
+        for indirect in [false, true] {
+            let mut code = vec![0x41,7,0x20,0,0x20,1,0x20,2];
+            code.extend_from_slice(if indirect { &[0x41,0,0x13,0,0,0x0b] } else { &[0x12,1,0x0b] });
+            let types = vec![0x7d, 0x7e, 0x7c];
+            let program = Program {
+                types: vec![(types.clone(), types)],
+                functions: vec![function(0, &code), function(0, &[0x20,0,0x20,1,0x20,2,0x0b])],
+                table: Some(vec![1]), ..Program::default()
+            };
+            let vm = program.vm(WasmNumericLimits { max_call_depth: 1, ..WasmNumericLimits::default() });
+            let values = [F32Bits(0x7f80_0001), I64(i64::MIN), F64Bits(0x8000_0000_0000_0000)];
+            let result = vm.call_export("f0", &values).unwrap();
+            assert_eq!(result.results, values);
+            assert_eq!(result.max_call_depth, 1);
+        }
+    }
 }

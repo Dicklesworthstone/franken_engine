@@ -232,20 +232,28 @@ pub(super) fn validate(vm: &WasmNumericVm, function: u32) -> Result<ControlMap, 
                 validator.unreachable();
             }
             0x0f => { validator.pop_types(&signature.results)?; validator.unreachable(); }
-            0x10 => {
-                let callee = reader.read_u32_leb(function)?;
-                let callee = vm.function_signature(callee)?;
+            0x10..=0x13 => {
+                let index = reader.read_u32_leb(function)?;
+                let callee = if matches!(opcode, 0x10 | 0x12) {
+                    vm.function_signature(index)?
+                } else {
+                    let table_index = reader.read_u32_leb(function)?;
+                    let callee = vm.function_type(index)?;
+                    vm.state.validate_table(table_index)?;
+                    validator.expect(WasmValueType::I32)?;
+                    callee
+                };
                 validator.pop_types(&callee.params)?;
-                validator.push_types(&callee.results)?;
-            }
-            0x11 => {
-                let type_index = reader.read_u32_leb(function)?;
-                let table_index = reader.read_u32_leb(function)?;
-                let callee = vm.function_type(type_index)?;
-                vm.state.validate_table(table_index)?;
-                validator.expect(WasmValueType::I32)?;
-                validator.pop_types(&callee.params)?;
-                validator.push_types(&callee.results)?;
+                if matches!(opcode, 0x12 | 0x13) {
+                    // Tail calls return from the function, not merely from
+                    // the innermost block. Validate this even in dead code.
+                    if callee.results != signature.results {
+                        return Err(invalid("tail call result types must match the enclosing function"));
+                    }
+                    validator.unreachable();
+                } else {
+                    validator.push_types(&callee.results)?;
+                }
             }
             0x1a => { validator.pop()?; }
             0x1b => {

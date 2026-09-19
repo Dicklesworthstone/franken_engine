@@ -20,6 +20,9 @@ use super::numeric::WasmHostError;
 struct Pool {
     capacity: u64,
     available: AtomicU64,
+    // Own the parent's capacity, rather than copying an apparent allowance.
+    // Live descendant instances keep this reservation alive through their Arc.
+    parent: Option<MemoryReservation>,
 }
 
 /// A fixed shared linear-memory ceiling. Pass clones to
@@ -38,10 +41,34 @@ impl WasmMemoryPool {
         Self(Arc::new(Pool {
             capacity: capacity_pages,
             available: AtomicU64::new(capacity_pages),
+            parent: None,
         }))
     }
 
+    /// Carve out protected capacity for a tenant or execution cell. Partitioning
+    /// immediately reserves the child's ENTIRE capacity in this pool, even when
+    /// the child has no instances yet. Siblings cannot borrow an idle child's
+    /// allotment. Guest admission within the child stays lazy as before.
+    ///
+    /// The parent reservation is released only when the last child handle and
+    /// all child instances/descendants are destroyed. Dropping an operator's
+    /// handle cannot refund pages still promised to live guest state. There is
+    /// no reparenting, grant duplication or guest-memory sharing. Like new(),
+    /// this is an embedding configuration operation, not a guest instruction.
+    pub fn partition(&self, capacity_pages: u64) -> Result<Self, WasmHostError> {
+        let parent = self.reserve(capacity_pages)?;
+        Ok(Self(Arc::new(Pool {
+            capacity: capacity_pages,
+            available: AtomicU64::new(capacity_pages),
+            parent: Some(parent),
+        })))
+    }
+
     pub fn capacity_pages(&self) -> u64 { self.0.capacity }
+
+    /// Whether this pool holds an allotment from another pool. This exposes no
+    /// parent handle with which a tenant could bypass its assigned ceiling.
+    pub fn is_partition(&self) -> bool { self.0.parent.is_some() }
 
     /// One instantaneous accounting observation, including future growth held
     /// for live instances. Another thread may admit/release immediately after it.

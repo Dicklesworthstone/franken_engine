@@ -310,3 +310,223 @@ fn startup_provider_panic_unwinds_the_reservation_without_poisoning_the_pool() {
     assert_eq!(pool.reserved_pages(), 2); drop(instance);
     assert_eq!(pool.available_pages(), 2);
 }
+
+mod tenant_lifecycles {
+    use super::*;
+    use std::num::NonZeroUsize;
+    use frankenengine_engine::module_resolver::{
+        CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
+        ModuleRequest, ResolutionContext, wasm_module_required_capabilities,
+    };
+    use frankenengine_engine::wasm_runtime_lane::{WasmNativeLoadError, WasmNativeModule};
+    use frankenengine_engine::wasm_runtime_lane::command::{WasmCommandExecution, WasmCommandStep, WasmCommandTask};
+    use frankenengine_engine::wasm_runtime_lane::host_replay::WasmHostTraceLimits;
+    use frankenengine_engine::wasm_runtime_lane::scheduler::{
+        WasmNativeScheduler, WasmStartupStep, WasmTaskAdmissionErrorKind, WasmTaskOutcome,
+    };
+
+    fn context() -> ResolutionContext { ResolutionContext::new("pool-trace", "pool-decision", "pool-policy") }
+    fn policy() -> CapabilityPolicyHook {
+        let mut caps = wasm_module_required_capabilities(); caps.insert(Builtin);
+        CapabilityPolicyHook::new(caps)
+    }
+    fn load(start: Option<&[u8]>, entry: &[u8], host: bool) -> WasmNativeModule {
+        let limits = WasmNumericLimits::default();
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        let definition = ModuleDefinition::wasm_binary(
+            &fixture(Some((1, Some(2))), start, entry, host, false), &limits,
+        ).unwrap().require_capability(Builtin);
+        resolver.register_workspace_module("/app/pool.wasm", definition).unwrap();
+        resolver.load_wasm(&ModuleRequest::new("/app/pool.wasm", ImportStyle::Import),
+            &context(), &policy(), limits).unwrap()
+    }
+    fn finish(mut command: WasmCommandTask<'_>) -> Result<WasmCommandExecution, WasmNativeLoadError> {
+        for _ in 0..128 {
+            match command.resume(NonZeroU64::new(8).unwrap(), &context(), &policy())? {
+                WasmCommandStep::Pending(next) => command = next,
+                WasmCommandStep::Complete(execution) => return Ok(execution),
+            }
+        }
+        panic!("bounded command failed to terminate");
+    }
+
+    #[test]
+    fn partitions_protect_idle_tenant_capacity_and_cannot_overcommit_parent() {
+        let root = WasmMemoryPool::new(4);
+        let a = root.partition(2).unwrap();
+        let b = root.partition(2).unwrap();
+        assert!(!root.is_partition()); assert!(a.is_partition());
+        assert_eq!(root.available_pages(), 0);
+        assert!(matches!(root.partition(1), Err(WasmHostError::MemoryPoolExhausted { requested_pages: 1, available_pages: 0 })));
+        let vm = vm(1, Some(2), None, END, false);
+        let mut a_instance = vm.instantiate_with_imports(imports(&a)).unwrap();
+        exhausted(vm.instantiate_with_imports(imports(&a)).unwrap_err(), 2, 0);
+        // The idle sibling's two pages are not borrowed by the saturated tenant.
+        let b_instance = vm.instantiate_with_imports(imports(&b)).unwrap();
+        assert_eq!(a_instance.call_export("grow", &[I32(1)]).unwrap().results, [I32(1)]);
+        assert_eq!(root.reserved_pages(), 4);
+        drop((a_instance, b_instance));
+        assert_eq!(a.available_pages(), 2); assert_eq!(b.available_pages(), 2);
+        drop((a, b)); assert_eq!(root.available_pages(), 4);
+    }
+
+    #[test]
+    fn dropping_partition_handles_never_refunds_a_live_descendant_instance() {
+        let root = WasmMemoryPool::new(8);
+        let tenant = root.partition(4).unwrap();
+        let cell = tenant.partition(2).unwrap();
+        let vm = vm(1, Some(2), None, END, false);
+        let instance = vm.instantiate_with_imports(imports(&cell)).unwrap();
+        drop(tenant); drop(cell);
+        assert_eq!(root.reserved_pages(), 4);
+        drop(instance);
+        assert_eq!(root.reserved_pages(), 0);
+        let replacement = root.partition(8).unwrap();
+        drop(replacement); assert_eq!(root.available_pages(), 8);
+    }
+
+    #[test]
+    fn unused_partition_clones_release_once_and_capacity_arithmetic_never_wraps() {
+        let root = WasmMemoryPool::new(u64::MAX);
+        let child = root.partition(u64::MAX - 1).unwrap();
+        assert_eq!(root.available_pages(), 1);
+        let clone = child.clone(); drop(child);
+        assert_eq!(root.reserved_pages(), u64::MAX - 1);
+        assert!(matches!(root.partition(2), Err(WasmHostError::MemoryPoolExhausted { requested_pages: 2, available_pages: 1 })));
+        let empty = clone.partition(0).unwrap();
+        assert_eq!(empty.capacity_pages(), 0);
+        drop(clone); assert_eq!(root.available_pages(), 1);
+        drop(empty); assert_eq!(root.available_pages(), u64::MAX);
+    }
+
+    #[test]
+    fn scheduled_startup_holds_capacity_after_leaving_the_scheduler() {
+        let pool = WasmMemoryPool::new(2);
+        let module = load(None, END, false);
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(1).unwrap());
+        scheduler.submit_startup(module.prepare_startup_with_imports(imports(&pool))).unwrap();
+        assert_eq!(pool.reserved_pages(), 0);
+        let turn = scheduler.run_next(quantum(), &context(), &policy()).unwrap();
+        let WasmTaskOutcome::Initialized(instance) = turn.outcome else { panic!("initialized instance"); };
+        drop(scheduler); assert_eq!(pool.reserved_pages(), 2);
+        drop(instance); assert_eq!(pool.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn queued_startup_cancellation_releases_capacity_for_a_new_command() {
+        let pool = WasmMemoryPool::new(2);
+        let spinner = load(Some(LOOP), END, false);
+        let useful = load(None, END, false);
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(2).unwrap());
+        let spinning = scheduler.submit_startup(spinner.prepare_startup_with_imports(imports(&pool))).unwrap();
+        assert!(matches!(scheduler.run_next(quantum(), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        assert_eq!(pool.reserved_pages(), 2);
+        scheduler.submit_command(useful.prepare_command(imports(&pool))).unwrap();
+        // The spinner keeps its reservation while rejoining the tail.
+        assert!(matches!(scheduler.run_next(quantum(), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        let turn = scheduler.run_next(quantum(), &context(), &policy()).unwrap();
+        match turn.outcome {
+            WasmTaskOutcome::Failed(WasmNativeLoadError::Execution(error)) => exhausted(error, 2, 0),
+            other => panic!("missing shared capacity refusal: {other:?}"),
+        }
+        spinning.cancel();
+        assert!(matches!(scheduler.run_next(quantum(), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Cancelled));
+        assert_eq!(pool.reserved_pages(), 0);
+        assert_eq!(finish(useful.prepare_command(imports(&pool))).unwrap().exit_code, 0);
+        assert_eq!(pool.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn rejected_and_withdrawn_commands_keep_the_original_memory_reservation() {
+        let pool = WasmMemoryPool::new(4);
+        let module = load(None, END, false);
+        let mut scheduler = WasmNativeScheduler::new(NonZeroUsize::new(1).unwrap());
+        let occupied = scheduler.submit_startup(module.prepare_startup_with_imports(imports(&pool))).unwrap();
+        let command = module.prepare_command(imports(&pool));
+        let WasmCommandStep::Pending(command) = command.resume(quantum(), &context(), &policy()).unwrap() else { panic!("phase yield"); };
+        assert_eq!(pool.reserved_pages(), 2);
+        let rejected = scheduler.submit_command(command).unwrap_err();
+        assert_eq!(rejected.kind(), WasmTaskAdmissionErrorKind::QueueFull);
+        assert_eq!(pool.reserved_pages(), 2);
+        occupied.cancel();
+        assert!(matches!(scheduler.run_next(quantum(), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Cancelled));
+        let handle = scheduler.submit_command((*rejected).into_command()).unwrap();
+        let command = scheduler.take_command(handle.id()).unwrap();
+        drop(scheduler); assert_eq!(pool.reserved_pages(), 2);
+        command.cancel(); assert_eq!(pool.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn policy_denial_releases_partial_state_without_returning_a_live_instance() {
+        let pool = WasmMemoryPool::new(2);
+        let module = load(Some(LOOP), END, false);
+        let startup = module.prepare_startup_with_imports(imports(&pool));
+        let WasmStartupStep::Pending(startup) = startup.resume(quantum(), &context(), &policy()).unwrap() else { panic!("pending initialization"); };
+        assert_eq!(pool.reserved_pages(), 2);
+        assert!(matches!(startup.resume(quantum(), &context(), &CapabilityPolicyHook::new(Default::default())), Err(WasmNativeLoadError::Resolution(_))));
+        assert_eq!(pool.reserved_pages(), 0);
+        // A denial before the first slice cannot consume any capacity either.
+        let startup = module.prepare_startup_with_imports(imports(&pool));
+        assert!(matches!(startup.resume(quantum(), &context(), &CapabilityPolicyHook::new(Default::default())), Err(WasmNativeLoadError::Resolution(_))));
+        assert_eq!(pool.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn replay_observers_neither_hold_capacity_nor_bypass_live_admission() {
+        let pool = WasmMemoryPool::new(2);
+        let module = load(Some(HOST), HOST, true);
+        let holder_vm = vm(1, Some(2), None, END, false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let mut registry = provider(&pool, move |caller, _| {
+            count.fetch_add(1, Ordering::SeqCst); caller.write_memory(0, b"pool")?; Ok(vec![])
+        });
+        let limits = WasmHostTraceLimits::default();
+        let record = registry.record_calls(limits).unwrap();
+        let expected = finish(module.prepare_command(registry)).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2); assert_eq!(pool.reserved_pages(), 0);
+        let transcript = record.snapshot().unwrap();
+        let holder = holder_vm.instantiate_with_imports(imports(&pool)).unwrap();
+        let mut registry = provider(&pool, |_, _| panic!("denied replay provider"));
+        let observer = registry.replay_calls(transcript.clone(), limits).unwrap();
+        match finish(module.prepare_command(registry)) {
+            Err(WasmNativeLoadError::Execution(error)) => exhausted(error, 2, 0),
+            other => panic!("replay bypassed memory admission: {other:?}"),
+        }
+        assert!(observer.verify_complete().is_err()); drop(holder);
+        let mut registry = provider(&pool, |_, _| panic!("replayed provider"));
+        let observer = registry.replay_calls(transcript, limits).unwrap();
+        assert_eq!(finish(module.prepare_command(registry)).unwrap(), expected);
+        observer.verify_complete().unwrap();
+        assert_eq!(pool.reserved_pages(), 0); // Both independent observers remain alive.
+    }
+
+    #[test]
+    fn a_command_exit_releases_pool_capacity_but_not_completed_host_effects() {
+        let pool = WasmMemoryPool::new(2);
+        let module = load(None, HOST, true);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let registry = provider(&pool, move |caller, _| {
+            count.fetch_add(1, Ordering::SeqCst); Err(caller.exit(u32::MAX))
+        });
+        assert_eq!(finish(module.prepare_command(registry)).unwrap().exit_code, u32::MAX);
+        assert_eq!(calls.load(Ordering::SeqCst), 1); assert_eq!(pool.reserved_pages(), 0);
+    }
+
+    #[test]
+    fn resolved_future_publication_denial_releases_its_pool_reservation() {
+        let pool = WasmMemoryPool::new(2);
+        let module = load(None, END, false);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let mut future = Box::pin(module.instantiate_cooperatively_with_imports(imports(&pool), quantum(), move || {
+            let allow = if observed.fetch_add(1, Ordering::SeqCst) == 0 { policy() }
+                else { CapabilityPolicyHook::new(Default::default()) };
+            Ok((context(), allow))
+        }));
+        let waker = waker(); let mut cx = Context::from_waker(&waker);
+        assert!(matches!(future.as_mut().poll(&mut cx), Poll::Ready(Err(WasmNativeLoadError::Resolution(_)))));
+        assert_eq!(reads.load(Ordering::SeqCst), 2); assert_eq!(pool.reserved_pages(), 0);
+    }
+}

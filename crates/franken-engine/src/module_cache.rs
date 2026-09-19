@@ -194,6 +194,8 @@ pub enum CacheErrorCode {
     ModuleRevoked,
     VersionRegression,
     EmptyModuleId,
+    InvalidSnapshot,
+    ConflictingArtifact,
 }
 
 impl CacheErrorCode {
@@ -202,6 +204,8 @@ impl CacheErrorCode {
             Self::ModuleRevoked => "FE-MODCACHE-0001",
             Self::VersionRegression => "FE-MODCACHE-0002",
             Self::EmptyModuleId => "FE-MODCACHE-0003",
+            Self::InvalidSnapshot => "FE-MODCACHE-0004",
+            Self::ConflictingArtifact => "FE-MODCACHE-0005",
         }
     }
 }
@@ -573,41 +577,127 @@ impl ModuleCache {
         self.snapshot_fastpath.telemetry()
     }
 
+    /// Compatibility entry point. Invalid snapshots leave cache state unchanged
+    /// and emit a denial. Prefer `try_merge_snapshot` when handling peer input.
     pub fn merge_snapshot(&mut self, snapshot: &CacheSnapshot, context: &CacheContext) {
+        let _ = self.try_merge_snapshot(snapshot, context);
+    }
+
+    /// Validate a peer snapshot before publishing any of its cache state.
+    ///
+    /// The digest detects corruption, not forgery. The replication boundary
+    /// must separately authenticate the peer and authorize its policy/trust
+    /// revisions. Revocation is remove-wins: a snapshot cannot restore trust.
+    ///
+    /// Policy and trust must both be non-regressing. Incomparable *active*
+    /// frontiers are refused, not fabricated into an executable fingerprint.
+    /// A revoked module instead retains the componentwise maximum as a
+    /// deny-only floor, with no artifact. This allows an out-of-order policy
+    /// snapshot to propagate a revocation rather than leave code executing.
+    /// Re-admission still requires a fresh authorized local trust decision
+    /// followed by an artifact compiled for the resulting authority envelope.
+    pub fn try_merge_snapshot(
+        &mut self,
+        snapshot: &CacheSnapshot,
+        context: &CacheContext,
+    ) -> CacheResult<()> {
+        if let Err(message) = validate_cache_snapshot(snapshot) {
+            return Err(self.error(
+                CacheErrorCode::InvalidSnapshot,
+                message,
+                "cache_merge_snapshot",
+                "deny",
+                "<fleet>",
+                context,
+            ));
+        }
+
+        // Stage only the replicated state, not ModuleCache itself: cloning the
+        // snapshot fast path must not accidentally publish a partial merge.
+        let mut latest_versions = self.latest_versions.clone();
+        let mut revoked_modules = self.revoked_modules.clone();
+        let mut entries = self.entries.clone();
+        revoked_modules.extend(snapshot.revoked_modules.iter().cloned());
+
         for (module_id, peer_version) in &snapshot.latest_versions {
-            match self.latest_versions.get(module_id) {
-                Some(local) if cache_version_order(local, peer_version) != Ordering::Less => {}
-                _ => {
-                    self.latest_versions
-                        .insert(module_id.clone(), peer_version.clone());
+            if let Some(local) = latest_versions.get(module_id) {
+                if revoked_modules.contains(module_id) {
+                    // This is an invalidation floor, never an executable
+                    // version. Join every coordinate deterministically and
+                    // discard all artifacts below, including exact matches.
+                    let floor = ModuleVersionFingerprint::new(
+                        local.source_hash.max(peer_version.source_hash),
+                        local.policy_version.max(peer_version.policy_version),
+                        local.trust_revision.max(peer_version.trust_revision),
+                    );
+                    latest_versions.insert(module_id.clone(), floor);
+                    continue;
+                }
+                let crossed = (peer_version.policy_version > local.policy_version
+                    && peer_version.trust_revision < local.trust_revision)
+                    || (peer_version.policy_version < local.policy_version
+                        && peer_version.trust_revision > local.trust_revision);
+                if crossed {
+                    return Err(self.error(
+                        CacheErrorCode::VersionRegression,
+                        format!(
+                            "incomparable authority frontiers for module '{module_id}': local policy={}, trust={}; peer policy={}, trust={}; a coherent authoritative snapshot is required",
+                            local.policy_version,
+                            local.trust_revision,
+                            peer_version.policy_version,
+                            peer_version.trust_revision,
+                        ),
+                        "cache_merge_snapshot",
+                        "deny",
+                        module_id,
+                        context,
+                    ));
+                }
+                if cache_version_order(local, peer_version) != Ordering::Less {
+                    continue;
                 }
             }
+            latest_versions.insert(module_id.clone(), peer_version.clone());
         }
-
-        self.revoked_modules
-            .extend(snapshot.revoked_modules.iter().cloned());
+        entries.retain(|key, _| {
+            !revoked_modules.contains(&key.module_id)
+                && latest_versions.get(&key.module_id) == Some(&key.version)
+        });
 
         for entry in &snapshot.entries {
-            if self.revoked_modules.contains(&entry.key.module_id) {
+            if revoked_modules.contains(&entry.key.module_id)
+                || latest_versions.get(&entry.key.module_id) != Some(&entry.key.version)
+            {
                 continue;
             }
-
-            if self
-                .latest_versions
-                .get(&entry.key.module_id)
-                .is_some_and(|latest| latest == &entry.key.version)
-            {
-                self.entries
-                    .entry(entry.key.clone())
-                    .or_insert_with(|| entry.clone());
+            if let Some(local) = entries.get_mut(&entry.key) {
+                if local.artifact_hash != entry.artifact_hash
+                    || local.resolved_specifier != entry.resolved_specifier
+                {
+                    return Err(self.error(
+                        CacheErrorCode::ConflictingArtifact,
+                        format!(
+                            "conflicting artifacts for module '{}' at the same source/policy/trust fingerprint",
+                            entry.key.module_id,
+                        ),
+                        "cache_merge_snapshot",
+                        "deny",
+                        &entry.key.module_id,
+                        context,
+                    ));
+                }
+                // Provenance sequence numbers are local observations, not an
+                // artifact-election rule. Equal artifacts converge regardless
+                // of which peer observed them first.
+                local.inserted_seq = local.inserted_seq.min(entry.inserted_seq);
+            } else {
+                entries.insert(entry.key.clone(), entry.clone());
             }
         }
 
-        let module_ids = self.latest_versions.keys().cloned().collect::<Vec<_>>();
-        for module_id in module_ids {
-            self.prune_stale_entries(&module_id);
-        }
-
+        self.latest_versions = latest_versions;
+        self.revoked_modules = revoked_modules;
+        self.entries = entries;
         self.publish_snapshot_fastpath();
         self.push_event(
             "cache_merge_snapshot",
@@ -617,35 +707,15 @@ impl ModuleCache {
             "snapshot merged and stale entries pruned",
             context,
         );
+        Ok(())
     }
 
     pub fn state_hash(&self) -> ContentHash {
-        let mut root = BTreeMap::new();
-
-        let entries = self
-            .entries
-            .values()
-            .map(ModuleCacheEntry::canonical_value)
-            .collect::<Vec<_>>();
-        root.insert("entries".to_string(), CanonicalValue::Array(entries));
-
-        let mut versions = BTreeMap::new();
-        for (module_id, version) in &self.latest_versions {
-            versions.insert(module_id.clone(), version.canonical_value());
-        }
-        root.insert("latest_versions".to_string(), CanonicalValue::Map(versions));
-
-        let revoked = self
-            .revoked_modules
-            .iter()
-            .map(|module_id| CanonicalValue::String(module_id.clone()))
-            .collect::<Vec<_>>();
-        root.insert(
-            "revoked_modules".to_string(),
-            CanonicalValue::Array(revoked),
-        );
-
-        ContentHash::compute(&encode_value(&CanonicalValue::Map(root)))
+        cache_state_hash(
+            self.entries.values(),
+            &self.latest_versions,
+            &self.revoked_modules,
+        )
     }
 
     pub fn events(&self) -> &[CacheEvent] {
@@ -760,6 +830,72 @@ impl ModuleCache {
             event: event_data,
         })
     }
+}
+
+// Keep the producer and ingest verifier on the same canonical byte contract.
+// Events and the local sequence counter are intentionally not replicated.
+fn cache_state_hash<'a>(
+    entries: impl Iterator<Item = &'a ModuleCacheEntry>,
+    latest_versions: &BTreeMap<String, ModuleVersionFingerprint>,
+    revoked_modules: &BTreeSet<String>,
+) -> ContentHash {
+    let mut root = BTreeMap::new();
+    root.insert(
+        "entries".to_string(),
+        CanonicalValue::Array(entries.map(ModuleCacheEntry::canonical_value).collect()),
+    );
+
+    let mut versions = BTreeMap::new();
+    for (module_id, version) in latest_versions {
+        versions.insert(module_id.clone(), version.canonical_value());
+    }
+    root.insert("latest_versions".to_string(), CanonicalValue::Map(versions));
+    root.insert(
+        "revoked_modules".to_string(),
+        CanonicalValue::Array(
+            revoked_modules
+                .iter()
+                .map(|module_id| CanonicalValue::String(module_id.clone()))
+                .collect(),
+        ),
+    );
+    ContentHash::compute(&encode_value(&CanonicalValue::Map(root)))
+}
+
+fn validate_cache_snapshot(snapshot: &CacheSnapshot) -> Result<(), &'static str> {
+    if snapshot.latest_versions.keys().any(|id| id.trim().is_empty()) {
+        return Err("snapshot contains an empty module identity");
+    }
+    if snapshot
+        .revoked_modules
+        .iter()
+        .any(|id| !snapshot.latest_versions.contains_key(id))
+    {
+        return Err("snapshot revocation has no policy/trust frontier");
+    }
+    let mut previous: Option<&ModuleCacheKey> = None;
+    for entry in &snapshot.entries {
+        if previous.is_some_and(|key| key >= &entry.key) {
+            return Err("snapshot entries are not in unique canonical key order");
+        }
+        if snapshot.revoked_modules.contains(&entry.key.module_id) {
+            return Err("snapshot contains an artifact for a revoked module");
+        }
+        if snapshot.latest_versions.get(&entry.key.module_id) != Some(&entry.key.version) {
+            return Err("snapshot artifact does not match its latest version frontier");
+        }
+        previous = Some(&entry.key);
+    }
+    if snapshot.state_hash
+        != cache_state_hash(
+            snapshot.entries.iter(),
+            &snapshot.latest_versions,
+            &snapshot.revoked_modules,
+        )
+    {
+        return Err("snapshot state hash does not match its canonical contents");
+    }
+    Ok(())
 }
 
 fn cache_version_order(

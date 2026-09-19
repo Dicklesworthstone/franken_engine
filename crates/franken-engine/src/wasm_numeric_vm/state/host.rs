@@ -33,6 +33,8 @@ pub enum WasmHostError {
     MissingMemory,
     Cancelled,
     CancellationAlreadyBound,
+    ExecutionCancelled,
+    ExecutionCancellationAlreadyBound,
     CapabilityRevocationAlreadyBound { capability: RuntimeCapability },
     Trace(WasmHostTraceError),
     Trap { message: String },
@@ -59,6 +61,8 @@ impl fmt::Display for WasmHostError {
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
             Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
             Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
+            Self::ExecutionCancelled => f.write_str("wasm instance execution was cancelled"),
+            Self::ExecutionCancellationAlreadyBound => f.write_str("wasm instance execution cancellation is already bound"),
             Self::CapabilityRevocationAlreadyBound { capability } => {
                 write!(f, "wasm host revocation signal is already bound for {capability}")
             }
@@ -109,9 +113,13 @@ struct HostCancellation {
 
 impl HostCancellation {
     fn new(token: CancellationToken, trace_id: impl Into<String>) -> Self {
+        Self::at_site(token, trace_id, LoopSite::Custom("wasm_host".to_string()))
+    }
+
+    fn at_site(token: CancellationToken, trace_id: impl Into<String>, site: LoopSite) -> Self {
         let mut scope = Self {
             guard: CheckpointGuard::new(
-                LoopSite::Custom("wasm_host".to_string()),
+                site,
                 WASM_NUMERIC_VM_COMPONENT,
                 trace_id,
                 DensityConfig::default(),
@@ -142,6 +150,7 @@ pub struct WasmHostImports {
     granted: BTreeSet<RuntimeCapability>,
     trace: host_replay::TraceMode,
     cancellation: Option<HostCancellation>,
+    execution_cancellation: Option<HostCancellation>,
     revocations: BTreeMap<RuntimeCapability, HostCancellation>,
 }
 
@@ -150,6 +159,7 @@ impl WasmHostImports {
         Self {
             bindings: BTreeMap::new(), granted,
             trace: host_replay::TraceMode::default(), cancellation: None,
+            execution_cancellation: None,
             revocations: BTreeMap::new(),
         }
     }
@@ -172,6 +182,33 @@ impl WasmHostImports {
             return Err(WasmHostError::CancellationAlreadyBound);
         }
         self.cancellation = Some(HostCancellation::new(token, trace_id));
+        Ok(())
+    }
+
+    /// Bind cancellation for the entire instance, including hostless guest
+    /// loops. An empty registry can carry this control without granting any
+    /// host capability. Unlike `bind_cancellation`, this scope is checked
+    /// before each guest opcode, at activation entry/return, and at the same
+    /// cooperative host/replay boundaries as the host-only scope.
+    ///
+    /// The first observed cancellation permanently stops execution in this
+    /// instance. Resetting the token cannot resurrect it; construct a new
+    /// authorized instance for a new session. Completed stores remain visible
+    /// for inspection. Native callbacks and individual bulk operations are
+    /// not preempted: callbacks must poll between bounded units of work.
+    /// This live signal does not itself provide deterministic replay of the
+    /// guest instruction at which an asynchronous request was observed.
+    pub fn bind_execution_cancellation(
+        &mut self,
+        token: CancellationToken,
+        trace_id: impl Into<String>,
+    ) -> Result<(), WasmHostError> {
+        if self.execution_cancellation.is_some() {
+            return Err(WasmHostError::ExecutionCancellationAlreadyBound);
+        }
+        self.execution_cancellation = Some(HostCancellation::at_site(
+            token, trace_id, LoopSite::BytecodeDispatch,
+        ));
         Ok(())
     }
 
@@ -199,6 +236,7 @@ impl WasmHostImports {
     }
 
     fn check_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
+        check_execution_scope(&mut self.execution_cancellation)?;
         if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
             return Err(WasmHostError::Cancelled.into());
         }
@@ -283,6 +321,13 @@ impl WasmHostImports {
     }
 }
 
+fn check_execution_scope(scope: &mut Option<HostCancellation>) -> Result<(), WasmNumericVmError> {
+    if scope.as_mut().is_some_and(HostCancellation::is_cancelled) {
+        return Err(WasmHostError::ExecutionCancelled.into());
+    }
+    Ok(())
+}
+
 fn check_authority(
     granted: &BTreeSet<RuntimeCapability>,
     binding: &Binding,
@@ -325,6 +370,7 @@ pub struct WasmHostCaller<'call, 'vm> {
     failure: Option<WasmNumericVmError>,
     recording: Option<&'call mut host_replay::CallRecording>,
     cancellation: &'call mut Option<HostCancellation>,
+    execution_cancellation: &'call mut Option<HostCancellation>,
     revocations: &'call mut BTreeMap<RuntimeCapability, HostCancellation>,
     required: &'call BTreeSet<RuntimeCapability>,
     import: &'call FunctionImport,
@@ -338,6 +384,10 @@ impl WasmHostCaller<'_, '_> {
     /// returns. Poll between bounded units of provider work or external I/O.
     pub fn checkpoint(&mut self) -> Result<(), WasmNumericVmError> {
         if let Some(error) = &self.failure { return Err(error.clone()); }
+        if let Err(error) = check_execution_scope(self.execution_cancellation) {
+            self.failure = Some(error.clone());
+            return Err(error);
+        }
         if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
             let error: WasmNumericVmError = WasmHostError::Cancelled.into();
             self.failure = Some(error.clone());
@@ -441,7 +491,11 @@ impl WasmNumericVm {
     ) -> Result<WasmNumericInstance<'_>, WasmNumericVmError> {
         imports.check_cancellation()?;
         imports.validate(self)?;
-        self.instantiate_with_host_bindings(Some(imports))
+        let mut instance = self.instantiate_with_host_bindings(Some(imports))?;
+        // Also observe a request that arrived during allocation when there
+        // was no start function to cross a guest instruction boundary.
+        instance.state.check_execution_cancellation()?;
+        Ok(instance)
     }
 }
 
@@ -455,6 +509,15 @@ impl WasmNumericInstance<'_> {
 }
 
 impl InstanceState {
+    /// Instruction/activation polling must not turn a host-only revocation
+    /// into guest cancellation. No registry means no execution subscription.
+    pub(in super::super) fn check_execution_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
+        if let Some(imports) = self.host_imports.as_mut() {
+            check_execution_scope(&mut imports.execution_cancellation)?;
+        }
+        Ok(())
+    }
+
     pub(in super::super) fn invoke_import(
         &mut self,
         vm: &WasmNumericVm,
@@ -509,6 +572,7 @@ impl InstanceState {
             }
             meter.charge_work(playback.call.work)?;
             for write in &playback.call.writes {
+                check_execution_scope(&mut imports.execution_cancellation)?;
                 if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
                     return Err(WasmHostError::Cancelled.into());
                 }
@@ -517,6 +581,7 @@ impl InstanceState {
                 let range = memory.range(write.address, 0, write.bytes.len())?;
                 memory.bytes[range].copy_from_slice(&write.bytes);
             }
+            check_execution_scope(&mut imports.execution_cancellation)?;
             if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
                 return Err(WasmHostError::Cancelled.into());
             }
@@ -528,6 +593,7 @@ impl InstanceState {
                 let mut caller = WasmHostCaller {
                     meter, memory: &mut self.memory, failure: None,
                     recording: trace.recording(), cancellation: &mut imports.cancellation,
+                    execution_cancellation: &mut imports.execution_cancellation,
                     revocations: &mut imports.revocations, required: &binding.required, import,
                 };
                 let outcome = (binding.callback)(&mut caller, arguments);

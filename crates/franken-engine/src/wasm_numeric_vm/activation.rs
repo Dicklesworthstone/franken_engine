@@ -111,6 +111,10 @@ impl<'vm> Activation<'vm> {
     ) -> Result<Transfer, WasmNumericVmError> {
         let function = self.function;
         while !self.reader.finished() {
+            // Guest-only loops may never reach a host callback. Poll before
+            // the opcode and its work/effects; completed instructions remain
+            // committed when this invocation unwinds its flat frame vector.
+            state.check_execution_cancellation()?;
             let offset = self.reader.offset();
             let opcode = self.reader.read_u8(function)?;
             meter.tick()?;
@@ -241,6 +245,7 @@ pub(super) fn invoke(
         let mut frames: Vec<Activation<'_>> = Vec::new();
         let mut pending = Some((function, Cow::Borrowed(arguments)));
         loop {
+            state.check_execution_cancellation()?;
             if let Some((callee, arguments)) = pending.take() {
                 let call_depth = u32::try_from(frames.len()).ok()
                     .and_then(|nested| depth.checked_add(nested))
@@ -295,5 +300,13 @@ pub(super) fn invoke(
     // Failure drops the flat frame vector and restores accounting, not guest
     // memory/global/host effects from already completed instructions.
     meter.live_value_base = previous_base;
-    outcome
+    match outcome {
+        Ok(results) => {
+            state.check_execution_cancellation()?;
+            Ok(results)
+        }
+        // Do not replace the first budget, validation or host failure with a
+        // request that arrived while cleaning up the rejected invocation.
+        Err(error) => Err(error),
+    }
 }

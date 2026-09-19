@@ -8,6 +8,9 @@
 
 use super::*;
 
+#[path = "state/extended.rs"]
+mod extended;
+
 #[path = "tables.rs"]
 mod tables;
 
@@ -77,8 +80,8 @@ pub(super) struct ModuleState {
 }
 
 pub(super) struct StackEffect {
-    /// Types consumed in pop order (value before address for stores).
-    pub(super) pop: [Option<WasmValueType>; 2],
+    /// Types consumed in pop order (length first for bulk operations).
+    pub(super) pop: [Option<WasmValueType>; 3],
     pub(super) push: Option<WasmValueType>,
 }
 
@@ -207,6 +210,9 @@ impl ModuleState {
     pub(super) fn validate_instruction(&self, opcode: u8, reader: &mut CodeReader<'_>, function: u32) -> Result<StackEffect, WasmNumericVmError> {
         use WasmValueType::I32;
         let offset = reader.offset().saturating_sub(1);
+        if opcode == 0xfc {
+            return extended::validate(self, reader, function);
+        }
         if matches!(opcode, 0x23 | 0x24) {
             let index = reader.read_u32_leb(function)?;
             let global = self.global(index)?;
@@ -215,7 +221,7 @@ impl ModuleState {
                 return Err(WasmStateError::ImmutableGlobal { global_index: index }.into());
             }
             return Ok(StackEffect {
-                pop: [if opcode == 0x24 { Some(ty) } else { None }, None],
+                pop: [if opcode == 0x24 { Some(ty) } else { None }, None, None],
                 push: if opcode == 0x23 { Some(ty) } else { None },
             });
         }
@@ -223,14 +229,14 @@ impl ModuleState {
             if matches!(opcode, 0x3f | 0x40) {
                 if self.memory.is_none() { return Err(invalid("memory instruction requires memory zero")); }
                 memory_index(reader, function)?;
-                return Ok(StackEffect { pop: [if opcode == 0x40 { Some(I32) } else { None }, None], push: Some(I32) });
+                return Ok(StackEffect { pop: [if opcode == 0x40 { Some(I32) } else { None }, None, None], push: Some(I32) });
             }
             return Err(WasmNumericVmError::UnsupportedOpcode { function_index: function, opcode, offset });
         };
         if self.memory.is_none() { return Err(invalid("memory instruction requires memory zero")); }
         memarg(reader, function, width)?;
         Ok(StackEffect {
-            pop: if store { [Some(ty), Some(I32)] } else { [Some(I32), None] },
+            pop: if store { [Some(ty), Some(I32), None] } else { [Some(I32), None, None] },
             push: if store { None } else { Some(ty) },
         })
     }
@@ -427,6 +433,9 @@ impl InstanceState {
     }
 
     pub(super) fn execute(&mut self, opcode: u8, reader: &mut CodeReader<'_>, stack: &mut Vec<WasmBoundaryValue>, meter: &mut ExecutionMeter<'_>, function: u32) -> Result<(), WasmNumericVmError> {
+        if opcode == 0xfc {
+            return extended::execute(self, reader, stack, meter, function);
+        }
         if matches!(opcode, 0x23 | 0x24) {
             let index = reader.read_u32_leb(function)?;
             let global = self.globals.get_mut(index as usize).ok_or(WasmStateError::UnknownGlobal { global_index: index })?;

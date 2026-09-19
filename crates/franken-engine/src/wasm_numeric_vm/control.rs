@@ -265,7 +265,7 @@ pub(super) fn validate(vm: &WasmNumericVm, function: u32) -> Result<ControlMap, 
                 if opcode != 0x20 { validator.expect(ty)?; }
                 if opcode != 0x21 { validator.push(Some(ty))?; }
             }
-            0x23..=0x40 => {
+            0x23..=0x40 | 0xfc => {
                 let effect = vm.state.validate_instruction(opcode, &mut reader, function)?;
                 for ty in effect.pop.into_iter().flatten() { validator.expect(ty)?; }
                 if let Some(ty) = effect.push { validator.push(Some(ty))?; }

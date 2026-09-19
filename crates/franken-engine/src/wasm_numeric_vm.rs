@@ -462,7 +462,7 @@ impl WasmNumericVm {
                         push_value(&mut stack, value, meter)?;
                     }
                 }
-                0x23..=0x40 => {
+                0x23..=0x40 | 0xfc => {
                     state.execute(opcode, &mut reader, &mut stack, meter, function_index)?;
                 }
                 0x41 => push_value(

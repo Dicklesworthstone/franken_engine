@@ -11,6 +11,7 @@ on:
       - 'crates/franken-engine/tests/wasm_*.rs'
       - 'crates/franken-engine/tests/fixtures/wasi_descriptor_smoke.*'
       - 'crates/franken-engine/tests/fixtures/wasi_file_smoke.*'
+      - 'crates/franken-engine/tests/fixtures/wasi_random_smoke.*'
       - 'Cargo.lock'
       - '.github/workflows/native-wasm.yml'
   workflow_dispatch:
@@ -55,3 +56,4 @@ jobs:
           --test wasm_work_pool
           --test wasm_wasi_files
           --test wasm_pool_revocation
+          --test wasm_wasi_sources

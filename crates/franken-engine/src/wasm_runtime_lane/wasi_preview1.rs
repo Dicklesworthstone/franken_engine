@@ -3,7 +3,7 @@
 //! The default registry supplies arguments, environment and guest process exit; an explicit stdio
 //! factory adds bounded memory-backed streams under `wasi_snapshot_preview1`.
 //! Nothing reads the process arguments/environment,
-//! opens host files, or installs clocks, entropy or sockets. An explicit
+//! opens host files or installs ambient clocks, entropy or sockets. An explicit
 //! read-only file factory exposes only supplied bytes under a private preopen.
 //! This is an implemented
 //! subset, not a full WASI runtime; undeclared services remain unbound.
@@ -261,3 +261,7 @@ pub use stdio::{WasiCapturedOutput, WasiReadOnlyFiles, WasiStdio, WasiStdioAcces
 #[path = "wasi_preview1/command.rs"]
 mod command;
 pub use command::{WasiCommandOutcome, WasiCommandPhase, run_command_with_outcome};
+
+/// Explicit capability-gated system sources; no ambient entropy or clocks.
+#[path = "wasi_preview1/sources.rs"]
+pub mod sources;

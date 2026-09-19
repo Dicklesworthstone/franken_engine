@@ -25,6 +25,10 @@ struct Response {
     export: String,
     available_exports: Vec<String>,
     execution: WasmNumericExecution,
+    // Startup and invocation are separate bounded executions. Do not silently
+    // report only the export's work when instantiation ran guest code too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_execution: Option<WasmNumericExecution>,
 }
 
 fn decode_module_hex(
@@ -54,7 +58,9 @@ fn run(request: Request) -> Result<Response, String> {
     let module_bytes = decode_module_hex(&request.module_hex, &limits)?;
     let vm = WasmNumericVm::parse(&module_bytes, limits).map_err(|error| error.to_string())?;
     let available_exports = vm.export_names().map(str::to_string).collect();
-    let execution = vm
+    let mut instance = vm.instantiate().map_err(|error| error.to_string())?;
+    let start_execution = instance.start_execution().cloned();
+    let execution = instance
         .call_export(&request.export, &request.arguments)
         .map_err(|error| error.to_string())?;
     Ok(Response {
@@ -63,6 +69,7 @@ fn run(request: Request) -> Result<Response, String> {
         export: request.export,
         available_exports,
         execution,
+        start_execution,
     })
 }
 
@@ -112,6 +119,8 @@ mod tests {
         .expect("execute add");
         assert_eq!(response.execution.results, vec![WasmBoundaryValue::I32(42)]);
         assert_eq!(response.available_exports, vec!["add".to_string()]);
+        assert!(response.start_execution.is_none());
+        assert!(serde_json::to_value(&response).unwrap().get("start_execution").is_none());
     }
 
     #[test]

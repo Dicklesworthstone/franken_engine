@@ -1,4 +1,4 @@
-//! Bounded, instance-owned WebAssembly linear memory and numeric globals.
+//! Bounded WebAssembly instance state and start-function execution.
 //!
 //! The compiled module is immutable. Instantiation validates every active data
 //! segment before allocating or publishing state; calls on one instance share
@@ -72,6 +72,7 @@ pub(super) struct ModuleState {
     data: Vec<DataSegment>,
     globals: Vec<Global>,
     tables: tables::TablePlan,
+    start: Option<u32>,
     exports: BTreeMap<String, (u8, u32)>,
 }
 
@@ -89,6 +90,10 @@ impl ModuleState {
             9 => self.tables.parse_elements(reader, limits, other),
             5 => self.parse_memory(reader),
             6 => self.parse_globals(reader, limits),
+            8 => {
+                self.start = Some(reader.read_u32_leb()?);
+                Ok(())
+            },
             11 => self.parse_data(reader, limits),
             _ => Err(WasmNumericVmError::UnsupportedSection { section_id: id }),
         }
@@ -181,7 +186,14 @@ impl ModuleState {
     }
 
     pub(super) fn validate_module(&self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
-        self.tables.validate_functions(vm)
+        self.tables.validate_functions(vm)?;
+        if let Some(start) = self.start {
+            let signature = vm.function_signature(start)?;
+            if !signature.params.is_empty() || !signature.results.is_empty() {
+                return Err(invalid(format!("start function {start} must have type [] -> []")));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn validate_table(&self, index: u32) -> Result<(), WasmNumericVmError> {
@@ -269,15 +281,44 @@ pub(super) struct InstanceState {
 /// A separately instantiated module. Repeated calls share only this instance's
 /// memory and globals. Traps retain writes by previously completed instructions.
 #[derive(Debug)]
-pub struct WasmNumericInstance<'a> { vm: &'a WasmNumericVm, state: InstanceState }
+pub struct WasmNumericInstance<'a> {
+    vm: &'a WasmNumericVm,
+    state: InstanceState,
+    start_execution: Option<WasmNumericExecution>,
+}
 
 impl WasmNumericVm {
+    /// Initialize tables, globals and memory, then run the optional start
+    /// function once before publishing the instance. A trap or resource refusal
+    /// drops the unpublished state; no partially initialized instance escapes.
+    /// Start execution has one configured instruction budget, shared by all its
+    /// nested calls. Each later export invocation has a fresh invocation budget.
     pub fn instantiate(&self) -> Result<WasmNumericInstance<'_>, WasmNumericVmError> {
-        Ok(WasmNumericInstance { vm: self, state: self.state.instantiate(&self.limits)? })
+        let mut state = self.state.instantiate(&self.limits)?;
+        let start_execution = if let Some(start) = self.state.start {
+            let mut meter = ExecutionMeter::new(&self.limits);
+            let results = self.invoke(start, &[], 1, &mut meter, &mut state)?;
+            Some(WasmNumericExecution {
+                results,
+                instructions_executed: meter.instructions,
+                peak_stack_values: meter.peak_stack_values,
+                max_call_depth: meter.max_call_depth,
+            })
+        } else {
+            None
+        };
+        Ok(WasmNumericInstance { vm: self, state, start_execution })
     }
 }
 
 impl WasmNumericInstance<'_> {
+    /// Execution of the binary start function, distinct from later export-call
+    /// metrics. None means no start section. State allocation/segment copying is
+    /// not counted as guest execution. Inspection never reruns initialization.
+    pub fn start_execution(&self) -> Option<&WasmNumericExecution> {
+        self.start_execution.as_ref()
+    }
+
     pub fn call_export(&mut self, name: &str, arguments: &[WasmBoundaryValue]) -> Result<WasmNumericExecution, WasmNumericVmError> {
         self.vm.call_export_in_instance(name, arguments, &mut self.state)
     }

@@ -400,3 +400,243 @@ fn actual_wasi_streams_and_exit_share_the_resolved_cooperative_command_lifecycle
     let captured = output.take_output().unwrap();
     assert!(captured.stdout.is_empty()); assert!(captured.stderr.is_empty());
 }
+
+mod scheduling {
+    use super::*;
+    use std::num::NonZeroUsize;
+    use frankenengine_engine::wasm_runtime_lane::scheduler::{
+        WasmNativeScheduler, WasmTaskAdmissionErrorKind, WasmTaskHandle, WasmTaskKind, WasmTaskOutcome,
+    };
+
+    fn slots(n: usize) -> NonZeroUsize { NonZeroUsize::new(n).unwrap() }
+
+    #[test]
+    fn infinite_command_cannot_starve_existing_exports_startup_or_finite_commands() {
+        let spin = command(None, &[0x03, 0x40, 0x0c, 0, 0x0b, 0x0b], WasmNumericLimits::default());
+        let fast = command(None, &[0x0b], WasmNumericLimits::default());
+        let ctx = context(); let allowed = policy();
+        let mut instance = fast.instantiate_with_imports(&ctx, &allowed, bindings(forbidden)).unwrap();
+        let mut queue = WasmNativeScheduler::new(slots(4));
+        let spinner = queue.submit_command(spin.prepare_command(bindings(forbidden))).unwrap();
+        let call = queue.submit(instance.begin_call("_start", &[], &ctx, &allowed).unwrap()).unwrap();
+        let startup = queue.submit_startup(fast.prepare_startup_with_imports(bindings(forbidden))).unwrap();
+        let finite = queue.submit_command(fast.prepare_command(bindings(forbidden))).unwrap();
+        let order = [spinner.id(), call.id(), startup.id(), finite.id()];
+        let mut completed = BTreeSet::new();
+        for turn in 0..32 {
+            let result = queue.run_next(work(2), &ctx, &allowed).unwrap();
+            if turn < 4 { assert_eq!(result.task_id, order[turn]); }
+            match result.outcome {
+                WasmTaskOutcome::Pending => {},
+                WasmTaskOutcome::Complete(_) | WasmTaskOutcome::Initialized(_) | WasmTaskOutcome::Exited(_) => {
+                    assert!(completed.insert(result.task_id));
+                }
+                other => panic!("unexpected scheduled outcome: {other:?}"),
+            }
+            if completed.len() == 3 { break; }
+        }
+        assert_eq!(completed, BTreeSet::from([call.id(), startup.id(), finite.id()]));
+        assert_eq!(queue.len(), 1);
+        spinner.cancel();
+        assert!(matches!(queue.run_next(work(1), &ctx, &allowed).unwrap().outcome, WasmTaskOutcome::Cancelled));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn command_identity_and_cumulative_work_span_startup_and_unsigned_exit() {
+        let module = command(Some(&effect(1)), &exit(u32::MAX, 0x10), WasmNumericLimits::default());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut queue = WasmNativeScheduler::new(slots(1));
+        let handle = queue.submit_command(module.prepare_command(recording_effects(events.clone()))).unwrap();
+        let mut before = 0;
+        let mut complete = false;
+        for _ in 0..20 {
+            assert_eq!(queue.next_task_kind(), Some(WasmTaskKind::Command));
+            let turn = queue.run_next(work(1), &context(), &policy()).unwrap();
+            assert_eq!(turn.task_id, handle.id()); assert_eq!(turn.kind, WasmTaskKind::Command);
+            assert_eq!(turn.event.event, "wasm_command_turn");
+            assert_eq!(turn.event.work_before, before); assert_eq!(turn.event.error_code, "none");
+            before = turn.event.work_after.unwrap();
+            match turn.outcome {
+                WasmTaskOutcome::Pending => assert_eq!(turn.event.outcome, "yield"),
+                WasmTaskOutcome::Exited(execution) => {
+                    assert_eq!(execution.exit_code, u32::MAX);
+                    assert_eq!(execution.instructions_executed, 9);
+                    assert_eq!(before, 9); assert_eq!(turn.event.outcome, "exit");
+                    complete = true; break;
+                }
+                other => panic!("unexpected result: {other:?}"),
+            }
+        }
+        assert!(complete); assert_eq!(*events.lock().unwrap(), [1]);
+        assert!(queue.run_next(work(1), &context(), &policy()).is_none());
+    }
+
+    #[test]
+    fn queue_full_returns_a_partially_executed_command_without_refunding_work() {
+        let module = command(Some(&effect(1)), &effect(2), WasmNumericLimits::default());
+        let fast = command(None, &[0x0b], WasmNumericLimits::default());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let task = pending(module.prepare_command(recording_effects(events.clone())).resume(work(100), &context(), &policy()).unwrap());
+        assert_eq!(task.instructions_executed(), 5);
+        let ctx = context(); let allowed = policy();
+        let mut instance = fast.instantiate_with_imports(&ctx, &allowed, bindings(forbidden)).unwrap();
+        let mut queue = WasmNativeScheduler::new(slots(1));
+        let old = queue.submit(instance.begin_call("_start", &[], &ctx, &allowed).unwrap()).unwrap();
+        let error = queue.submit_command(task).unwrap_err();
+        assert_eq!(error.kind(), WasmTaskAdmissionErrorKind::QueueFull);
+        let task = (*error).into_command(); assert_eq!(task.instructions_executed(), 5);
+        let error = queue.submit_startup(fast.prepare_startup_with_imports(bindings(forbidden))).unwrap_err();
+        assert_eq!(error.kind(), WasmTaskAdmissionErrorKind::QueueFull);
+        (*error).into_startup().cancel();
+        assert!(matches!(queue.run_next(work(100), &ctx, &allowed).unwrap().outcome, WasmTaskOutcome::Complete(_)));
+        let new = queue.submit_command(task).unwrap();
+        assert_eq!(new.id().get(), old.id().get() + 1); old.cancel();
+        match queue.run_next(work(100), &ctx, &allowed).unwrap().outcome {
+            WasmTaskOutcome::Exited(execution) => assert_eq!(execution.instructions_executed, 10),
+            other => panic!("lost admitted command: {other:?}"),
+        }
+        assert_eq!(*events.lock().unwrap(), [1, 2]);
+    }
+
+    #[test]
+    fn withdrawal_is_kind_safe_and_does_not_restart_a_command_phase() {
+        let module = command(Some(&effect(1)), &effect(2), WasmNumericLimits::default());
+        let fast = command(None, &[0x0b], WasmNumericLimits::default());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let task = pending(module.prepare_command(recording_effects(events.clone())).resume(work(100), &context(), &policy()).unwrap());
+        let ctx = context(); let allowed = policy();
+        let mut instance = fast.instantiate_with_imports(&ctx, &allowed, bindings(forbidden)).unwrap();
+        let mut queue = WasmNativeScheduler::new(slots(3));
+        let cmd = queue.submit_command(task).unwrap();
+        let startup = queue.submit_startup(fast.prepare_startup_with_imports(bindings(forbidden))).unwrap();
+        let call = queue.submit(instance.begin_call("_start", &[], &ctx, &allowed).unwrap()).unwrap();
+        assert!(queue.take_startup(cmd.id()).is_none()); assert!(queue.take(cmd.id()).is_none());
+        assert!(queue.take_command(startup.id()).is_none()); assert!(queue.take_command(call.id()).is_none());
+        assert_eq!(queue.next_task(), Some(cmd.id())); assert_eq!(queue.len(), 3);
+        let task = queue.take_command(cmd.id()).unwrap();
+        assert_eq!(task.instructions_executed(), 5); cmd.cancel();
+        let resubmitted = queue.submit_command(task).unwrap();
+        assert!(resubmitted.id().get() > call.id().get());
+        assert_eq!(queue.next_task(), Some(startup.id()));
+        assert!(matches!(queue.run_next(work(100), &ctx, &allowed).unwrap().outcome, WasmTaskOutcome::Initialized(_)));
+        assert!(matches!(queue.run_next(work(100), &ctx, &allowed).unwrap().outcome, WasmTaskOutcome::Complete(_)));
+        assert!(matches!(queue.run_next(work(100), &ctx, &allowed).unwrap().outcome, WasmTaskOutcome::Exited(_)));
+        assert_eq!(*events.lock().unwrap(), [1, 2]);
+    }
+
+    #[test]
+    fn cancelled_admission_stops_before_allocation_and_cannot_be_transferred() {
+        let module = command(Some(&effect(1)), &effect(2), WasmNumericLimits {
+            max_memory_pages: 0, ..WasmNumericLimits::default()
+        });
+        let mut queue = WasmNativeScheduler::new(slots(1));
+        let handle = queue.submit_command(module.prepare_command(bindings(forbidden))).unwrap();
+        handle.cancel();
+        assert!(queue.take_command(handle.id()).is_none());
+        let turn = queue.run_next(work(100), &context(), &policy()).unwrap();
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Cancelled));
+        assert_eq!(turn.event.work_before, 0); assert_eq!(turn.event.work_after, Some(0));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn revoked_policy_retires_only_the_selected_command_before_entry_effects() {
+        let module = command(Some(&effect(1)), &effect(2), WasmNumericLimits::default());
+        let fast = command(None, &[0x0b], WasmNumericLimits::default());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut queue = WasmNativeScheduler::new(slots(2));
+        let denied = queue.submit_command(module.prepare_command(recording_effects(events.clone()))).unwrap();
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        let healthy = queue.submit_command(fast.prepare_command(bindings(forbidden))).unwrap();
+        let changed = ResolutionContext::new("revoked-trace", "revoked-decision", "revoked-policy");
+        let turn = queue.run_next(work(100), &changed, &CapabilityPolicyHook::new(BTreeSet::new())).unwrap();
+        assert_eq!(turn.task_id, denied.id());
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Failed(WasmNativeLoadError::Resolution(_))));
+        assert_eq!(turn.event.policy_id, "revoked-policy"); assert_eq!(turn.event.outcome, "deny");
+        assert_eq!(turn.event.work_before, 5); assert_eq!(turn.event.work_after, None);
+        assert_eq!(queue.next_task(), Some(healthy.id()));
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Exited(_)));
+        assert_eq!(*events.lock().unwrap(), [1]);
+    }
+
+    #[test]
+    fn cancellation_in_the_final_callback_suppresses_command_completion_not_effects() {
+        let module = command(None, &effect(2), WasmNumericLimits::default());
+        let signal = Arc::new(Mutex::new(None::<WasmTaskHandle>)); let captured = signal.clone();
+        let events = Arc::new(Mutex::new(Vec::new())); let observed = events.clone();
+        let imports = bindings(move |caller, _| {
+            observed.lock().unwrap().push(1);
+            captured.lock().unwrap().as_ref().unwrap().cancel();
+            Err(caller.exit(71))
+        });
+        let mut queue = WasmNativeScheduler::new(slots(1));
+        *signal.lock().unwrap() = Some(queue.submit_command(module.prepare_command(imports)).unwrap());
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        let turn = queue.run_next(work(100), &context(), &policy()).unwrap();
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Cancelled));
+        assert_eq!(turn.event.work_after, Some(4)); assert_eq!(*events.lock().unwrap(), [1]);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn cancellation_does_not_replace_a_real_command_budget_failure() {
+        let module = command(None, &effect(2), WasmNumericLimits::default());
+        let signal = Arc::new(Mutex::new(None::<WasmTaskHandle>)); let captured = signal.clone();
+        let imports = bindings(move |caller, _| {
+            captured.lock().unwrap().as_ref().unwrap().cancel();
+            caller.charge_work(u64::MAX)?;
+            Ok(vec![])
+        });
+        let mut queue = WasmNativeScheduler::new(slots(1));
+        *signal.lock().unwrap() = Some(queue.submit_command(module.prepare_command(imports)).unwrap());
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        let turn = queue.run_next(work(100), &context(), &policy()).unwrap();
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Failed(WasmNativeLoadError::Execution(WasmNumericVmError::InstructionBudgetExceeded { .. }))));
+        assert_eq!(turn.event.work_after, None); assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn scheduled_replay_consumes_the_same_command_trace_without_reexecuting_effects() {
+        let module = command(Some(&effect(1)), &exit(17, 0x13), WasmNumericLimits::default());
+        let mut imports = bindings(|_, _| Ok(vec![]));
+        let recording = imports.record_calls(WasmHostTraceLimits::default()).unwrap();
+        let expected = finish(module.prepare_command(imports), &[10000]).unwrap();
+        let mut imports = bindings(forbidden);
+        let replay = imports.replay_calls(recording.snapshot().unwrap(), WasmHostTraceLimits::default()).unwrap();
+        let mut queue = WasmNativeScheduler::new(slots(1));
+        queue.submit_command(module.prepare_command(imports)).unwrap();
+        let mut completed = false;
+        for _ in 0..100 {
+            let turn = queue.run_next(work(1), &context(), &policy()).unwrap();
+            match turn.outcome {
+                WasmTaskOutcome::Exited(execution) => { assert_eq!(execution, expected); completed = true; break; }
+                WasmTaskOutcome::Pending => {},
+                other => panic!("unexpected replay outcome: {other:?}"),
+            }
+        }
+        assert!(completed); replay.verify_complete().unwrap(); assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn a_panicked_command_is_removed_without_losing_other_ready_work() {
+        let module = command(Some(&effect(1)), &effect(2), WasmNumericLimits::default());
+        let fast = command(None, &[0x0b], WasmNumericLimits::default());
+        let events = Arc::new(Mutex::new(Vec::new())); let observed = events.clone();
+        let imports = bindings(move |_, args| {
+            let [I32(value)] = args else { panic!("ABI"); };
+            if *value == 2 { panic!("entry provider panicked"); }
+            observed.lock().unwrap().push(*value); Ok(vec![])
+        });
+        let mut queue = WasmNativeScheduler::new(slots(2));
+        queue.submit_command(module.prepare_command(imports)).unwrap();
+        let healthy = queue.submit_command(fast.prepare_command(bindings(forbidden))).unwrap();
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| queue.run_next(work(100), &context(), &policy()))).is_err());
+        assert_eq!(queue.len(), 1); assert_eq!(queue.next_task(), Some(healthy.id()));
+        assert!(matches!(queue.run_next(work(100), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Exited(_)));
+        assert_eq!(*events.lock().unwrap(), [1]);
+    }
+}

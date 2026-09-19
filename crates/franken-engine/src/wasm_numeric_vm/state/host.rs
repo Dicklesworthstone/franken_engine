@@ -18,6 +18,7 @@ use super::*;
 use crate::capability::RuntimeCapability;
 use crate::checkpoint::{CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite};
 use crate::wasm_runtime_lane::WasmFunctionSignature;
+use crate::wasm_runtime_lane::memory_pool::{MemoryReservation, WasmMemoryPool};
 use std::collections::BTreeSet;
 use crate::hash_tiers::ContentHash;
 use crate::wasm_runtime_lane::host_replay::{
@@ -34,6 +35,8 @@ pub enum WasmHostError {
     MissingAuthority,
     ZeroCallCost,
     MissingMemory,
+    MemoryPoolAlreadyBound,
+    MemoryPoolExhausted { requested_pages: u64, available_pages: u64 },
     /// Normal termination of this guest instance, never the embedding process.
     ProcessExit { code: u32 },
     Cancelled,
@@ -64,6 +67,10 @@ impl fmt::Display for WasmHostError {
             Self::MissingAuthority => f.write_str("wasm host binding requires explicit capability authority"),
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
+            Self::MemoryPoolAlreadyBound => f.write_str("wasm memory pool is already bound"),
+            Self::MemoryPoolExhausted { requested_pages, available_pages } => {
+                write!(f, "wasm memory reservation needs {requested_pages} pages, only {available_pages} available")
+            }
             Self::ProcessExit { code } => write!(f, "wasm guest exited with status {code}"),
             Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
             Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
@@ -159,6 +166,10 @@ pub struct WasmHostImports {
     execution_cancellation: Option<HostCancellation>,
     revocations: BTreeMap<RuntimeCapability, HostCancellation>,
     exit_status: Option<u32>,
+    memory_pool: Option<WasmMemoryPool>,
+    // InstanceState drops its linear memory before its owned host registry.
+    // Keep this lease until that memory and all provider state have been freed.
+    memory_reservation: Option<MemoryReservation>,
 }
 
 impl WasmHostImports {
@@ -169,7 +180,33 @@ impl WasmHostImports {
             execution_cancellation: None,
             revocations: BTreeMap::new(),
             exit_status: None,
+            memory_pool: None,
+            memory_reservation: None,
         }
+    }
+
+    /// Attach a shared ceiling for this instance's complete linear-memory
+    /// envelope. Binding is lazy: reserve the lesser of the module's declared
+    /// maximum and the VM's page limit only after import authorization, before
+    /// any instance allocation or startup effects. An undeclared maximum uses
+    /// the existing memory32 maximum, still capped by the VM's configured limit.
+    ///
+    /// Reserve growth up front, not on each memory.grow. Admitted instances do
+    /// not compete for pages later, so another task cannot change their growth
+    /// outcomes through pool contention. This is a conservative logical-page
+    /// reservation, not committed bytes, allocator overhead, or a process RSS
+    /// limit. Native allocation and the original instruction budget can still
+    /// refuse growth. Tables, code, stacks and provider allocations are separate.
+    ///
+    /// An empty registry can carry a pool without granting host authority. The
+    /// reservation follows the actual instance, including yielded startup and
+    /// exited-but-inspectable state; only destruction releases it. Pool binding
+    /// cannot be replaced to widen a limit. All existing with-imports execution
+    /// paths (synchronous, Future and scheduled) use this same admission gate.
+    pub fn bind_memory_pool(&mut self, pool: WasmMemoryPool) -> Result<(), WasmHostError> {
+        if self.memory_pool.is_some() { return Err(WasmHostError::MemoryPoolAlreadyBound); }
+        self.memory_pool = Some(pool);
+        Ok(())
     }
 
     /// Bind the canonical control-plane cancellation signal before linking.
@@ -325,6 +362,27 @@ impl WasmHostImports {
             }
             check_authority(&self.granted, binding, import)?;
             check_revocations(&mut self.revocations, &binding.required, import)?;
+        }
+        // Admission is outside provider recording/replay and precedes ALL
+        // instance allocation. A replay tape cannot supply memory capacity.
+        if let Some(pool) = &self.memory_pool {
+            let pages = if let Some(memory) = &vm.state.memory {
+                let maximum = memory.maximum.min(vm.limits.max_memory_pages);
+                if memory.minimum > maximum {
+                    return Err(WasmStateError::LimitExceeded {
+                        resource: "initial memory pages".into(),
+                        actual: u64::from(memory.minimum), max: u64::from(maximum),
+                    }.into());
+                }
+                u64::from(maximum)
+            } else { 0 };
+            if let Some(reservation) = &self.memory_reservation {
+                if reservation.pages() != pages {
+                    return Err(invalid("linked memory reservation changed its instance envelope"));
+                }
+            } else {
+                self.memory_reservation = Some(pool.reserve(pages)?);
+            }
         }
         Ok(())
     }

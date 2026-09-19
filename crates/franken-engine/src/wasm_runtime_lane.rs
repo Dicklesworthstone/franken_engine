@@ -45,5 +45,9 @@ pub mod scheduler;
 #[path = "wasm_runtime_lane/wasi_preview1.rs"]
 pub mod wasi_preview1;
 
+/// Shared admission reservations for bounded native linear-memory envelopes.
+#[path = "wasm_runtime_lane/memory_pool.rs"]
+pub mod memory_pool;
+
 #[path = "wasm_runtime_lane/command.rs"]
 pub mod command;

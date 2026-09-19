@@ -51,3 +51,4 @@ jobs:
           --test wasm_scheduled_command
           --test wasm_wasi_descriptors
           --test wasm_memory_pool
+          --test wasm_wasi_files

@@ -12,6 +12,9 @@ use std::sync::{Mutex, MutexGuard, TryLockError};
 
 #[path = "stdio/descriptors.rs"]
 mod descriptors;
+#[path = "stdio/files.rs"]
+mod files;
+pub use files::WasiReadOnlyFiles;
 
 const AGAIN: i32 = 6;
 const BADF: i32 = 8;
@@ -61,6 +64,7 @@ impl std::error::Error for WasiStdioAccessError {}
 #[derive(Debug)]
 struct Streams {
     descriptors: descriptors::Table,
+    files: Option<files::FileSystem>,
     input: Vec<u8>,
     consumed: usize,
     output: WasiCapturedOutput,
@@ -110,11 +114,27 @@ impl WasiPreview1Config {
         stdin: Vec<u8>,
         limits: WasiStdioLimits,
     ) -> Result<(WasmHostImports, WasiStdio), WasiPreview1Error> {
+        self.stdio_imports(granted, stdin, limits, None)
+    }
+
+    fn stdio_imports(
+        self,
+        granted: BTreeSet<RuntimeCapability>,
+        stdin: Vec<u8>,
+        limits: WasiStdioLimits,
+        files: Option<WasiReadOnlyFiles>,
+    ) -> Result<(WasmHostImports, WasiStdio), WasiPreview1Error> {
         limit("stdin bytes", stdin.len() as u64, limits.max_stdin_bytes as u64)?;
+        let descriptors = match &files {
+            Some(files) => descriptors::Table::with_files(files.max_open_descriptors)?,
+            None => descriptors::Table::new(),
+        };
+        let files = files.map(files::FileSystem::build).transpose()?;
+        let has_files = files.is_some();
         let mut imports = self.into_imports(granted)?;
         let observer = WasiStdio {
             streams: Arc::new(Mutex::new(Streams {
-                descriptors: descriptors::Table::new(),
+                descriptors, files,
                 input: stdin, consumed: 0, output: WasiCapturedOutput::default(), emitted: 0,
             })),
         };
@@ -127,7 +147,7 @@ impl WasiPreview1Config {
             imports.define(WASI_PREVIEW1_MODULE, function, signature(4), BTreeSet::from([capability]), 1,
                 move |caller, arguments| {
                     let arguments = words(arguments)?;
-                    let outcome = if read { read_stdin(caller, arguments, &streams, &limits) }
+                    let outcome = if read { read_input(caller, arguments, &streams, &limits, None) }
                         else { write_output(caller, arguments, &streams, &limits) };
                     match outcome {
                         Ok(()) => errno(SUCCESS),
@@ -136,7 +156,8 @@ impl WasiPreview1Config {
                     }
                 })?;
         }
-        descriptors::install(&mut imports, &observer.streams)?;
+        descriptors::install(&mut imports, &observer.streams, has_files)?;
+        if has_files { files::install(&mut imports, &observer.streams, &limits)?; }
         Ok((imports, observer))
     }
 }
@@ -196,6 +217,7 @@ fn write_output(
     limits: &WasiStdioLimits,
 ) -> IoResult<()> {
     let mut streams = access(streams)?;
+    streams.descriptors.charge(caller)?;
     let stream = streams.descriptors.writable(fd)?;
     let plan = prepare(caller, table, count, result, limits)?;
     let next = streams.emitted.checked_add(plan.length as usize)
@@ -223,16 +245,30 @@ fn write_output(
     Ok(())
 }
 
-fn read_stdin(
+fn read_input(
     caller: &mut WasmHostCaller<'_, '_>,
     [fd, table, count, result]: [u32; 4],
     streams: &Mutex<Streams>,
     limits: &WasiStdioLimits,
+    offset: Option<u64>,
 ) -> IoResult<()> {
     let mut streams = access(streams)?;
-    streams.descriptors.readable(fd)?;
+    streams.descriptors.charge(caller)?;
+    let descriptor = streams.descriptors.readable(fd)?;
+    let slot = streams.descriptors.index(fd)?;
+    let file = match descriptor.stream {
+        descriptors::Stream::File(index) => Some(Arc::clone(streams.files.as_ref()
+            .ok_or(IoFailure::Errno(BADF))?.bytes(index)?)),
+        _ => None,
+    };
+    if offset.is_some() {
+        if file.is_none() { return Err(IoFailure::Errno(descriptors::SPIPE)); }
+        descriptors::require_right(descriptor, descriptors::READ | descriptors::SEEK)?;
+    }
+    let mut position = offset.unwrap_or(if file.is_some() { descriptor.cursor } else { streams.consumed as u64 });
+    let size = file.as_ref().map_or(streams.input.len(), |bytes| bytes.len()) as u64;
     let plan = prepare(caller, table, count, result, limits)?;
-    let actual = (plan.length as usize).min(streams.input.len() - streams.consumed);
+    let actual = u64::from(plan.length).min(size.saturating_sub(position)) as usize;
     let mut remaining = actual;
     let mut work = 1_u64; // final nread write, including EOF
     for (_, width) in &plan.buffers {
@@ -246,11 +282,19 @@ fn read_stdin(
         if remaining == 0 { break; }
         let copied = remaining.min(width as usize);
         if copied == 0 { continue; }
-        let start = streams.consumed;
-        caller.write_memory(address, &streams.input[start..start + copied])?;
+        let start = position as usize; // copied > 0 implies position < bounded payload length.
+        if let Some(bytes) = &file {
+            caller.write_memory(address, &bytes[start..start + copied])?;
+        } else {
+            caller.write_memory(address, &streams.input[start..start + copied])?;
+        }
         // This completed prefix is consumed even when a later cancellation or
         // transcript refusal terminates the callback. No synthetic rollback.
-        streams.consumed += copied;
+        position += copied as u64;
+        if offset.is_none() {
+            if file.is_some() { streams.descriptors.set_slot_cursor(slot, position); }
+            else { streams.consumed += copied; }
+        }
         remaining -= copied;
     }
     caller.write_memory(result, &(actual as u32).to_le_bytes())?;

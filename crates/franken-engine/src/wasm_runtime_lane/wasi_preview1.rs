@@ -3,7 +3,9 @@
 //! The default registry supplies arguments, environment and guest process exit; an explicit stdio
 //! factory adds bounded memory-backed streams under `wasi_snapshot_preview1`.
 //! Nothing reads the process arguments/environment,
-//! opens files, or installs clocks, entropy or sockets. This is an implemented
+//! opens host files, or installs clocks, entropy or sockets. An explicit
+//! read-only file factory exposes only supplied bytes under a private preopen.
+//! This is an implemented
 //! subset, not a full WASI runtime; undeclared services remain unbound.
 //!
 //! ABI source: WebAssembly/WASI, wasi-0.1/preview1/witx (args/environ functions).
@@ -254,7 +256,7 @@ fn require_work(caller: &mut WasmHostCaller<'_, '_>, work: u64) -> Result<(), Wa
 
 #[path = "wasi_preview1/stdio.rs"]
 mod stdio;
-pub use stdio::{WasiCapturedOutput, WasiStdio, WasiStdioAccessError, WasiStdioLimits};
+pub use stdio::{WasiCapturedOutput, WasiReadOnlyFiles, WasiStdio, WasiStdioAccessError, WasiStdioLimits};
 
 #[path = "wasi_preview1/command.rs"]
 mod command;

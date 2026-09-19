@@ -95,6 +95,12 @@ impl WasmHostImports {
         Self { bindings: BTreeMap::new(), granted }
     }
 
+    /// Narrow a provider envelope to a resolved module's declared authority.
+    /// Never infer a grant from a binding requirement or a process-wide policy.
+    pub(crate) fn restrict_capabilities(&mut self, permitted: &BTreeSet<RuntimeCapability>) {
+        self.granted.retain(|capability| permitted.contains(capability));
+    }
+
     /// Define an exact (module, name) binding. Duplicate registration fails
     /// without replacing the existing callback. VmDispatch is always required
     /// in addition to the provider's nonempty service-capability set.

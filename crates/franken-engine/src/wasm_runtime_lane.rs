@@ -14,7 +14,9 @@
 //! capability-gated imports into [`WasmNativeModule`] for native execution.
 //! [`WasmNativeInstance`] rechecks the current policy before startup, calls and
 //! state inspection. This is an embedding API, not JavaScript import-expression
-//! evaluation or automatic ESM namespace binding. Host imports remain unbound.
+//! evaluation or automatic ESM namespace binding. Host imports are unbound by
+//! default; [`WasmNativeModule::instantiate_with_imports`] explicitly links
+//! providers within the module's declared authority and current policy.
 
 #[path = "wasm_runtime_lane/lane.rs"]
 mod lane;

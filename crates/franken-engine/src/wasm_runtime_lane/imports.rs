@@ -2,9 +2,10 @@
 //!
 //! The deterministic resolver owns names, provenance and resolution policy;
 //! the numeric VM owns validation and execution. A loaded module pins those
-//! exact source bytes. Instances preserve guest state, but never retain an
-//! authorization grant: startup, calls and state inspection require the current
-//! capability policy. Imported host functions remain unbound and fail closed.
+//! exact source bytes. Startup, calls and state inspection require the current
+//! capability policy. Host functions are unbound by default; explicit linking
+//! intersects provider authority with the module's declared capabilities and
+//! validates every imported ABI before startup. No live-policy grant is cached.
 //!
 //! This is the embedding-facing import path, not JavaScript import-expression
 //! evaluation or automatic ESM namespace binding. The constant-body ABI route
@@ -14,6 +15,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::capability::RuntimeCapability;
 use crate::module_resolver::{
     CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
     ModulePolicyHook, ModuleRequest, ModuleResolver, ModuleSyntax, ResolutionContext,
@@ -22,7 +24,7 @@ use crate::module_resolver::{
 
 use super::WasmBoundaryValue;
 use super::numeric::{
-    WasmNumericExecution, WasmNumericInstance, WasmNumericLimits, WasmNumericVm,
+    WasmHostImports, WasmNumericExecution, WasmNumericInstance, WasmNumericLimits, WasmNumericVm,
     WasmNumericVmError,
 };
 
@@ -224,9 +226,32 @@ impl WasmNativeModule {
         let instance = self.vm.instantiate()?;
         Ok(WasmNativeInstance { module: self, instance })
     }
+
+    /// Link explicit host implementations without broadening module authority.
+    /// Every imported service capability must be present in all three places:
+    /// the provider's grant, this pinned module's declaration, and the current
+    /// policy. All imports are validated before allocation or startup effects.
+    ///
+    /// The returned instance uses the same policy-checked call and inspection
+    /// methods as a compute-only instance. A policy denial precedes *all* guest
+    /// instructions, including stores before a host call. This policy is a
+    /// caller-supplied snapshot, not an asynchronous revocation subscription.
+    /// Host callbacks remain trusted code responsible for I/O, IFC and replay;
+    /// successful host effects are not rolled back by a later startup trap.
+    pub fn instantiate_with_imports(
+        &self,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
+        mut imports: WasmHostImports,
+    ) -> Result<WasmNativeInstance<'_>, WasmNativeLoadError> {
+        self.authorize(context, policy)?;
+        imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+        let instance = self.vm.instantiate_with_imports(imports)?;
+        Ok(WasmNativeInstance { module: self, instance })
+    }
 }
 
-/// Persistent guest state with no cached permission or unchecked VM accessor.
+/// Persistent guest state with no cached live-policy grant or unchecked VM accessor.
 #[derive(Debug)]
 pub struct WasmNativeInstance<'a> {
     module: &'a WasmNativeModule,
@@ -234,6 +259,13 @@ pub struct WasmNativeInstance<'a> {
 }
 
 impl WasmNativeInstance<'_> {
+    /// Permanently attenuate this instance's linked host authority. Passing a
+    /// broader policy later cannot restore the removed provider grant. A fresh
+    /// authorized instantiation is required to link that capability again.
+    pub fn revoke_host_capability(&mut self, capability: RuntimeCapability) -> bool {
+        self.instance.revoke_host_capability(capability)
+    }
+
     /// Use the caller's current policy, not the grant used when this module
     /// loaded. A denied call cannot run instructions or change guest state.
     pub fn call_export(

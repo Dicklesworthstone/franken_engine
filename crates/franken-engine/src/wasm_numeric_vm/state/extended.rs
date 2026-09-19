@@ -32,6 +32,8 @@ enum Instruction {
     Saturating { subopcode: u32, input: WasmValueType, output: WasmValueType },
     MemoryCopy,
     MemoryFill,
+    TableInit { element: u32, table: u32 },
+    ElementDrop { element: u32 },
     TableCopy { destination: u32, source: u32 },
     TableSize { table: u32 },
 }
@@ -61,6 +63,12 @@ fn decode(reader: &mut CodeReader<'_>, function: u32) -> Result<Instruction, Was
             memory_zero(reader, function)?;
             Ok(Instruction::MemoryFill)
         }
+        // The binary order is elemidx, tableidx (unlike textual table.init).
+        12 => Ok(Instruction::TableInit {
+            element: reader.read_u32_leb(function)?,
+            table: reader.read_u32_leb(function)?,
+        }),
+        13 => Ok(Instruction::ElementDrop { element: reader.read_u32_leb(function)? }),
         14 => Ok(Instruction::TableCopy {
             destination: reader.read_u32_leb(function)?,
             source: reader.read_u32_leb(function)?,
@@ -80,6 +88,15 @@ pub(super) fn validate(
             pop: [Some(input), None, None],
             push: Some(output),
         }),
+        Instruction::TableInit { element, table } => {
+            state.tables.validate_element(element)?;
+            state.validate_table(table)?;
+            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+        }
+        Instruction::ElementDrop { element } => {
+            state.tables.validate_element(element)?;
+            Ok(StackEffect { pop: [None; 3], push: None })
+        }
         Instruction::TableCopy { destination, source } => {
             state.validate_table(destination)?;
             state.validate_table(source)?;
@@ -138,6 +155,9 @@ pub(super) fn execute(
     if let Instruction::Saturating { subopcode, input, .. } = instruction {
         return saturate(subopcode, input, stack, meter, function);
     }
+    if let Instruction::ElementDrop { element } = instruction {
+        return state.tables.drop_element(element);
+    }
     if let Instruction::TableSize { table } = instruction {
         let size = state.tables.size(table)?;
         return push_value(stack, WasmBoundaryValue::I32(size as i32), meter);
@@ -145,6 +165,9 @@ pub(super) fn execute(
     let length = expect_i32(pop_value(stack, function, PREFIX)?, function, 2)? as u32;
     let source_or_byte = expect_i32(pop_value(stack, function, PREFIX)?, function, 1)? as u32;
     let destination = expect_i32(pop_value(stack, function, PREFIX)?, function, 0)? as u32;
+    if let Instruction::TableInit { element, table } = instruction {
+        return state.tables.init(table, element, destination, source_or_byte, length, meter);
+    }
     if let Instruction::TableCopy { destination: to, source: from } = instruction {
         return state.tables.copy(to, from, destination, source_or_byte, length, meter);
     }

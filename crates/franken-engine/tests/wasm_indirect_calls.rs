@@ -312,7 +312,7 @@ fn malformed_or_unsupported_tables_and_elements_are_refused() {
         assert!(WasmNumericVm::parse(&fixture.bytes(), WasmNumericLimits::default()).is_err());
     }
     for elements in [
-        vec![1, 1, 0, 1, 0], // passive elements are not yet executable
+        vec![1, 1, 0, 2, 0], // truncated passive element vector
         vec![1, 0, 0x42, 0, 0x0b, 0], // wrong offset type
         vec![1, 2, 1, 0x41, 0, 0x0b, 0, 0], // missing table
         vec![1, 0, 0x41, 0, 0x0b, 2, 0], // truncated vector
@@ -349,4 +349,22 @@ fn duplicate_export_names_and_invalid_table_exports_fail_validation() {
     let mut fixture = Fixture::default();
     fixture.exports[8] = 1;
     assert!(matches!(WasmNumericVm::parse(&fixture.bytes(), WasmNumericLimits::default()), Err(WasmNumericVmError::State(WasmStateError::UnknownTable { table_index: 1 }))));
+}
+
+#[test]
+fn passive_import_references_still_require_authorized_host_bindings() {
+    let mut fixture = Fixture::default();
+    fixture.imports = vec![1, 1, b'h', 1, b'f', 0, 0];
+    let mut caller = vec![0x41, 0, 0x41, 0, 0x41, 1, 0xfc, 12, 0, 0, 0xfc, 13, 0];
+    caller.extend(fixture.functions[2].1.iter().copied());
+    fixture.functions = vec![(1, caller)];
+    fixture.elements = vec![1, 1, 0, 1, 0];
+    fixture.exports[4] = 1;
+    let vm = fixture.vm();
+    let mut instance = vm.instantiate().unwrap();
+    assert_eq!(instance.table_export("t"), Some([None, None, None].as_slice()));
+    assert!(matches!(instance.call_export("f", &[I32(1), I32(2), I32(0)]), Err(WasmNumericVmError::ImportedFunctionUnsupported { function_index: 0, module, name }) if module == "h" && name == "f"));
+    // Initialization and drop completed before imported dispatch refused.
+    assert_eq!(instance.table_export("t"), Some([Some(0), None, None].as_slice()));
+    assert!(matches!(instance.call_export("f", &[I32(1), I32(2), I32(0)]), Err(WasmNumericVmError::State(WasmStateError::LimitExceeded { actual: 1, max: 0, .. }))));
 }

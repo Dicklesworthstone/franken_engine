@@ -1,13 +1,14 @@
 //! Instance-owned table32 funcref storage and checked indirect dispatch.
 //!
-//! Active element segments accept function-index vectors and ref.func/ref.null
-//! constant expressions. No host table or callable is synthesized. All function
-//! references are validated before module publication; bounds are checked at
-//! instantiation, before any instance can escape. Bulk copies are bounded and
-//! metered before mutation. Passive segments, reference-valued instructions,
-//! typed references, and imported tables remain refused.
+//! Active, passive and declarative elements accept function-index vectors and
+//! ref.func/ref.null constant expressions. All references are validated before
+//! publication. Active/declarative elements are unavailable before startup;
+//! passive elements remain readable until dropped in that instance. Bulk writes
+//! check both ranges and charge work before mutation. Reference-valued stack
+//! instructions, typed references and imported tables remain refused.
 
 use super::*;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 struct TableType {
@@ -15,11 +16,21 @@ struct TableType {
     maximum: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ElementMode {
+    Active { table: u32, offset: u32 },
+    Passive,
+    Declarative,
+}
+
+// Immutable module-owned payload; an instance only owns its availability flag.
+// Sharing these bytes never shares mutable table contents or drop state.
+type ElementEntries = Arc<Vec<Option<u32>>>;
+
 #[derive(Debug, Clone)]
 struct ElementSegment {
-    table: u32,
-    offset: u32,
-    entries: Vec<Option<u32>>,
+    mode: ElementMode,
+    entries: ElementEntries,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,19 +98,29 @@ impl TablePlan {
         self.admit(count, other, limits)?;
         for _ in 0..count {
             let mode = reader.read_u32_leb()?;
-            if !matches!(mode, 0 | 2 | 4 | 6) {
-                return Err(invalid("only active funcref element segments are supported"));
+            if mode > 7 {
+                return Err(invalid("unsupported element segment mode"));
             }
-            let table = if mode & 2 != 0 { reader.read_u32_leb()? } else { 0 };
-            self.validate_table(table)?;
-            let WasmBoundaryValue::I32(offset) = numeric_constant(reader)? else {
-                return Err(invalid("element offset must be i32.const"));
+            let segment_mode = if mode & 1 == 0 {
+                let table = if mode & 2 != 0 { reader.read_u32_leb()? } else { 0 };
+                self.validate_table(table)?;
+                let WasmBoundaryValue::I32(offset) = numeric_constant(reader)? else {
+                    return Err(invalid("element offset must be i32.const"));
+                };
+                ElementMode::Active { table, offset: offset as u32 }
+            } else if mode & 2 == 0 {
+                ElementMode::Passive
+            } else {
+                ElementMode::Declarative
             };
-            if mode == 2 && reader.read_u8()? != 0 {
-                return Err(invalid("element kind must be funcref"));
-            }
-            if mode == 6 && reader.read_u8()? != 0x70 {
-                return Err(invalid("element reference type must be nullable funcref"));
+            // Encodings 0/4 imply their reference type. Every other mode has
+            // elemkind (indices) or reftype (expressions), without an offset
+            // or table immediate in passive/declarative modes.
+            if mode & 3 != 0 {
+                let expected = if mode & 4 == 0 { 0 } else { 0x70 };
+                if reader.read_u8()? != expected {
+                    return Err(invalid("element reference type must be nullable funcref"));
+                }
             }
             let length = reader.read_u32_leb()? as usize;
             self.admit(length, other, limits)?;
@@ -134,7 +155,14 @@ impl TablePlan {
                 entries.push(entry);
             }
             self.elements.try_reserve(1).map_err(|_| allocation::<ElementSegment>(count))?;
-            self.elements.push(ElementSegment { table, offset: offset as u32, entries });
+            self.elements.push(ElementSegment { mode: segment_mode, entries: Arc::new(entries) });
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_element(&self, index: u32) -> Result<(), WasmNumericVmError> {
+        if self.elements.get(index as usize).is_none() {
+            return Err(invalid(format!("unknown element segment {index}")));
         }
         Ok(())
     }
@@ -152,10 +180,11 @@ impl TablePlan {
 
     pub(super) fn instantiate(&self) -> Result<InstanceTables, WasmNumericVmError> {
         for (segment, element) in self.elements.iter().enumerate() {
-            let size = self.table(element.table)?.minimum;
-            if u64::from(element.offset) + element.entries.len() as u64 > u64::from(size) {
+            let ElementMode::Active { table, offset } = element.mode else { continue; };
+            let size = self.table(table)?.minimum;
+            if u64::from(offset) + element.entries.len() as u64 > u64::from(size) {
                 return Err(WasmStateError::ElementSegmentOutOfBounds {
-                    segment, table_index: element.table, offset: element.offset,
+                    segment, table_index: table, offset,
                     length: element.entries.len(), table_size: size,
                 }.into());
             }
@@ -171,12 +200,24 @@ impl TablePlan {
         }
         // Source order matters: later segments replace overlapping entries,
         // including explicit nulls. No guest code runs during initialization.
+        let mut elements = Vec::new();
+        elements.try_reserve_exact(self.elements.len())
+            .map_err(|_| allocation::<Option<ElementEntries>>(self.elements.len()))?;
         for element in &self.elements {
-            let start = element.offset as usize;
-            tables[element.table as usize][start..start + element.entries.len()]
-                .copy_from_slice(&element.entries);
+            if let ElementMode::Active { table, offset } = element.mode {
+                let start = offset as usize;
+                tables[table as usize][start..start + element.entries.len()]
+                    .copy_from_slice(element.entries.as_slice());
+            }
+            // Active and declarative segments are dropped before a start
+            // function can observe them. Preserve indices as empty slots.
+            elements.push(if matches!(element.mode, ElementMode::Passive) {
+                Some(Arc::clone(&element.entries))
+            } else {
+                None
+            });
         }
-        Ok(InstanceTables { tables })
+        Ok(InstanceTables { tables, elements })
     }
 }
 
@@ -189,6 +230,7 @@ fn allocation<T>(count: usize) -> WasmStateError {
 #[derive(Debug)]
 pub(super) struct InstanceTables {
     tables: Vec<Vec<Option<u32>>>,
+    elements: Vec<Option<ElementEntries>>,
 }
 
 impl InstanceTables {
@@ -233,6 +275,39 @@ impl InstanceTables {
             let (before, after) = self.tables.split_at_mut(destination_table as usize);
             after[0][destination_range].copy_from_slice(&before[source_table as usize][source_range]);
         }
+        Ok(())
+    }
+
+    pub(super) fn init(
+        &mut self, table: u32, element: u32, destination: u32,
+        source: u32, length: u32, meter: &mut ExecutionMeter<'_>,
+    ) -> Result<(), WasmNumericVmError> {
+        let destination_range = self.range(table, destination, length)?;
+        let entries = self.elements.get(element as usize)
+            .ok_or_else(|| invalid(format!("unknown validated element segment {element}")))?
+            .as_ref().map_or(&[][..], |entries| entries.as_slice());
+        let end = u64::from(source) + u64::from(length);
+        if end > entries.len() as u64 {
+            // This is the source segment's extent, NOT the destination table
+            // extent or the embedding's allocation ceiling. Retain both bounds
+            // in the existing structured state-limit error channel.
+            return Err(WasmStateError::LimitExceeded {
+                resource: format!("element segment {element} source range"),
+                actual: end, max: entries.len() as u64,
+            }.into());
+        }
+        meter.charge_work(u64::from(length))?;
+        self.tables[table as usize][destination_range]
+            .copy_from_slice(&entries[source as usize..end as usize]);
+        Ok(())
+    }
+
+    pub(super) fn drop_element(&mut self, element: u32) -> Result<(), WasmNumericVmError> {
+        let slot = self.elements.get_mut(element as usize)
+            .ok_or_else(|| invalid(format!("unknown validated element segment {element}")))?;
+        // Idempotent and local to this instance. The module's immutable plan
+        // and other instances retain their own references. No per-entry walk.
+        *slot = None;
         Ok(())
     }
 

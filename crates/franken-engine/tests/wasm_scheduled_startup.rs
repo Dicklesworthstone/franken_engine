@@ -331,3 +331,323 @@ fn a_later_start_trap_preserves_completed_callback_recording() {
     assert_eq!(effects.load(Ordering::SeqCst), 1);
     assert_eq!(recording.snapshot().unwrap().call_count(), 1);
 }
+
+mod queue {
+    use super::*;
+    use std::num::NonZeroUsize;
+    use std::sync::Mutex;
+    use frankenengine_engine::wasm_runtime_lane::scheduler::{
+        WasmNativeScheduler, WasmTaskAdmissionErrorKind, WasmTaskHandle, WasmTaskKind,
+        WasmTaskOutcome, WasmTaskId,
+    };
+
+    fn slots(count: usize) -> NonZeroUsize { NonZeroUsize::new(count).unwrap() }
+
+    fn spin_start() -> Vec<u8> {
+        let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+        section(&mut bytes, 1, &[2, 0x60, 0, 0, 0x60, 0, 1, 0x7f]);
+        section(&mut bytes, 3, &[2, 0, 1]);
+        section(&mut bytes, 7, &[1, 1, b'f', 0, 1]);
+        section(&mut bytes, 8, &[0]);
+        section(&mut bytes, 10, &[2, 7, 0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x0b, 4, 0, 0x41, 7, 0x0b]);
+        bytes
+    }
+
+    fn initialized<'call, 'vm>(
+        scheduler: &mut WasmNativeScheduler<'call, 'vm>, work: u64,
+    ) -> (WasmTaskId, WasmNativeInstance<'vm>) {
+        for _ in 0..100_000 {
+            let turn = scheduler.run_next(quantum(work), &context(), &policy()).expect("queued startup");
+            match turn.outcome {
+                WasmTaskOutcome::Pending => {},
+                WasmTaskOutcome::Initialized(instance) => return (turn.task_id, instance),
+                other => panic!("unexpected initialization outcome: {other:?}"),
+            }
+        }
+        panic!("startup did not finish")
+    }
+
+    #[test]
+    fn an_infinite_start_function_does_not_starve_ready_exports() {
+        let slow = module(&spin_start());
+        let useful = module(&program(0, 0, 0, false, false));
+        let mut instance = useful.instantiate(&context(), &policy()).unwrap();
+        let mut scheduler = WasmNativeScheduler::new(slots(2));
+        let startup = scheduler.submit_startup(slow.prepare_startup()).unwrap();
+        let call = scheduler.submit(instance.begin_call("get", &[], &context(), &policy()).unwrap()).unwrap();
+        assert_eq!(scheduler.next_task_kind(), Some(WasmTaskKind::Startup));
+        let turn = scheduler.run_next(quantum(2), &context(), &policy()).unwrap();
+        assert_eq!(turn.task_id, startup.id());
+        assert_eq!(turn.kind, WasmTaskKind::Startup);
+        assert_eq!(turn.event.event, "wasm_startup_turn");
+        assert_eq!(turn.event.work_after, Some(2));
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Pending));
+        assert_eq!(scheduler.next_task_kind(), Some(WasmTaskKind::Call));
+        let turn = scheduler.run_next(quantum(2), &context(), &policy()).unwrap();
+        assert_eq!(turn.task_id, call.id());
+        assert_eq!(turn.event.event, "wasm_schedule_turn");
+        match turn.outcome {
+            WasmTaskOutcome::Complete(execution) => assert_eq!(execution.results, [I32(0)]),
+            other => panic!("useful export starved: {other:?}"),
+        }
+        startup.cancel();
+        assert!(matches!(scheduler.run_next(quantum(2), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Cancelled));
+        assert!(scheduler.is_empty());
+    }
+
+    #[test]
+    fn initialized_instances_can_execute_exports_without_rerunning_startup() {
+        let module = module(&program(5, 2, 2, false, true));
+        let effects = Arc::new(AtomicUsize::new(0));
+        let mut ready = None;
+        let mut scheduler = WasmNativeScheduler::new(slots(1));
+        let start = scheduler.submit_startup(module.prepare_startup_with_imports(imports(effects.clone(), false))).unwrap();
+        let (id, instance) = initialized(&mut scheduler, 7);
+        assert_eq!(id, start.id());
+        let expected_start = instance.start_execution(&context(), &policy()).unwrap().cloned();
+        let previous = ready.replace(instance);
+        assert!(previous.is_none());
+        let call = scheduler.submit(ready.as_mut().unwrap().begin_call("get", &[], &context(), &policy()).unwrap()).unwrap();
+        assert!(call.id().get() > start.id().get());
+        let turn = scheduler.run_next(quantum(2), &context(), &policy()).unwrap();
+        match turn.outcome {
+            WasmTaskOutcome::Complete(result) => assert_eq!(result.results, [I32(6)]),
+            other => panic!("initialized instance did not execute: {other:?}"),
+        }
+        assert_eq!(effects.load(Ordering::SeqCst), 2);
+        drop(scheduler);
+        assert_eq!(ready.as_ref().unwrap().start_execution(&context(), &policy()).unwrap().cloned(), expected_start);
+    }
+
+    #[test]
+    fn startup_and_export_admission_share_one_capacity_limit() {
+        let module = module(&program(0, 0, 0, false, false));
+        let mut instance = module.instantiate(&context(), &policy()).unwrap();
+        let mut scheduler = WasmNativeScheduler::new(slots(1));
+        let call = scheduler.submit(instance.begin_call("get", &[], &context(), &policy()).unwrap()).unwrap();
+        let error = scheduler.submit_startup(module.prepare_startup()).unwrap_err();
+        assert_eq!(error.kind(), WasmTaskAdmissionErrorKind::QueueFull);
+        let startup = (*error).into_startup();
+        assert_eq!(startup.instructions_executed(), 0);
+        call.cancel();
+        assert!(matches!(scheduler.run_next(quantum(1), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Cancelled));
+        let handle = scheduler.submit_startup(startup).unwrap();
+        assert_eq!(handle.id().get(), call.id().get() + 1);
+        call.cancel();
+        let turn = scheduler.run_next(quantum(1), &context(), &policy()).unwrap();
+        assert_eq!(turn.task_id, handle.id());
+        assert_eq!(turn.event.work_after, Some(0));
+        assert_eq!(turn.event.outcome, "initialized");
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Initialized(_)));
+        drop(scheduler);
+
+        let mut scheduler = WasmNativeScheduler::new(slots(1));
+        scheduler.submit_startup(module.prepare_startup()).unwrap();
+        let error = scheduler.submit(instance.begin_call("get", &[], &context(), &policy()).unwrap()).unwrap_err();
+        assert_eq!(error.kind(), WasmTaskAdmissionErrorKind::QueueFull);
+        let call = (*error).into_call();
+        assert_eq!(call.instructions_executed(), 0);
+        assert!(matches!(scheduler.run_next(quantum(1), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Initialized(_)));
+        scheduler.submit(call).unwrap();
+        assert!(matches!(scheduler.run_next(quantum(2), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Complete(_)));
+    }
+
+    #[test]
+    fn queued_startup_cancellation_precedes_allocation_and_policy_checks() {
+        let module = load(&program(0, 0, 1, false, true), true, WasmNumericLimits {
+            max_memory_pages: 0, ..WasmNumericLimits::default()
+        });
+        let effects = Arc::new(AtomicUsize::new(0));
+        let mut scheduler = WasmNativeScheduler::new(slots(1));
+        let handle = scheduler.submit_startup(module.prepare_startup_with_imports(imports(effects.clone(), false))).unwrap();
+        handle.cancel();
+        assert!(scheduler.take_startup(handle.id()).is_none());
+        let turn = scheduler.run_next(quantum(1), &context(), &CapabilityPolicyHook::new(BTreeSet::new())).unwrap();
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Cancelled));
+        assert_eq!(turn.event.work_before, 0);
+        assert_eq!(turn.event.work_after, Some(0));
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+        assert!(scheduler.is_empty());
+    }
+
+    #[test]
+    fn withdrawal_preserves_partial_work_and_wrong_kind_does_not_remove_tasks() {
+        let module = module(&program(9, 3, 0, false, true));
+        let mut ready = module.instantiate(&context(), &policy()).unwrap();
+        let mut scheduler = WasmNativeScheduler::new(slots(2));
+        let startup = scheduler.submit_startup(module.prepare_startup()).unwrap();
+        assert!(matches!(scheduler.run_next(quantum(7), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Pending));
+        let call = scheduler.submit(ready.begin_call("get", &[], &context(), &policy()).unwrap()).unwrap();
+        assert!(scheduler.take(startup.id()).is_none());
+        assert!(scheduler.take_startup(call.id()).is_none());
+        assert_eq!(scheduler.next_task(), Some(startup.id()));
+        assert_eq!(scheduler.len(), 2);
+        let pending = scheduler.take_startup(startup.id()).unwrap();
+        assert_eq!(pending.instructions_executed(), 7);
+        assert_eq!(scheduler.next_task(), Some(call.id()));
+        assert!(matches!(scheduler.run_next(quantum(2), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Complete(_)));
+        let next = scheduler.submit_startup(pending).unwrap();
+        startup.cancel();
+        assert!(scheduler.take_startup(startup.id()).is_none());
+        let (id, instance) = initialized(&mut scheduler, 11);
+        assert_eq!(id, next.id());
+        assert_eq!(instance.global_export("g", &context(), &policy()).unwrap(), Some(&I32(10)));
+        assert_eq!(instance.start_execution(&context(), &policy()).unwrap(),
+            module.instantiate(&context(), &policy()).unwrap().start_execution(&context(), &policy()).unwrap());
+    }
+
+    #[test]
+    fn denied_partial_startup_retires_independently_and_reports_current_context() {
+        let module = module(&program(0, 0, 2, false, true));
+        let effects = Arc::new(AtomicUsize::new(0));
+        let task = first_effect(&module, effects.clone());
+        let healthy = super::module(&program(0, 0, 0, false, false));
+        let mut scheduler = WasmNativeScheduler::new(slots(2));
+        let denied_id = scheduler.submit_startup(task).unwrap().id();
+        let healthy_id = scheduler.submit_startup(healthy.prepare_startup()).unwrap().id();
+        let changed = ResolutionContext::new("changed-trace", "changed-decision", "revoked-policy");
+        let mut revoked = policy(); revoked.granted_capabilities.remove(&Builtin);
+        let turn = scheduler.run_next(quantum(100), &changed, &revoked).unwrap();
+        assert_eq!(turn.task_id, denied_id);
+        assert_eq!(turn.event.trace_id, "changed-trace");
+        assert_eq!(turn.event.policy_id, "revoked-policy");
+        assert_eq!(turn.event.outcome, "deny");
+        assert_eq!(turn.event.work_after, None);
+        assert!(matches!(turn.outcome, WasmTaskOutcome::Failed(WasmNativeLoadError::Resolution(_))));
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.next_task(), Some(healthy_id));
+        assert!(matches!(scheduler.run_next(quantum(1), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Initialized(_)));
+    }
+
+    #[test]
+    fn an_infinite_start_hits_its_hard_budget_without_retiring_other_tasks() {
+        let slow = load(&spin_start(), true, WasmNumericLimits {
+            max_instructions: 9, ..WasmNumericLimits::default()
+        });
+        let healthy = module(&program(0, 0, 0, false, false));
+        let mut scheduler = WasmNativeScheduler::new(slots(2));
+        let slow_id = scheduler.submit_startup(slow.prepare_startup()).unwrap().id();
+        let healthy_id = scheduler.submit_startup(healthy.prepare_startup()).unwrap().id();
+        let mut initialized_count = 0;
+        let mut refused = false;
+        for _ in 0..20 {
+            let Some(turn) = scheduler.run_next(quantum(2), &context(), &policy()) else { break; };
+            match turn.outcome {
+                WasmTaskOutcome::Initialized(_) => { assert_eq!(turn.task_id, healthy_id); initialized_count += 1; }
+                WasmTaskOutcome::Pending => assert_eq!(turn.task_id, slow_id),
+                WasmTaskOutcome::Failed(WasmNativeLoadError::Execution(WasmNumericVmError::InstructionBudgetExceeded { max: 9 })) => {
+                    assert_eq!(turn.task_id, slow_id); refused = true;
+                }
+                other => panic!("unexpected work outcome: {other:?}"),
+            }
+        }
+        assert_eq!(initialized_count, 1);
+        assert!(refused && scheduler.is_empty());
+    }
+
+    #[test]
+    fn cancellation_during_final_host_effect_prevents_instance_publication() {
+        let module = module(&program(0, 0, 1, false, true));
+        for trap in [false, true] {
+            let handle: Arc<Mutex<Option<WasmTaskHandle>>> = Arc::new(Mutex::new(None));
+            let captured = handle.clone();
+            let effects = Arc::new(AtomicUsize::new(0));
+            let count = effects.clone();
+            let mut bindings = WasmHostImports::new(BTreeSet::from([VmDispatch, Builtin]));
+            bindings.define("h", "tick", WasmFunctionSignature { params: vec![], results: vec![] },
+                BTreeSet::from([Builtin]), 1, move |_, _| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    captured.lock().unwrap().as_ref().unwrap().cancel();
+                    if trap { return Err(WasmHostError::trap("first failure").into()); }
+                    Ok(vec![])
+                }).unwrap();
+            let mut scheduler = WasmNativeScheduler::new(slots(1));
+            *handle.lock().unwrap() = Some(scheduler.submit_startup(module.prepare_startup_with_imports(bindings)).unwrap());
+            let turn = scheduler.run_next(quantum(u64::MAX), &context(), &policy()).unwrap();
+            if trap {
+                assert!(matches!(turn.outcome, WasmTaskOutcome::Failed(WasmNativeLoadError::Execution(
+                    WasmNumericVmError::State(WasmStateError::Host(WasmHostError::Trap { .. }))))));
+            } else {
+                assert!(matches!(turn.outcome, WasmTaskOutcome::Cancelled));
+                assert!(turn.event.work_after.unwrap() > 0);
+            }
+            assert_eq!(effects.load(Ordering::SeqCst), 1);
+            assert!(scheduler.is_empty());
+        }
+    }
+
+    #[test]
+    fn startup_replay_completes_in_queue_without_provider_effects() {
+        let module = module(&program(8, 1, 2, false, true));
+        let effects = Arc::new(AtomicUsize::new(0));
+        let mut bindings = imports(effects.clone(), false);
+        let recording = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+        let expected = run(module.prepare_startup_with_imports(bindings), &[u64::MAX]);
+        let mut bindings = imports(effects.clone(), true);
+        let replay = bindings.replay_calls(recording.snapshot().unwrap(), WasmHostTraceLimits::default()).unwrap();
+        let mut scheduler = WasmNativeScheduler::new(slots(1));
+        scheduler.submit_startup(module.prepare_startup_with_imports(bindings)).unwrap();
+        let (_, actual) = initialized(&mut scheduler, 3);
+        replay.verify_complete().unwrap();
+        assert_eq!(effects.load(Ordering::SeqCst), 2);
+        assert_eq!(actual.start_execution(&context(), &policy()).unwrap(), expected.start_execution(&context(), &policy()).unwrap());
+        assert_eq!(actual.memory_export("m", &context(), &policy()).unwrap(), expected.memory_export("m", &context(), &policy()).unwrap());
+    }
+
+    #[test]
+    fn a_provider_panic_drops_only_the_current_startup_and_cannot_reenter_it() {
+        let broken = module(&program(0, 0, 1, false, true));
+        let healthy = module(&program(0, 0, 0, false, false));
+        let mut bindings = WasmHostImports::new(BTreeSet::from([VmDispatch, Builtin]));
+        let effects = Arc::new(AtomicUsize::new(0));
+        let count = effects.clone();
+        bindings.define("h", "tick", WasmFunctionSignature { params: vec![], results: vec![] },
+            BTreeSet::from([Builtin]), 1, move |_, _| {
+                count.fetch_add(1, Ordering::SeqCst);
+                panic!("native provider panicked")
+            }).unwrap();
+        let mut scheduler = WasmNativeScheduler::new(slots(2));
+        scheduler.submit_startup(broken.prepare_startup_with_imports(bindings)).unwrap();
+        let healthy_id = scheduler.submit_startup(healthy.prepare_startup()).unwrap().id();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.run_next(quantum(u64::MAX), &context(), &policy())
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.next_task(), Some(healthy_id));
+        assert_eq!(scheduler.len(), 1);
+        assert!(matches!(scheduler.run_next(quantum(1), &context(), &policy()).unwrap().outcome, WasmTaskOutcome::Initialized(_)));
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn dropping_the_queue_releases_unstarted_provider_owners_without_entering_them() {
+        struct Release(Arc<AtomicUsize>);
+        impl Drop for Release {
+            fn drop(&mut self) { self.0.fetch_add(1, Ordering::SeqCst); }
+        }
+        let module = module(&program(0, 0, 1, false, true));
+        let released = Arc::new(AtomicUsize::new(0));
+        let mut scheduler = WasmNativeScheduler::new(slots(2));
+        for _ in 0..2 {
+            let owner = Release(released.clone());
+            let mut bindings = WasmHostImports::new(BTreeSet::from([VmDispatch, Builtin]));
+            bindings.define("h", "tick", WasmFunctionSignature { params: vec![], results: vec![] },
+                BTreeSet::from([Builtin]), 1, move |_, _| {
+                    let _owner = &owner;
+                    panic!("unstarted provider entered")
+                }).unwrap();
+            scheduler.submit_startup(module.prepare_startup_with_imports(bindings)).unwrap();
+        }
+        assert_eq!(released.load(Ordering::SeqCst), 0);
+        drop(scheduler);
+        assert_eq!(released.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn startup_tasks_and_mixed_schedulers_keep_send_and_sync_contracts() {
+        fn require<T: Send + Sync>() {}
+        require::<WasmStartupTask<'static>>();
+        require::<WasmNativeScheduler<'static, 'static>>();
+    }
+}

@@ -1,11 +1,12 @@
-//! Bounded, deterministic round-robin execution of resolver-backed Wasm calls.
+//! Bounded, deterministic round-robin execution of Wasm startup and exports.
 //!
 //! This is a synchronous scheduler: the embedder drives each turn and supplies
 //! the current policy. No thread, timer, ambient authority or cached grant is
 //! installed. One turn resumes at most one invocation; a pending invocation
 //! rejoins the tail, so an infinite guest cannot monopolize subsequent turns.
 //! Quanta are soft, just like `WasmNativeCall::resume`: native providers and
-//! individual bulk operations must still bound their own work.
+//! individual bulk operations must still bound their own work. Startup shares
+//! the same ready queue and admission limit, not a priority or unbounded lane.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -84,11 +85,62 @@ impl std::error::Error for WasmTaskAdmissionError<'_, '_> {}
 #[derive(Debug)]
 struct Task<'call, 'vm> {
     handle: WasmTaskHandle,
-    call: WasmNativeCall<'call, 'vm>,
+    work: TaskWork<'call, 'vm>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmTaskKind { Call, Startup }
+
+#[derive(Debug)]
+enum TaskWork<'call, 'vm> {
+    Call(WasmNativeCall<'call, 'vm>),
+    Startup(WasmStartupTask<'vm>),
+}
+
+enum TaskStep<'call, 'vm> {
+    Pending(TaskWork<'call, 'vm>),
+    Complete(WasmTaskOutcome<'vm>, u64),
+}
+
+impl<'call, 'vm> TaskWork<'call, 'vm> {
+    fn kind(&self) -> WasmTaskKind {
+        match self { Self::Call(_) => WasmTaskKind::Call, Self::Startup(_) => WasmTaskKind::Startup }
+    }
+
+    fn instructions_executed(&self) -> u64 {
+        match self {
+            Self::Call(call) => call.instructions_executed(),
+            Self::Startup(startup) => startup.instructions_executed(),
+        }
+    }
+
+    fn resume(
+        self, work: NonZeroU64, context: &ResolutionContext, policy: &CapabilityPolicyHook,
+    ) -> Result<TaskStep<'call, 'vm>, WasmNativeLoadError> {
+        Ok(match self {
+            Self::Call(call) => match call.resume(work, context, policy)? {
+                WasmNativeCallStep::Pending(call) => TaskStep::Pending(Self::Call(call)),
+                WasmNativeCallStep::Complete(execution) => {
+                    let after = execution.instructions_executed;
+                    TaskStep::Complete(WasmTaskOutcome::Complete(execution), after)
+                }
+            },
+            Self::Startup(startup) => match startup.resume(work, context, policy)? {
+                WasmStartupStep::Pending(startup) => TaskStep::Pending(Self::Startup(startup)),
+                WasmStartupStep::Complete(instance) => {
+                    let after = instance.start_execution(context, policy)?
+                        .map_or(0, |execution| execution.instructions_executed);
+                    TaskStep::Complete(WasmTaskOutcome::Initialized(instance), after)
+                }
+            },
+        })
+    }
 }
 
 #[derive(Debug)]
-pub enum WasmTaskOutcome {
+pub enum WasmTaskOutcome<'vm> {
+    /// Startup alone publishes an instance. Export results use Complete.
+    Initialized(WasmNativeInstance<'vm>),
     Pending,
     Complete(WasmNumericExecution),
     Failed(WasmNativeLoadError),
@@ -115,14 +167,16 @@ pub struct WasmScheduleEvent {
 
 #[derive(Debug)]
 #[must_use = "consume the task outcome and its scheduling event"]
-pub struct WasmScheduledTurn {
+pub struct WasmScheduledTurn<'vm> {
     pub task_id: WasmTaskId,
-    pub outcome: WasmTaskOutcome,
+    pub kind: WasmTaskKind,
+    pub outcome: WasmTaskOutcome<'vm>,
     pub event: WasmScheduleEvent,
 }
 
-/// Ready invocations from independently instantiated modules. Each continuation
-/// keeps its exclusive instance borrow and cumulative VM meter across turns.
+/// Ready startup attempts and export invocations share one bounded FIFO queue.
+/// Startup owns unpublished state; export calls exclusively borrow their instance.
+/// Each continuation keeps its cumulative VM meter across turns.
 /// Completed results/errors leave the scheduler immediately, freeing capacity;
 /// the embedder owns any longer-lived result retention and backpressure.
 #[derive(Debug)]
@@ -147,24 +201,46 @@ impl<'call, 'vm> WasmNativeScheduler<'call, 'vm> {
         self.ready.front().map(|task| task.handle.id)
     }
 
+    /// Report the next phase without authorizing or reordering its work.
+    pub fn next_task_kind(&self) -> Option<WasmTaskKind> {
+        self.ready.front().map(|task| task.work.kind())
+    }
+
+    fn reserve_slot(&mut self) -> Result<WasmTaskHandle, WasmTaskAdmissionErrorKind> {
+        if self.ready.len() >= self.max_tasks.get() {
+            return Err(WasmTaskAdmissionErrorKind::QueueFull);
+        }
+        let id = self.next_id.ok_or(WasmTaskAdmissionErrorKind::IdSpaceExhausted)?.get();
+        self.ready.try_reserve(1).map_err(|_| WasmTaskAdmissionErrorKind::AllocationFailed)?;
+        self.next_id = id.checked_add(1).and_then(NonZeroU64::new);
+        Ok(WasmTaskHandle { id: WasmTaskId(id), cancellation: CancellationToken::new() })
+    }
+
     pub fn submit(
         &mut self,
         call: WasmNativeCall<'call, 'vm>,
     ) -> Result<WasmTaskHandle, Box<WasmTaskAdmissionError<'call, 'vm>>> {
-        let refusal = if self.ready.len() >= self.max_tasks.get() {
-            Some(WasmTaskAdmissionErrorKind::QueueFull)
-        } else if self.next_id.is_none() {
-            Some(WasmTaskAdmissionErrorKind::IdSpaceExhausted)
-        } else if self.ready.try_reserve(1).is_err() {
-            Some(WasmTaskAdmissionErrorKind::AllocationFailed)
-        } else { None };
-        if let Some(kind) = refusal {
-            return Err(Box::new(WasmTaskAdmissionError { kind, call }));
-        }
-        let id = self.next_id.expect("admitted scheduler identity").get();
-        self.next_id = id.checked_add(1).and_then(NonZeroU64::new);
-        let handle = WasmTaskHandle { id: WasmTaskId(id), cancellation: CancellationToken::new() };
-        self.ready.push_back(Task { handle: handle.clone(), call });
+        let handle = match self.reserve_slot() {
+            Ok(handle) => handle,
+            Err(kind) => return Err(Box::new(WasmTaskAdmissionError { kind, call })),
+        };
+        self.ready.push_back(Task { handle: handle.clone(), work: TaskWork::Call(call) });
+        Ok(handle)
+    }
+
+    /// Admit initialization without linking, allocating guest state or executing
+    /// its start function. Startup and exports consume the SAME queue capacity
+    /// and get the SAME FIFO turn ordering. Rejection returns the original task,
+    /// including any work already completed before submission to this scheduler.
+    pub fn submit_startup(
+        &mut self,
+        startup: WasmStartupTask<'vm>,
+    ) -> Result<WasmTaskHandle, Box<WasmStartupAdmissionError<'vm>>> {
+        let handle = match self.reserve_slot() {
+            Ok(handle) => handle,
+            Err(kind) => return Err(Box::new(WasmStartupAdmissionError { kind, startup })),
+        };
+        self.ready.push_back(Task { handle: handle.clone(), work: TaskWork::Startup(startup) });
         Ok(handle)
     }
 
@@ -175,43 +251,65 @@ impl<'call, 'vm> WasmNativeScheduler<'call, 'vm> {
     /// cannot be rescued by transferring its continuation to a fresh signal.
     pub fn take(&mut self, id: WasmTaskId) -> Option<WasmNativeCall<'call, 'vm>> {
         let index = self.ready.iter().position(|task| task.handle.id == id)?;
-        if self.ready[index].handle.cancellation.is_cancelled() { return None; }
-        Some(self.ready.remove(index)?.call)
+        if self.ready[index].handle.cancellation.is_cancelled()
+            || !matches!(&self.ready[index].work, TaskWork::Call(_)) { return None; }
+        match self.ready.remove(index)?.work {
+            TaskWork::Call(call) => Some(call),
+            TaskWork::Startup(_) => unreachable!("checked task kind"),
+        }
+    }
+
+    /// Withdraw only startup work. A wrong-kind or cancelled ID does not remove
+    /// or reorder anything. Cancellation observed before withdrawal cannot be
+    /// erased by transferring a task into a fresh scheduler scope.
+    pub fn take_startup(&mut self, id: WasmTaskId) -> Option<WasmStartupTask<'vm>> {
+        let index = self.ready.iter().position(|task| task.handle.id == id)?;
+        if self.ready[index].handle.cancellation.is_cancelled()
+            || !matches!(&self.ready[index].work, TaskWork::Startup(_)) { return None; }
+        match self.ready.remove(index)?.work {
+            TaskWork::Startup(startup) => Some(startup),
+            TaskWork::Call(_) => unreachable!("checked task kind"),
+        }
     }
 
     /// Execute exactly one ready task's slice using the supplied current
     /// resolver policy. Policy denial, VM traps and cancellation retire only
-    /// that invocation, never the other ready tasks. A pending call rejoins
-    /// the tail without allocating: popping it already freed one queue slot.
+    /// that task, never the other ready tasks. Pending work rejoins the tail
+    /// without allocation. No-start initialization reports zero startup work.
+    /// Successful startup returns Initialized only after the post-slice task
+    /// cancellation check; cancellation never leaks a ready partial instance.
     pub fn run_next(
         &mut self,
         work: NonZeroU64,
         context: &ResolutionContext,
         policy: &CapabilityPolicyHook,
-    ) -> Option<WasmScheduledTurn> {
+    ) -> Option<WasmScheduledTurn<'vm>> {
         let task = self.ready.pop_front()?;
         let id = task.handle.id;
-        let before = task.call.instructions_executed();
+        let kind = task.work.kind();
+        let before = task.work.instructions_executed();
         let (outcome, after) = if task.handle.cancellation.is_cancelled() {
-            task.call.cancel();
+            drop(task.work);
             (WasmTaskOutcome::Cancelled, Some(before))
         } else {
-            match task.call.resume(work, context, policy) {
-                Ok(WasmNativeCallStep::Pending(call)) => {
-                    let after = call.instructions_executed();
+            match task.work.resume(work, context, policy) {
+                Ok(TaskStep::Pending(work)) => {
+                    let after = work.instructions_executed();
                     if task.handle.cancellation.is_cancelled() {
-                        call.cancel();
+                        drop(work);
                         (WasmTaskOutcome::Cancelled, Some(after))
                     } else {
-                        self.ready.push_back(Task { handle: task.handle, call });
+                        self.ready.push_back(Task { handle: task.handle, work });
                         (WasmTaskOutcome::Pending, Some(after))
                     }
                 }
-                Ok(WasmNativeCallStep::Complete(execution)) => {
-                    let after = execution.instructions_executed;
+                Ok(TaskStep::Complete(outcome, after)) => {
                     if task.handle.cancellation.is_cancelled() {
+                        // A startup may have just finished. Its state must not
+                        // escape after this invocation was cancelled by a host.
+                        drop(outcome);
                         (WasmTaskOutcome::Cancelled, Some(after))
-                    } else { (WasmTaskOutcome::Complete(execution), Some(after)) }
+                    } else { (outcome, Some(after)) }
                 }
                 Err(error) => (WasmTaskOutcome::Failed(error), None),
             }
@@ -219,16 +317,21 @@ impl<'call, 'vm> WasmNativeScheduler<'call, 'vm> {
         let (label, code) = match &outcome {
             WasmTaskOutcome::Pending => ("yield", "none"),
             WasmTaskOutcome::Complete(_) => ("complete", "none"),
+            WasmTaskOutcome::Initialized(_) => ("initialized", "none"),
             WasmTaskOutcome::Cancelled => ("cancel", "FE-WASMSCHED-0001"),
             WasmTaskOutcome::Failed(WasmNativeLoadError::Resolution(_)) => ("deny", "FE-WASMSCHED-0002"),
             WasmTaskOutcome::Failed(_) => ("error", "FE-WASMSCHED-0003"),
         };
         Some(WasmScheduledTurn {
             task_id: id,
+            kind,
             event: WasmScheduleEvent {
                 trace_id: context.trace_id.clone(), decision_id: context.decision_id.clone(),
                 policy_id: context.policy_id.clone(), component: WASM_NATIVE_SCHEDULER_COMPONENT.into(),
-                event: "wasm_schedule_turn".into(), outcome: label.into(), error_code: code.into(),
+                event: match kind {
+                    WasmTaskKind::Call => "wasm_schedule_turn",
+                    WasmTaskKind::Startup => "wasm_startup_turn",
+                }.into(), outcome: label.into(), error_code: code.into(),
                 task_id: id, work_before: before, work_after: after,
             },
             outcome,
@@ -304,3 +407,28 @@ impl<'vm> WasmStartupTask<'vm> {
     /// Discard unfinished initialization; completed host effects remain real.
     pub fn cancel(self) {}
 }
+
+/// Rejected startup admission returns its exact owned initialization, not a
+/// new attempt. A caller may retry it without repeating any previous effects.
+#[derive(Debug)]
+pub struct WasmStartupAdmissionError<'vm> {
+    kind: WasmTaskAdmissionErrorKind,
+    startup: WasmStartupTask<'vm>,
+}
+
+impl<'vm> WasmStartupAdmissionError<'vm> {
+    pub fn kind(&self) -> WasmTaskAdmissionErrorKind { self.kind }
+    pub fn into_startup(self) -> WasmStartupTask<'vm> { self.startup }
+}
+
+impl fmt::Display for WasmStartupAdmissionError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            WasmTaskAdmissionErrorKind::QueueFull => f.write_str("wasm scheduler is at its task limit"),
+            WasmTaskAdmissionErrorKind::IdSpaceExhausted => f.write_str("wasm scheduler task identities exhausted"),
+            WasmTaskAdmissionErrorKind::AllocationFailed => f.write_str("cannot allocate a wasm scheduler task slot"),
+        }
+    }
+}
+
+impl std::error::Error for WasmStartupAdmissionError<'_> {}

@@ -596,6 +596,12 @@ impl ModuleCache {
     /// snapshot to propagate a revocation rather than leave code executing.
     /// Re-admission still requires a fresh authorized local trust decision
     /// followed by an artifact compiled for the resulting authority envelope.
+    ///
+    /// Once structural and digest validation succeeds, revocations are applied
+    /// before artifact reconciliation. A later version/artifact conflict
+    /// rejects all active-state changes but does NOT undo those denials. The
+    /// audit trail records the revocation phase separately. Corrupt or invalid
+    /// snapshots still change no replicated state at all.
     pub fn try_merge_snapshot(
         &mut self,
         snapshot: &CacheSnapshot,
@@ -612,27 +618,23 @@ impl ModuleCache {
             ));
         }
 
+        // A conflict in an unrelated cached artifact must not suppress a
+        // verified revocation. This phase can only remove execution authority.
+        self.apply_validated_snapshot_revocations(snapshot, context);
+
         // Stage only the replicated state, not ModuleCache itself: cloning the
         // snapshot fast path must not accidentally publish a partial merge.
         let mut latest_versions = self.latest_versions.clone();
-        let mut revoked_modules = self.revoked_modules.clone();
+        let revoked_modules = self.revoked_modules.clone();
         let mut entries = self.entries.clone();
-        revoked_modules.extend(snapshot.revoked_modules.iter().cloned());
 
         for (module_id, peer_version) in &snapshot.latest_versions {
+            if revoked_modules.contains(module_id) {
+                // The deny-only floor was already published independently of
+                // the active artifact transaction. Never promote it here.
+                continue;
+            }
             if let Some(local) = latest_versions.get(module_id) {
-                if revoked_modules.contains(module_id) {
-                    // This is an invalidation floor, never an executable
-                    // version. Join every coordinate deterministically and
-                    // discard all artifacts below, including exact matches.
-                    let floor = ModuleVersionFingerprint::new(
-                        local.source_hash.max(peer_version.source_hash),
-                        local.policy_version.max(peer_version.policy_version),
-                        local.trust_revision.max(peer_version.trust_revision),
-                    );
-                    latest_versions.insert(module_id.clone(), floor);
-                    continue;
-                }
                 let crossed = (peer_version.policy_version > local.policy_version
                     && peer_version.trust_revision < local.trust_revision)
                     || (peer_version.policy_version < local.policy_version
@@ -708,6 +710,60 @@ impl ModuleCache {
             context,
         );
         Ok(())
+    }
+
+    /// Only call after the complete peer snapshot passes validation. Denials
+    /// are a separate monotone transaction from importing executable artifacts.
+    fn apply_validated_snapshot_revocations(
+        &mut self,
+        snapshot: &CacheSnapshot,
+        context: &CacheContext,
+    ) {
+        let mut new_revocations = 0_usize;
+        let mut changed_frontiers = 0_usize;
+        for (module_id, peer_version) in &snapshot.latest_versions {
+            if !self.revoked_modules.contains(module_id)
+                && !snapshot.revoked_modules.contains(module_id)
+            {
+                continue;
+            }
+
+            // This record is a deny-only floor, not a manufactured compiled
+            // identity. No artifact is ever retained for a revoked module.
+            let floor = match self.latest_versions.get(module_id) {
+                Some(local) => ModuleVersionFingerprint::new(
+                    local.source_hash.max(peer_version.source_hash),
+                    local.policy_version.max(peer_version.policy_version),
+                    local.trust_revision.max(peer_version.trust_revision),
+                ),
+                None => peer_version.clone(),
+            };
+            if self.latest_versions.get(module_id) != Some(&floor) {
+                self.latest_versions.insert(module_id.clone(), floor);
+                changed_frontiers += 1;
+            }
+            if self.revoked_modules.insert(module_id.clone()) {
+                new_revocations += 1;
+            }
+        }
+
+        let before = self.entries.len();
+        self.entries
+            .retain(|key, _| !self.revoked_modules.contains(&key.module_id));
+        let removed = before - self.entries.len();
+        if new_revocations != 0 || changed_frontiers != 0 || removed != 0 {
+            self.publish_snapshot_fastpath();
+            self.push_event(
+                "cache_merge_revocations",
+                "allow",
+                "none",
+                "<fleet>",
+                format!(
+                    "applied {new_revocations} revocations, updated {changed_frontiers} deny-only frontiers, removed {removed} artifacts before active-state reconciliation"
+                ),
+                context,
+            );
+        }
     }
 
     pub fn state_hash(&self) -> ContentHash {

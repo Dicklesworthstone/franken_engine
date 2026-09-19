@@ -476,3 +476,156 @@ fn revoked_floor_saturates_without_losing_the_other_coordinate() {
     );
     assert_eq!(local.snapshot(), snapshot);
 }
+
+#[test]
+fn valid_revocation_survives_an_unrelated_artifact_or_authority_conflict() {
+    // Exercise both key orders; neither lexicographic position nor conflict
+    // kind may prevent the revocation phase from stopping cached execution.
+    for revoked_id in ["aaa-revoked", "zzz-revoked"] {
+        for artifact_conflict in [false, true] {
+            let mut local = ModuleCache::new();
+            insert(&mut local, revoked_id, "live", 7, 3);
+            insert(&mut local, "conflict", "shared", 7, 10);
+            insert(&mut local, "unrelated", "unrelated", 1, 1);
+            let before = local.snapshot();
+            let mut peer = ModuleCache::new();
+            peer.invalidate_trust_revocation(revoked_id, 9, &context());
+            insert(&mut peer, "new-artifact", "new", 20, 20);
+            if artifact_conflict {
+                peer.insert(CacheInsertRequest::new(
+                    "conflict", version("shared", 7, 10),
+                    ContentHash::compute(b"incompatible-build"), "/conflict.js",
+                ), &context()).unwrap();
+            } else {
+                insert(&mut peer, "conflict", "shared", 8, 3);
+            }
+            let events_before = local.events().len();
+            let error = local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+            assert_eq!(error.code, if artifact_conflict {
+                CacheErrorCode::ConflictingArtifact
+            } else {
+                CacheErrorCode::VersionRegression
+            });
+            let after = local.snapshot();
+            assert!(after.revoked_modules.contains(revoked_id));
+            assert_eq!(after.latest_versions[revoked_id].policy_version, 7);
+            assert_eq!(after.latest_versions[revoked_id].trust_revision, 9);
+            assert!(local.get(revoked_id, &version("live", 7, 3)).is_none());
+            assert!(after.entries.iter().all(|entry| entry.key.module_id != revoked_id));
+            assert!(!after.latest_versions.contains_key("new-artifact"));
+            for id in ["conflict", "unrelated"] {
+                assert_eq!(after.latest_versions[id], before.latest_versions[id]);
+                assert_eq!(
+                    after.entries.iter().find(|entry| entry.key.module_id == id),
+                    before.entries.iter().find(|entry| entry.key.module_id == id),
+                );
+            }
+            assert_eq!(after.state_hash, legacy_hash(&after));
+            assert_eq!(local.state_hash(), after.state_hash);
+            let events = &local.events()[events_before..];
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].event, "cache_merge_revocations");
+            assert_eq!(events[0].outcome, "allow");
+            assert_eq!(events[0].trace_id, context().trace_id);
+            assert_eq!(events[0].decision_id, context().decision_id);
+            assert_eq!(events[0].policy_id, context().policy_id);
+            assert_eq!(events[1], error.event);
+            assert!(events[0].seq < events[1].seq);
+        }
+    }
+}
+
+#[test]
+fn corrupted_snapshot_never_enters_the_revocation_phase() {
+    let mut local = ModuleCache::new();
+    insert(&mut local, "m", "live", 7, 3);
+    let before = local.snapshot();
+    let mut peer = ModuleCache::new();
+    peer.invalidate_trust_revocation("m", 9, &context());
+    let mut corrupt = peer.snapshot();
+    corrupt.state_hash = ContentHash::compute(b"corrupted-in-transit");
+    let event_count = local.events().len();
+    assert_eq!(
+        local.try_merge_snapshot(&corrupt, &context()).unwrap_err().code,
+        CacheErrorCode::InvalidSnapshot,
+    );
+    assert_eq!(local.snapshot(), before);
+    assert!(local.get("m", &version("live", 7, 3)).is_some());
+    assert_eq!(local.events().len(), event_count + 1);
+    assert_eq!(local.events().last().unwrap().event, "cache_merge_snapshot");
+}
+
+#[test]
+fn replaying_a_conflicted_snapshot_does_not_reapply_revocation_effects() {
+    let mut local = ModuleCache::new();
+    insert(&mut local, "m", "live", 7, 3);
+    insert(&mut local, "conflict", "shared", 7, 10);
+    let mut peer = ModuleCache::new();
+    peer.invalidate_trust_revocation("m", 9, &context());
+    insert(&mut peer, "conflict", "shared", 8, 3);
+    let snapshot = peer.snapshot();
+    local.try_merge_snapshot(&snapshot, &context()).unwrap_err();
+    let denied = local.snapshot();
+    for _ in 0..3 {
+        local.try_merge_snapshot(&snapshot, &context()).unwrap_err();
+        assert_eq!(local.snapshot(), denied);
+    }
+    assert_eq!(local.events().iter()
+        .filter(|event| event.event == "cache_merge_revocations").count(), 1);
+    assert!(local.events().windows(2).all(|pair| pair[0].seq < pair[1].seq));
+}
+
+#[test]
+fn coherent_retry_imports_artifacts_without_undoing_prior_revocations() {
+    let mut local = ModuleCache::new();
+    insert(&mut local, "m", "live", 7, 3);
+    insert(&mut local, "conflict", "shared", 7, 10);
+    let mut peer = ModuleCache::new();
+    peer.invalidate_trust_revocation("m", 9, &context());
+    insert(&mut peer, "conflict", "shared", 8, 3);
+    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+    assert!(local.snapshot().revoked_modules.contains("m"));
+    insert(&mut peer, "conflict", "shared", 8, 10);
+    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap();
+    assert!(local.get("conflict", &version("shared", 8, 10)).is_some());
+    assert!(local.get("m", &version("live", 7, 3)).is_none());
+    assert!(local.snapshot().revoked_modules.contains("m"));
+    local.try_restore_trust("m", 9, &context()).unwrap_err();
+    assert_eq!(local.events().iter()
+        .filter(|event| event.event == "cache_merge_revocations").count(), 1);
+}
+
+#[test]
+fn existing_revocation_floor_advances_even_when_active_merge_is_refused() {
+    let mut local = ModuleCache::new();
+    local.invalidate_trust_revocation("m", 3, &context());
+    insert(&mut local, "conflict", "shared", 7, 10);
+    let mut peer = ModuleCache::new();
+    insert(&mut peer, "m", "peer", 7, 9);
+    insert(&mut peer, "conflict", "shared", 8, 3);
+    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+    let snapshot = local.snapshot();
+    assert!(snapshot.revoked_modules.contains("m"));
+    assert_eq!(snapshot.latest_versions["m"].policy_version, 7);
+    assert_eq!(snapshot.latest_versions["m"].trust_revision, 9);
+    assert!(local.get("m", &version("peer", 7, 9)).is_none());
+    for revision in [3, 4, 8, 9] {
+        local.try_restore_trust("m", revision, &context()).unwrap_err();
+        assert_eq!(local.snapshot(), snapshot);
+    }
+}
+
+#[test]
+fn compatibility_merge_also_applies_valid_revocations_before_conflict_denial() {
+    let mut local = ModuleCache::new();
+    insert(&mut local, "m", "live", 7, 3);
+    insert(&mut local, "conflict", "shared", 7, 10);
+    let mut peer = ModuleCache::new();
+    peer.invalidate_trust_revocation("m", 9, &context());
+    insert(&mut peer, "conflict", "shared", 8, 3);
+    local.merge_snapshot(&peer.snapshot(), &context());
+    assert!(local.snapshot().revoked_modules.contains("m"));
+    assert!(local.get("m", &version("live", 7, 3)).is_none());
+    assert!(local.get("conflict", &version("shared", 7, 10)).is_some());
+    assert_eq!(local.events().last().unwrap().error_code, "FE-MODCACHE-0002");
+}

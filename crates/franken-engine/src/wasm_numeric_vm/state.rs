@@ -8,6 +8,9 @@
 
 use super::*;
 
+#[path = "tables.rs"]
+mod tables;
+
 const PAGE_BYTES: u64 = 65_536;
 const MEMORY32_MAX_PAGES: u32 = 65_536;
 
@@ -19,6 +22,11 @@ pub enum WasmStateError {
     DataSegmentOutOfBounds { segment: usize, offset: u32, length: usize, memory_bytes: u64 },
     UnknownGlobal { global_index: u32 },
     ImmutableGlobal { global_index: u32 },
+    UnknownTable { table_index: u32 },
+    TableElementOutOfBounds { table_index: u32, element_index: u32, table_size: u32 },
+    UninitializedTableElement { table_index: u32, element_index: u32 },
+    ElementSegmentOutOfBounds { segment: usize, table_index: u32, offset: u32, length: usize, table_size: u32 },
+    IndirectCallTypeMismatch { function_index: u32, type_index: u32 },
 }
 
 impl fmt::Display for WasmStateError {
@@ -30,6 +38,11 @@ impl fmt::Display for WasmStateError {
             Self::DataSegmentOutOfBounds { segment, offset, length, memory_bytes } => write!(f, "wasm data segment {segment} at {offset} with {length} bytes exceeds {memory_bytes}-byte memory"),
             Self::UnknownGlobal { global_index } => write!(f, "unknown wasm global {global_index}"),
             Self::ImmutableGlobal { global_index } => write!(f, "cannot assign immutable wasm global {global_index}"),
+            Self::UnknownTable { table_index } => write!(f, "unknown wasm table {table_index}"),
+            Self::TableElementOutOfBounds { table_index, element_index, table_size } => write!(f, "wasm table {table_index} index {element_index} exceeds size {table_size}"),
+            Self::UninitializedTableElement { table_index, element_index } => write!(f, "wasm table {table_index} index {element_index} is null"),
+            Self::ElementSegmentOutOfBounds { segment, table_index, offset, length, table_size } => write!(f, "wasm element segment {segment} at {offset} with {length} entries exceeds table {table_index} size {table_size}"),
+            Self::IndirectCallTypeMismatch { function_index, type_index } => write!(f, "wasm indirect function {function_index} does not match type {type_index}"),
         }
     }
 }
@@ -58,6 +71,7 @@ pub(super) struct ModuleState {
     memory: Option<MemoryType>,
     data: Vec<DataSegment>,
     globals: Vec<Global>,
+    tables: tables::TablePlan,
     exports: BTreeMap<String, (u8, u32)>,
 }
 
@@ -69,7 +83,10 @@ pub(super) struct StackEffect {
 
 impl ModuleState {
     pub(super) fn parse_section(&mut self, id: u8, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
+        let other = self.globals.len().saturating_add(self.data.len());
         match id {
+            4 => self.tables.parse_tables(reader, limits, other),
+            9 => self.tables.parse_elements(reader, limits, other),
             5 => self.parse_memory(reader),
             6 => self.parse_globals(reader, limits),
             11 => self.parse_data(reader, limits),
@@ -117,7 +134,8 @@ impl ModuleState {
     }
 
     fn check_entry_count(&self, additional: usize, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
-        let actual = self.globals.len().saturating_add(self.data.len()).saturating_add(additional);
+        let actual = self.globals.len().saturating_add(self.data.len())
+            .saturating_add(self.tables.records()).saturating_add(additional);
         if actual > limits.max_state_entries {
             return Err(WasmStateError::LimitExceeded { resource: "instance state records".into(), actual: actual as u64, max: limits.max_state_entries as u64 }.into());
         }
@@ -152,6 +170,7 @@ impl ModuleState {
 
     pub(super) fn parse_export(&mut self, name: String, kind: u8, index: u32) -> Result<(), WasmNumericVmError> {
         match kind {
+            1 => self.validate_table(index)?,
             2 if index == 0 && self.memory.is_some() => {},
             2 => return Err(invalid("memory export references missing memory")),
             3 => { self.global(index)?; }
@@ -159,6 +178,14 @@ impl ModuleState {
         }
         self.exports.insert(name, (kind, index));
         Ok(())
+    }
+
+    pub(super) fn validate_module(&self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
+        self.tables.validate_functions(vm)
+    }
+
+    pub(super) fn validate_table(&self, index: u32) -> Result<(), WasmNumericVmError> {
+        self.tables.validate_table(index)
     }
 
     fn global(&self, index: u32) -> Result<&Global, WasmNumericVmError> {
@@ -197,6 +224,7 @@ impl ModuleState {
     }
 
     fn instantiate(&self, limits: &WasmNumericLimits) -> Result<InstanceState, WasmNumericVmError> {
+        let tables = self.tables.instantiate()?;
         let memory = if let Some(ty) = &self.memory {
             let maximum = ty.maximum.min(limits.max_memory_pages);
             if ty.minimum > maximum {
@@ -224,7 +252,7 @@ impl ModuleState {
             bytes: (self.globals.len() as u64).saturating_mul(std::mem::size_of::<Global>() as u64),
         })?;
         globals.extend(self.globals.iter().cloned());
-        Ok(InstanceState { memory, globals })
+        Ok(InstanceState { memory, globals, tables })
     }
 }
 
@@ -232,7 +260,11 @@ impl ModuleState {
 struct LinearMemory { bytes: Vec<u8>, maximum: u32 }
 
 #[derive(Debug)]
-pub(super) struct InstanceState { memory: Option<LinearMemory>, globals: Vec<Global> }
+pub(super) struct InstanceState {
+    memory: Option<LinearMemory>,
+    globals: Vec<Global>,
+    tables: tables::InstanceTables,
+}
 
 /// A separately instantiated module. Repeated calls share only this instance's
 /// memory and globals. Traps retain writes by previously completed instructions.
@@ -255,6 +287,13 @@ impl WasmNumericInstance<'_> {
     pub fn memory_export(&self, name: &str) -> Option<&[u8]> {
         if self.vm.state.export_kind(name) != Some(2) { return None; }
         self.state.memory.as_ref().map(|memory| memory.bytes.as_slice())
+    }
+
+    /// Read a declared table export as module-local function indices or null.
+    /// The slice grants neither mutation nor authority to invoke host imports.
+    pub fn table_export(&self, name: &str) -> Option<&[Option<u32>]> {
+        let &(1, index) = self.vm.state.exports.get(name)? else { return None; };
+        self.state.tables.export(index)
     }
 
     /// Inspect the current value of a declared numeric global export. Mutable
@@ -342,6 +381,10 @@ impl LinearMemory {
 }
 
 impl InstanceState {
+    pub(super) fn indirect_callee(&self, vm: &WasmNumericVm, type_index: u32, table: u32, element: u32, meter: &mut ExecutionMeter<'_>) -> Result<u32, WasmNumericVmError> {
+        self.tables.resolve(vm, type_index, table, element, meter)
+    }
+
     pub(super) fn execute(&mut self, opcode: u8, reader: &mut CodeReader<'_>, stack: &mut Vec<WasmBoundaryValue>, meter: &mut ExecutionMeter<'_>, function: u32) -> Result<(), WasmNumericVmError> {
         if matches!(opcode, 0x23 | 0x24) {
             let index = reader.read_u32_leb(function)?;

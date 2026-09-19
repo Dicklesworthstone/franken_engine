@@ -6,8 +6,9 @@
 //! branch tables and returns, as well as locals, direct calls and numeric
 //! operations. Every body, including untaken arms and unreachable code, is
 //! validated before publication. Instance-owned linear memory and active data
-//! segments execute through the bounded state module. Tables, indirect calls,
-//! SIMD, atomics and imported-function execution remain explicitly unsupported.
+//! segments, numeric globals and funcref tables execute through the bounded
+//! state module. Indirect calls check the selected function's complete numeric
+//! signature. SIMD, atomics and imported-function execution remain unsupported.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -277,6 +278,7 @@ impl WasmNumericVm {
             state: parser.state,
             limits,
         };
+        vm.state.validate_module(&vm)?;
         // Validate every function, not merely the export selected by the caller.
         // This also constructs jump destinations without scanning code at runtime.
         for index in 0..vm.functions.len() {
@@ -436,8 +438,17 @@ impl WasmNumericVm {
                     )?;
                     *slot = value;
                 }
-                0x10 => {
-                    let callee = reader.read_u32_leb(function_index)?;
+                0x10 | 0x11 => {
+                    let index = reader.read_u32_leb(function_index)?;
+                    let callee = if opcode == 0x10 {
+                        index
+                    } else {
+                        let table = reader.read_u32_leb(function_index)?;
+                        let element = expect_i32(
+                            pop_value(&mut stack, function_index, opcode)?, function_index, 0,
+                        )? as u32;
+                        state.indirect_callee(self, index, table, element, meter)?
+                    };
                     let callee_type = self.function_signature(callee)?;
                     let mut call_args = Vec::with_capacity(callee_type.params.len());
                     for _ in 0..callee_type.params.len() {

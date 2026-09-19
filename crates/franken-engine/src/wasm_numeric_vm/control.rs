@@ -238,6 +238,15 @@ pub(super) fn validate(vm: &WasmNumericVm, function: u32) -> Result<ControlMap, 
                 validator.pop_types(&callee.params)?;
                 validator.push_types(&callee.results)?;
             }
+            0x11 => {
+                let type_index = reader.read_u32_leb(function)?;
+                let table_index = reader.read_u32_leb(function)?;
+                let callee = vm.function_type(type_index)?;
+                vm.state.validate_table(table_index)?;
+                validator.expect(WasmValueType::I32)?;
+                validator.pop_types(&callee.params)?;
+                validator.push_types(&callee.results)?;
+            }
             0x1a => { validator.pop()?; }
             0x1b => {
                 validator.expect(WasmValueType::I32)?;

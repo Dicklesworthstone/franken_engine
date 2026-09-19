@@ -312,6 +312,10 @@ fn resolver_policy_and_manifest_bound_the_standard_services_before_execution() {
     let mut definition = ModuleDefinition::wasm_binary(&fixture(false), &WasmNumericLimits::default()).unwrap();
     definition.required_capabilities = capabilities;
     let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver.register_workspace_module("/app/main.mjs", ModuleDefinition::new(
+        frankenengine_engine::module_resolver::ModuleSyntax::EsModule,
+        "import './command.wasm';",
+    )).unwrap();
     resolver.register_workspace_module("/app/command.wasm", definition.clone()).unwrap();
     let module = resolver.load_wasm(&request, &context, &policy, WasmNumericLimits::default()).unwrap();
     let (imports, output) = providers(b"abcde", WasiStdioLimits::default());

@@ -170,3 +170,108 @@ impl<'vm> Future for Startup<'vm> {
         }
     }
 }
+
+/// Own the entire command lifecycle, including the binary start and `_start`.
+/// Reuse Startup's state construction and Machine's evaluator; never publish a
+/// partial or exited instance, and never replenish fuel at the phase boundary.
+struct Command<'vm> {
+    startup: Startup<'vm>,
+    entry: Option<u32>,
+    running_entry: bool,
+    finished: bool,
+}
+
+impl WasmNumericVm {
+    /// Private resolver seam. Creating a driver performs no validation,
+    /// linking, allocation of guest state or provider work.
+    pub(crate) fn cooperative_command_driver(
+        &self,
+        imports: WasmHostImports,
+    ) -> impl FnMut(NonZeroU64) -> Result<(u64, Option<u32>), WasmNumericVmError>
+           + Send + Sync + '_ {
+        let mut command = Command {
+            startup: Startup::new(self, Some(imports), NonZeroU64::MIN),
+            entry: None,
+            running_entry: false,
+            finished: false,
+        };
+        move |work| {
+            let status = command.advance(work)?;
+            Ok((command.startup.meter.instructions, status))
+        }
+    }
+}
+
+impl Command<'_> {
+    fn validate_entry(&self) -> Result<u32, WasmNumericVmError> {
+        let vm = self.startup.vm;
+        if let Some(kind) = vm.state.export_kind("_start") {
+            return Err(WasmNumericVmError::ExportIsNotFunction {
+                name: "_start".into(), kind,
+            });
+        }
+        let function = vm.exports.get("_start")
+            .ok_or_else(|| WasmNumericVmError::UnknownExport { name: "_start".into() })?
+            .function_index;
+        let signature = vm.function_signature(function)?;
+        if !signature.params.is_empty() || !signature.results.is_empty() {
+            return Err(WasmNumericVmError::InvalidModule {
+                detail: "WASI command _start must have no parameters or results".into(),
+            });
+        }
+        Ok(function)
+    }
+
+    fn run_slice(&mut self, work: NonZeroU64) -> Result<Option<u32>, WasmNumericVmError> {
+        if self.entry.is_none() {
+            // Validate the command ABI BEFORE any binary start effects, import
+            // linking or state allocation. Borrow the signature instead of
+            // allocating an ABI copy from guest-controlled type counts.
+            self.entry = Some(self.validate_entry()?);
+        }
+        if !self.running_entry {
+            self.startup.work = work;
+            if self.startup.run_slice()? {
+                self.running_entry = true;
+                self.startup.machine = Some(Machine::new(
+                    self.entry.expect("validated command entry"), Cow::Borrowed(&[]), 1,
+                ));
+            }
+            // Even an absent/empty binary start yields here. A later resume
+            // reauthorizes before _start; unused quantum does not cross phases.
+            return Ok(None);
+        }
+        let startup = &mut self.startup;
+        let instance = startup.instance.as_mut().expect("initialized private command");
+        instance.state.check_execution_cancellation()?;
+        let slice = Slice { start: startup.meter.instructions, work };
+        let results = startup.machine.as_mut().expect("command entry machine")
+            .run(startup.vm, &mut startup.meter, &mut instance.state, Some(slice))?;
+        // Preserve execution failures over later controls. ProcessExit remains
+        // terminal through the existing host gate, including replayed exits.
+        instance.state.check_execution_cancellation()?;
+        Ok(results.map(|_| 0))
+    }
+
+    fn advance(&mut self, work: NonZeroU64) -> Result<Option<u32>, WasmNumericVmError> {
+        assert!(!self.finished, "command resumed after completion or panic");
+        self.finished = true;
+        let outcome = match self.run_slice(work) {
+            Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code }))) => {
+                Ok(Some(code))
+            }
+            other => other,
+        };
+        if matches!(&outcome, Ok(None)) {
+            self.finished = false;
+        } else {
+            // Recording refusal after exit is still an error, not an exit
+            // success. Drop unpublished state on EVERY terminal outcome.
+            // Independently retained stream/recording observers are untouched.
+            self.startup.machine = None;
+            self.startup.instance = None;
+            self.startup.imports = None;
+        }
+        outcome
+    }
+}

@@ -8,7 +8,8 @@
 //! instance's completed writes, including writes preceding a later trap.
 //! [`numeric::WasmNumericInstance::begin_call`] prepares a cooperatively sliced
 //! export invocation. [`WasmNativeInstance::begin_call`] preserves the resolver
-//! policy boundary and reauthorizes every resume; startup remains synchronous.
+//! policy boundary and reauthorizes every resume. Startup and complete commands
+//! also have cooperative, current-policy-checked task APIs.
 //!
 //! The ABI-routing and reactive-signal surfaces remain available at their
 //! existing public paths. In particular, [`WasmModuleImportRoute::call_export`]
@@ -43,3 +44,6 @@ pub mod scheduler;
 /// Explicit, bounded Preview 1 providers; no process environment or ambient I/O.
 #[path = "wasm_runtime_lane/wasi_preview1.rs"]
 pub mod wasi_preview1;
+
+#[path = "wasm_runtime_lane/command.rs"]
+pub mod command;

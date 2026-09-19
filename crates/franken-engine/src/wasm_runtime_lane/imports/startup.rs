@@ -330,3 +330,29 @@ fn command_exit(
         error => Err(error),
     }
 }
+
+impl WasmNativeModule {
+    /// Prepare one lazy command: binary initialization followed by `_start`.
+    /// Providers are explicit; no WASI services or process state are installed
+    /// implicitly. The command ABI is checked before any initializer effects.
+    /// Every resume checks the current policy, including the mandatory turn
+    /// boundary between initialization and entry. One hard VM work budget spans
+    /// both phases, unlike separately invoked startup and export APIs.
+    pub fn prepare_command(
+        &self,
+        imports: WasmHostImports,
+    ) -> super::super::command::WasmCommandTask<'_> {
+        let mut pending_imports = Some(imports);
+        let mut driver = None;
+        super::super::command::WasmCommandTask::new(move |work, context, policy| {
+            self.authorize(context, policy)?;
+            if driver.is_none() {
+                let mut imports = pending_imports.take().expect("unstarted command");
+                imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+                imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+                driver = Some(self.vm.cooperative_command_driver(imports));
+            }
+            Ok(driver.as_mut().expect("prepared command driver")(work)?)
+        })
+    }
+}

@@ -188,3 +188,157 @@ fn saturating_conversion_keeps_the_existing_instruction_budget() {
             Err(WasmNumericVmError::InstructionBudgetExceeded { max: 1 })));
     }
 }
+
+fn bulk_module(instruction: &[u8], prefix: &[u8]) -> Vec<u8> {
+    let mut code = prefix.to_vec();
+    code.extend([0x20, 0, 0x20, 1, 0x20, 2]);
+    code.extend_from_slice(instruction);
+    code.push(0x0b);
+    let mut bytes = module(&[0x7f; 3], &[], &code, true);
+    let mut data = vec![1, 0, 0x41, 0, 0x0b, 16];
+    data.extend_from_slice(b"0123456789abcdef");
+    section(&mut bytes, 11, &data);
+    bytes
+}
+
+fn bulk_vm(instruction: &[u8], limits: WasmNumericLimits) -> WasmNumericVm {
+    WasmNumericVm::parse(&bulk_module(instruction, &[]), limits).unwrap()
+}
+
+fn arguments(values: [i32; 3]) -> [WasmBoundaryValue; 3] {
+    values.map(WasmBoundaryValue::I32)
+}
+
+#[test]
+fn memory_copy_is_memmove_in_both_overlap_directions() {
+    let vm = bulk_vm(&[PREFIX, 10, 0, 0], WasmNumericLimits::default());
+    for (args, expected) in [
+        ([2, 0, 8], b"0101234567abcdef"),
+        ([0, 2, 8], b"2345678989abcdef"),
+        ([8, 0, 4], b"012345670123cdef"),
+        ([0, 0, 16], b"0123456789abcdef"),
+        ([65_536, 65_536, 0], b"0123456789abcdef"),
+    ] {
+        let mut instance = vm.instantiate().unwrap();
+        instance.call_export("f", &arguments(args)).unwrap();
+        assert_eq!(&instance.memory_export("m").unwrap()[..16], expected);
+    }
+    let mut instance = vm.instantiate().unwrap();
+    instance.call_export("f", &arguments([65_532, 0, 4])).unwrap();
+    assert_eq!(&instance.memory_export("m").unwrap()[65_532..], b"0123");
+}
+
+#[test]
+fn memory_fill_uses_only_the_low_byte_and_preserves_neighbors() {
+    let vm = bulk_vm(&[PREFIX, 11, 0], WasmNumericLimits::default());
+    for (value, byte) in [(0x1ff, 255), (-1, 255), (0x100, 0), (0x142, 0x42)] {
+        let mut instance = vm.instantiate().unwrap();
+        instance.call_export("f", &arguments([3, value, 5])).unwrap();
+        let memory = instance.memory_export("m").unwrap();
+        assert_eq!(&memory[..3], b"012");
+        assert_eq!(&memory[3..8], &[byte; 5]);
+        assert_eq!(&memory[8..16], b"89abcdef");
+    }
+}
+
+#[test]
+fn bulk_memory_bounds_traps_do_not_partially_write() {
+    for (instruction, cases) in [
+        (&[PREFIX, 10, 0, 0][..], vec![
+            [65_535, 0, 2], [0, 65_535, 2], [-1, 0, 1], [0, -1, 1], [0, 0, -1],
+            [65_537, 0, 0], [0, 65_537, 0],
+        ]),
+        (&[PREFIX, 11, 0][..], vec![
+            [65_535, 42, 2], [-1, 42, 1], [0, 42, -1], [65_537, 42, 0],
+        ]),
+    ] {
+        let vm = bulk_vm(instruction, WasmNumericLimits::default());
+        for args in cases {
+            let mut instance = vm.instantiate().unwrap();
+            let before = instance.memory_export("m").unwrap().to_vec();
+            assert!(matches!(instance.call_export("f", &arguments(args)),
+                Err(WasmNumericVmError::State(WasmStateError::MemoryOutOfBounds { .. }))));
+            assert_eq!(instance.memory_export("m").unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn zero_length_bulk_operations_allow_exactly_one_past_the_end() {
+    for instruction in [&[PREFIX, 10, 0, 0][..], &[PREFIX, 11, 0][..]] {
+        let vm = bulk_vm(instruction, WasmNumericLimits::default());
+        let mut instance = vm.instantiate().unwrap();
+        instance.call_export("f", &arguments([65_536, 65_536, 0])).unwrap();
+        assert_eq!(&instance.memory_export("m").unwrap()[..16], b"0123456789abcdef");
+    }
+}
+
+#[test]
+fn bulk_work_is_precharged_and_budget_refusal_is_atomic() {
+    for instruction in [&[PREFIX, 10, 0, 0][..], &[PREFIX, 11, 0][..]] {
+        let vm = bulk_vm(instruction, WasmNumericLimits { max_instructions: 4, ..WasmNumericLimits::default() });
+        let mut instance = vm.instantiate().unwrap();
+        let before = instance.memory_export("m").unwrap().to_vec();
+        assert!(matches!(instance.call_export("f", &arguments([2, 1, 1])),
+            Err(WasmNumericVmError::InstructionBudgetExceeded { max: 4 })));
+        assert_eq!(instance.memory_export("m").unwrap(), before);
+        for (length, budget) in [(0, 5), (1, 6), (63, 6), (64, 6), (65, 7)] {
+            let vm = bulk_vm(instruction, WasmNumericLimits { max_instructions: budget, ..WasmNumericLimits::default() });
+            let result = vm.call_export("f", &arguments([128, 0, length])).unwrap();
+            assert_eq!(result.instructions_executed, budget);
+        }
+    }
+}
+
+#[test]
+fn bulk_failure_retains_earlier_stores_but_never_leaks_between_instances() {
+    // Store byte 42 at zero, then perform an out-of-bounds copy.
+    let prefix = [0x41, 0, 0x41, 42, 0x3a, 0, 0];
+    let vm = WasmNumericVm::parse(
+        &bulk_module(&[PREFIX, 10, 0, 0], &prefix), WasmNumericLimits::default(),
+    ).unwrap();
+    let mut first = vm.instantiate().unwrap();
+    let second = vm.instantiate().unwrap();
+    assert!(first.call_export("f", &arguments([65_536, 0, 1])).is_err());
+    assert_eq!(first.memory_export("m").unwrap()[0], 42);
+    assert_eq!(second.memory_export("m").unwrap()[0], b'0');
+    assert_eq!(&first.memory_export("m").unwrap()[1..16], b"123456789abcdef");
+}
+
+#[test]
+fn bulk_memory_immediates_and_all_operand_types_are_validated() {
+    for instruction in [&[PREFIX, 10, 0, 0][..], &[PREFIX, 11, 0][..]] {
+        let mut code = vec![0x20, 0, 0x20, 1, 0x20, 2];
+        code.extend(instruction);
+        code.push(0x0b);
+        assert!(WasmNumericVm::parse(&module(&[0x7f; 3], &[], &code, false), WasmNumericLimits::default()).is_err());
+        for position in 0..3 {
+            for wrong in [0x7e, 0x7d, 0x7c] {
+                let mut types = [0x7f; 3];
+                types[position] = wrong;
+                assert!(WasmNumericVm::parse(&module(&types, &[], &code, true), WasmNumericLimits::default()).is_err());
+            }
+        }
+    }
+    for instruction in [
+        vec![PREFIX, 10, 1, 0], vec![PREFIX, 10, 0, 1], vec![PREFIX, 11, 1],
+        vec![PREFIX, 11, 128, 128, 128, 128, 16],
+    ] {
+        // The unreachable stack is polymorphic, but immediates must still be checked.
+        let mut code = vec![0x41, 0, 0x04, 0x40, 0];
+        code.extend(instruction);
+        code.extend([0x0b, 0x0b]);
+        assert!(WasmNumericVm::parse(&module(&[], &[], &code, true), WasmNumericLimits::default()).is_err());
+    }
+}
+
+#[test]
+fn padded_zero_memory_indices_are_not_misparsed_as_instructions() {
+    for instruction in [
+        vec![PREFIX, 0x8a, 0, 128, 0, 128, 128, 128, 128, 0],
+        vec![PREFIX, 11, 128, 128, 128, 128, 0],
+    ] {
+        let vm = bulk_vm(&instruction, WasmNumericLimits::default());
+        assert!(vm.call_export("f", &arguments([8, 0, 4])).is_ok());
+    }
+}

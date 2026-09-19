@@ -593,12 +593,22 @@ impl<'a> ModuleParser<'a> {
                 // appear anywhere; their payload is intentionally opaque here.
                 continue;
             }
-            if section_id <= self.last_non_custom_section {
+            // Section 12 precedes code (10) and data (11), despite its id.
+            // Compare logical ranks so legal data-count placement does not
+            // weaken duplicate or out-of-order section rejection.
+            let section_rank = match section_id {
+                1..=9 => section_id,
+                12 => 10,
+                10 => 11,
+                11 => 12,
+                _ => return Err(WasmNumericVmError::UnsupportedSection { section_id }),
+            };
+            if section_rank <= self.last_non_custom_section {
                 return self.invalid(format!(
                     "wasm section {section_id} is duplicated or out of order"
                 ));
             }
-            self.last_non_custom_section = section_id;
+            self.last_non_custom_section = section_rank;
             let mut reader = ByteReader::new(section);
             match section_id {
                 1 => self.parse_types(&mut reader)?,

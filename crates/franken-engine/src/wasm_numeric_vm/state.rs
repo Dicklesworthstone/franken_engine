@@ -7,9 +7,14 @@
 //! writes are deliberately retained when a later instruction traps.
 
 use super::*;
+use std::sync::Arc;
 
 #[path = "state/extended.rs"]
 mod extended;
+
+#[cfg(test)]
+#[path = "state/data_tests.rs"]
+mod data_tests;
 
 #[path = "tables.rs"]
 mod tables;
@@ -23,6 +28,8 @@ pub enum WasmStateError {
     AllocationFailed { bytes: u64 },
     MemoryOutOfBounds { address: u64, width: u64, memory_bytes: u64 },
     DataSegmentOutOfBounds { segment: usize, offset: u32, length: usize, memory_bytes: u64 },
+    UnknownDataSegment { data_index: u32 },
+    DataSourceOutOfBounds { data_index: u32, offset: u32, length: u32, data_bytes: u64 },
     UnknownGlobal { global_index: u32 },
     ImmutableGlobal { global_index: u32 },
     UnknownTable { table_index: u32 },
@@ -39,6 +46,8 @@ impl fmt::Display for WasmStateError {
             Self::AllocationFailed { bytes } => write!(f, "cannot allocate {bytes} bytes of wasm instance state"),
             Self::MemoryOutOfBounds { address, width, memory_bytes } => write!(f, "wasm memory access [{address}, +{width}) exceeds {memory_bytes} bytes"),
             Self::DataSegmentOutOfBounds { segment, offset, length, memory_bytes } => write!(f, "wasm data segment {segment} at {offset} with {length} bytes exceeds {memory_bytes}-byte memory"),
+            Self::UnknownDataSegment { data_index } => write!(f, "unknown wasm data segment {data_index}"),
+            Self::DataSourceOutOfBounds { data_index, offset, length, data_bytes } => write!(f, "wasm data segment {data_index} access [{offset}, +{length}) exceeds {data_bytes} bytes"),
             Self::UnknownGlobal { global_index } => write!(f, "unknown wasm global {global_index}"),
             Self::ImmutableGlobal { global_index } => write!(f, "cannot assign immutable wasm global {global_index}"),
             Self::UnknownTable { table_index } => write!(f, "unknown wasm table {table_index}"),
@@ -64,7 +73,12 @@ fn invalid(detail: impl Into<String>) -> WasmNumericVmError {
 struct MemoryType { minimum: u32, maximum: u32 }
 
 #[derive(Debug, Clone)]
-struct DataSegment { offset: u32, bytes: Vec<u8> }
+struct DataSegment {
+    // None denotes a passive segment. Its immutable payload can be shared,
+    // but each instance owns its own live/dropped handle.
+    offset: Option<u32>,
+    bytes: Arc<[u8]>,
+}
 
 #[derive(Debug, Clone)]
 struct Global { value: WasmBoundaryValue, mutable: bool }
@@ -73,6 +87,7 @@ struct Global { value: WasmBoundaryValue, mutable: bool }
 pub(super) struct ModuleState {
     memory: Option<MemoryType>,
     data: Vec<DataSegment>,
+    data_count: Option<u32>,
     globals: Vec<Global>,
     tables: tables::TablePlan,
     start: Option<u32>,
@@ -98,6 +113,12 @@ impl ModuleState {
                 Ok(())
             },
             11 => self.parse_data(reader, limits),
+            12 => {
+                let count = reader.read_u32_leb()?;
+                self.check_entry_count(count as usize, limits)?;
+                self.data_count = Some(count);
+                Ok(())
+            },
             _ => Err(WasmNumericVmError::UnsupportedSection { section_id: id }),
         }
     }
@@ -120,23 +141,36 @@ impl ModuleState {
     fn parse_data(&mut self, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
         let count = reader.read_u32_leb()? as usize;
         self.check_entry_count(count, limits)?;
+        // Even an empty passive segment needs a mode and a payload length.
+        // Reject impossible counts before a count-controlled allocation.
+        if count > reader.remaining().len() / 2 {
+            return Err(invalid("truncated data segment vector"));
+        }
+        self.data.try_reserve_exact(count).map_err(|_| WasmStateError::AllocationFailed {
+            bytes: (count as u64).saturating_mul(std::mem::size_of::<DataSegment>() as u64),
+        })?;
         for _ in 0..count {
-            let mode = reader.read_u32_leb()?;
-            match mode {
-                0 => {},
-                2 if reader.read_u32_leb()? == 0 => {},
-                _ => return Err(invalid("only active data segments for memory zero are supported")),
-            }
-            if self.memory.is_none() { return Err(invalid("active data segment requires memory zero")); }
-            if reader.read_u8()? != 0x41 { return Err(invalid("data offset must be an i32.const expression")); }
-            let (offset, consumed) = read_i32_leb(reader.remaining())?;
-            reader.offset += consumed;
-            if reader.read_u8()? != 0x0b { return Err(invalid("data offset expression has trailing instructions")); }
+            let active = match reader.read_u32_leb()? {
+                0 => true,
+                1 => false,
+                2 if reader.read_u32_leb()? == 0 => true,
+                _ => return Err(invalid("invalid data segment mode or unsupported memory index")),
+            };
+            let offset = if active {
+                if self.memory.is_none() { return Err(invalid("active data segment requires memory zero")); }
+                if reader.read_u8()? != 0x41 { return Err(invalid("data offset must be an i32.const expression")); }
+                let (offset, consumed) = read_i32_leb(reader.remaining())?;
+                reader.offset += consumed;
+                if reader.read_u8()? != 0x0b { return Err(invalid("data offset expression has trailing instructions")); }
+                Some(offset as u32)
+            } else {
+                None
+            };
             let length = reader.read_u32_leb()? as usize;
-            // The module byte limit bounds payload storage. Never reserve from
-            // a hostile declared length before checking the section boundary.
-            let bytes = reader.read_bytes(length)?.to_vec();
-            self.data.push(DataSegment { offset: offset as u32, bytes });
+            // Check the section boundary before allocating the payload. Each
+            // instance only clones a handle, not all retained passive bytes.
+            let bytes = Arc::from(reader.read_bytes(length)?);
+            self.data.push(DataSegment { offset, bytes });
         }
         Ok(())
     }
@@ -189,6 +223,14 @@ impl ModuleState {
     }
 
     pub(super) fn validate_module(&self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
+        if let Some(declared) = self.data_count {
+            if declared as usize != self.data.len() {
+                return Err(invalid(format!(
+                    "data count section declares {declared} segments, data section provides {}",
+                    self.data.len()
+                )));
+            }
+        }
         self.tables.validate_functions(vm)?;
         if let Some(start) = self.start {
             let signature = vm.function_signature(start)?;
@@ -201,6 +243,17 @@ impl ModuleState {
 
     pub(super) fn validate_table(&self, index: u32) -> Result<(), WasmNumericVmError> {
         self.tables.validate_table(index)
+    }
+
+    fn validate_data(&self, data_index: u32) -> Result<(), WasmNumericVmError> {
+        // Even an instruction in unreachable code requires a data-count section
+        // and a real module-local segment. Active segments remain addressable;
+        // their instance payloads are already dropped before start execution.
+        if self.data_count.is_none() {
+            return Err(invalid("data-index instruction requires a data count section"));
+        }
+        self.data.get(data_index as usize).map(|_| ())
+            .ok_or_else(|| WasmStateError::UnknownDataSegment { data_index }.into())
     }
 
     fn global(&self, index: u32) -> Result<&Global, WasmNumericVmError> {
@@ -250,8 +303,9 @@ impl ModuleState {
             }
             let bytes = u64::from(ty.minimum) * PAGE_BYTES;
             for (segment, data) in self.data.iter().enumerate() {
-                if u64::from(data.offset).checked_add(data.bytes.len() as u64).is_none_or(|end| end > bytes) {
-                    return Err(WasmStateError::DataSegmentOutOfBounds { segment, offset: data.offset, length: data.bytes.len(), memory_bytes: bytes }.into());
+                let Some(offset) = data.offset else { continue; };
+                if u64::from(offset).checked_add(data.bytes.len() as u64).is_none_or(|end| end > bytes) {
+                    return Err(WasmStateError::DataSegmentOutOfBounds { segment, offset, length: data.bytes.len(), memory_bytes: bytes }.into());
                 }
             }
             let length = usize::try_from(bytes).map_err(|_| WasmStateError::AllocationFailed { bytes })?;
@@ -260,7 +314,8 @@ impl ModuleState {
             buffer.resize(length, 0);
             // Active segments apply in source order, so later overlaps win.
             for data in &self.data {
-                let start = data.offset as usize;
+                let Some(offset) = data.offset else { continue; };
+                let start = offset as usize;
                 buffer[start..start + data.bytes.len()].copy_from_slice(&data.bytes);
             }
             Some(LinearMemory { bytes: buffer, maximum })
@@ -270,7 +325,16 @@ impl ModuleState {
             bytes: (self.globals.len() as u64).saturating_mul(std::mem::size_of::<Global>() as u64),
         })?;
         globals.extend(self.globals.iter().cloned());
-        Ok(InstanceState { memory, globals, tables })
+        let mut data = Vec::new();
+        data.try_reserve_exact(self.data.len()).map_err(|_| WasmStateError::AllocationFailed {
+            bytes: (self.data.len() as u64).saturating_mul(std::mem::size_of::<Option<Arc<[u8]>>>() as u64),
+        })?;
+        data.extend(self.data.iter().map(|segment| {
+            segment.offset.is_none().then(|| Arc::clone(&segment.bytes))
+        }));
+        // Active segments are dropped before the start function, but retain
+        // their indices as empty entries. Passive segments are instance-local.
+        Ok(InstanceState { memory, globals, tables, data })
     }
 }
 
@@ -282,6 +346,7 @@ pub(super) struct InstanceState {
     memory: Option<LinearMemory>,
     globals: Vec<Global>,
     tables: tables::InstanceTables,
+    data: Vec<Option<Arc<[u8]>>>,
 }
 
 /// A separately instantiated module. Repeated calls share only this instance's
@@ -734,8 +799,10 @@ mod tests {
         }
         let bytes = module(&[], &[], &[0x0b], Some(&[1, 0, 1]), Some(&data(&[(0, b"x")])));
         assert!(matches!(WasmNumericVm::parse(&bytes, WasmNumericLimits { max_state_entries: 0, ..WasmNumericLimits::default() }), Err(WasmNumericVmError::State(WasmStateError::LimitExceeded { .. }))));
-        let passive = module(&[], &[], &[0x0b], Some(&[1, 0, 1]), Some(&[1, 1, 1, 42]));
-        assert!(WasmNumericVm::parse(&passive, WasmNumericLimits::default()).is_err());
+        // Mode 1 is now executable passive data (covered in data_tests).
+        // Keep the fail-closed assertion for the invalid mode 3 instead.
+        let unsupported = module(&[], &[], &[0x0b], Some(&[1, 0, 1]), Some(&[1, 3, 1, 42]));
+        assert!(WasmNumericVm::parse(&unsupported, WasmNumericLimits::default()).is_err());
     }
 
     fn global_section(ty: u8, mutable: bool, expression: &[u8]) -> Vec<u8> {

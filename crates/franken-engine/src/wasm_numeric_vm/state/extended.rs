@@ -30,6 +30,8 @@ fn unsupported(function: u32, offset: usize) -> WasmNumericVmError {
 #[derive(Clone, Copy)]
 enum Instruction {
     Saturating { subopcode: u32, input: WasmValueType, output: WasmValueType },
+    MemoryInit { data_index: u32 },
+    DataDrop { data_index: u32 },
     MemoryCopy,
     MemoryFill,
     TableInit { element: u32, table: u32 },
@@ -54,6 +56,12 @@ fn decode(reader: &mut CodeReader<'_>, function: u32) -> Result<Instruction, Was
         return Ok(Instruction::Saturating { subopcode, input, output });
     }
     match subopcode {
+        8 => {
+            let data_index = reader.read_u32_leb(function)?;
+            memory_zero(reader, function)?;
+            Ok(Instruction::MemoryInit { data_index })
+        }
+        9 => Ok(Instruction::DataDrop { data_index: reader.read_u32_leb(function)? }),
         10 => {
             memory_zero(reader, function)?;
             memory_zero(reader, function)?;
@@ -95,6 +103,17 @@ pub(super) fn validate(
         }
         Instruction::ElementDrop { element } => {
             state.tables.validate_element(element)?;
+            Ok(StackEffect { pop: [None; 3], push: None })
+        }
+        Instruction::MemoryInit { data_index } => {
+            state.validate_data(data_index)?;
+            if state.memory.is_none() {
+                return Err(invalid("memory.init requires memory zero"));
+            }
+            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+        }
+        Instruction::DataDrop { data_index } => {
+            state.validate_data(data_index)?;
             Ok(StackEffect { pop: [None; 3], push: None })
         }
         Instruction::TableCopy { destination, source } => {
@@ -162,6 +181,14 @@ pub(super) fn execute(
         let size = state.tables.size(table)?;
         return push_value(stack, WasmBoundaryValue::I32(size as i32), meter);
     }
+    if let Instruction::DataDrop { data_index } = instruction {
+        let segment = state.data.get_mut(data_index as usize)
+            .ok_or(WasmStateError::UnknownDataSegment { data_index })?;
+        // Idempotent, including an already-dropped active segment. The VM's
+        // opcode tick has already succeeded; no other instance is changed.
+        *segment = None;
+        return Ok(());
+    }
     let length = expect_i32(pop_value(stack, function, PREFIX)?, function, 2)? as u32;
     let source_or_byte = expect_i32(pop_value(stack, function, PREFIX)?, function, 1)? as u32;
     let destination = expect_i32(pop_value(stack, function, PREFIX)?, function, 0)? as u32;
@@ -174,6 +201,21 @@ pub(super) fn execute(
     let memory = state.memory.as_mut().ok_or_else(|| invalid("missing validated memory"))?;
     let destination_range = memory.range(destination, 0, length as usize)?;
     match instruction {
+        Instruction::MemoryInit { data_index } => {
+            let data = state.data.get(data_index as usize)
+                .ok_or(WasmStateError::UnknownDataSegment { data_index })?
+                .as_deref().unwrap_or(&[]);
+            let end = u64::from(source_or_byte) + u64::from(length);
+            if end > data.len() as u64 {
+                return Err(WasmStateError::DataSourceOutOfBounds {
+                    data_index, offset: source_or_byte, length, data_bytes: data.len() as u64,
+                }.into());
+            }
+            // Use the same per-64-byte work charge as memory.copy/fill/grow.
+            // All checks and the complete charge precede the first write.
+            meter.charge_work(u64::from(length).div_ceil(64))?;
+            memory.bytes[destination_range].copy_from_slice(&data[source_or_byte as usize..end as usize]);
+        }
         Instruction::MemoryCopy => {
             let source_range = memory.range(source_or_byte, 0, length as usize)?;
             // Charge work exactly as memory.grow does: one unit per 64 bytes,

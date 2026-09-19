@@ -238,6 +238,8 @@ impl WasmNativeModule {
     /// caller-supplied snapshot, not an asynchronous revocation subscription.
     /// Host callbacks remain trusted code responsible for I/O, IFC and replay;
     /// successful host effects are not rolled back by a later startup trap.
+    /// Configured host recordings are bound to this exact module record;
+    /// replay rejects other modules and unscoped tapes before startup.
     pub fn instantiate_with_imports(
         &self,
         context: &ResolutionContext,
@@ -246,6 +248,7 @@ impl WasmNativeModule {
     ) -> Result<WasmNativeInstance<'_>, WasmNativeLoadError> {
         self.authorize(context, policy)?;
         imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+        imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
         let instance = self.vm.instantiate_with_imports(imports)?;
         Ok(WasmNativeInstance { module: self, instance })
     }

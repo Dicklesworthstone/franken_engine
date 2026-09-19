@@ -5,6 +5,9 @@
 //! ABI and capability gates still run; a transcript is data, never a grant.
 //! Full memory fingerprints bind even reads through unexported memory. Both
 //! recording and replay charge one work unit per 64 memory bytes for this scan.
+//! Resolver-backed instantiation binds the transcript to the immutable module
+//! record before startup. Scoped and raw numeric-VM recordings are deliberately
+//! not interchangeable; no caller-supplied identity can override this binding.
 //!
 //! Snapshots are prefixes of entered host calls, not complete incident reports.
 //! Verify replay consumption explicitly. Guest invocations, external effects,
@@ -26,7 +29,7 @@ use super::{WasmBoundaryValue, WasmFunctionSignature};
 use super::numeric::{WasmHostError, WasmNumericLimits, WasmNumericVmError};
 
 type Outcome = Result<Vec<WasmBoundaryValue>, WasmNumericVmError>;
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 // Reserve space for the envelope, array separators and empty-record overhead.
 const ENVELOPE_RESERVE: usize = 1024;
 
@@ -49,6 +52,7 @@ pub enum WasmHostTraceError {
     LimitExceeded,
     Unavailable,
     InvalidTranscript,
+    ModuleMismatch,
     Diverged { call: usize },
     Exhausted { call: usize },
     Incomplete { remaining: usize },
@@ -62,6 +66,7 @@ impl fmt::Display for WasmHostTraceError {
             Self::LimitExceeded => f.write_str("host transcript limit exceeded"),
             Self::Unavailable => f.write_str("host transcript is busy, poisoned or incomplete"),
             Self::InvalidTranscript => f.write_str("invalid host transcript or digest"),
+            Self::ModuleMismatch => f.write_str("host transcript does not belong to this resolved module"),
             Self::Diverged { call } => write!(f, "host replay diverged at call {call}"),
             Self::Exhausted { call } => write!(f, "host replay exhausted before call {call}"),
             Self::Incomplete { remaining } => write!(f, "host replay has {remaining} unconsumed calls"),
@@ -160,7 +165,12 @@ pub(crate) struct CallRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TranscriptData { version: u32, calls: Vec<CallRecord> }
+struct TranscriptData { version: u32, scope: ModuleScope, calls: Vec<CallRecord> }
+
+// An explicit enum makes the scope field mandatory on the wire. In particular,
+// an omitted field cannot deserialize as an implicitly unscoped Option::None.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum ModuleScope { Unscoped, Resolved(ContentHash) }
 
 /// Immutable recorded host effects. Deserialize only through `from_json`, which
 /// enforces the caller's byte/call ceilings, schema and content digest.
@@ -170,6 +180,12 @@ pub struct WasmHostTranscript { data: TranscriptData, digest: ContentHash }
 impl WasmHostTranscript {
     pub fn call_count(&self) -> usize { self.data.calls.len() }
     pub fn digest(&self) -> ContentHash { self.digest }
+
+    /// Pinned canonical module-record hash for resolver-backed recordings.
+    /// Raw numeric VM recordings have no module identity and return None.
+    pub fn module_hash(&self) -> Option<ContentHash> {
+        match self.data.scope { ModuleScope::Unscoped => None, ModuleScope::Resolved(hash) => Some(hash) }
+    }
 
     pub fn to_json(&self, limits: WasmHostTraceLimits) -> Result<Vec<u8>, WasmHostTraceError> {
         self.validate(limits)?;
@@ -220,6 +236,7 @@ impl WasmHostTranscript {
 #[derive(Debug)]
 struct RecordingState {
     limits: WasmHostTraceLimits,
+    scope: ModuleScope,
     calls: Vec<CallRecord>,
     used: usize,
     active: bool,
@@ -240,14 +257,15 @@ impl WasmHostRecording {
     fn new(limits: WasmHostTraceLimits) -> Result<Self, WasmHostTraceError> {
         checked_limits(limits)?;
         Ok(Self(Arc::new(Mutex::new(RecordingState {
-            limits, calls: Vec::new(), used: ENVELOPE_RESERVE, active: false, failed: false,
+            limits, scope: ModuleScope::Unscoped, calls: Vec::new(),
+            used: ENVELOPE_RESERVE, active: false, failed: false,
         }))))
     }
 
     pub fn snapshot(&self) -> Result<WasmHostTranscript, WasmHostTraceError> {
         let state = lock(&self.0)?;
         if state.failed || state.active { return Err(WasmHostTraceError::Unavailable); }
-        let data = TranscriptData { version: VERSION, calls: state.calls.clone() };
+        let data = TranscriptData { version: VERSION, scope: state.scope, calls: state.calls.clone() };
         let digest = ContentHash::compute(&json(&data, state.limits.max_bytes)?);
         let transcript = WasmHostTranscript { data, digest };
         transcript.validate(state.limits)?;
@@ -256,7 +274,15 @@ impl WasmHostRecording {
 }
 
 #[derive(Debug)]
-struct ReplayState { transcript: WasmHostTranscript, next: usize, active: bool, failed: bool }
+struct ReplayState {
+    transcript: WasmHostTranscript,
+    // Installed only by the resolver's consuming instantiation path, never
+    // copied from a transcript or accepted as a public caller assertion.
+    bound_module: Option<ContentHash>,
+    next: usize,
+    active: bool,
+    failed: bool,
+}
 
 /// Consumption observer. Call `verify_complete` after the intended sequence;
 /// running only a valid prefix is not a successful complete replay.
@@ -267,6 +293,9 @@ impl WasmHostReplay {
     pub fn verify_complete(&self) -> Result<(), WasmHostTraceError> {
         let state = lock(&self.0)?;
         if state.failed || state.active { return Err(WasmHostTraceError::Unavailable); }
+        if state.transcript.module_hash() != state.bound_module {
+            return Err(WasmHostTraceError::ModuleMismatch);
+        }
         let remaining = state.transcript.call_count() - state.next;
         if remaining != 0 { return Err(WasmHostTraceError::Incomplete { remaining }); }
         Ok(())
@@ -294,9 +323,55 @@ impl TraceMode {
     pub fn replay(&mut self, transcript: WasmHostTranscript, limits: WasmHostTraceLimits) -> Result<WasmHostReplay, WasmHostTraceError> {
         if self.enabled() { return Err(WasmHostTraceError::AlreadyConfigured); }
         transcript.validate(limits)?;
-        let replay = WasmHostReplay(Arc::new(Mutex::new(ReplayState { transcript, next: 0, active: false, failed: false })));
+        let replay = WasmHostReplay(Arc::new(Mutex::new(ReplayState {
+            transcript, bound_module: None, next: 0, active: false, failed: false,
+        })));
         *self = Self::Replay(replay.clone());
         Ok(replay)
+    }
+
+    /// The consuming resolver path supplies the hash of the already validated,
+    /// pinned record, including source, provenance and declared capabilities.
+    pub fn bind_module(&mut self, hash: ContentHash) -> Result<(), WasmHostTraceError> {
+        match self {
+            Self::Off => Ok(()),
+            Self::Record(recording) => {
+                let mut state = lock(&recording.0)?;
+                if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
+                if !state.calls.is_empty() || matches!(state.scope, ModuleScope::Resolved(old) if old != hash) {
+                    state.failed = true;
+                    return Err(WasmHostTraceError::ModuleMismatch);
+                }
+                state.scope = ModuleScope::Resolved(hash);
+                Ok(())
+            }
+            Self::Replay(replay) => {
+                let mut state = lock(&replay.0)?;
+                if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
+                if state.next != 0 || state.transcript.module_hash() != Some(hash)
+                    || state.bound_module.is_some_and(|old| old != hash)
+                {
+                    state.failed = true;
+                    return Err(WasmHostTraceError::ModuleMismatch);
+                }
+                state.bound_module = Some(hash);
+                Ok(())
+            }
+        }
+    }
+
+    /// Run before import linking/state allocation, even with no host calls or
+    /// start function. This closes the raw-VM bypass for scoped transcripts.
+    pub fn validate_module_scope(&self) -> Result<(), WasmHostTraceError> {
+        if let Self::Replay(replay) = self {
+            let mut state = lock(&replay.0)?;
+            if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
+            if state.transcript.module_hash() != state.bound_module {
+                state.failed = true;
+                return Err(WasmHostTraceError::ModuleMismatch);
+            }
+        }
+        Ok(())
     }
 
     pub fn begin(&mut self, context: CallContext<'_>) -> Result<TraceCall, WasmHostTraceError> {

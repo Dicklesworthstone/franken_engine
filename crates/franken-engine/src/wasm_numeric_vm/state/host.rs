@@ -117,6 +117,12 @@ impl WasmHostImports {
         self.trace.replay(transcript, limits)
     }
 
+    /// Bind only from the consuming, authorized resolver path. A public
+    /// provider cannot relabel an unscoped tape as a resolved-module tape.
+    pub(crate) fn bind_module(&mut self, hash: ContentHash) -> Result<(), WasmHostTraceError> {
+        self.trace.bind_module(hash)
+    }
+
     /// Narrow a provider envelope to a resolved module's declared authority.
     /// Never infer a grant from a binding requirement or a process-wide policy.
     pub(crate) fn restrict_capabilities(&mut self, permitted: &BTreeSet<RuntimeCapability>) {
@@ -155,6 +161,7 @@ impl WasmHostImports {
     }
 
     fn validate(&self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
+        self.trace.validate_module_scope()?;
         for import in &vm.imports {
             let binding = self.bindings.get(&import.module)
                 .and_then(|bindings| bindings.get(&import.name))

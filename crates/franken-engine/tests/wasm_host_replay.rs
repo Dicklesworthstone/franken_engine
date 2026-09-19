@@ -4,6 +4,11 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::wasm_runtime_lane::{WasmBoundaryValue, WasmFunctionSignature, WasmValueType};
+use frankenengine_engine::module_resolver::{
+    CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
+    ModuleRequest, ResolutionContext, ResolutionErrorCode,
+};
+use frankenengine_engine::wasm_runtime_lane::{WasmNativeLoadError, WasmNativeModule};
 use frankenengine_engine::wasm_runtime_lane::host_replay::{WasmHostTraceError, WasmHostTraceLimits, WasmHostTranscript};
 use frankenengine_engine::wasm_runtime_lane::numeric::{
     WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericLimits,
@@ -374,4 +379,234 @@ fn configuration_cannot_replace_an_existing_recording_or_replay() {
     let mut bindings = imports(forbidden);
     bindings.replay_calls(recorder.snapshot().unwrap(), WasmHostTraceLimits::default()).unwrap();
     assert_eq!(bindings.record_calls(WasmHostTraceLimits::default()).unwrap_err(), WasmHostTraceError::AlreadyConfigured);
+}
+
+fn resolved_policy() -> CapabilityPolicyHook {
+    CapabilityPolicyHook::new([
+        RuntimeCapability::ModuleLoad, RuntimeCapability::VmDispatch,
+        RuntimeCapability::Builtin, RuntimeCapability::FsRead,
+    ].into_iter().collect())
+}
+
+fn resolved_context() -> ResolutionContext {
+    ResolutionContext::new("trace-resolved-replay", "decision-resolved-replay", "policy-current")
+}
+
+fn resolved(bytes: &[u8], path: &str, origin: &str, extra_capability: bool) -> WasmNativeModule {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    let mut definition = ModuleDefinition::wasm_binary(bytes, &WasmNumericLimits::default()).unwrap()
+        .with_provenance(origin).require_capability(RuntimeCapability::Builtin);
+    if extra_capability { definition = definition.require_capability(RuntimeCapability::FsRead); }
+    resolver.register_workspace_module(path, definition).unwrap();
+    resolver.load_wasm(&ModuleRequest::new(path, ImportStyle::Import), &resolved_context(),
+        &resolved_policy(), WasmNumericLimits::default()).unwrap()
+}
+
+fn resolved_recording(module: &WasmNativeModule) -> WasmHostTranscript {
+    let mut bindings = imports(transform);
+    let recording = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+    let mut instance = module.instantiate_with_imports(&resolved_context(), &resolved_policy(), bindings).unwrap();
+    instance.call_export("f", &[I32(0), I32(4)], &resolved_context(), &resolved_policy()).unwrap();
+    recording.snapshot().unwrap()
+}
+
+fn scope_error(error: WasmNativeLoadError) -> WasmHostTraceError {
+    match error {
+        WasmNativeLoadError::Execution(error) => trace_error(error),
+        other => panic!("expected execution scope error, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolved_recordings_pin_the_module_before_start_and_replay_real_state() {
+    let module = resolved(&fixture(true, false), "/app/replay.wasm", "release-a", false);
+    let ctx = resolved_context();
+    let policy = resolved_policy();
+    let mut bindings = imports(transform);
+    let recording = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+    assert_eq!(recording.snapshot().unwrap().module_hash(), None);
+    let mut live = module.instantiate_with_imports(&ctx, &policy, bindings).unwrap();
+    assert_eq!(recording.snapshot().unwrap().call_count(), 1);
+    assert_eq!(recording.snapshot().unwrap().module_hash(), Some(module.resolution().module.content_hash));
+    let expected = live.call_export("f", &[I32(0), I32(4)], &ctx, &policy).unwrap();
+    let transcript = recording.snapshot().unwrap();
+    let encoded = transcript.to_json(WasmHostTraceLimits::default()).unwrap();
+    let decoded = WasmHostTranscript::from_json(&encoded, WasmHostTraceLimits::default()).unwrap();
+    assert_eq!(decoded, transcript);
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(decoded, WasmHostTraceLimits::default()).unwrap();
+    let mut reproduced = module.instantiate_with_imports(&ctx, &policy, bindings).unwrap();
+    assert_eq!(reproduced.start_execution(&ctx, &policy).unwrap(), live.start_execution(&ctx, &policy).unwrap());
+    assert_eq!(reproduced.call_export("f", &[I32(0), I32(4)], &ctx, &policy).unwrap(), expected);
+    assert_eq!(reproduced.memory_export("m", &ctx, &policy).unwrap(), live.memory_export("m", &ctx, &policy).unwrap());
+    replay.verify_complete().unwrap();
+}
+
+#[test]
+fn matching_host_calls_cannot_replay_against_changed_source_name_or_provenance() {
+    let original = fixture(true, false);
+    let module = resolved(&original, "/app/replay.wasm", "release-a", false);
+    let transcript = resolved_recording(&module);
+    let mut changed_source = original.clone();
+    // Same executable instructions, different exact code artifact.
+    section(&mut changed_source, 0, &[1, b'x', 1]);
+    for (bytes, path, origin, extra) in [
+        (changed_source.as_slice(), "/app/replay.wasm", "release-a", false),
+        (original.as_slice(), "/app/other.wasm", "release-a", false),
+        (original.as_slice(), "/app/replay.wasm", "release-b", false),
+        (original.as_slice(), "/app/replay.wasm", "release-a", true),
+    ] {
+        let changed = resolved(bytes, path, origin, extra);
+        assert_ne!(changed.resolution().module.content_hash, module.resolution().module.content_hash);
+        let mut bindings = imports(forbidden);
+        let replay = bindings.replay_calls(transcript.clone(), WasmHostTraceLimits::default()).unwrap();
+        assert_eq!(scope_error(changed.instantiate_with_imports(&resolved_context(), &resolved_policy(), bindings).unwrap_err()),
+            WasmHostTraceError::ModuleMismatch);
+        assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Unavailable));
+    }
+}
+
+#[test]
+fn scoped_transcripts_cannot_escape_through_the_raw_numeric_vm() {
+    let bytes = fixture(true, false);
+    let module = resolved(&bytes, "/app/replay.wasm", "release-a", false);
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(resolved_recording(&module), WasmHostTraceLimits::default()).unwrap();
+    let vm = WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).unwrap();
+    assert_eq!(trace_error(vm.instantiate_with_imports(bindings).unwrap_err()), WasmHostTraceError::ModuleMismatch);
+    assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Unavailable));
+}
+
+#[test]
+fn unscoped_transcripts_cannot_be_relabelled_by_a_resolved_instantiation() {
+    let bytes = fixture(false, false);
+    let raw_vm = WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).unwrap();
+    let transcript = one_call(&raw_vm);
+    assert_eq!(transcript.module_hash(), None);
+    let module = resolved(&bytes, "/app/replay.wasm", "release-a", false);
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(transcript, WasmHostTraceLimits::default()).unwrap();
+    assert_eq!(scope_error(module.instantiate_with_imports(&resolved_context(), &resolved_policy(), bindings).unwrap_err()),
+        WasmHostTraceError::ModuleMismatch);
+    assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Unavailable));
+}
+
+#[test]
+fn scoped_empty_prefixes_require_identity_even_without_any_host_call() {
+    let bytes = fixture(false, false);
+    let module = resolved(&bytes, "/app/replay.wasm", "release-a", false);
+    let mut bindings = imports(forbidden);
+    let recording = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+    module.instantiate_with_imports(&resolved_context(), &resolved_policy(), bindings).unwrap();
+    let transcript = recording.snapshot().unwrap();
+    assert_eq!(transcript.call_count(), 0);
+    assert_eq!(transcript.module_hash(), Some(module.resolution().module.content_hash));
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(transcript.clone(), WasmHostTraceLimits::default()).unwrap();
+    assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::ModuleMismatch));
+    module.instantiate_with_imports(&resolved_context(), &resolved_policy(), bindings).unwrap();
+    replay.verify_complete().unwrap();
+    let mut bindings = imports(forbidden);
+    bindings.replay_calls(transcript, WasmHostTraceLimits::default()).unwrap();
+    let raw = WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).unwrap();
+    assert_eq!(trace_error(raw.instantiate_with_imports(bindings).unwrap_err()), WasmHostTraceError::ModuleMismatch);
+}
+
+#[test]
+fn current_policy_denials_and_permanent_host_revocation_still_gate_scoped_replay() {
+    let module = resolved(&fixture(true, false), "/app/replay.wasm", "release-a", false);
+    let ctx = resolved_context();
+    let policy = resolved_policy();
+    let transcript = resolved_recording(&module);
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(transcript.clone(), WasmHostTraceLimits::default()).unwrap();
+    let mut instance = module.instantiate_with_imports(&ctx, &policy, bindings).unwrap();
+    let mut denied = policy.clone();
+    denied.granted_capabilities.remove(&RuntimeCapability::Builtin);
+    let denied_specifier = policy.clone().deny_specifier("/app/replay.wasm");
+    let before = instance.memory_export("m", &ctx, &policy).unwrap().unwrap().to_vec();
+    for rejected in [&denied, &denied_specifier] {
+        assert!(matches!(instance.call_export("f", &[I32(0), I32(4)], &ctx, rejected),
+            Err(WasmNativeLoadError::Resolution(error)) if error.code == ResolutionErrorCode::PolicyDenied));
+        assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Incomplete { remaining: 1 }));
+        assert_eq!(instance.memory_export("m", &ctx, &policy).unwrap().unwrap(), before);
+    }
+    // A current-policy denial neither consumes the trace nor revokes the
+    // provider-owned grant. Explicit permanent revocation is separate.
+    instance.call_export("f", &[I32(0), I32(4)], &ctx, &policy).unwrap();
+    replay.verify_complete().unwrap();
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(transcript, WasmHostTraceLimits::default()).unwrap();
+    let mut instance = module.instantiate_with_imports(&ctx, &policy, bindings).unwrap();
+    assert!(instance.revoke_host_capability(RuntimeCapability::Builtin));
+    assert!(matches!(instance.call_export("f", &[I32(0), I32(4)], &ctx, &policy),
+        Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::CapabilityDenied { .. }))))));
+    assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Incomplete { remaining: 1 }));
+}
+
+#[test]
+fn registry_updates_do_not_rebind_an_already_loaded_replay_identity() {
+    let bytes = fixture(false, false);
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    let definition = ModuleDefinition::wasm_binary(&bytes, &WasmNumericLimits::default()).unwrap()
+        .with_provenance("release-a").require_capability(RuntimeCapability::Builtin);
+    resolver.register_workspace_module("/app/replay.wasm", definition.clone()).unwrap();
+    let request = ModuleRequest::new("/app/replay.wasm", ImportStyle::Import);
+    let ctx = resolved_context();
+    let policy = resolved_policy();
+    let old = resolver.load_wasm(&request, &ctx, &policy, WasmNumericLimits::default()).unwrap();
+    let transcript = resolved_recording(&old);
+    resolver.register_workspace_module("/app/replay.wasm", definition.with_provenance("release-b")).unwrap();
+    let new = resolver.load_wasm(&request, &ctx, &policy, WasmNumericLimits::default()).unwrap();
+    let mut bindings = imports(forbidden);
+    bindings.replay_calls(transcript.clone(), WasmHostTraceLimits::default()).unwrap();
+    assert_eq!(scope_error(new.instantiate_with_imports(&ctx, &policy, bindings).unwrap_err()), WasmHostTraceError::ModuleMismatch);
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(transcript, WasmHostTraceLimits::default()).unwrap();
+    old.instantiate_with_imports(&ctx, &policy, bindings).unwrap()
+        .call_export("f", &[I32(0), I32(4)], &ctx, &policy).unwrap();
+    replay.verify_complete().unwrap();
+}
+
+#[test]
+fn aliases_share_canonical_identity_but_their_current_denials_still_apply() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver.register_workspace_module("/app/replay.wasm",
+        ModuleDefinition::wasm_binary(&fixture(false, false), &WasmNumericLimits::default()).unwrap()
+            .require_capability(RuntimeCapability::Builtin)).unwrap();
+    let ctx = resolved_context();
+    let policy = resolved_policy();
+    let direct = resolver.load_wasm(&ModuleRequest::new("/app/replay.wasm", ImportStyle::Import),
+        &ctx, &policy, WasmNumericLimits::default()).unwrap();
+    let alias = resolver.load_wasm(&ModuleRequest::new("./replay.wasm", ImportStyle::Import).with_referrer("/app/main.mjs"),
+        &ctx, &policy, WasmNumericLimits::default()).unwrap();
+    assert_eq!(direct.resolution().module.content_hash, alias.resolution().module.content_hash);
+    let transcript = resolved_recording(&direct);
+    let mut bindings = imports(forbidden);
+    let replay = bindings.replay_calls(transcript, WasmHostTraceLimits::default()).unwrap();
+    let mut instance = alias.instantiate_with_imports(&ctx, &policy, bindings).unwrap();
+    assert!(matches!(instance.call_export("f", &[I32(0), I32(4)], &ctx, &policy.clone().deny_specifier("./replay.wasm")),
+        Err(WasmNativeLoadError::Resolution(error)) if error.code == ResolutionErrorCode::PolicyDenied));
+    assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Incomplete { remaining: 1 }));
+    instance.call_export("f", &[I32(0), I32(4)], &ctx, &policy).unwrap();
+    replay.verify_complete().unwrap();
+}
+
+#[test]
+fn transcript_scope_is_explicit_versioned_and_part_of_the_content_digest() {
+    let module = resolved(&fixture(false, false), "/app/replay.wasm", "release-a", false);
+    let scoped = resolved_recording(&module);
+    let bytes = scoped.to_json(WasmHostTraceLimits::default()).unwrap();
+    for change in 0..4 {
+        let mut wire: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        match change {
+            0 => { wire["data"].as_object_mut().unwrap().remove("scope"); }
+            1 => { wire["data"]["scope"] = serde_json::json!("Unscoped"); }
+            2 => { wire["data"]["scope"] = serde_json::json!({"Resolved": vec![0_u8; 32]}); }
+            3 => { wire["data"]["version"] = serde_json::json!(1); }
+            _ => unreachable!(),
+        }
+        assert_eq!(WasmHostTranscript::from_json(&serde_json::to_vec(&wire).unwrap(), WasmHostTraceLimits::default()).unwrap_err(),
+            WasmHostTraceError::InvalidTranscript);
+    }
 }

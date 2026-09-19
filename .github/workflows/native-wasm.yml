@@ -37,4 +37,4 @@ jobs:
           cargo +stable test --locked -p frankenengine-engine --no-default-features
           --test wasm_host_imports --test wasm_host_memory
           --test wasm_resolved_host_imports --test wasm_host_replay
-          --test wasm_call_frames
+          --test wasm_call_frames --test wasm_host_cancellation

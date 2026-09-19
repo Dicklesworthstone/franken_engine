@@ -13,6 +13,7 @@
 
 use super::*;
 use crate::capability::RuntimeCapability;
+use crate::checkpoint::{CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite};
 use crate::wasm_runtime_lane::WasmFunctionSignature;
 use std::collections::BTreeSet;
 use crate::hash_tiers::ContentHash;
@@ -30,6 +31,8 @@ pub enum WasmHostError {
     MissingAuthority,
     ZeroCallCost,
     MissingMemory,
+    Cancelled,
+    CancellationAlreadyBound,
     Trace(WasmHostTraceError),
     Trap { message: String },
 }
@@ -53,6 +56,8 @@ impl fmt::Display for WasmHostError {
             Self::MissingAuthority => f.write_str("wasm host binding requires explicit capability authority"),
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
+            Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
+            Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
             Self::Trace(error) => write!(f, "{error}"),
             Self::Trap { message } => write!(f, "wasm host trap: {message}"),
         }
@@ -87,6 +92,42 @@ impl fmt::Debug for Binding {
     }
 }
 
+/// A persistent epoch observer, not a second work meter. The canonical guard
+/// remembers cancellation across token reset; the sticky bit prevents a later
+/// invocation from reusing a drained scope. We do not tick this guard: the VM
+/// meter owns instruction/work limits, and observing a signal must not build
+/// an unbounded periodic-event log inside a long-running native callback.
+#[derive(Debug)]
+struct HostCancellation {
+    guard: CheckpointGuard,
+    cancelled: bool,
+}
+
+impl HostCancellation {
+    fn new(token: CancellationToken, trace_id: impl Into<String>) -> Self {
+        let mut scope = Self {
+            guard: CheckpointGuard::new(
+                LoopSite::Custom("wasm_host".to_string()),
+                WASM_NUMERIC_VM_COMPONENT,
+                trace_id,
+                DensityConfig::default(),
+                token,
+            ),
+            cancelled: false,
+        };
+        // Capture an already-pending request before handing the scope back.
+        scope.is_cancelled();
+        scope
+    }
+
+    fn is_cancelled(&mut self) -> bool {
+        if !self.cancelled {
+            self.cancelled = self.guard.check() != CheckpointAction::Continue;
+        }
+        self.cancelled
+    }
+}
+
 /// An owned host registry and its explicit authority envelope. Instantiation
 /// consumes it, so callback state is instance-local unless the trusted provider
 /// deliberately captures shared state. The running instance can only revoke,
@@ -96,11 +137,43 @@ pub struct WasmHostImports {
     bindings: BTreeMap<String, BTreeMap<String, Binding>>,
     granted: BTreeSet<RuntimeCapability>,
     trace: host_replay::TraceMode,
+    cancellation: Option<HostCancellation>,
 }
 
 impl WasmHostImports {
     pub fn new(granted: BTreeSet<RuntimeCapability>) -> Self {
-        Self { bindings: BTreeMap::new(), granted, trace: host_replay::TraceMode::default() }
+        Self {
+            bindings: BTreeMap::new(), granted,
+            trace: host_replay::TraceMode::default(), cancellation: None,
+        }
+    }
+
+    /// Bind the canonical control-plane cancellation signal before linking.
+    /// This may be called only once: replacing a token cannot erase a request.
+    /// Cancellation is sticky for this registry and the instance that consumes
+    /// it, even if the token is reset for a different execution session.
+    ///
+    /// Checks occur before instantiation, at host dispatch, on provider
+    /// checkpoints/buffer access/work charges, and after callback return.
+    /// Native callbacks must cooperate; this does not preempt native code or
+    /// guest-only loops, and already-completed effects are not rolled back.
+    pub fn bind_cancellation(
+        &mut self,
+        token: CancellationToken,
+        trace_id: impl Into<String>,
+    ) -> Result<(), WasmHostError> {
+        if self.cancellation.is_some() {
+            return Err(WasmHostError::CancellationAlreadyBound);
+        }
+        self.cancellation = Some(HostCancellation::new(token, trace_id));
+        Ok(())
+    }
+
+    fn check_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
+        if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+            return Err(WasmHostError::Cancelled.into());
+        }
+        Ok(())
     }
 
     /// Record entered providers, including startup. The observer survives a
@@ -204,9 +277,24 @@ pub struct WasmHostCaller<'call, 'vm> {
     memory: &'call mut Option<LinearMemory>,
     failure: Option<WasmNumericVmError>,
     recording: Option<&'call mut host_replay::CallRecording>,
+    cancellation: &'call mut Option<HostCancellation>,
 }
 
 impl WasmHostCaller<'_, '_> {
+    /// Cooperatively observe cancellation without charging work or allocating
+    /// an event on every poll. A refusal is latched just like a budget/buffer
+    /// failure; ignoring it cannot resume guest execution when the callback
+    /// returns. Poll between bounded units of provider work or external I/O.
+    pub fn checkpoint(&mut self) -> Result<(), WasmNumericVmError> {
+        if let Some(error) = &self.failure { return Err(error.clone()); }
+        if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+            let error: WasmNumericVmError = WasmHostError::Cancelled.into();
+            self.failure = Some(error.clone());
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Size of the caller's memory zero, or None when the module has no memory.
     /// This neither grows memory nor exposes the underlying allocation.
     pub fn memory_size_bytes(&self) -> Option<usize> {
@@ -257,7 +345,7 @@ impl WasmHostCaller<'_, '_> {
         address: u32,
         length: usize,
     ) -> Result<std::ops::Range<usize>, WasmNumericVmError> {
-        if let Some(error) = &self.failure { return Err(error.clone()); }
+        self.checkpoint()?;
         let checked = match self.memory.as_ref() {
             Some(memory) => memory.range(address, 0, length),
             None => Err(WasmHostError::MissingMemory.into()),
@@ -278,7 +366,7 @@ impl WasmHostCaller<'_, '_> {
     }
 
     pub fn charge_work(&mut self, units: u64) -> Result<(), WasmNumericVmError> {
-        if let Some(error) = &self.failure { return Err(error.clone()); }
+        self.checkpoint()?;
         if let Err(error) = self.meter.charge_work(units) {
             self.failure = Some(error.clone());
             return Err(error);
@@ -294,8 +382,9 @@ impl WasmNumericVm {
     /// effects cannot be rolled back if a later startup instruction traps.
     pub fn instantiate_with_imports(
         &self,
-        imports: WasmHostImports,
+        mut imports: WasmHostImports,
     ) -> Result<WasmNumericInstance<'_>, WasmNumericVmError> {
+        imports.check_cancellation()?;
         imports.validate(self)?;
         self.instantiate_with_host_bindings(Some(imports))
     }
@@ -326,6 +415,7 @@ impl InstanceState {
                 function_index, module: import.module.clone(), name: import.name.clone(),
             });
         };
+        imports.check_cancellation()?;
         let signature = vm.function_type(import.type_index)?;
         validate_arguments(function_index, signature, arguments)?;
         let binding = imports.bindings.get_mut(&import.module)
@@ -363,9 +453,15 @@ impl InstanceState {
             }
             meter.charge_work(playback.call.work)?;
             for write in &playback.call.writes {
+                if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+                    return Err(WasmHostError::Cancelled.into());
+                }
                 let memory = self.memory.as_mut().ok_or(WasmHostError::MissingMemory)?;
                 let range = memory.range(write.address, 0, write.bytes.len())?;
                 memory.bytes[range].copy_from_slice(&write.bytes);
+            }
+            if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+                return Err(WasmHostError::Cancelled.into());
             }
             playback.complete()?;
             playback.call.outcome.clone()
@@ -373,12 +469,15 @@ impl InstanceState {
             let outcome = {
                 let mut caller = WasmHostCaller {
                     meter, memory: &mut self.memory, failure: None,
-                    recording: trace.recording(),
+                    recording: trace.recording(), cancellation: &mut imports.cancellation,
                 };
                 let outcome = (binding.callback)(&mut caller, arguments);
-                match caller.failure {
-                    Some(error) => Err(error),
-                    None => outcome,
+                // Finish the recording even when cancellation or a latched
+                // provider fault wins over its return value. Using `?` here
+                // would discard the entered call's completed-effect evidence.
+                match caller.checkpoint() {
+                    Ok(()) => outcome,
+                    Err(error) => Err(error),
                 }
             };
             trace.finish(meter.instructions - entry_work, &outcome)?;

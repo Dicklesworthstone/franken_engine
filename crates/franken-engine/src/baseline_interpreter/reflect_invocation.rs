@@ -182,6 +182,25 @@ impl InterpreterCore {
         })
     }
 
+    /// A native fault can depend on observations that exist only in the
+    /// callback scope (for example a secret array-like length). Materialize
+    /// its exception before restoring that scope: the outer dispatch cannot
+    /// reconstruct it from public argument aliases or a consumed result slot.
+    /// Guest throws already carry their original value. Containment failures
+    /// must remain uncatchable and must not allocate an Error object here.
+    fn seal_scoped_native_failure<T>(
+        &mut self,
+        outcome: Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        match outcome {
+            Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                self.observe_scoped_callback_result()?;
+                Err(self.scoped_native_error(&error)?)
+            }
+            other => other,
+        }
+    }
+
     pub(super) fn reflect_observe_selected_property(
         &mut self,
         object: ObjectId,
@@ -391,6 +410,7 @@ impl InterpreterCore {
         self.simple_callback_temporary_bytes = self
             .simple_callback_temporary_bytes
             .saturating_sub(reserved);
+        outcome = self.seal_scoped_native_failure(outcome);
         let context = self
             .active_inline_callback_context_label
             .take()
@@ -456,6 +476,7 @@ impl InterpreterCore {
         self.simple_callback_temporary_bytes = self
             .simple_callback_temporary_bytes
             .saturating_sub(reserved);
+        outcome = self.seal_scoped_native_failure(outcome);
         let context = self
             .active_inline_callback_context_label
             .take()

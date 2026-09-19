@@ -10,6 +10,7 @@ on:
       - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
       - 'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
+      - 'crates/franken-engine/tests/reflect_*.rs'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -19,6 +20,33 @@ permissions:
   contents: read
 
 jobs:
+  reflection:
+    name: Native reflection and confidentiality
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Execute production reflection boundaries
+        run: |
+          set -o pipefail
+          cargo +stable test --locked -p frankenengine-engine --no-default-features \
+            --test reflect_invocation_execution --test reflect_property_execution \
+            --test reflect_failure_confidentiality -- --nocapture 2>&1 | tee reflection-tests.log
+      - name: Retain reflection results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reflection-validation
+          path: reflection-tests.log
+          retention-days: 7
   core:
     runs-on: ubuntu-latest
     timeout-minutes: 25

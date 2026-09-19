@@ -34,6 +34,8 @@ pub enum WasmHostError {
     MissingAuthority,
     ZeroCallCost,
     MissingMemory,
+    /// Normal termination of this guest instance, never the embedding process.
+    ProcessExit { code: u32 },
     Cancelled,
     CancellationAlreadyBound,
     ExecutionCancelled,
@@ -62,6 +64,7 @@ impl fmt::Display for WasmHostError {
             Self::MissingAuthority => f.write_str("wasm host binding requires explicit capability authority"),
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
+            Self::ProcessExit { code } => write!(f, "wasm guest exited with status {code}"),
             Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
             Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
             Self::ExecutionCancelled => f.write_str("wasm instance execution was cancelled"),
@@ -155,6 +158,7 @@ pub struct WasmHostImports {
     cancellation: Option<HostCancellation>,
     execution_cancellation: Option<HostCancellation>,
     revocations: BTreeMap<RuntimeCapability, HostCancellation>,
+    exit_status: Option<u32>,
 }
 
 impl WasmHostImports {
@@ -164,6 +168,7 @@ impl WasmHostImports {
             trace: host_replay::TraceMode::default(), cancellation: None,
             execution_cancellation: None,
             revocations: BTreeMap::new(),
+            exit_status: None,
         }
     }
 
@@ -239,6 +244,7 @@ impl WasmHostImports {
     }
 
     fn check_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
+        check_exit(self.exit_status)?;
         check_execution_scope(&mut self.execution_cancellation)?;
         if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
             return Err(WasmHostError::Cancelled.into());
@@ -324,6 +330,21 @@ impl WasmHostImports {
     }
 }
 
+fn check_exit(status: Option<u32>) -> Result<(), WasmNumericVmError> {
+    match status {
+        Some(code) => Err(WasmHostError::ProcessExit { code }.into()),
+        None => Ok(()),
+    }
+}
+
+fn remember_exit(status: &mut Option<u32>, outcome: &Result<Vec<WasmBoundaryValue>, WasmNumericVmError>) {
+    if let Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code }))) = outcome {
+        // First terminal status wins. Recording failure cannot resurrect an
+        // instance whose provider has already terminated it.
+        status.get_or_insert(*code);
+    }
+}
+
 fn check_execution_scope(scope: &mut Option<HostCancellation>) -> Result<(), WasmNumericVmError> {
     if scope.as_mut().is_some_and(HostCancellation::is_cancelled) {
         return Err(WasmHostError::ExecutionCancelled.into());
@@ -377,9 +398,23 @@ pub struct WasmHostCaller<'call, 'vm> {
     revocations: &'call mut BTreeMap<RuntimeCapability, HostCancellation>,
     required: &'call BTreeSet<RuntimeCapability>,
     import: &'call FunctionImport,
+    exit_status: &'call mut Option<u32>,
 }
 
 impl WasmHostCaller<'_, '_> {
+    /// Terminate this guest instance and return its typed non-returning outcome.
+    /// Use `Err(caller.exit(code))` from a provider. Ignoring the returned error
+    /// cannot permit later buffer writes or resume guest instructions. An
+    /// earlier budget, memory or live-control fault still wins. This does not
+    /// preempt trusted Rust code or terminate the embedding process.
+    pub fn exit(&mut self, code: u32) -> WasmNumericVmError {
+        if let Err(error) = self.checkpoint() { return error; }
+        let code = *self.exit_status.get_or_insert(code);
+        let error: WasmNumericVmError = WasmHostError::ProcessExit { code }.into();
+        self.failure = Some(error.clone());
+        error
+    }
+
     /// Cooperatively observe cancellation and required-capability revocation
     /// without charging work or allocating an event on every poll. A refusal
     /// is latched just like a budget/buffer
@@ -484,6 +519,20 @@ impl WasmHostCaller<'_, '_> {
 }
 
 impl WasmNumericVm {
+    /// Inspect the validated numeric ABI without instantiating or running a
+    /// start function. This grants neither an import binding nor host authority.
+    pub fn export_signature(&self, name: &str) -> Result<WasmFunctionSignature, WasmNumericVmError> {
+        if let Some(kind) = self.state.export_kind(name) {
+            return Err(WasmNumericVmError::ExportIsNotFunction { name: name.into(), kind });
+        }
+        let export = self.exports.get(name)
+            .ok_or_else(|| WasmNumericVmError::UnknownExport { name: name.into() })?;
+        let signature = self.function_signature(export.function_index)?;
+        Ok(WasmFunctionSignature {
+            params: signature.params.clone(), results: signature.results.clone(),
+        })
+    }
+
     /// Link every declared function import before allocating state or running
     /// startup. Missing bindings, ABI mismatches and absent grants cannot
     /// produce host side effects. Once a valid start runs, its external host
@@ -503,6 +552,12 @@ impl WasmNumericVm {
 }
 
 impl WasmNumericInstance<'_> {
+    /// Inspect the first normal guest exit, including one followed by a trace
+    /// finalization failure. State remains inspectable but cannot execute again.
+    pub fn process_exit_status(&self) -> Option<u32> {
+        self.state.host_imports.as_ref().and_then(|imports| imports.exit_status)
+    }
+
     /// Attenuate host authority between invocations. Subsequent direct,
     /// indirect, and exported-import calls all recheck this same envelope.
     pub fn revoke_host_capability(&mut self, capability: RuntimeCapability) -> bool {
@@ -513,9 +568,11 @@ impl WasmNumericInstance<'_> {
 
 impl InstanceState {
     /// Instruction/activation polling must not turn a host-only revocation
-    /// into guest cancellation. No registry means no execution subscription.
+    /// into guest cancellation. Normal process exit is independently terminal
+    /// for all guest execution. No registry means neither kind of subscription.
     pub(in super::super) fn check_execution_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
         if let Some(imports) = self.host_imports.as_mut() {
+            check_exit(imports.exit_status)?;
             check_execution_scope(&mut imports.execution_cancellation)?;
         }
         Ok(())
@@ -589,6 +646,9 @@ impl InstanceState {
                 return Err(WasmHostError::Cancelled.into());
             }
             check_revocations(&mut imports.revocations, &binding.required, import)?;
+            // Replay skips the provider, so it must reproduce terminal state
+            // explicitly, after live authorization and effect checks succeed.
+            remember_exit(&mut imports.exit_status, &playback.call.outcome);
             playback.complete()?;
             playback.call.outcome.clone()
         } else {
@@ -598,6 +658,7 @@ impl InstanceState {
                     recording: trace.recording(), cancellation: &mut imports.cancellation,
                     execution_cancellation: &mut imports.execution_cancellation,
                     revocations: &mut imports.revocations, required: &binding.required, import,
+                    exit_status: &mut imports.exit_status,
                 };
                 let outcome = (binding.callback)(&mut caller, arguments);
                 // Finish the recording even when cancellation or a latched
@@ -608,6 +669,7 @@ impl InstanceState {
                     Err(error) => Err(error),
                 }
             };
+            remember_exit(&mut imports.exit_status, &outcome);
             trace.finish(meter.instructions - entry_work, &outcome)?;
             outcome
         };

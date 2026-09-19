@@ -1,6 +1,6 @@
 //! Explicit WASI Preview 1 providers for the native executor.
 //!
-//! The default registry supplies arguments and environment; an explicit stdio
+//! The default registry supplies arguments, environment and guest process exit; an explicit stdio
 //! factory adds bounded memory-backed streams under `wasi_snapshot_preview1`.
 //! Nothing reads the process arguments/environment,
 //! opens files, or installs clocks, entropy or sockets. This is an implemented
@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::capability::RuntimeCapability;
 use super::{WasmBoundaryValue, WasmFunctionSignature, WasmValueType};
-use super::numeric::{WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericVmError};
+use super::numeric::{WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericVm, WasmNumericVmError, WasmStateError};
 
 pub const WASI_PREVIEW1_MODULE: &str = "wasi_snapshot_preview1";
 const SUCCESS: i32 = 0;
@@ -85,7 +85,7 @@ fn limit(resource: &'static str, actual: u64, max: u64) -> Result<(), WasiPrevie
 
 impl WasiPreview1Config {
     /// Create a fresh owned registry. Bindings do not grant capabilities:
-    /// args access requires Builtin; environment access requires EnvRead;
+    /// args access and proc_exit require Builtin; environment access requires EnvRead;
     /// the shared linker also requires VmDispatch. Unused registered services
     /// do not add requirements to modules that do not import them.
     ///
@@ -131,7 +131,40 @@ impl WasiPreview1Config {
             imports.define(WASI_PREVIEW1_MODULE, get_name, signature(2), BTreeSet::from([capability]), 1,
                 move |caller, arguments| table.write_strings(caller, words(arguments)?))?;
         }
+        imports.define(WASI_PREVIEW1_MODULE, "proc_exit", WasmFunctionSignature {
+            params: vec![WasmValueType::I32], results: Vec::new(),
+        }, BTreeSet::from([RuntimeCapability::Builtin]), 1, |caller, arguments| {
+            let [code] = words(arguments)?;
+            Err(caller.exit(code))
+        })?;
         Ok(imports)
+    }
+}
+
+/// Execute one command in a fresh, private instance and return its full u32
+/// exit status. A normal return from `_start` means zero; only the typed
+/// ProcessExit outcome is translated to another status. Traps, denial, budget
+/// exhaustion and recording failures remain errors, including after exit.
+///
+/// Validate `_start: [] -> []` BEFORE linking, allocating or executing binary
+/// startup. Exit from binary startup ends the command without invoking `_start`.
+/// The instance is consumed on every path, so this API cannot rerun its entry.
+/// Keep the separate stdio/recording observers to inspect completed effects.
+/// This synchronous embedding API neither exits the host nor installs services;
+/// resolver-backed callers retain their existing policy-checked execution API.
+pub fn run_command(vm: &WasmNumericVm, imports: WasmHostImports) -> Result<u32, WasmNumericVmError> {
+    let signature = vm.export_signature("_start")?;
+    if !signature.params.is_empty() || !signature.results.is_empty() {
+        return Err(WasmNumericVmError::InvalidModule {
+            detail: "WASI command _start must have no parameters or results".into(),
+        });
+    }
+    let outcome = vm.instantiate_with_imports(imports)
+        .and_then(|mut instance| instance.call_export("_start", &[]));
+    match outcome {
+        Ok(_) => Ok(0),
+        Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code }))) => Ok(code),
+        Err(error) => Err(error),
     }
 }
 

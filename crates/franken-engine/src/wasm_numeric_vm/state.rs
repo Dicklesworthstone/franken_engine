@@ -12,6 +12,10 @@ use std::sync::Arc;
 #[path = "state/extended.rs"]
 mod extended;
 
+#[path = "state/host.rs"]
+mod host;
+pub use host::{WasmHostCaller, WasmHostError, WasmHostImports};
+
 #[cfg(test)]
 #[path = "state/data_tests.rs"]
 mod data_tests;
@@ -24,6 +28,7 @@ const MEMORY32_MAX_PAGES: u32 = 65_536;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WasmStateError {
+    Host(WasmHostError),
     LimitExceeded { resource: String, actual: u64, max: u64 },
     AllocationFailed { bytes: u64 },
     MemoryOutOfBounds { address: u64, width: u64, memory_bytes: u64 },
@@ -42,6 +47,7 @@ pub enum WasmStateError {
 impl fmt::Display for WasmStateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Host(error) => write!(f, "{error}"),
             Self::LimitExceeded { resource, actual, max } => write!(f, "wasm {resource} {actual} exceeds limit {max}"),
             Self::AllocationFailed { bytes } => write!(f, "cannot allocate {bytes} bytes of wasm instance state"),
             Self::MemoryOutOfBounds { address, width, memory_bytes } => write!(f, "wasm memory access [{address}, +{width}) exceeds {memory_bytes} bytes"),
@@ -334,7 +340,7 @@ impl ModuleState {
         }));
         // Active segments are dropped before the start function, but retain
         // their indices as empty entries. Passive segments are instance-local.
-        Ok(InstanceState { memory, globals, tables, data })
+        Ok(InstanceState { memory, globals, tables, data, host_imports: None })
     }
 }
 
@@ -347,6 +353,7 @@ pub(super) struct InstanceState {
     globals: Vec<Global>,
     tables: tables::InstanceTables,
     data: Vec<Option<Arc<[u8]>>>,
+    host_imports: Option<WasmHostImports>,
 }
 
 /// A separately instantiated module. Repeated calls share only this instance's
@@ -365,7 +372,15 @@ impl WasmNumericVm {
     /// Start execution has one configured instruction budget, shared by all its
     /// nested calls. Each later export invocation has a fresh invocation budget.
     pub fn instantiate(&self) -> Result<WasmNumericInstance<'_>, WasmNumericVmError> {
+        self.instantiate_with_host_bindings(None)
+    }
+
+    fn instantiate_with_host_bindings(
+        &self,
+        host_imports: Option<WasmHostImports>,
+    ) -> Result<WasmNumericInstance<'_>, WasmNumericVmError> {
         let mut state = self.state.instantiate(&self.limits)?;
+        state.host_imports = host_imports;
         let start_execution = if let Some(start) = self.state.start {
             let mut meter = ExecutionMeter::new(&self.limits);
             let results = self.invoke(start, &[], 1, &mut meter, &mut state)?;

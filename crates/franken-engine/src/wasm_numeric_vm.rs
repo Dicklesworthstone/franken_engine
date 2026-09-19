@@ -8,7 +8,8 @@
 //! validated before publication. Instance-owned linear memory and active data
 //! segments, numeric globals and funcref tables execute through the bounded
 //! state module. Indirect calls check the selected function's complete numeric
-//! signature. SIMD, atomics and imported-function execution remain unsupported.
+//! signature. Explicit typed host bindings can be supplied by the embedder;
+//! the default API has no host authority. SIMD and atomics remain unsupported.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,7 +22,7 @@ use crate::wasm_runtime_lane::{WasmBoundaryValue, WasmValueType};
 mod control;
 #[path = "wasm_numeric_vm/state.rs"]
 mod state;
-pub use state::{WasmNumericInstance, WasmStateError};
+pub use state::{WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericInstance, WasmStateError};
 
 pub const WASM_NUMERIC_VM_COMPONENT: &str = "wasm_numeric_vm";
 pub const WASM_NUMERIC_VM_SCHEMA_VERSION: &str = "franken-engine.wasm-numeric-vm.v1";
@@ -338,12 +339,7 @@ impl WasmNumericVm {
     ) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError> {
         meter.enter_call(depth)?;
         if function_index < self.imports.len() as u32 {
-            let import = &self.imports[function_index as usize];
-            return Err(WasmNumericVmError::ImportedFunctionUnsupported {
-                function_index,
-                module: import.module.clone(),
-                name: import.name.clone(),
-            });
+            return state.invoke_import(self, function_index, arguments, meter);
         }
         let local_index = function_index
             .checked_sub(self.imports.len() as u32)

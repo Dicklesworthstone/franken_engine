@@ -12,7 +12,8 @@
 //! charged by the native instruction meter need their own resource limits.
 //! Pool creation is a trusted host operation; pools are intentionally not
 //! serializable. Existing raw interpreter entry points remain per-execution
-//! APIs. Use `BudgetedInterpreter` for every execution in a shared workload.
+//! APIs. Use `BudgetedInterpreter` or a single-use `ExecutionAdmission` for
+//! every execution in a shared workload.
 
 use std::fmt;
 use std::sync::Arc;
@@ -22,6 +23,9 @@ use crate::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, InterpreterHook,
 };
 use crate::ir_contract::Ir3Module;
+
+mod scheduling;
+pub use scheduling::ExecutionAdmission;
 
 #[derive(Debug)]
 struct WorkPoolState {
@@ -58,7 +62,7 @@ impl ExecutionWorkPool {
         self.state.remaining.load(Ordering::Acquire)
     }
 
-    /// Reserved instruction allowance, not an actual execution count.
+    /// Reserved or delegated allowance, not an actual execution count.
     pub fn committed(&self) -> u64 {
         self.limit() - self.remaining()
     }
@@ -221,7 +225,7 @@ mod tests {
     use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
     use std::sync::Barrier;
 
-    fn module(source: &str) -> Ir3Module {
+    pub(super) fn module(source: &str) -> Ir3Module {
         let tree = CanonicalEs2020Parser
             .parse(source, ParseGoal::Script)
             .expect("work-budget source must parse");
@@ -233,7 +237,7 @@ mod tests {
         .ir3
     }
 
-    fn config(budget: u64) -> InterpreterConfig {
+    pub(super) fn config(budget: u64) -> InterpreterConfig {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.instruction_budget = budget;
         config.granted_capabilities.extend([
@@ -243,7 +247,7 @@ mod tests {
         config
     }
 
-    fn interpreter(pool: &ExecutionWorkPool, budget: u64) -> BudgetedInterpreter {
+    pub(super) fn interpreter(pool: &ExecutionWorkPool, budget: u64) -> BudgetedInterpreter {
         BudgetedInterpreter::new(pool.clone(), config(budget), "work-budget").unwrap()
     }
 
@@ -449,7 +453,7 @@ mod tests {
         assert_eq!(pool.remaining(), 0);
     }
 
-    struct PanickingHook;
+    pub(super) struct PanickingHook;
 
     impl InterpreterHook for PanickingHook {
         fn pre_property_access(

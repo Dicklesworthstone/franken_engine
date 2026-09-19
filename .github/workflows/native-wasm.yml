@@ -9,6 +9,9 @@ on:
       - 'crates/franken-engine/src/wasm_runtime_lane*'
       - 'crates/franken-engine/src/wasm_runtime_lane/**'
       - 'crates/franken-engine/tests/wasm_*.rs'
+      - 'crates/franken-core/src/execution_work_budget*'
+      - 'crates/franken-core/src/execution_work_budget/**'
+      - 'crates/franken-core/tests/execution_work_budget_errors.rs'
       - 'crates/franken-engine/tests/fixtures/wasi_descriptor_smoke.*'
       - 'crates/franken-engine/tests/fixtures/wasi_file_smoke.*'
       - 'crates/franken-engine/tests/fixtures/wasi_random_smoke.*'
@@ -59,3 +62,7 @@ jobs:
           --test wasm_pool_revocation
           --test wasm_wasi_sources
           --test wasm_wasi_clocks
+      - name: Verify typed core execution failures
+        run: >-
+          cargo +stable test --locked -p frankenengine-core --no-default-features
+          --test execution_work_budget_errors

@@ -114,6 +114,11 @@ impl fmt::Display for WorkBudgetError {
     }
 }
 
+// The native error already owns its diagnostics and implements Debug/Display.
+// Make the existing typed cause usable through std::error::Error rather than
+// erasing it, dropping the source chain, or weakening execution admission.
+impl std::error::Error for InterpreterError {}
+
 impl std::error::Error for WorkBudgetError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {

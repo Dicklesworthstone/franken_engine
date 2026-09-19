@@ -2,7 +2,7 @@
 //!
 //! Decode the full u32 LEB subopcode in validation and execution. In particular,
 //! a non-canonical (but valid) LEB must not be confused with a new instruction.
-//! Bulk operations validate all ranges and charge work before modifying memory.
+//! Bulk operations validate all ranges and charge work before modifying instance state.
 
 use super::*;
 
@@ -32,6 +32,8 @@ enum Instruction {
     Saturating { subopcode: u32, input: WasmValueType, output: WasmValueType },
     MemoryCopy,
     MemoryFill,
+    TableCopy { destination: u32, source: u32 },
+    TableSize { table: u32 },
 }
 
 fn memory_zero(reader: &mut CodeReader<'_>, function: u32) -> Result<(), WasmNumericVmError> {
@@ -59,6 +61,11 @@ fn decode(reader: &mut CodeReader<'_>, function: u32) -> Result<Instruction, Was
             memory_zero(reader, function)?;
             Ok(Instruction::MemoryFill)
         }
+        14 => Ok(Instruction::TableCopy {
+            destination: reader.read_u32_leb(function)?,
+            source: reader.read_u32_leb(function)?,
+        }),
+        16 => Ok(Instruction::TableSize { table: reader.read_u32_leb(function)? }),
         _ => Err(unsupported(function, offset)),
     }
 }
@@ -73,6 +80,15 @@ pub(super) fn validate(
             pop: [Some(input), None, None],
             push: Some(output),
         }),
+        Instruction::TableCopy { destination, source } => {
+            state.validate_table(destination)?;
+            state.validate_table(source)?;
+            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+        }
+        Instruction::TableSize { table } => {
+            state.validate_table(table)?;
+            Ok(StackEffect { pop: [None; 3], push: Some(WasmValueType::I32) })
+        }
         Instruction::MemoryCopy | Instruction::MemoryFill => {
             if state.memory.is_none() {
                 return Err(invalid("bulk memory instruction requires memory zero"));
@@ -122,9 +138,16 @@ pub(super) fn execute(
     if let Instruction::Saturating { subopcode, input, .. } = instruction {
         return saturate(subopcode, input, stack, meter, function);
     }
+    if let Instruction::TableSize { table } = instruction {
+        let size = state.tables.size(table)?;
+        return push_value(stack, WasmBoundaryValue::I32(size as i32), meter);
+    }
     let length = expect_i32(pop_value(stack, function, PREFIX)?, function, 2)? as u32;
     let source_or_byte = expect_i32(pop_value(stack, function, PREFIX)?, function, 1)? as u32;
     let destination = expect_i32(pop_value(stack, function, PREFIX)?, function, 0)? as u32;
+    if let Instruction::TableCopy { destination: to, source: from } = instruction {
+        return state.tables.copy(to, from, destination, source_or_byte, length, meter);
+    }
     let memory = state.memory.as_mut().ok_or_else(|| invalid("missing validated memory"))?;
     let destination_range = memory.range(destination, 0, length as usize)?;
     match instruction {
@@ -140,7 +163,7 @@ pub(super) fn execute(
             meter.charge_work(u64::from(length).div_ceil(64))?;
             memory.bytes[destination_range].fill(source_or_byte as u8);
         }
-        Instruction::Saturating { .. } => return Err(invalid("invalid bulk memory dispatch")),
+        _ => return Err(invalid("invalid bulk memory dispatch")),
     }
     Ok(())
 }

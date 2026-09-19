@@ -3,8 +3,9 @@
 //! Active element segments accept function-index vectors and ref.func/ref.null
 //! constant expressions. No host table or callable is synthesized. All function
 //! references are validated before module publication; bounds are checked at
-//! instantiation, before any instance can escape. Passive segments, table
-//! mutation instructions, typed references, and imported tables remain refused.
+//! instantiation, before any instance can escape. Bulk copies are bounded and
+//! metered before mutation. Passive segments, reference-valued instructions,
+//! typed references, and imported tables remain refused.
 
 use super::*;
 
@@ -195,6 +196,46 @@ impl InstanceTables {
         self.tables.get(table as usize).map(Vec::as_slice)
     }
 
+    pub(super) fn size(&self, table_index: u32) -> Result<u32, WasmNumericVmError> {
+        self.tables.get(table_index as usize).map(|table| table.len() as u32)
+            .ok_or_else(|| WasmStateError::UnknownTable { table_index }.into())
+    }
+
+    fn range(&self, table_index: u32, offset: u32, length: u32) -> Result<std::ops::Range<usize>, WasmNumericVmError> {
+        let size = self.size(table_index)?;
+        let end = u64::from(offset) + u64::from(length);
+        if end > u64::from(size) {
+            // Report the first invalid element, including a zero-length range
+            // starting beyond the end. The addition must never wrap at 2^32.
+            return Err(WasmStateError::TableElementOutOfBounds {
+                table_index, element_index: offset.max(size), table_size: size,
+            }.into());
+        }
+        Ok(offset as usize..end as usize)
+    }
+
+    pub(super) fn copy(
+        &mut self, destination_table: u32, source_table: u32,
+        destination: u32, source: u32, length: u32, meter: &mut ExecutionMeter<'_>,
+    ) -> Result<(), WasmNumericVmError> {
+        let destination_range = self.range(destination_table, destination, length)?;
+        let source_range = self.range(source_table, source, length)?;
+        // One unit per reference, independent of the host's Option layout.
+        // Both bounds and the entire charge precede the first changed slot.
+        // No temporary vector or new callable authority is introduced.
+        meter.charge_work(u64::from(length))?;
+        if destination_table == source_table {
+            self.tables[destination_table as usize].copy_within(source_range, destination_range.start);
+        } else if destination_table < source_table {
+            let (before, after) = self.tables.split_at_mut(source_table as usize);
+            before[destination_table as usize][destination_range].copy_from_slice(&after[0][source_range]);
+        } else {
+            let (before, after) = self.tables.split_at_mut(destination_table as usize);
+            after[0][destination_range].copy_from_slice(&before[source_table as usize][source_range]);
+        }
+        Ok(())
+    }
+
     pub(super) fn resolve(&self, vm: &WasmNumericVm, type_index: u32, table_index: u32, element_index: u32, meter: &mut ExecutionMeter<'_>) -> Result<u32, WasmNumericVmError> {
         let expected = vm.function_type(type_index)?;
         let table = self.tables.get(table_index as usize)
@@ -215,3 +256,7 @@ impl InstanceTables {
         Ok(callee)
     }
 }
+
+#[cfg(test)]
+#[path = "tables/tests.rs"]
+mod tests;

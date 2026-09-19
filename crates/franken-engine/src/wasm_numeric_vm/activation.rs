@@ -240,9 +240,9 @@ fn resume(
 /// One cooperative slice. Subtraction avoids overflow near u64::MAX and never
 /// turns a depleted *invocation* budget into an endlessly yielding continuation.
 #[derive(Clone, Copy)]
-struct Slice {
-    start: u64,
-    work: NonZeroU64,
+pub(super) struct Slice {
+    pub(super) start: u64,
+    pub(super) work: NonZeroU64,
 }
 
 impl Slice {
@@ -251,20 +251,20 @@ impl Slice {
     }
 }
 
-struct Machine<'vm, 'args> {
+pub(super) struct Machine<'vm, 'args> {
     frames: Vec<Activation<'vm>>,
     pending: Option<(u32, Cow<'args, [WasmBoundaryValue]>)>,
     depth: u32,
 }
 
 impl<'vm, 'args> Machine<'vm, 'args> {
-    fn new(function: u32, arguments: Cow<'args, [WasmBoundaryValue]>, depth: u32) -> Self {
+    pub(super) fn new(function: u32, arguments: Cow<'args, [WasmBoundaryValue]>, depth: u32) -> Self {
         Self { frames: Vec::new(), pending: Some((function, arguments)), depth }
     }
 
     /// None means a suspension BEFORE the next opcode or pending callee.
     /// All stack/label accounting stays in place until this invocation ends.
-    fn run(
+    pub(super) fn run(
         &mut self,
         vm: &'vm WasmNumericVm,
         meter: &mut ExecutionMeter<'_>,

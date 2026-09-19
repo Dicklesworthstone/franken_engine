@@ -11,6 +11,9 @@
 //! resource, IFC and replay contracts. This API does not install ambient I/O,
 //! claim deterministic host behavior, or grant JavaScript hostcall authority.
 
+#[path = "cooperative.rs"]
+mod cooperative;
+
 use super::*;
 use crate::capability::RuntimeCapability;
 use crate::checkpoint::{CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite};

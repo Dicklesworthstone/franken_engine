@@ -40,3 +40,4 @@ jobs:
           --test wasm_call_frames --test wasm_host_cancellation
           --test wasm_execution_cancellation
           --test wasm_cooperative_calls --test wasm_native_scheduler
+          --test wasm_cooperative_startup

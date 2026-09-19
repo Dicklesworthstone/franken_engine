@@ -33,6 +33,7 @@ pub enum WasmHostError {
     MissingMemory,
     Cancelled,
     CancellationAlreadyBound,
+    CapabilityRevocationAlreadyBound { capability: RuntimeCapability },
     Trace(WasmHostTraceError),
     Trap { message: String },
 }
@@ -58,6 +59,9 @@ impl fmt::Display for WasmHostError {
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
             Self::Cancelled => f.write_str("wasm host execution scope was cancelled"),
             Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
+            Self::CapabilityRevocationAlreadyBound { capability } => {
+                write!(f, "wasm host revocation signal is already bound for {capability}")
+            }
             Self::Trace(error) => write!(f, "{error}"),
             Self::Trap { message } => write!(f, "wasm host trap: {message}"),
         }
@@ -138,6 +142,7 @@ pub struct WasmHostImports {
     granted: BTreeSet<RuntimeCapability>,
     trace: host_replay::TraceMode,
     cancellation: Option<HostCancellation>,
+    revocations: BTreeMap<RuntimeCapability, HostCancellation>,
 }
 
 impl WasmHostImports {
@@ -145,6 +150,7 @@ impl WasmHostImports {
         Self {
             bindings: BTreeMap::new(), granted,
             trace: host_replay::TraceMode::default(), cancellation: None,
+            revocations: BTreeMap::new(),
         }
     }
 
@@ -166,6 +172,29 @@ impl WasmHostImports {
             return Err(WasmHostError::CancellationAlreadyBound);
         }
         self.cancellation = Some(HostCancellation::new(token, trace_id));
+        Ok(())
+    }
+
+    /// Bind a live, permanent revocation signal for one service capability.
+    /// This never grants the capability. A revoked service stops only bindings
+    /// that require it; unrelated host functions remain usable. VmDispatch is
+    /// required by every binding and therefore revokes all host dispatch.
+    ///
+    /// Like whole-scope cancellation, requests survive reset and are checked
+    /// before linking, at dispatch, at provider checkpoints and after return.
+    /// A signal cannot be replaced, even before the registry is instantiated.
+    /// The map is bounded by the canonical RuntimeCapability enum, not by guest
+    /// function count or caller-supplied string identities.
+    pub fn bind_capability_revocation(
+        &mut self,
+        capability: RuntimeCapability,
+        token: CancellationToken,
+        trace_id: impl Into<String>,
+    ) -> Result<(), WasmHostError> {
+        if self.revocations.contains_key(&capability) {
+            return Err(WasmHostError::CapabilityRevocationAlreadyBound { capability });
+        }
+        self.revocations.insert(capability, HostCancellation::new(token, trace_id));
         Ok(())
     }
 
@@ -233,7 +262,7 @@ impl WasmHostImports {
         Ok(())
     }
 
-    fn validate(&self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
+    fn validate(&mut self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
         self.trace.validate_module_scope()?;
         for import in &vm.imports {
             let binding = self.bindings.get(&import.module)
@@ -248,6 +277,7 @@ impl WasmHostImports {
                 }.into());
             }
             check_authority(&self.granted, binding, import)?;
+            check_revocations(&mut self.revocations, &binding.required, import)?;
         }
         Ok(())
     }
@@ -266,6 +296,23 @@ fn check_authority(
     Ok(())
 }
 
+fn check_revocations(
+    revocations: &mut BTreeMap<RuntimeCapability, HostCancellation>,
+    required: &BTreeSet<RuntimeCapability>,
+    import: &FunctionImport,
+) -> Result<(), WasmNumericVmError> {
+    for capability in required {
+        if revocations.get_mut(capability).is_some_and(HostCancellation::is_cancelled) {
+            return Err(WasmHostError::CapabilityDenied {
+                module: import.module.clone(),
+                name: import.name.clone(),
+                capability: *capability,
+            }.into());
+        }
+    }
+    Ok(())
+}
+
 /// Scoped access to the same budget as the enclosing Wasm invocation. A
 /// provider cannot erase a refusal by ignoring the returned Result: failures
 /// are latched and take precedence when the callback returns.
@@ -278,17 +325,25 @@ pub struct WasmHostCaller<'call, 'vm> {
     failure: Option<WasmNumericVmError>,
     recording: Option<&'call mut host_replay::CallRecording>,
     cancellation: &'call mut Option<HostCancellation>,
+    revocations: &'call mut BTreeMap<RuntimeCapability, HostCancellation>,
+    required: &'call BTreeSet<RuntimeCapability>,
+    import: &'call FunctionImport,
 }
 
 impl WasmHostCaller<'_, '_> {
-    /// Cooperatively observe cancellation without charging work or allocating
-    /// an event on every poll. A refusal is latched just like a budget/buffer
+    /// Cooperatively observe cancellation and required-capability revocation
+    /// without charging work or allocating an event on every poll. A refusal
+    /// is latched just like a budget/buffer
     /// failure; ignoring it cannot resume guest execution when the callback
     /// returns. Poll between bounded units of provider work or external I/O.
     pub fn checkpoint(&mut self) -> Result<(), WasmNumericVmError> {
         if let Some(error) = &self.failure { return Err(error.clone()); }
         if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
             let error: WasmNumericVmError = WasmHostError::Cancelled.into();
+            self.failure = Some(error.clone());
+            return Err(error);
+        }
+        if let Err(error) = check_revocations(self.revocations, self.required, self.import) {
             self.failure = Some(error.clone());
             return Err(error);
         }
@@ -424,6 +479,7 @@ impl InstanceState {
                 module: import.module.clone(), name: import.name.clone(),
             })?;
         check_authority(&imports.granted, binding, import)?;
+        check_revocations(&mut imports.revocations, &binding.required, import)?;
         // Precharge ABI checking as well as the provider's declared fixed cost.
         // Overflow is a refusal, never a wrapped/saturated cheap host call.
         let abi_work = (signature.params.len().saturating_add(signature.results.len()) as u64).div_ceil(64);
@@ -456,6 +512,7 @@ impl InstanceState {
                 if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
                     return Err(WasmHostError::Cancelled.into());
                 }
+                check_revocations(&mut imports.revocations, &binding.required, import)?;
                 let memory = self.memory.as_mut().ok_or(WasmHostError::MissingMemory)?;
                 let range = memory.range(write.address, 0, write.bytes.len())?;
                 memory.bytes[range].copy_from_slice(&write.bytes);
@@ -463,6 +520,7 @@ impl InstanceState {
             if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
                 return Err(WasmHostError::Cancelled.into());
             }
+            check_revocations(&mut imports.revocations, &binding.required, import)?;
             playback.complete()?;
             playback.call.outcome.clone()
         } else {
@@ -470,6 +528,7 @@ impl InstanceState {
                 let mut caller = WasmHostCaller {
                     meter, memory: &mut self.memory, failure: None,
                     recording: trace.recording(), cancellation: &mut imports.cancellation,
+                    revocations: &mut imports.revocations, required: &binding.required, import,
                 };
                 let outcome = (binding.callback)(&mut caller, arguments);
                 // Finish the recording even when cancellation or a latched

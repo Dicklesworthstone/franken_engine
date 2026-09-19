@@ -413,3 +413,254 @@ fn a_live_cancellation_cannot_be_bypassed_with_a_successful_replay_tape() {
     assert_eq!(&replayed.memory_export("m").unwrap()[..8], &[0; 8]);
     assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Incomplete { remaining: 1 }));
 }
+
+fn two_services() -> WasmNumericVm {
+    let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+    section(&mut bytes, 1, &[1, 0x60, 1, 0x7f, 1, 0x7f]);
+    let mut imported = vec![2];
+    let mut exported = vec![2];
+    for (index, name) in ["read", "compute"].into_iter().enumerate() {
+        imported.extend([3, b'e', b'n', b'v']);
+        imported.extend(leb(name.len()));
+        imported.extend_from_slice(name.as_bytes());
+        imported.extend([0, 0]);
+        exported.extend(leb(name.len()));
+        exported.extend_from_slice(name.as_bytes());
+        exported.extend([0, index as u8]);
+    }
+    section(&mut bytes, 2, &imported);
+    section(&mut bytes, 7, &exported);
+    WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).unwrap()
+}
+
+fn service_imports(granted: BTreeSet<RuntimeCapability>) -> WasmHostImports {
+    let mut imports = WasmHostImports::new(granted);
+    for (name, capability) in [("read", RuntimeCapability::FsRead), ("compute", RuntimeCapability::Builtin)] {
+        imports.define("env", name, WasmFunctionSignature {
+            params: vec![WasmValueType::I32], results: vec![WasmValueType::I32],
+        }, [capability].into(), 3, add).unwrap();
+    }
+    imports
+}
+
+fn service_grants() -> BTreeSet<RuntimeCapability> {
+    [RuntimeCapability::VmDispatch, RuntimeCapability::FsRead, RuntimeCapability::Builtin].into()
+}
+
+fn revoked(error: WasmNumericVmError, capability: RuntimeCapability, name: &str) {
+    assert_eq!(error, WasmNumericVmError::State(WasmStateError::Host(WasmHostError::CapabilityDenied {
+        module: "env".to_string(), name: name.to_string(), capability,
+    })));
+}
+
+#[test]
+fn service_revocation_blocks_only_the_bindings_that_require_it() {
+    let vm = two_services();
+    let signal = CancellationToken::new();
+    let mut imports = service_imports(service_grants());
+    imports.bind_capability_revocation(RuntimeCapability::FsRead, signal.clone(), "read-authority").unwrap();
+    let mut instance = vm.instantiate_with_imports(imports).unwrap();
+    assert_eq!(instance.call_export("read", &[I32(2)]).unwrap().results, [I32(42)]);
+    signal.cancel();
+    signal.reset();
+    revoked(instance.call_export("read", &[I32(3)]).unwrap_err(), RuntimeCapability::FsRead, "read");
+    assert_eq!(instance.call_export("compute", &[I32(4)]).unwrap().results, [I32(44)]);
+    revoked(instance.call_export("read", &[I32(5)]).unwrap_err(), RuntimeCapability::FsRead, "read");
+    assert_eq!(instance.call_export("compute", &[I32(6)]).unwrap().results, [I32(46)]);
+}
+
+#[test]
+fn vm_dispatch_revocation_covers_all_host_services() {
+    let vm = two_services();
+    let signal = CancellationToken::new();
+    let mut imports = service_imports(service_grants());
+    imports.bind_capability_revocation(RuntimeCapability::VmDispatch, signal.clone(), "host-dispatch").unwrap();
+    let mut instance = vm.instantiate_with_imports(imports).unwrap();
+    signal.cancel();
+    for name in ["read", "compute"] {
+        revoked(instance.call_export(name, &[I32(2)]).unwrap_err(), RuntimeCapability::VmDispatch, name);
+    }
+}
+
+#[test]
+fn an_already_revoked_required_service_prevents_linking_before_startup() {
+    let vm = vm(true);
+    let signal = CancellationToken::new();
+    let mut imports = imports(&CancellationToken::new(), |_, _| panic!("revoked startup callback"));
+    signal.cancel();
+    imports.bind_capability_revocation(RuntimeCapability::Builtin, signal.clone(), "builtin-authority").unwrap();
+    signal.reset();
+    revoked(vm.instantiate_with_imports(imports).unwrap_err(), RuntimeCapability::Builtin, "step");
+}
+
+#[test]
+fn an_unused_revocation_signal_neither_grants_nor_blocks_other_services() {
+    let vm = two_services();
+    let signal = CancellationToken::new();
+    signal.cancel();
+    let mut imports = service_imports(service_grants());
+    imports.bind_capability_revocation(RuntimeCapability::NetworkEgress, signal, "unused-network").unwrap();
+    let mut instance = vm.instantiate_with_imports(imports).unwrap();
+    assert_eq!(instance.call_export("read", &[I32(2)]).unwrap().results, [I32(42)]);
+    assert_eq!(instance.call_export("compute", &[I32(3)]).unwrap().results, [I32(43)]);
+}
+
+#[test]
+fn binding_a_signal_cannot_grant_an_absent_capability_or_replace_an_old_signal() {
+    let vm = two_services();
+    let signal = CancellationToken::new();
+    let mut imports = service_imports(grants()); // FsRead was never granted.
+    imports.bind_capability_revocation(RuntimeCapability::FsRead, signal.clone(), "missing-grant").unwrap();
+    revoked(vm.instantiate_with_imports(imports).unwrap_err(), RuntimeCapability::FsRead, "read");
+
+    let mut imports = service_imports(service_grants());
+    imports.bind_capability_revocation(RuntimeCapability::FsRead, signal.clone(), "original").unwrap();
+    assert_eq!(imports.bind_capability_revocation(RuntimeCapability::FsRead, CancellationToken::new(), "replacement"),
+        Err(WasmHostError::CapabilityRevocationAlreadyBound { capability: RuntimeCapability::FsRead }));
+    signal.cancel();
+    signal.reset();
+    revoked(vm.instantiate_with_imports(imports).unwrap_err(), RuntimeCapability::FsRead, "read");
+}
+
+#[test]
+fn in_callback_service_revocation_latches_buffer_and_result_refusal() {
+    let vm = vm(false);
+    let signal = CancellationToken::new();
+    let callback_signal = signal.clone();
+    let mut imports = imports(&CancellationToken::new(), move |caller, _| {
+        caller.write_memory(0, &[10, 20, 30, 40])?;
+        callback_signal.cancel();
+        callback_signal.reset();
+        revoked(caller.write_memory(0, &[99; 4]).unwrap_err(), RuntimeCapability::Builtin, "step");
+        revoked(caller.read_memory(8, 3).unwrap_err(), RuntimeCapability::Builtin, "step");
+        revoked(caller.charge_work(0).unwrap_err(), RuntimeCapability::Builtin, "step");
+        Ok(vec![I32(99)]) // Deliberate error swallowing must not resume the guest.
+    });
+    imports.bind_capability_revocation(RuntimeCapability::Builtin, signal, "live-builtin").unwrap();
+    let mut instance = vm.instantiate_with_imports(imports).unwrap();
+    revoked(instance.call_export("direct", &[I32(1)]).unwrap_err(), RuntimeCapability::Builtin, "step");
+    assert_eq!(&instance.memory_export("m").unwrap()[..8], &[10, 20, 30, 40, 0, 0, 0, 0]);
+    revoked(instance.call_export("indirect", &[I32(1)]).unwrap_err(), RuntimeCapability::Builtin, "step");
+}
+
+#[test]
+fn post_callback_service_revocation_is_checked_even_without_a_provider_poll() {
+    let vm = vm(false);
+    let signal = CancellationToken::new();
+    let callback_signal = signal.clone();
+    let mut imports = imports(&CancellationToken::new(), move |_, _| {
+        callback_signal.cancel();
+        callback_signal.reset();
+        Ok(vec![I32(99)])
+    });
+    imports.bind_capability_revocation(RuntimeCapability::Builtin, signal, "live-builtin").unwrap();
+    let mut instance = vm.instantiate_with_imports(imports).unwrap();
+    revoked(instance.call_export("direct", &[I32(1)]).unwrap_err(), RuntimeCapability::Builtin, "step");
+    assert_eq!(&instance.memory_export("m").unwrap()[4..8], &[0; 4]);
+}
+
+#[test]
+fn shared_service_revocation_reaches_every_existing_instance_after_reset() {
+    let vm = two_services();
+    let signal = CancellationToken::new();
+    let build_imports = || {
+        let mut imports = service_imports(service_grants());
+        imports.bind_capability_revocation(RuntimeCapability::FsRead, signal.clone(), "shared-read").unwrap();
+        imports
+    };
+    let mut a = vm.instantiate_with_imports(build_imports()).unwrap();
+    let mut b = vm.instantiate_with_imports(build_imports()).unwrap();
+    signal.cancel();
+    signal.reset();
+    for instance in [&mut a, &mut b] {
+        revoked(instance.call_export("read", &[I32(2)]).unwrap_err(), RuntimeCapability::FsRead, "read");
+        assert_eq!(instance.call_export("compute", &[I32(2)]).unwrap().results, [I32(42)]);
+    }
+    // A new authorized scope after reset is independent of the drained ones.
+    let mut fresh = vm.instantiate_with_imports(build_imports()).unwrap();
+    assert_eq!(fresh.call_export("read", &[I32(2)]).unwrap().results, [I32(42)]);
+    revoked(a.call_export("read", &[I32(2)]).unwrap_err(), RuntimeCapability::FsRead, "read");
+}
+
+#[test]
+fn every_required_capability_is_observed_at_provider_checkpoints() {
+    for capability in [RuntimeCapability::Builtin, RuntimeCapability::FsRead] {
+        let vm = vm(false);
+        let signal = CancellationToken::new();
+        let callback_signal = signal.clone();
+        let mut imports = WasmHostImports::new(service_grants());
+        imports.define("env", "step", WasmFunctionSignature {
+            params: vec![WasmValueType::I32], results: vec![WasmValueType::I32],
+        }, [RuntimeCapability::Builtin, RuntimeCapability::FsRead].into(), 3, move |caller, _| {
+            callback_signal.cancel();
+            revoked(caller.checkpoint().unwrap_err(), capability, "step");
+            Ok(vec![I32(99)])
+        }).unwrap();
+        imports.bind_capability_revocation(capability, signal, "multi-capability").unwrap();
+        let mut instance = vm.instantiate_with_imports(imports).unwrap();
+        revoked(instance.call_export("direct", &[I32(1)]).unwrap_err(), capability, "step");
+        assert_eq!(&instance.memory_export("m").unwrap()[4..8], &[0; 4]);
+    }
+}
+
+#[test]
+fn whole_scope_cancellation_still_covers_services_without_revocation_subscriptions() {
+    let vm = two_services();
+    let whole_scope = CancellationToken::new();
+    let read_scope = CancellationToken::new();
+    let mut imports = service_imports(service_grants());
+    imports.bind_cancellation(whole_scope.clone(), "whole-scope").unwrap();
+    imports.bind_capability_revocation(RuntimeCapability::FsRead, read_scope.clone(), "read-only").unwrap();
+    let mut instance = vm.instantiate_with_imports(imports).unwrap();
+    read_scope.cancel();
+    revoked(instance.call_export("read", &[I32(1)]).unwrap_err(), RuntimeCapability::FsRead, "read");
+    assert_eq!(instance.call_export("compute", &[I32(2)]).unwrap().results, [I32(42)]);
+    whole_scope.cancel();
+    cancelled(instance.call_export("compute", &[I32(2)]).unwrap_err());
+    cancelled(instance.call_export("read", &[I32(2)]).unwrap_err());
+}
+
+#[test]
+fn a_successful_tape_cannot_regrant_a_live_revoked_service() {
+    use frankenengine_engine::wasm_runtime_lane::host_replay::{WasmHostTraceError, WasmHostTraceLimits};
+    let vm = two_services();
+    let mut bindings = service_imports(service_grants());
+    let recording = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+    vm.instantiate_with_imports(bindings).unwrap().call_export("read", &[I32(2)]).unwrap();
+    let signal = CancellationToken::new();
+    let mut bindings = service_imports(service_grants());
+    bindings.bind_capability_revocation(RuntimeCapability::FsRead, signal.clone(), "read-replay").unwrap();
+    let replay = bindings.replay_calls(recording.snapshot().unwrap(), WasmHostTraceLimits::default()).unwrap();
+    let mut replayed = vm.instantiate_with_imports(bindings).unwrap();
+    signal.cancel();
+    signal.reset();
+    revoked(replayed.call_export("read", &[I32(2)]).unwrap_err(), RuntimeCapability::FsRead, "read");
+    assert_eq!(replay.verify_complete(), Err(WasmHostTraceError::Incomplete { remaining: 1 }));
+}
+
+#[test]
+fn service_revocation_on_return_retains_a_replayable_effect_record() {
+    use frankenengine_engine::wasm_runtime_lane::host_replay::WasmHostTraceLimits;
+    let vm = vm(false);
+    let signal = CancellationToken::new();
+    let provider_signal = signal.clone();
+    let mut bindings = imports(&CancellationToken::new(), move |caller, _| {
+        caller.write_memory(0, &[4, 3, 2, 1])?;
+        provider_signal.cancel();
+        provider_signal.reset();
+        Ok(vec![I32(99)])
+    });
+    bindings.bind_capability_revocation(RuntimeCapability::Builtin, signal, "record-builtin").unwrap();
+    let recording = bindings.record_calls(WasmHostTraceLimits::default()).unwrap();
+    let mut live = vm.instantiate_with_imports(bindings).unwrap();
+    let expected = live.call_export("host", &[I32(2)]).unwrap_err();
+    revoked(expected.clone(), RuntimeCapability::Builtin, "step");
+    let tape = recording.snapshot().unwrap();
+    assert_eq!(tape.call_count(), 1);
+    let mut bindings = imports(&CancellationToken::new(), |_, _| panic!("replay invoked provider"));
+    let replay = bindings.replay_calls(tape, WasmHostTraceLimits::default()).unwrap();
+    let mut replayed = vm.instantiate_with_imports(bindings).unwrap();
+    assert_eq!(replayed.call_export("host", &[I32(2)]).unwrap_err(), expected);
+    assert_eq!(replayed.memory_export("m"), live.memory_export("m"));
+    replay.verify_complete().unwrap();
+}

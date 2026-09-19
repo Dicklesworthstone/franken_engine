@@ -39,3 +39,7 @@ pub mod host_replay;
 
 #[path = "wasm_runtime_lane/scheduler.rs"]
 pub mod scheduler;
+
+/// Explicit, bounded Preview 1 providers; no process environment or ambient I/O.
+#[path = "wasm_runtime_lane/wasi_preview1.rs"]
+pub mod wasi_preview1;

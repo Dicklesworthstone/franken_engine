@@ -9,6 +9,7 @@ on:
       - 'crates/franken-engine/src/wasm_runtime_lane*'
       - 'crates/franken-engine/src/wasm_runtime_lane/**'
       - 'crates/franken-engine/tests/wasm_*.rs'
+      - 'crates/franken-engine/tests/fixtures/wasi_descriptor_smoke.*'
       - 'Cargo.lock'
       - '.github/workflows/native-wasm.yml'
   workflow_dispatch:
@@ -48,3 +49,4 @@ jobs:
           --test wasm_wasi_command_runner
           --test wasm_resolved_commands
           --test wasm_scheduled_command
+          --test wasm_wasi_descriptors

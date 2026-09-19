@@ -10,6 +10,9 @@
 use super::*;
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
+#[path = "stdio/descriptors.rs"]
+mod descriptors;
+
 const AGAIN: i32 = 6;
 const BADF: i32 = 8;
 const INVAL: i32 = 28;
@@ -57,6 +60,7 @@ impl std::error::Error for WasiStdioAccessError {}
 
 #[derive(Debug)]
 struct Streams {
+    descriptors: descriptors::Table,
     input: Vec<u8>,
     consumed: usize,
     output: WasiCapturedOutput,
@@ -89,13 +93,16 @@ impl WasiStdio {
 
 impl WasiPreview1Config {
     /// Add fd_read for explicit stdin (fd 0) and fd_write for captured stdout
-    /// and stderr (fds 1 and 2). This installs no file/path operations, preopens,
+    /// and stderr (fds 1 and 2), with descriptor inspection, rights attenuation,
+    /// close and renumber. Numbers can change without changing stream identity.
+    /// This installs no file/path operations or preopens,
     /// clocks or random sources. proc_exit remains guest-only; it never exits
     /// the host process or touches process stdio.
     ///
     /// fd_read requires FsRead; fd_write requires Console; neither is granted
     /// by configuration. Resolver-backed modules must also declare the required
-    /// capabilities. Builtin is needed for imported args/proc_exit functions;
+    /// capabilities. Builtin is needed for imported descriptor-management and
+    /// args/proc_exit functions; metadata rights never grant Console or FsRead.
     /// EnvRead is needed only for environment access. All use the host gate.
     pub fn into_imports_with_stdio(
         self,
@@ -107,6 +114,7 @@ impl WasiPreview1Config {
         let mut imports = self.into_imports(granted)?;
         let observer = WasiStdio {
             streams: Arc::new(Mutex::new(Streams {
+                descriptors: descriptors::Table::new(),
                 input: stdin, consumed: 0, output: WasiCapturedOutput::default(), emitted: 0,
             })),
         };
@@ -128,6 +136,7 @@ impl WasiPreview1Config {
                     }
                 })?;
         }
+        descriptors::install(&mut imports, &observer.streams)?;
         Ok((imports, observer))
     }
 }
@@ -186,9 +195,9 @@ fn write_output(
     streams: &Mutex<Streams>,
     limits: &WasiStdioLimits,
 ) -> IoResult<()> {
-    if !matches!(fd, 1 | 2) { return Err(IoFailure::Errno(BADF)); }
-    let plan = prepare(caller, table, count, result, limits)?;
     let mut streams = access(streams)?;
+    let stream = streams.descriptors.writable(fd)?;
+    let plan = prepare(caller, table, count, result, limits)?;
     let next = streams.emitted.checked_add(plan.length as usize)
         .filter(|n| *n <= limits.max_output_bytes).ok_or(IoFailure::Errno(NOSPC))?;
     let native_copy = u64::from(plan.length).div_ceil(64) * 2;
@@ -197,7 +206,9 @@ fn write_output(
     caller.charge_work(native_copy)?;
     let mut staged = Vec::new();
     staged.try_reserve_exact(plan.length as usize).map_err(|_| IoFailure::Errno(NOMEM))?;
-    let output = if fd == 1 { &mut streams.output.stdout } else { &mut streams.output.stderr };
+    let output = if stream == descriptors::Stream::Output {
+        &mut streams.output.stdout
+    } else { &mut streams.output.stderr };
     output.try_reserve_exact(plan.length as usize).map_err(|_| IoFailure::Errno(NOMEM))?;
     for (address, width) in plan.buffers {
         staged.extend_from_slice(caller.read_memory(address, width)?);
@@ -218,9 +229,9 @@ fn read_stdin(
     streams: &Mutex<Streams>,
     limits: &WasiStdioLimits,
 ) -> IoResult<()> {
-    if fd != 0 { return Err(IoFailure::Errno(BADF)); }
-    let plan = prepare(caller, table, count, result, limits)?;
     let mut streams = access(streams)?;
+    streams.descriptors.readable(fd)?;
+    let plan = prepare(caller, table, count, result, limits)?;
     let actual = (plan.length as usize).min(streams.input.len() - streams.consumed);
     let mut remaining = actual;
     let mut work = 1_u64; // final nread write, including EOF

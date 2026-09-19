@@ -19,6 +19,7 @@ use crate::capability::RuntimeCapability;
 use crate::checkpoint::{CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite};
 use crate::wasm_runtime_lane::WasmFunctionSignature;
 use crate::wasm_runtime_lane::memory_pool::{MemoryReservation, WasmMemoryPool};
+use crate::wasm_runtime_lane::work_pool::{WasmWorkPool, WasmWorkPoolExhausted};
 use std::collections::BTreeSet;
 use crate::hash_tiers::ContentHash;
 use crate::wasm_runtime_lane::host_replay::{
@@ -39,6 +40,8 @@ pub enum WasmHostError {
     MemoryPoolRevoked,
     MemoryPoolDepthExceeded { max: usize },
     MemoryPoolExhausted { requested_pages: u64, available_pages: u64 },
+    WorkPoolAlreadyBound,
+    WorkPool(WasmWorkPoolExhausted),
     /// A prior native callback unwound without completing its host boundary.
     HostCallInterrupted,
     /// Normal termination of this guest instance, never the embedding process.
@@ -72,6 +75,8 @@ impl fmt::Display for WasmHostError {
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
             Self::MemoryPoolAlreadyBound => f.write_str("wasm memory pool is already bound"),
+            Self::WorkPoolAlreadyBound => f.write_str("wasm work pool is already bound"),
+            Self::WorkPool(error) => write!(f, "{error}"),
             Self::MemoryPoolRevoked => f.write_str("wasm memory pool execution scope was revoked"),
             Self::MemoryPoolDepthExceeded { max } => write!(f, "wasm memory pool nesting exceeds {max}"),
             Self::MemoryPoolExhausted { requested_pages, available_pages } => {
@@ -181,6 +186,7 @@ pub struct WasmHostImports {
     // InstanceState drops its linear memory before its owned host registry.
     // Keep this lease until that memory and all provider state have been freed.
     memory_reservation: Option<MemoryReservation>,
+    work_pool: Option<WasmWorkPool>,
 }
 
 impl WasmHostImports {
@@ -194,6 +200,7 @@ impl WasmHostImports {
             host_call_in_progress: false,
             memory_pool: None,
             memory_reservation: None,
+            work_pool: None,
         }
     }
 
@@ -221,6 +228,23 @@ impl WasmHostImports {
     pub fn bind_memory_pool(&mut self, pool: WasmMemoryPool) -> Result<(), WasmHostError> {
         if self.memory_pool.is_some() { return Err(WasmHostError::MemoryPoolAlreadyBound); }
         self.memory_pool = Some(pool);
+        Ok(())
+    }
+
+    /// Bind a non-refillable work allotment across this instance's startup and
+    /// every later invocation. Clone one pool into all registries in the intended
+    /// scope to bound their aggregate metered execution, including hostless code.
+    /// Binding and preparation are free; every accepted runtime charge spends
+    /// both this pool and the original per-invocation meter before its effects.
+    /// No trap, cancellation, panic, yield, exit or destruction refunds work.
+    ///
+    /// Binding cannot be replaced, grants no capability, and does not preempt
+    /// unmetered trusted Rust. Parsing and initial state allocation remain outside
+    /// guest work accounting. Replay must pay its own CURRENT pool; a transcript
+    /// cannot restore a recorded balance or widen the live caller's authority.
+    pub fn bind_work_pool(&mut self, pool: WasmWorkPool) -> Result<(), WasmHostError> {
+        if self.work_pool.is_some() { return Err(WasmHostError::WorkPoolAlreadyBound); }
+        self.work_pool = Some(pool);
         Ok(())
     }
 
@@ -594,8 +618,11 @@ impl WasmHostCaller<'_, '_> {
         Ok(range)
     }
 
+    /// Current upper bound, not a reservation against other instances. A
+    /// provider must still charge before work; the actual debit is atomic.
     pub fn remaining_work(&self) -> u64 {
-        self.meter.limits.max_instructions.saturating_sub(self.meter.instructions)
+        let local = self.meter.limits.max_instructions.saturating_sub(self.meter.instructions);
+        self.meter.work_pool.as_ref().map_or(local, |pool| local.min(pool.remaining()))
     }
 
     pub fn charge_work(&mut self, units: u64) -> Result<(), WasmNumericVmError> {
@@ -659,6 +686,13 @@ impl WasmNumericInstance<'_> {
 }
 
 impl InstanceState {
+    /// Every execution route enters the same activation machine. Attach the
+    /// instance's original quota before frame setup, host dispatch or opcodes;
+    /// a fresh invocation meter or resumed slice never creates a fresh balance.
+    pub(in super::super) fn attach_work_pool(&self, meter: &mut ExecutionMeter<'_>) {
+        meter.work_pool = self.host_imports.as_ref().and_then(|imports| imports.work_pool.clone());
+    }
+
     /// Instruction/activation polling must not turn a host-only revocation
     /// into guest cancellation. Normal process exit is independently terminal
     /// for all guest execution. No registry means neither kind of subscription.

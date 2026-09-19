@@ -271,6 +271,7 @@ impl<'vm, 'args> Machine<'vm, 'args> {
         state: &mut state::InstanceState,
         slice: Option<Slice>,
     ) -> Result<Option<Vec<WasmBoundaryValue>>, WasmNumericVmError> {
+        state.attach_work_pool(meter);
         loop {
             state.check_execution_cancellation()?;
             if slice.is_some_and(|slice| slice.exhausted(meter)) { return Ok(None); }

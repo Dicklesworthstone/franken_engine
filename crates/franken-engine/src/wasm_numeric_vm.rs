@@ -839,6 +839,9 @@ struct ExecutionMeter<'a> {
     max_call_depth: u32,
     // All live locals plus operand prefixes belonging to suspended callers.
     live_value_base: usize,
+    // Attached from the instance before Machine admits any activation or host.
+    // This is not copied into serialized limits or replay-granted authority.
+    work_pool: Option<crate::wasm_runtime_lane::work_pool::WasmWorkPool>,
 }
 
 impl<'a> ExecutionMeter<'a> {
@@ -849,6 +852,7 @@ impl<'a> ExecutionMeter<'a> {
             peak_stack_values: 0,
             max_call_depth: 0,
             live_value_base: 0,
+            work_pool: None,
         }
     }
 
@@ -862,6 +866,12 @@ impl<'a> ExecutionMeter<'a> {
             .ok_or(WasmNumericVmError::InstructionBudgetExceeded {
                 max: self.limits.max_instructions,
             })?;
+        // Check local overflow/exhaustion first. Neither a local refusal nor a
+        // failed atomic shared charge debits the other counter. Both precharges
+        // complete before the caller can perform the corresponding work/effect.
+        if let Some(pool) = &self.work_pool {
+            pool.charge(units).map_err(WasmHostError::WorkPool)?;
+        }
         self.instructions = next;
         Ok(())
     }

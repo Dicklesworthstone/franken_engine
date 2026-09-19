@@ -49,5 +49,9 @@ pub mod wasi_preview1;
 #[path = "wasm_runtime_lane/memory_pool.rs"]
 pub mod memory_pool;
 
+/// Non-refillable shared execution quotas; no ambient work or host authority.
+#[path = "wasm_runtime_lane/work_pool.rs"]
+pub mod work_pool;
+
 #[path = "wasm_runtime_lane/command.rs"]
 pub mod command;

@@ -370,9 +370,26 @@ impl AsyncModuleScheduler {
         promise: PromiseHandle,
     ) -> Result<(), AsyncModuleSchedulerError> {
         self.validate_in_flight(task)?;
+        let already_fulfilled = self
+            .bridge
+            .promise_store()
+            .get(promise)
+            .is_ok_and(|record| record.state.is_fulfilled());
+        if already_fulfilled {
+            // The live lease becomes one queued continuation. Reserve its
+            // slot before recording a suspension or revoking that lease, so a
+            // full queue leaves the original operation entirely retryable.
+            // Batch admission cannot be used while this task is in flight.
+            self.ensure_ready_capacity(1)?;
+        }
         self.bridge
             .suspend_module_on_promise(&task.module_specifier, promise)?;
         self.in_flight.remove(&task.module_specifier);
+        if already_fulfilled {
+            // Never execute a fulfilled await inline or reuse its old lease.
+            // Enqueue after existing work and charge the normal dispatch budget.
+            self.enqueue(&task.module_specifier, ModuleTaskKind::Resume)?;
+        }
         Ok(())
     }
 
@@ -696,6 +713,14 @@ impl AsyncModuleScheduler {
                 module_specifier: task.module_specifier.clone(),
                 expected: current.kind,
                 actual: task.kind,
+            });
+        }
+        if current.sequence != task.sequence {
+            return Err(AsyncModuleSchedulerError::Bridge {
+                detail: format!(
+                    "module {} task sequence mismatch: expected {}, got {}",
+                    task.module_specifier, current.sequence, task.sequence
+                ),
             });
         }
         Ok(())
@@ -1199,5 +1224,24 @@ mod tests {
             assert_eq!(task.kind, ModuleTaskKind::Resume);
         }
         assert!(scheduler.next_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn forged_sequence_cannot_mutate_a_live_task() {
+        let mut scheduler = AsyncModuleScheduler::default();
+        scheduler.register_module("app", true, &[]).unwrap();
+        let task = scheduler.next_task().unwrap().unwrap();
+        let promise = scheduler.create_pending_promise();
+        let mut forged = task.clone();
+        forged.sequence += 1;
+        let before = observable_state(&scheduler);
+        let events = scheduler.bridge().evaluator().witness_events().to_vec();
+        assert!(scheduler.complete_task(&forged, JsValue::Int(999), public()).is_err());
+        assert!(scheduler.reject_task(&forged, JsValue::Int(999), public()).is_err());
+        assert!(scheduler.suspend_task(&forged, promise).is_err());
+        assert_eq!(observable_state(&scheduler), before);
+        assert_eq!(scheduler.bridge().evaluator().witness_events(), events.as_slice());
+        assert_eq!(scheduler.in_flight_task("app"), Some(&task));
+        scheduler.complete_task(&task, JsValue::Int(42), Label::Secret).unwrap();
     }
 }

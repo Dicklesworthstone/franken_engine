@@ -323,7 +323,8 @@ impl AsyncModulePromiseBridge {
             .get(promise)
             .map_err(|error| self.promise_error(specifier, promise, error))?
             .state;
-        if !matches!(promise_state, PromiseState::Pending) {
+        let already_fulfilled = matches!(promise_state, PromiseState::Fulfilled(_));
+        if matches!(promise_state, PromiseState::Rejected(_)) {
             return Err(AsyncModulePromiseBridgeError::AwaitPromiseNotPending {
                 promise,
                 status: ModulePromiseStatus::from_state(promise_state),
@@ -332,12 +333,23 @@ impl AsyncModulePromiseBridge {
         self.evaluator
             .suspend_at_top_level_await(specifier, promise)
             .map_err(|error| self.module_error(specifier, error))?;
-        self.active_awaits_by_module
-            .insert(specifier.to_string(), promise);
-        self.awaiters_by_promise
-            .entry(promise)
-            .or_default()
-            .insert(specifier.to_string());
+        if already_fulfilled {
+            // A settled Promise will not notify waiters again. Record the same
+            // suspension/resumption history as the pending path, but retain no
+            // dead await edge and do not settle the module's evaluation Promise.
+            // The scheduler issues a separate Resume lease before guest code
+            // can consume the authoritative Promise value and IFC label.
+            self.evaluator
+                .resume_evaluation(specifier)
+                .map_err(|error| self.module_error(specifier, error))?;
+        } else {
+            self.active_awaits_by_module
+                .insert(specifier.to_string(), promise);
+            self.awaiters_by_promise
+                .entry(promise)
+                .or_default()
+                .insert(specifier.to_string());
+        }
         Ok(())
     }
 

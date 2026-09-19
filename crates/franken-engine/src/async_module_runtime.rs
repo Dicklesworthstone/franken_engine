@@ -43,10 +43,17 @@ pub struct ModuleAwaitInput {
     pub label: Label,
 }
 
-#[derive(Debug)]
 pub struct AsyncModuleRuntime {
     scheduler: AsyncModuleScheduler,
     metadata: AsyncModuleRuntimeMetadata,
+}
+
+impl std::fmt::Debug for AsyncModuleRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AsyncModuleRuntime")
+            .field("snapshot", &self.snapshot())
+            .finish_non_exhaustive()
+    }
 }
 
 impl AsyncModuleRuntime {

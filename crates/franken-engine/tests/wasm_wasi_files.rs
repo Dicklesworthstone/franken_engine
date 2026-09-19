@@ -36,6 +36,7 @@ fn binary() -> Vec<u8> {
         ("fd_close", &[0x7f]), ("fd_renumber", &[0x7f;2]),
         ("fd_fdstat_set_rights", &[0x7f,0x7e,0x7e]), ("fd_fdstat_set_flags", &[0x7f;2]),
         ("fd_prestat_get", &[0x7f;2]), ("fd_prestat_dir_name", &[0x7f;3]), ("fd_write", &[0x7f;4]),
+        ("fd_readdir", &[0x7f,0x7f,0x7f,0x7e,0x7f]),
     ];
     let mut out = b"\0asm\x01\0\0\0".to_vec();
     let mut types = leb(functions.len() + 1);
@@ -317,4 +318,150 @@ fn resolver_manifest_must_authorize_files_even_with_broader_provider_grants() {
             assert!(matches!(result,Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::CapabilityDenied { capability:FsRead,.. }))))));
         }
     }
+}
+
+fn listing(instance: &mut WasmNumericInstance<'_>, fd: u32, length: u32, cookie: u64) -> Vec<u8> {
+    assert_eq!(errno(instance,"fd_readdir",&[I32(fd as i32),I32(4096),I32(length as i32),I64(cookie as i64),I32(32)]),0);
+    let used=u32_at(instance,32) as usize;
+    instance.memory_export("memory").unwrap()[4096..4096+used].to_vec()
+}
+fn decode_entries(bytes: &[u8]) -> Vec<(u64,u64,String,u8)> {
+    let mut entries=Vec::new(); let mut at=0;
+    while at<bytes.len() {
+        assert!(bytes.len()-at>=24);
+        let next=u64::from_le_bytes(bytes[at..at+8].try_into().unwrap());
+        let inode=u64::from_le_bytes(bytes[at+8..at+16].try_into().unwrap());
+        let length=u32::from_le_bytes(bytes[at+16..at+20].try_into().unwrap()) as usize;
+        assert_eq!(&bytes[at+21..at+24],&[0;3]);
+        let name=std::str::from_utf8(&bytes[at+24..at+24+length]).unwrap().to_owned();
+        entries.push((next,inode,name,bytes[at+20])); at+=24+length;
+    }
+    entries
+}
+
+#[test]
+fn directory_entries_are_complete_sorted_and_deterministic_with_stable_cookies() {
+    let vm=vm(); let mut instance=vm.instantiate_with_imports(registry(files())).unwrap();
+    put(&mut instance,4096,&[0xaa;1024]);
+    let bytes=listing(&mut instance,3,1024,0); let entries=decode_entries(&bytes);
+    assert_eq!(entries.iter().map(|entry|entry.2.as_str()).collect::<Vec<_>>(),[".","..","alpha.txt","bulk","dir","empty","é.txt"]);
+    for (index,entry) in entries.iter().enumerate() { assert_eq!(entry.0,index as u64+1); }
+    assert_eq!(entries[0].1,entries[1].1); assert_eq!(entries[4].3,3); assert_eq!(entries[2].3,4);
+    assert_eq!(listing(&mut instance,3,1024,0),bytes);
+    assert!(listing(&mut instance,3,1024,entries.len() as u64).is_empty());
+}
+
+#[test]
+fn short_readdir_buffers_return_exact_prefixes_and_can_retry_the_same_cookie() {
+    let vm=vm(); let mut instance=vm.instantiate_with_imports(registry(files())).unwrap();
+    let full=listing(&mut instance,3,1024,0);
+    for length in [0,1,7,23,24,25,26,50,64] {
+        assert_eq!(listing(&mut instance,3,length,0),full[..length as usize]);
+    }
+    let dot=listing(&mut instance,3,25,0); assert_eq!(decode_entries(&dot)[0].2,".");
+    let remainder=listing(&mut instance,3,1024,1); assert_eq!(remainder,full[25..]);
+}
+
+#[test]
+fn directory_handles_remain_anchored_after_renumber_and_root_close() {
+    let vm=vm(); let mut instance=vm.instantiate_with_imports(registry(files())).unwrap();
+    let rights=DIRECTORY|(1<<14);
+    assert_eq!(open_at(&mut instance,3,b"dir",rights,FILE,2,64),0); let dir=u32_at(&instance,64);
+    let expected=listing(&mut instance,dir,1024,0);
+    assert_eq!(errno(&mut instance,"fd_renumber",&[I32(dir as i32),I32(-1)]),0);
+    assert_eq!(errno(&mut instance,"fd_close",&[I32(3)]),0);
+    assert_eq!(listing(&mut instance,u32::MAX,1024,0),expected);
+    assert_eq!(open_at(&mut instance,u32::MAX,b"../alpha.txt",FILE,0,0,64),76);
+    assert_eq!(open_at(&mut instance,u32::MAX,b"beta.bin",FILE,0,0,64),0);
+    let fd=u32_at(&instance,64); assert_eq!(read(&mut instance,fd,8),[0,128,255,7]);
+}
+
+#[test]
+fn directory_enumeration_cannot_restore_removed_rights_or_read_regular_files() {
+    let vm=vm(); let mut instance=vm.instantiate_with_imports(registry(files())).unwrap();
+    let fd=open(&mut instance,b"alpha.txt");
+    assert_eq!(errno(&mut instance,"fd_readdir",&[I32(fd as i32),I32(4096),I32(100),I64(0),I32(32)]),54);
+    assert_eq!(errno(&mut instance,"fd_fdstat_set_rights",&[I32(3),I64(DIRECTORY as i64),I64(FILE as i64)]),0);
+    assert_eq!(errno(&mut instance,"fd_readdir",&[I32(3),I32(4096),I32(100),I64(0),I32(32)]),76);
+    assert_eq!(errno(&mut instance,"fd_fdstat_set_rights",&[I32(3),I64((DIRECTORY|(1<<14)) as i64),I64(FILE as i64)]),76);
+}
+
+#[test]
+fn invalid_cookie_ranges_and_transfer_limits_do_not_publish_directory_bytes() {
+    let vm=vm(); let mut instance=vm.instantiate_with_imports(registry(files())).unwrap();
+    put(&mut instance,32,&0xdead_beef_u32.to_le_bytes());
+    for args in [vec![I32(3),I32(4096),I32(100),I64(-1),I32(32)],vec![I32(3),I32(65530),I32(20),I64(0),I32(32)],
+        vec![I32(3),I32(4096),I32(65537),I64(0),I32(32)],vec![I32(3),I32(4096),I32(100),I64(0),I32(65534)]] {
+        assert_ne!(errno(&mut instance,"fd_readdir",&args),0);
+        assert_eq!(u32_at(&instance,32),0xdead_beef); assert_eq!(&instance.memory_export("memory").unwrap()[4096..4196],&[0;100]);
+    }
+}
+
+#[test]
+fn readdir_precharges_output_work_before_any_payload_or_count_write() {
+    let vm=WasmNumericVm::parse(&binary(),WasmNumericLimits { max_instructions:50, ..WasmNumericLimits::default() }).unwrap();
+    let mut config=files(); config.max_open_descriptors=4;
+    let mut instance=vm.instantiate_with_imports(registry(config)).unwrap();
+    put(&mut instance,32,&0xdead_beef_u32.to_le_bytes());
+    assert!(matches!(instance.call_export("fd_readdir",&[I32(3),I32(4096),I32(4096),I64(0),I32(32)]),Err(WasmNumericVmError::InstructionBudgetExceeded { max:50 })));
+    assert_eq!(u32_at(&instance,32),0xdead_beef); assert_eq!(&instance.memory_export("memory").unwrap()[4096..4352],&[0;256]);
+}
+
+#[test]
+fn overlapping_directory_count_is_written_after_the_snapshotted_payload() {
+    let vm=vm(); let mut instance=vm.instantiate_with_imports(registry(files())).unwrap();
+    let expected=listing(&mut instance,3,1024,0);
+    assert_eq!(errno(&mut instance,"fd_readdir",&[I32(3),I32(4096),I32(1024),I64(0),I32(4096)]),0);
+    assert_eq!(u32_at(&instance,4096),expected.len() as u32);
+    assert_eq!(&instance.memory_export("memory").unwrap()[4100..4096+expected.len()],&expected[4..]);
+}
+
+#[test]
+fn immutable_directory_replay_restores_the_historical_listing() {
+    let vm=vm(); let limits=WasmHostTraceLimits::default(); let mut imports=registry(files());
+    let record=imports.record_calls(limits).unwrap(); let mut a=vm.instantiate_with_imports(imports).unwrap();
+    let expected=listing(&mut a,3,1024,0);
+    let mut config=files(); config.files.clear(); let mut imports=registry(config);
+    let replay=imports.replay_calls(record.snapshot().unwrap(),limits).unwrap();
+    let mut b=vm.instantiate_with_imports(imports).unwrap(); assert_eq!(listing(&mut b,3,1024,0),expected);
+    replay.verify_complete().unwrap();
+}
+
+fn compiled_input() -> Vec<u8> { (0..1000).map(|index| index as u8).collect() }
+fn compiled_registry(payload: Vec<u8>) -> (WasmHostImports, frankenengine_engine::wasm_runtime_lane::wasi_preview1::WasiStdio) {
+    let files=WasiReadOnlyFiles {
+        files:BTreeMap::from([("nested/input.bin".into(),payload)]),
+        max_open_descriptors:8, ..WasiReadOnlyFiles::default()
+    };
+    WasiPreview1Config::default().into_imports_with_read_only_files(grants(),vec![],WasiStdioLimits::default(),files).unwrap()
+}
+
+#[test]
+fn clang_compiled_guest_discovers_opens_seeks_and_copies_an_entire_input_file() {
+    use frankenengine_engine::wasm_runtime_lane::wasi_preview1::run_command;
+    let bytes=include_bytes!("fixtures/wasi_file_smoke.wasm");
+    let vm=WasmNumericVm::parse(bytes,WasmNumericLimits::default()).unwrap();
+    let (imports,output)=compiled_registry(compiled_input());
+    assert_eq!(run_command(&vm,imports).unwrap(),0);
+    let captured=output.take_output().unwrap();
+    assert_eq!(captured.stdout,compiled_input());
+    assert!(captured.stderr.is_empty());
+}
+
+#[test]
+fn compiled_file_command_replay_preserves_results_without_recapturing_output() {
+    use frankenengine_engine::wasm_runtime_lane::wasi_preview1::run_command;
+    let vm=WasmNumericVm::parse(include_bytes!("fixtures/wasi_file_smoke.wasm"),WasmNumericLimits::default()).unwrap();
+    let limits=WasmHostTraceLimits::default();
+    let (mut imports,output)=compiled_registry(compiled_input());
+    let recording=imports.record_calls(limits).unwrap();
+    assert_eq!(run_command(&vm,imports).unwrap(),0);
+    let transcript=recording.snapshot().unwrap();
+    assert_eq!(transcript.call_count(),19);
+    assert_eq!(output.take_output().unwrap().stdout,compiled_input());
+    let (mut imports,replayed_output)=compiled_registry(b"different live file".to_vec());
+    let replay=imports.replay_calls(transcript,limits).unwrap();
+    assert_eq!(run_command(&vm,imports).unwrap(),0);
+    replay.verify_complete().unwrap();
+    assert!(replayed_output.take_output().unwrap().stdout.is_empty());
 }

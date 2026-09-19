@@ -10,6 +10,7 @@ on:
       - 'crates/franken-engine/src/wasm_runtime_lane/**'
       - 'crates/franken-engine/tests/wasm_*.rs'
       - 'crates/franken-engine/tests/fixtures/wasi_descriptor_smoke.*'
+      - 'crates/franken-engine/tests/fixtures/wasi_file_smoke.*'
       - 'Cargo.lock'
       - '.github/workflows/native-wasm.yml'
   workflow_dispatch:

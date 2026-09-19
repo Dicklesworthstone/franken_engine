@@ -16,10 +16,11 @@ const SET_FLAGS: u64 = 1 << 3;
 const TELL: u64 = 1 << 5;
 const WRITE: u64 = 1 << 6;
 pub(super) const PATH_OPEN: u64 = 1 << 13;
+pub(super) const READDIR: u64 = 1 << 14;
 pub(super) const PATH_FILESTAT: u64 = 1 << 18;
 pub(super) const FILESTAT: u64 = 1 << 21;
 pub(super) const FILE_RIGHTS: u64 = READ | SEEK | TELL | SET_FLAGS | FILESTAT;
-pub(super) const DIRECTORY_RIGHTS: u64 = PATH_OPEN | PATH_FILESTAT | FILESTAT;
+pub(super) const DIRECTORY_RIGHTS: u64 = PATH_OPEN | PATH_FILESTAT | FILESTAT | READDIR;
 const NONBLOCK: u16 = 4;
 const CHARACTER_DEVICE: u8 = 2;
 

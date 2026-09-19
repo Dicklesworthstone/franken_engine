@@ -162,7 +162,7 @@ impl WasiPreview1Config {
 }
 
 #[derive(Clone, Copy)]
-enum Operation { Open, Stat, Pread }
+enum Operation { Open, Stat, Pread, Readdir }
 
 pub(super) fn install(
     imports: &mut WasmHostImports,
@@ -174,6 +174,7 @@ pub(super) fn install(
         ("path_open", vec![I32, I32, I32, I32, I32, I64, I64, I32, I32], Operation::Open),
         ("path_filestat_get", vec![I32; 5], Operation::Stat),
         ("fd_pread", vec![I32, I32, I32, I64, I32], Operation::Pread),
+        ("fd_readdir", vec![I32, I32, I32, I64, I32], Operation::Readdir),
     ] {
         let streams = Arc::clone(streams);
         let limits = limits.clone();
@@ -190,6 +191,9 @@ fn execute(operation: Operation, caller: &mut WasmHostCaller<'_, '_>, args: &[Wa
     streams: &Mutex<Streams>, limits: &WasiStdioLimits) -> IoResult<()> {
     use WasmBoundaryValue::{I32, I64};
     caller.checkpoint()?;
+    if matches!(operation, Operation::Readdir) {
+        return readdir(caller, args, streams, limits);
+    }
     if matches!(operation, Operation::Pread) {
         let [I32(fd), I32(table), I32(count), I64(offset), I32(result)] = args else {
             return Err(IoFailure::Vm(WasmHostError::trap("invalid WASI pread ABI").into()));
@@ -206,7 +210,7 @@ fn execute(operation: Operation, caller: &mut WasmHostCaller<'_, '_>, args: &[Wa
             (*fd as u32, *flags as u32, *address as u32, *length as u32, *out as u32)
         }
         Operation::Stat => { let [fd, flags, address, length, out] = words(args)?; (fd, flags, address, length, out) }
-        Operation::Pread => unreachable!("handled before locking"),
+        Operation::Pread | Operation::Readdir => unreachable!("handled before locking"),
     };
     if flags & !1 != 0 { return Err(IoFailure::Errno(INVAL)); }
     let directory = streams.descriptors.get(fd)?;
@@ -245,5 +249,58 @@ fn execute(operation: Operation, caller: &mut WasmHostCaller<'_, '_>, args: &[Wa
     descriptor.inheriting = inheriting;
     descriptor.flags = fdflags as u16;
     streams.descriptors.insert(slot, number, descriptor);
+    Ok(())
+}
+
+/// Immutable directories have stable ordinal cookies: dot, dot-dot, then
+/// UTF-8 byte-ordered children. No hidden enumeration cursor or host inode is
+/// retained. A caller can retry a truncated entry with its previous cookie.
+fn readdir(caller: &mut WasmHostCaller<'_, '_>, args: &[WasmBoundaryValue],
+    streams: &Mutex<Streams>, limits: &WasiStdioLimits) -> IoResult<()> {
+    use WasmBoundaryValue::{I32, I64};
+    let [I32(fd), I32(address), I32(length), I64(cookie), I32(result)] = args else {
+        return Err(IoFailure::Vm(WasmHostError::trap("invalid WASI readdir ABI").into()));
+    };
+    let (address, length, result, cookie) = (*address as u32, *length as u32, *result as u32, *cookie as u64);
+    let streams = access(streams)?;
+    streams.descriptors.charge(caller)?;
+    let descriptor = streams.descriptors.get(*fd as u32)?;
+    let Stream::Directory(index) = descriptor.stream else { return Err(IoFailure::Errno(NOTDIR)); };
+    require_right(descriptor, descriptors::READDIR)?;
+    if length > limits.max_transfer_bytes { return Err(IoFailure::Errno(NOBUFS)); }
+    if !valid_range(caller, address, u64::from(length)) || !valid_range(caller, result, 4) {
+        return Err(IoFailure::Errno(FAULT));
+    }
+    let fs = streams.files.as_ref().ok_or(IoFailure::Errno(BADF))?;
+    let directory = &fs.nodes[index];
+    let count = directory.children.len() as u64 + 2;
+    if cookie > count { return Err(IoFailure::Errno(INVAL)); }
+    // Precharge traversal and bounded staging, then reserve known output work
+    // before the first write. Limits apply to requested staging capacity, not
+    // just whichever prefix happens to fit this time. No complete-tree copy.
+    let copy_work = u64::from(length).div_ceil(64);
+    let compute = count + copy_work;
+    require_work(caller, compute + copy_work + 1)?;
+    caller.charge_work(compute)?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(length as usize).map_err(|_| IoFailure::Errno(NOMEM))?;
+    let entries = std::iter::once((".", index)).chain(std::iter::once(("..", directory.parent)))
+        .chain(directory.children.values().map(|child| (fs.nodes[*child].name.as_str(), *child)));
+    for (ordinal, (name, node)) in entries.enumerate().skip(cookie as usize) {
+        if output.len() == length as usize { break; }
+        let mut header = [0_u8; 24];
+        header[..8].copy_from_slice(&(ordinal as u64 + 1).to_le_bytes());
+        header[8..16].copy_from_slice(&(node as u64 + 4).to_le_bytes());
+        header[16..20].copy_from_slice(&(name.len() as u32).to_le_bytes());
+        header[20] = descriptors::file_type(fs.object(node));
+        for part in [header.as_slice(), name.as_bytes()] {
+            let take = part.len().min(length as usize - output.len());
+            output.extend_from_slice(&part[..take]);
+        }
+    }
+    // The result pointer may alias an entry: snapshot all output first and
+    // publish the byte count last, like the other WASI scatter/gather providers.
+    caller.write_memory(address, &output)?;
+    caller.write_memory(result, &(output.len() as u32).to_le_bytes())?;
     Ok(())
 }

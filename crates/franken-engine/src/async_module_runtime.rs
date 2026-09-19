@@ -7,7 +7,7 @@
 //! any runtime state escapes, then registers nodes dependency-first. Callers
 //! receive only execution-task lifecycle operations after initialization.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,27 @@ impl AsyncModuleRuntime {
                 evaluation_promises: registered.evaluation_promises,
             },
         })
+    }
+
+    /// Load only the transitive dependency closure of the requested entrypoints.
+    ///
+    /// `nodes` is a bounded discovery catalogue, not a request to execute every
+    /// module it contains. Unreachable bodies are never registered, consume no
+    /// scheduler/Promise slots, and cannot block these entrypoints with an
+    /// unrelated cycle or missing import. Ambiguous catalogue names and raw
+    /// input-size violations still fail closed before graph selection.
+    ///
+    /// Duplicate entrypoints are idempotent within the input budget. An empty
+    /// entrypoint list constructs an empty runtime. A missing entrypoint uses
+    /// `UnknownDependency` with `<entrypoint>` as its requesting module.
+    pub fn from_entrypoints(
+        nodes: &[ModuleGraphNode],
+        entrypoints: &[String],
+        graph_limits: &ModuleGraphLimits,
+        scheduler_config: AsyncModuleSchedulerConfig,
+    ) -> Result<Self, ModuleGraphError> {
+        let selected = select_entrypoint_nodes(nodes, entrypoints, graph_limits)?;
+        Self::from_graph(&selected, graph_limits, scheduler_config)
     }
 
     pub fn with_defaults(nodes: &[ModuleGraphNode]) -> Result<Self, ModuleGraphError> {
@@ -242,6 +263,92 @@ impl AsyncModuleRuntime {
     pub fn evaluation_promise(&self, specifier: &str) -> Option<PromiseHandle> {
         self.metadata.evaluation_promises.get(specifier).copied()
     }
+}
+
+fn select_entrypoint_nodes(
+    nodes: &[ModuleGraphNode],
+    entrypoints: &[String],
+    limits: &ModuleGraphLimits,
+) -> Result<Vec<ModuleGraphNode>, ModuleGraphError> {
+    // Admission bounds the catalogue and root list as well as the selected
+    // graph, so unreachable input cannot evade CPU/memory limits.
+    for actual in [nodes.len(), entrypoints.len()] {
+        if actual > limits.max_modules {
+            return Err(ModuleGraphError::ModuleLimitExceeded {
+                actual,
+                max: limits.max_modules,
+            });
+        }
+    }
+    let check_name = |name: &str| -> Result<(), ModuleGraphError> {
+        if name.is_empty() {
+            return Err(ModuleGraphError::EmptySpecifier);
+        }
+        if name.len() > limits.max_specifier_bytes {
+            return Err(ModuleGraphError::SpecifierTooLong {
+                specifier: name.to_string(),
+                actual: name.len(),
+                max: limits.max_specifier_bytes,
+            });
+        }
+        Ok(())
+    };
+    let mut by_name = BTreeMap::new();
+    let mut edges = 0usize;
+    for node in nodes {
+        check_name(&node.specifier)?;
+        edges = edges.saturating_add(node.dependencies.len());
+        if edges > limits.max_edges {
+            return Err(ModuleGraphError::EdgeLimitExceeded {
+                actual: edges,
+                max: limits.max_edges,
+            });
+        }
+        for dependency in &node.dependencies {
+            check_name(dependency)?;
+        }
+        if by_name.insert(node.specifier.as_str(), node).is_some() {
+            return Err(ModuleGraphError::DuplicateModule {
+                specifier: node.specifier.clone(),
+            });
+        }
+    }
+    let mut pending = BTreeSet::new();
+    for entrypoint in entrypoints {
+        check_name(entrypoint)?;
+        if !by_name.contains_key(entrypoint.as_str()) {
+            return Err(ModuleGraphError::UnknownDependency {
+                module: "<entrypoint>".to_string(),
+                dependency: entrypoint.clone(),
+            });
+        }
+        pending.insert(entrypoint.as_str());
+    }
+    let mut selected = BTreeSet::new();
+    while let Some(name) = pending.pop_first() {
+        if !selected.insert(name) {
+            continue;
+        }
+        let node = by_name[name];
+        for dependency in &node.dependencies {
+            if !by_name.contains_key(dependency.as_str()) {
+                return Err(ModuleGraphError::UnknownDependency {
+                    module: node.specifier.clone(),
+                    dependency: dependency.clone(),
+                });
+            }
+            if !selected.contains(dependency.as_str()) {
+                pending.insert(dependency.as_str());
+            }
+        }
+    }
+    // Traversal borrows the catalogue and visits each module once; only the
+    // selected nodes are copied. The existing graph planner remains the sole
+    // authority for cycle, duplicate-edge, and dependency-first validation.
+    Ok(selected
+        .into_iter()
+        .map(|name| by_name[name].clone())
+        .collect())
 }
 
 #[cfg(test)]
@@ -476,5 +583,183 @@ mod tests {
             );
         }
         assert!(runtime.promise_result(PromiseHandle(u32::MAX)).is_err());
+    }
+
+    fn from_roots(
+        nodes: &[ModuleGraphNode],
+        roots: &[&str],
+    ) -> Result<AsyncModuleRuntime, ModuleGraphError> {
+        AsyncModuleRuntime::from_entrypoints(
+            nodes,
+            &roots.iter().map(|root| (*root).to_string()).collect::<Vec<_>>(),
+            &ModuleGraphLimits::default(),
+            AsyncModuleSchedulerConfig::default(),
+        )
+    }
+
+    #[test]
+    fn entrypoint_execution_excludes_unrelated_bodies_and_broken_graphs() {
+        let nodes = [
+            node("app", false, &["dep"]),
+            node("dep", true, &[]),
+            node("aaa-side-effect", true, &[]),
+            node("cycle-a", true, &["cycle-b"]),
+            node("cycle-b", true, &["cycle-a"]),
+            node("broken", true, &["absent"]),
+        ];
+        let config = AsyncModuleSchedulerConfig {
+            max_registered_modules: 2,
+            max_ready_tasks: 1,
+            ..AsyncModuleSchedulerConfig::default()
+        };
+        let mut runtime = AsyncModuleRuntime::from_entrypoints(
+            &nodes,
+            &["app".into()],
+            &ModuleGraphLimits::default(),
+            config,
+        )
+        .unwrap();
+        assert_eq!(runtime.metadata().graph_plan.registration_order, vec!["dep", "app"]);
+        assert_eq!(runtime.snapshot().registered_modules, 2);
+        assert!(runtime.evaluation_promise("aaa-side-effect").is_none());
+        let dep = runtime.next_task().unwrap().unwrap();
+        assert_eq!(dep.module_specifier, "dep");
+        let promise = runtime.create_pending_promise();
+        runtime.suspend_task(&dep, promise).unwrap();
+        assert!(runtime.next_task().unwrap().is_none());
+        runtime
+            .fulfill_awaited_promise(promise, JsValue::Int(42), Label::Secret)
+            .unwrap();
+        let resume = runtime.next_task().unwrap().unwrap();
+        assert_eq!(runtime.resume_input(&resume).unwrap().unwrap().value, JsValue::Int(42));
+        runtime.complete_task(&resume, JsValue::Undefined, Label::Secret).unwrap();
+        let app = runtime.next_task().unwrap().unwrap();
+        assert_eq!(app.module_specifier, "app");
+        assert_eq!(runtime.resume_input(&app).unwrap(), None);
+        runtime.complete_task(&app, JsValue::Undefined, Label::Secret).unwrap();
+        assert!(runtime.next_task().unwrap().is_none());
+        assert!(runtime.module_phases().values().all(|phase| *phase == AsyncModulePhase::Settled));
+    }
+
+    #[test]
+    fn entrypoint_shared_dependencies_execute_once_and_order_is_stable() {
+        let mut nodes = vec![
+            node("left", false, &["common"]),
+            node("right", false, &["common"]),
+            node("common", false, &[]),
+            node("unused", true, &[]),
+        ];
+        let expected = vec!["common", "left", "right"];
+        for _ in 0..nodes.len() {
+            let mut runtime = from_roots(&nodes, &["right", "left", "left"]).unwrap();
+            assert_eq!(runtime.metadata().graph_plan.registration_order, expected);
+            let mut executed = Vec::new();
+            while let Some(task) = runtime.next_task().unwrap() {
+                executed.push(task.module_specifier.clone());
+                runtime.complete_task(&task, JsValue::Undefined, Label::Public).unwrap();
+            }
+            assert_eq!(executed, expected);
+            nodes.rotate_left(1);
+        }
+    }
+
+    #[test]
+    fn empty_entrypoints_execute_nothing() {
+        let nodes = [node("unselected", true, &["absent"])];
+        let mut runtime = from_roots(&nodes, &[]).unwrap();
+        assert_eq!(runtime.snapshot().registered_modules, 0);
+        assert!(runtime.metadata().evaluation_promises.is_empty());
+        assert!(runtime.next_task().unwrap().is_none());
+        assert!(AsyncModuleRuntime::with_defaults(&nodes).is_err());
+    }
+
+    #[test]
+    fn missing_entrypoints_and_selected_imports_fail_closed() {
+        let nodes = [node("app", false, &["absent"])];
+        assert!(matches!(
+            from_roots(&nodes, &["unknown"]),
+            Err(ModuleGraphError::UnknownDependency { module, dependency })
+                if module == "<entrypoint>" && dependency == "unknown"
+        ));
+        assert!(matches!(
+            from_roots(&nodes, &["app"]),
+            Err(ModuleGraphError::UnknownDependency { module, dependency })
+                if module == "app" && dependency == "absent"
+        ));
+    }
+
+    #[test]
+    fn selected_cycles_self_edges_and_duplicate_imports_still_fail() {
+        assert!(matches!(
+            from_roots(&[node("a", false, &["b"]), node("b", false, &["a"])], &["a"]),
+            Err(ModuleGraphError::Cycle { .. })
+        ));
+        assert!(matches!(
+            from_roots(&[node("a", false, &["a"])], &["a"]),
+            Err(ModuleGraphError::SelfDependency { .. })
+        ));
+        assert!(matches!(
+            from_roots(&[node("a", false, &["b", "b"]), node("b", false, &[])], &["a"]),
+            Err(ModuleGraphError::DuplicateDependency { .. })
+        ));
+    }
+
+    #[test]
+    fn ambiguous_catalogue_names_fail_even_when_unselected() {
+        assert!(matches!(
+            from_roots(&[node("app", false, &[]), node("other", false, &[]), node("other", true, &[])], &["app"]),
+            Err(ModuleGraphError::DuplicateModule { specifier }) if specifier == "other"
+        ));
+    }
+
+    #[test]
+    fn unreachable_input_and_duplicate_root_lists_cannot_bypass_limits() {
+        let limits = ModuleGraphLimits {
+            max_modules: 1,
+            max_edges: 1,
+            max_specifier_bytes: 4,
+        };
+        assert!(matches!(
+            select_entrypoint_nodes(&[node("a", false, &[]), node("b", false, &[])], &[], &limits),
+            Err(ModuleGraphError::ModuleLimitExceeded { .. })
+        ));
+        assert!(matches!(
+            select_entrypoint_nodes(&[node("a", false, &["b", "c"])], &[], &limits),
+            Err(ModuleGraphError::EdgeLimitExceeded { .. })
+        ));
+        assert!(matches!(
+            select_entrypoint_nodes(&[node("a", false, &[])], &["a".into(), "a".into()], &limits),
+            Err(ModuleGraphError::ModuleLimitExceeded { .. })
+        ));
+        assert!(matches!(
+            select_entrypoint_nodes(&[node("a", false, &["oversized"])], &[], &limits),
+            Err(ModuleGraphError::SpecifierTooLong { .. })
+        ));
+        assert!(matches!(
+            select_entrypoint_nodes(&[node("a", false, &[])], &[String::new()], &limits),
+            Err(ModuleGraphError::EmptySpecifier)
+        ));
+    }
+
+    #[test]
+    fn entrypoint_selection_handles_deep_graphs_without_recursion() {
+        let nodes: Vec<ModuleGraphNode> = (0..4096)
+            .map(|index| ModuleGraphNode {
+                specifier: format!("m{index:04}"),
+                has_top_level_await: false,
+                dependencies: if index == 4095 {
+                    Vec::new()
+                } else {
+                    vec![format!("m{:04}", index + 1)]
+                },
+            })
+            .collect();
+        let selected = select_entrypoint_nodes(
+            &nodes,
+            &["m0000".into()],
+            &ModuleGraphLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(selected, nodes);
     }
 }

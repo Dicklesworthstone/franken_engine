@@ -14,12 +14,19 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::checkpoint::CancellationToken;
 use super::numeric::WasmHostError;
+
+/// Maximum number of partition edges below a root. Bounds both ancestor
+/// observation at guest checkpoints and destruction of nested reservations.
+pub const WASM_MEMORY_POOL_MAX_DEPTH: usize = 64;
 
 #[derive(Debug)]
 struct Pool {
     capacity: u64,
     available: AtomicU64,
+    cancellation: CancellationToken,
+    depth: usize,
     // Own the parent's capacity, rather than copying an apparent allowance.
     // Live descendant instances keep this reservation alive through their Arc.
     parent: Option<MemoryReservation>,
@@ -41,6 +48,8 @@ impl WasmMemoryPool {
         Self(Arc::new(Pool {
             capacity: capacity_pages,
             available: AtomicU64::new(capacity_pages),
+            cancellation: CancellationToken::new(),
+            depth: 0,
             parent: None,
         }))
     }
@@ -55,13 +64,54 @@ impl WasmMemoryPool {
     /// handle cannot refund pages still promised to live guest state. There is
     /// no reparenting, grant duplication or guest-memory sharing. Like new(),
     /// this is an embedding configuration operation, not a guest instruction.
+    /// A revoked ancestor cannot create an active descendant. Nesting is
+    /// bounded by WASM_MEMORY_POOL_MAX_DEPTH; refusal reserves no capacity.
     pub fn partition(&self, capacity_pages: u64) -> Result<Self, WasmHostError> {
+        self.check_active()?;
+        if self.0.depth >= WASM_MEMORY_POOL_MAX_DEPTH {
+            return Err(WasmHostError::MemoryPoolDepthExceeded { max: WASM_MEMORY_POOL_MAX_DEPTH });
+        }
         let parent = self.reserve(capacity_pages)?;
-        Ok(Self(Arc::new(Pool {
+        let child = Self(Arc::new(Pool {
             capacity: capacity_pages,
             available: AtomicU64::new(capacity_pages),
+            cancellation: CancellationToken::new(),
+            depth: self.0.depth + 1,
             parent: Some(parent),
-        })))
+        }));
+        child.check_active()?;
+        Ok(child)
+    }
+
+    /// Permanently revoke admission AND execution for this pool's subtree.
+    /// Clones share the request. Ancestors and sibling partitions are untouched.
+    /// Participating instances observe it at existing guest, activation, host
+    /// and replay checkpoints, including modules without memory or host calls.
+    /// No instance enumeration, lock, background worker or task handle is needed.
+    ///
+    /// Revocation is cooperative, not a native-callback/allocator preemption
+    /// guarantee. Work already past a checkpoint can complete before the next
+    /// observation. Completed effects and existing terminal faults are retained.
+    /// Live memory stays charged until destruction; this never refunds pages,
+    /// resets a pool, or widens its authority. Create a new authorized scope to
+    /// restart work. A replay transcript cannot revoke a live pool on its own.
+    pub fn revoke(&self) { self.0.cancellation.cancel(); }
+
+    /// Observe permanent revocation of this pool or any ancestor. This is not
+    /// an execution lease: a concurrent request may follow an active snapshot.
+    pub fn is_revoked(&self) -> bool {
+        let mut current = self;
+        loop {
+            if current.0.cancellation.is_cancelled() { return true; }
+            match &current.0.parent {
+                Some(parent) => current = &parent.pool,
+                None => return false,
+            }
+        }
+    }
+
+    pub(crate) fn check_active(&self) -> Result<(), WasmHostError> {
+        if self.is_revoked() { Err(WasmHostError::MemoryPoolRevoked) } else { Ok(()) }
     }
 
     pub fn capacity_pages(&self) -> u64 { self.0.capacity }
@@ -83,6 +133,7 @@ impl WasmMemoryPool {
     pub(crate) fn reserve(&self, pages: u64) -> Result<MemoryReservation, WasmHostError> {
         let mut available = self.0.available.load(Ordering::Acquire);
         loop {
+            self.check_active()?;
             let remaining = available.checked_sub(pages)
                 .ok_or(WasmHostError::MemoryPoolExhausted {
                     requested_pages: pages, available_pages: available,
@@ -90,7 +141,13 @@ impl WasmMemoryPool {
             match self.0.available.compare_exchange_weak(
                 available, remaining, Ordering::AcqRel, Ordering::Acquire,
             ) {
-                Ok(_) => return Ok(MemoryReservation { pool: self.clone(), pages }),
+                Ok(_) => {
+                    let reservation = MemoryReservation { pool: self.clone(), pages };
+                    // A request racing the reservation cannot leak the charge.
+                    // A later request is still observed by execution checkpoints.
+                    self.check_active()?;
+                    return Ok(reservation);
+                }
                 Err(actual) => available = actual,
             }
         }

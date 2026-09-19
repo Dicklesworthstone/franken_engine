@@ -36,6 +36,8 @@ pub enum WasmHostError {
     ZeroCallCost,
     MissingMemory,
     MemoryPoolAlreadyBound,
+    MemoryPoolRevoked,
+    MemoryPoolDepthExceeded { max: usize },
     MemoryPoolExhausted { requested_pages: u64, available_pages: u64 },
     /// Normal termination of this guest instance, never the embedding process.
     ProcessExit { code: u32 },
@@ -68,6 +70,8 @@ impl fmt::Display for WasmHostError {
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
             Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
             Self::MemoryPoolAlreadyBound => f.write_str("wasm memory pool is already bound"),
+            Self::MemoryPoolRevoked => f.write_str("wasm memory pool execution scope was revoked"),
+            Self::MemoryPoolDepthExceeded { max } => write!(f, "wasm memory pool nesting exceeds {max}"),
             Self::MemoryPoolExhausted { requested_pages, available_pages } => {
                 write!(f, "wasm memory reservation needs {requested_pages} pages, only {available_pages} available")
             }
@@ -203,6 +207,9 @@ impl WasmHostImports {
     /// exited-but-inspectable state; only destruction releases it. Pool binding
     /// cannot be replaced to widen a limit. All existing with-imports execution
     /// paths (synchronous, Future and scheduled) use this same admission gate.
+    /// Revoking this pool or an ancestor also stops participating execution at
+    /// guest/host checkpoints. This cannot replace explicit execution/service
+    /// signals, and their existing failure precedence is preserved.
     pub fn bind_memory_pool(&mut self, pool: WasmMemoryPool) -> Result<(), WasmHostError> {
         if self.memory_pool.is_some() { return Err(WasmHostError::MemoryPoolAlreadyBound); }
         self.memory_pool = Some(pool);
@@ -286,6 +293,7 @@ impl WasmHostImports {
         if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
             return Err(WasmHostError::Cancelled.into());
         }
+        check_memory_pool(self.memory_pool.as_ref())?;
         Ok(())
     }
 
@@ -410,6 +418,11 @@ fn check_execution_scope(scope: &mut Option<HostCancellation>) -> Result<(), Was
     Ok(())
 }
 
+fn check_memory_pool(pool: Option<&WasmMemoryPool>) -> Result<(), WasmNumericVmError> {
+    if let Some(pool) = pool { pool.check_active()?; }
+    Ok(())
+}
+
 fn check_authority(
     granted: &BTreeSet<RuntimeCapability>,
     binding: &Binding,
@@ -457,6 +470,7 @@ pub struct WasmHostCaller<'call, 'vm> {
     required: &'call BTreeSet<RuntimeCapability>,
     import: &'call FunctionImport,
     exit_status: &'call mut Option<u32>,
+    memory_pool: Option<&'call WasmMemoryPool>,
 }
 
 impl WasmHostCaller<'_, '_> {
@@ -490,6 +504,10 @@ impl WasmHostCaller<'_, '_> {
             return Err(error);
         }
         if let Err(error) = check_revocations(self.revocations, self.required, self.import) {
+            self.failure = Some(error.clone());
+            return Err(error);
+        }
+        if let Err(error) = check_memory_pool(self.memory_pool) {
             self.failure = Some(error.clone());
             return Err(error);
         }
@@ -632,6 +650,7 @@ impl InstanceState {
         if let Some(imports) = self.host_imports.as_mut() {
             check_exit(imports.exit_status)?;
             check_execution_scope(&mut imports.execution_cancellation)?;
+            check_memory_pool(imports.memory_pool.as_ref())?;
         }
         Ok(())
     }
@@ -695,6 +714,7 @@ impl InstanceState {
                     return Err(WasmHostError::Cancelled.into());
                 }
                 check_revocations(&mut imports.revocations, &binding.required, import)?;
+                check_memory_pool(imports.memory_pool.as_ref())?;
                 let memory = self.memory.as_mut().ok_or(WasmHostError::MissingMemory)?;
                 let range = memory.range(write.address, 0, write.bytes.len())?;
                 memory.bytes[range].copy_from_slice(&write.bytes);
@@ -704,6 +724,7 @@ impl InstanceState {
                 return Err(WasmHostError::Cancelled.into());
             }
             check_revocations(&mut imports.revocations, &binding.required, import)?;
+            check_memory_pool(imports.memory_pool.as_ref())?;
             // Replay skips the provider, so it must reproduce terminal state
             // explicitly, after live authorization and effect checks succeed.
             remember_exit(&mut imports.exit_status, &playback.call.outcome);
@@ -717,6 +738,7 @@ impl InstanceState {
                     execution_cancellation: &mut imports.execution_cancellation,
                     revocations: &mut imports.revocations, required: &binding.required, import,
                     exit_status: &mut imports.exit_status,
+                    memory_pool: imports.memory_pool.as_ref(),
                 };
                 let outcome = (binding.callback)(&mut caller, arguments);
                 // Finish the recording even when cancellation or a latched

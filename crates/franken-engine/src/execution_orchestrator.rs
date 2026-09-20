@@ -2487,7 +2487,7 @@ impl ExecutionOrchestrator {
 
             let cancellation_token = self.cancellation_token.clone().unwrap_or_default();
             let (instruction_budget, memory_budget_bytes) =
-                Self::execution_budget_for_lane(adaptive_routing_decision.selected_lane);
+                self.execution_budget_for_lane(adaptive_routing_decision.selected_lane);
             cell.bind_execution_authority(CellExecutionAuthority::new(
                 CellExecutionAuthoritySnapshot {
                     cell_id: trace_id.clone(),
@@ -3297,6 +3297,7 @@ impl ExecutionOrchestrator {
     }
 
     fn lane_router_for_execution(
+        &self,
         package: &ExtensionPackage,
         cancellation_token: Option<&CancellationToken>,
         instruction_budget: u64,
@@ -3311,9 +3312,11 @@ impl ExecutionOrchestrator {
 
         let module_root = Self::module_root_for_execution(package)?;
 
-        let mut quickjs_config = InterpreterConfig::quickjs_defaults();
-        quickjs_config.instruction_budget = instruction_budget;
-        quickjs_config.max_total_memory_bytes = memory_budget_bytes;
+        let mut quickjs_config =
+            InterpreterConfig::deterministic_from_config(&self.runtime_config.execution);
+        quickjs_config.instruction_budget = quickjs_config.instruction_budget.min(instruction_budget);
+        quickjs_config.max_total_memory_bytes =
+            quickjs_config.max_total_memory_bytes.min(memory_budget_bytes);
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
@@ -3322,9 +3325,10 @@ impl ExecutionOrchestrator {
             quickjs_config.canonical_module_root = canonical_root.clone();
         }
 
-        let mut v8_config = InterpreterConfig::v8_defaults();
-        v8_config.instruction_budget = instruction_budget;
-        v8_config.max_total_memory_bytes = memory_budget_bytes;
+        let mut v8_config =
+            InterpreterConfig::throughput_from_config(&self.runtime_config.execution);
+        v8_config.instruction_budget = v8_config.instruction_budget.min(instruction_budget);
+        v8_config.max_total_memory_bytes = v8_config.max_total_memory_bytes.min(memory_budget_bytes);
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
@@ -3351,10 +3355,14 @@ impl ExecutionOrchestrator {
         granted_capabilities
     }
 
-    fn execution_budget_for_lane(lane: LaneChoice) -> (u64, u64) {
+    fn execution_budget_for_lane(&self, lane: LaneChoice) -> (u64, u64) {
         let config = match lane {
-            LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
-            LaneChoice::V8 => InterpreterConfig::v8_defaults(),
+            LaneChoice::QuickJs => {
+                InterpreterConfig::deterministic_from_config(&self.runtime_config.execution)
+            }
+            LaneChoice::V8 => {
+                InterpreterConfig::throughput_from_config(&self.runtime_config.execution)
+            }
         };
         (config.instruction_budget, config.max_total_memory_bytes)
     }
@@ -3436,7 +3444,7 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
-        let mut lane_router = Self::lane_router_for_execution(
+        let mut lane_router = self.lane_router_for_execution(
             package,
             Some(cancellation_token),
             instruction_budget,
@@ -5423,7 +5431,7 @@ mod tests {
                 LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
                 LaneChoice::V8 => InterpreterConfig::v8_defaults(),
             };
-            let router = ExecutionOrchestrator::lane_router_for_execution(
+            let router = ExecutionOrchestrator::with_defaults().lane_router_for_execution(
                 &package,
                 Some(&cancellation),
                 defaults.instruction_budget,
@@ -5446,7 +5454,7 @@ mod tests {
         module.instructions.push(Ir3Instruction::Jump { target: 0 });
 
         for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-            let router = ExecutionOrchestrator::lane_router_for_execution(
+            let router = ExecutionOrchestrator::with_defaults().lane_router_for_execution(
                 &package,
                 None,
                 3,
@@ -5466,7 +5474,8 @@ mod tests {
             );
 
             let memory_limited =
-                ExecutionOrchestrator::lane_router_for_execution(&package, None, 10_000, 1)
+                ExecutionOrchestrator::with_defaults()
+                    .lane_router_for_execution(&package, None, 10_000, 1)
                     .expect("memory-limited lane router should build")
                     .execute(&module, "cell-memory-trace", Some(lane))
                     .expect_err(
@@ -7322,7 +7331,7 @@ mod tests {
         assert_eq!(cell_transcript.authority.trace_id, result.trace_id);
         assert_eq!(cell_transcript.authority.policy_epoch, result.epoch);
         let (expected_instruction_budget, expected_memory_limit) =
-            ExecutionOrchestrator::execution_budget_for_lane(result.lane);
+            orch.execution_budget_for_lane(result.lane);
         assert_eq!(
             cell_transcript.authority.instruction_budget,
             expected_instruction_budget

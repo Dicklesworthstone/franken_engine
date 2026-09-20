@@ -1675,6 +1675,7 @@ impl ExecutionOrchestrator {
     }
 
     fn lane_router_for_execution(
+        &self,
         package: &ExtensionPackage,
         ir3: &Ir3Module,
     ) -> Result<LaneRouter, OrchestratorError> {
@@ -1685,7 +1686,8 @@ impl ExecutionOrchestrator {
         granted_capabilities.insert(RuntimeCapability::HeapAllocate);
         granted_capabilities.extend(Self::internal_runtime_capabilities_for_module(ir3));
 
-        let mut quickjs_config = InterpreterConfig::quickjs_defaults();
+        let mut quickjs_config =
+            InterpreterConfig::deterministic_from_config(&self.runtime_config.execution);
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.module_root = package
@@ -1694,7 +1696,8 @@ impl ExecutionOrchestrator {
             .and_then(|path| std::path::Path::new(path).parent())
             .map(|path| path.display().to_string());
 
-        let mut v8_config = InterpreterConfig::v8_defaults();
+        let mut v8_config =
+            InterpreterConfig::throughput_from_config(&self.runtime_config.execution);
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.module_root = package
@@ -1773,7 +1776,7 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the internal enforcement capabilities required by the lowered module.
-        let routed = Self::lane_router_for_execution(package, ir3)?
+        let routed = self.lane_router_for_execution(package, ir3)?
             .execute_with_hook(
                 ir3,
                 trace_id,

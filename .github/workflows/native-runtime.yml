@@ -10,6 +10,7 @@ on:
       - 'crates/franken-engine/src/bin/franken_shipped_path_parity.rs'
       - 'crates/franken-engine/tests/orchestrator_execution_budgets.rs'
       - 'crates/franken-engine/tests/orchestrator_live_revocation.rs'
+      - 'crates/franken-engine/tests/work_scope_revocation.rs'
       - 'crates/franken-engine/src/baseline_interpreter*'
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
@@ -45,7 +46,7 @@ jobs:
           cargo +stable test --locked -p frankenengine-engine --no-default-features \
             --test reflect_invocation_execution --test reflect_property_execution \
             --test reflect_failure_confidentiality --test orchestrator_execution_budgets \
-            --test orchestrator_live_revocation \
+            --test orchestrator_live_revocation --test work_scope_revocation \
             -- --nocapture 2>&1 | tee reflection-tests.log
       - name: Retain reflection results
         if: always()

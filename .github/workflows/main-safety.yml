@@ -9,7 +9,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: main-safety-${{ github.ref }}
+  # Isolate this one pinned transfer from unrelated pushes; ordinary runs keep
+  # the exact original main-safety concurrency group and cancellation policy.
+  group: >-
+    ${{ github.event.head_commit.message == 'chore(runtime): transfer reviewed revocation source blobs' && format('revocation-source-transfer-{0}', github.sha) || format('main-safety-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:

@@ -113,14 +113,31 @@ fn checked_addresses(addresses: Vec<SocketAddr>) -> io::Result<Vec<SocketAddr>> 
             "DNS lookup returned too many addresses",
         ));
     }
-    // Preserve resolver preference order; do not attempt duplicate endpoints.
+    // Deduplicate before interleaving: duplicate answers must not consume an
+    // attempt slot or delay the other family. Keep each family's OS ordering.
     let mut unique = Vec::with_capacity(addresses.len());
     for address in addresses {
         if !unique.contains(&address) {
             unique.push(address);
         }
     }
-    Ok(unique)
+    // RFC 8305 section 4: retain the first-family preference, then alternate
+    // families while both are available. A long run of unreachable IPv6 (or
+    // IPv4) addresses must not spend every dial opportunity before the other
+    // family is tried. This neither resolves again nor invents a destination.
+    let first_v6 = unique[0].is_ipv6();
+    let mut preferred = unique.iter().filter(|address| address.is_ipv6() == first_v6);
+    let mut alternate = unique.iter().filter(|address| address.is_ipv6() != first_v6);
+    let mut ordered = Vec::with_capacity(unique.len());
+    loop {
+        let first = preferred.next();
+        let second = alternate.next();
+        if first.is_none() && second.is_none() {
+            break;
+        }
+        ordered.extend(first.into_iter().chain(second).copied());
+    }
+    Ok(ordered)
 }
 
 fn resolve_with<F>(
@@ -254,6 +271,50 @@ mod tests {
             .unwrap(),
             vec![b, a]
         );
+    }
+
+    #[test]
+    fn alternate_family_precedes_the_preferred_familys_remaining_addresses() {
+        let v6a: SocketAddr = "[::1]:80".parse().unwrap();
+        let v6b: SocketAddr = "[::2]:80".parse().unwrap();
+        let v6c: SocketAddr = "[::3]:80".parse().unwrap();
+        let v4a: SocketAddr = "127.0.0.1:80".parse().unwrap();
+        let v4b: SocketAddr = "127.0.0.2:80".parse().unwrap();
+        assert_eq!(
+            checked_addresses(vec![v6a, v6b, v6c, v4a, v4b]).unwrap(),
+            vec![v6a, v4a, v6b, v4b, v6c]
+        );
+        assert_eq!(
+            checked_addresses(vec![v4a, v4b, v6a, v6b, v6c]).unwrap(),
+            vec![v4a, v6a, v4b, v6b, v6c]
+        );
+    }
+
+    #[test]
+    fn duplicate_answers_do_not_delay_the_other_family_or_reorder_unique_peers() {
+        let a: SocketAddr = "[::1]:80".parse().unwrap();
+        let b: SocketAddr = "[::2]:80".parse().unwrap();
+        let c: SocketAddr = "127.0.0.1:80".parse().unwrap();
+        let d: SocketAddr = "127.0.0.2:80".parse().unwrap();
+        let ordered = checked_addresses(vec![a, a, b, c, c, d, b]).unwrap();
+        assert_eq!(ordered, vec![a, c, b, d]);
+        // Both the worker and the caller validate the real resolver's result.
+        assert_eq!(checked_addresses(ordered.clone()).unwrap(), ordered);
+    }
+
+    #[test]
+    fn one_family_keeps_its_original_unique_order_and_ports() {
+        for inputs in [
+            ["127.0.0.2:443", "127.0.0.1:80", "127.0.0.2:443"],
+            ["[::2]:443", "[::1]:80", "[::2]:443"],
+        ] {
+            let addresses: Vec<SocketAddr> = inputs
+                .iter()
+                .map(|input| input.parse().unwrap())
+                .collect();
+            let expected = vec![addresses[0], addresses[1]];
+            assert_eq!(checked_addresses(addresses).unwrap(), expected);
+        }
     }
 
     #[test]

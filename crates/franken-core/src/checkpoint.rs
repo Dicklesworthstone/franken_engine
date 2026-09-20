@@ -165,6 +165,10 @@ impl Default for DensityConfig {
 pub struct CancellationToken {
     #[serde(skip)]
     cancelled: Arc<AtomicBool>,
+    /// Flat, shared signals: polling and destruction never recurse through a
+    /// token graph. Cloning a token does not copy its ancestor list.
+    #[serde(skip)]
+    parents: Arc<[Arc<AtomicBool>]>,
 }
 
 impl CancellationToken {
@@ -172,6 +176,45 @@ impl CancellationToken {
     pub fn new() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
+            parents: Arc::default(),
+        }
+    }
+
+    /// Create an independently cancellable child that also observes this token.
+    ///
+    /// Parent cancellation is live, not a snapshot taken during construction.
+    /// Cancelling or resetting the child never changes its parent or siblings.
+    /// Resetting a parent retains the existing token-reuse semantics; callers
+    /// needing irreversible revocation must keep that parent private and never
+    /// reset it. Serialized tokens do not preserve live cancellation bindings.
+    pub fn child_token(&self) -> Self {
+        let mut parents = self.parents.to_vec();
+        parents.push(Arc::clone(&self.cancelled));
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            parents: parents.into(),
+        }
+    }
+
+    /// Observe either cancellation source without acquiring the ability to
+    /// cancel either source. The returned token has its own local signal.
+    ///
+    /// This lets a runtime add scope revocation without replacing a caller's
+    /// cancellation request or accidentally cancelling a sibling that shares
+    /// the caller's token. Signal identity, not the current boolean state, is
+    /// used for deduplication. Construction is a trusted host setup operation;
+    /// checkpoint polling only reads the resulting flat signal list.
+    pub fn linked_with(&self, other: &Self) -> Self {
+        let mut parents = self.parents.to_vec();
+        parents.push(Arc::clone(&self.cancelled));
+        for signal in other.parents.iter().chain(std::iter::once(&other.cancelled)) {
+            if !parents.iter().any(|parent| Arc::ptr_eq(parent, signal)) {
+                parents.push(Arc::clone(signal));
+            }
+        }
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            parents: parents.into(),
         }
     }
 
@@ -183,9 +226,14 @@ impl CancellationToken {
     /// Check if cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .parents
+                .iter()
+                .any(|signal| signal.load(Ordering::Acquire))
     }
 
-    /// Reset the token (for reuse after drain/finalize).
+    /// Reset this token's local signal (for reuse after drain/finalize).
+    /// Inherited cancellation remains pending until its own source is reset.
     pub fn reset(&self) {
         self.cancelled.store(false, Ordering::Release);
     }
@@ -2061,5 +2109,146 @@ mod tests {
         assert_eq!(cov.total(), mandatory_names.len());
         let uncov = cov.uncovered();
         assert_eq!(uncov.len(), mandatory_names.len());
+    }
+}
+
+#[cfg(test)]
+mod linked_cancellation_tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    #[test]
+    fn parent_signal_is_live_and_children_cannot_cancel_their_siblings() {
+        let parent = CancellationToken::new();
+        let first = parent.child_token();
+        let second = parent.child_token();
+        first.cancel();
+        assert!(first.is_cancelled());
+        assert!(!parent.is_cancelled());
+        assert!(!second.is_cancelled());
+        first.reset();
+        assert!(!first.is_cancelled());
+        parent.cancel();
+        assert!(first.is_cancelled());
+        assert!(second.is_cancelled());
+    }
+
+    #[test]
+    fn equal_boolean_states_do_not_merge_independent_authorities() {
+        let scope = CancellationToken::new();
+        let caller = CancellationToken::new();
+        assert_eq!(scope, caller);
+        let combined = scope.linked_with(&caller);
+        assert_eq!(combined.parents.len(), 2);
+        for source in [&scope, &caller] {
+            assert!(!combined.is_cancelled());
+            source.cancel();
+            assert!(combined.is_cancelled());
+            combined.reset();
+            assert!(combined.is_cancelled(), "a child cannot clear its source");
+            source.reset();
+        }
+        combined.cancel();
+        assert!(!scope.is_cancelled());
+        assert!(!caller.is_cancelled());
+    }
+
+    #[test]
+    fn descendant_reset_cannot_escape_an_ancestor_cancellation() {
+        let root = CancellationToken::new();
+        let child = root.child_token();
+        let leaf = child.child_token();
+        root.cancel();
+        child.reset();
+        leaf.reset();
+        assert!(child.is_cancelled());
+        assert!(leaf.is_cancelled());
+        root.reset();
+        assert!(!leaf.is_cancelled(), "existing parent reuse remains explicit");
+    }
+
+    #[test]
+    fn diamond_links_are_flat_and_deduplicated_by_signal_identity() {
+        let root = CancellationToken::new();
+        let mut token = root.clone();
+        for depth in 1..=128 {
+            token = token.linked_with(&token);
+            assert_eq!(token.parents.len(), depth);
+        }
+        root.cancel();
+        assert!(token.is_cancelled());
+        drop(root);
+        token.reset();
+        assert!(token.is_cancelled(), "dropping a source is not a reset");
+    }
+
+    #[test]
+    fn cloned_linked_tokens_share_local_state_but_not_parent_authority() {
+        let root = CancellationToken::new();
+        let token = root.child_token();
+        let alias = token.clone();
+        assert!(Arc::ptr_eq(&token.parents, &alias.parents));
+        alias.cancel();
+        assert!(token.is_cancelled());
+        assert!(!root.is_cancelled());
+        token.reset();
+        assert!(!alias.is_cancelled());
+    }
+
+    #[test]
+    fn linked_cancellation_uses_existing_drain_precedence_and_evidence() {
+        for explicit in [false, true] {
+            let caller = CancellationToken::new();
+            let scope = CancellationToken::new();
+            let mut guard = CheckpointGuard::new(
+                LoopSite::BytecodeDispatch,
+                "linked",
+                "scope-trace",
+                DensityConfig {
+                    max_iterations: 1,
+                    max_total_iterations: 1,
+                },
+                scope.linked_with(&caller),
+            );
+            guard.tick();
+            scope.cancel();
+            let action = if explicit {
+                guard.explicit_checkpoint()
+            } else {
+                guard.check()
+            };
+            assert_eq!(action, CheckpointAction::Drain);
+            let events = guard.drain_events();
+            assert_eq!(events[0].reason, CheckpointReason::CancelPending);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].trace_id, "scope-trace");
+            assert!(!caller.is_cancelled());
+        }
+    }
+
+    #[test]
+    fn linked_guard_observes_a_cross_thread_request_without_polling_workers() {
+        let parent = CancellationToken::new();
+        let child = parent.child_token();
+        let ready = Arc::new(Barrier::new(2));
+        let released = Arc::new(Barrier::new(2));
+        let worker_ready = Arc::clone(&ready);
+        let worker_released = Arc::clone(&released);
+        let worker = std::thread::spawn(move || {
+            let mut guard = CheckpointGuard::new(
+                LoopSite::BytecodeDispatch,
+                "worker",
+                "thread-trace",
+                DensityConfig::default(),
+                child,
+            );
+            worker_ready.wait();
+            worker_released.wait();
+            guard.check()
+        });
+        ready.wait();
+        parent.cancel();
+        released.wait();
+        assert_eq!(worker.join().unwrap(), CheckpointAction::Drain);
     }
 }

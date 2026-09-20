@@ -66,6 +66,7 @@ fn create_deterministic_config() -> OrchestratorConfig {
         loss_matrix_preset: LossMatrixPreset::Balanced,
         force_lane: None,
         drain_deadline_ticks: 100,
+        work_pool: None,
         cell_close_budget_ms: 5000,
         max_concurrent_sagas: 1,
         epoch: SecurityEpoch::from_raw(1000), // Fixed epoch for determinism

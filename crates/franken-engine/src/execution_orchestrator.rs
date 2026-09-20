@@ -21,6 +21,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+pub use frankenengine_core::execution_work_budget::{ExecutionWorkPool, WorkBudgetError};
+
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
     CompactTier1Program, ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig,
@@ -628,6 +630,11 @@ pub struct OrchestratorConfig {
     pub loss_matrix_preset: LossMatrixPreset,
     /// Force a specific interpreter lane.
     pub force_lane: Option<LaneChoice>,
+    /// Optional shared, non-refundable instruction allowance supplied by the
+    /// trusted host. Cloning this configuration shares the same balance.
+    /// Every ordinary `execute` reserves the selected profile's full budget
+    /// before native entry; parse/lowering work is not covered by this pool.
+    pub work_pool: Option<ExecutionWorkPool>,
     /// Max drain ticks for cell close.
     pub drain_deadline_ticks: u64,
     /// Root budget used for the canonical cell-close context.
@@ -652,6 +659,7 @@ impl Default for OrchestratorConfig {
         Self {
             loss_matrix_preset: LossMatrixPreset::Balanced,
             force_lane: None,
+            work_pool: None,
             drain_deadline_ticks: runtime_orchestrator.drain_deadline_ticks,
             cell_close_budget_ms: runtime_orchestrator.cell_close_budget_ms,
             max_concurrent_sagas: runtime_orchestrator.max_concurrent_sagas,
@@ -1523,6 +1531,7 @@ pub enum OrchestratorError {
         detail: String,
     },
     Interpreter(InterpreterError),
+    WorkBudget(WorkBudgetError),
     Ledger(LedgerError),
     Saga(SagaError),
     Cell(CellError),
@@ -1583,6 +1592,7 @@ impl fmt::Display for OrchestratorError {
                 write!(f, "ifc runtime guard blocked execution: {detail}")
             }
             Self::Interpreter(e) => write!(f, "interpreter: {e}"),
+            Self::WorkBudget(e) => write!(f, "execution work admission: {e}"),
             Self::Ledger(e) => write!(f, "ledger: {e}"),
             Self::Saga(e) => write!(f, "saga: {e}"),
             Self::Cell(e) => write!(f, "cell: {e}"),
@@ -2488,6 +2498,17 @@ impl ExecutionOrchestrator {
             let cancellation_token = self.cancellation_token.clone().unwrap_or_default();
             let (instruction_budget, memory_budget_bytes) =
                 self.execution_budget_for_lane(adaptive_routing_decision.selected_lane);
+            // Admission precedes recorder setup and native/host entry. A
+            // refused tenant must not clear an earlier recorder transcript,
+            // create a new interpreter, or reach any guest-triggered effect.
+            // The cell-close path still runs with the typed refusal intact.
+            let _work_admission = self
+                .config
+                .work_pool
+                .as_ref()
+                .map(|pool| pool.reserve(instruction_budget))
+                .transpose()
+                .map_err(OrchestratorError::WorkBudget)?;
             cell.bind_execution_authority(CellExecutionAuthority::new(
                 CellExecutionAuthoritySnapshot {
                     cell_id: trace_id.clone(),

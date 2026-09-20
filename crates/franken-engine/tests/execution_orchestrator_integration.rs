@@ -1030,6 +1030,7 @@ fn config_clone_preserves_all_fields() {
         loss_matrix_preset: LossMatrixPreset::Conservative,
         force_lane: Some(LaneChoice::V8),
         drain_deadline_ticks: 99_999,
+        work_pool: None,
         cell_close_budget_ms: 77,
         max_concurrent_sagas: 16,
         epoch: SecurityEpoch::from_raw(77),

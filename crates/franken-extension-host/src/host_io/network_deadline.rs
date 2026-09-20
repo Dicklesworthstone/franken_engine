@@ -4,8 +4,11 @@
 //! delivering occasional bytes. Keeping the deadline underneath rustls also
 //! bounds handshake loops and TLS records that produce no application bytes.
 
+use super::control::OperationControl;
+use super::{HostIoControl, UnrestrictedHostIoControl};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -19,6 +22,7 @@ use revocation::REVOCATION_POLL_INTERVAL;
 pub(super) struct NetworkDeadline {
     end: Instant,
     revocation: Option<NetworkRevocation>,
+    control: Option<OperationControl>,
 }
 
 impl NetworkDeadline {
@@ -39,12 +43,16 @@ impl NetworkDeadline {
         Self {
             end,
             revocation: None,
+            control: None,
         }
     }
 
     fn remaining(&self) -> io::Result<Duration> {
         if let Some(revocation) = &self.revocation {
             revocation.check()?;
+        }
+        if let Some(control) = &self.control {
+            control.check_io()?;
         }
         self.end
             .checked_duration_since(Instant::now())
@@ -55,11 +63,16 @@ impl NetworkDeadline {
     }
     fn wait_slice(&self) -> io::Result<Duration> {
         let remaining = self.remaining()?;
-        Ok(if self.revocation.is_some() {
+        Ok(if self.revocation.is_some() || self.control.is_some() {
             remaining.min(REVOCATION_POLL_INTERVAL)
         } else {
             remaining
         })
+    }
+
+    pub(super) fn with_control(mut self, control: OperationControl) -> Self {
+        self.control = Some(control);
+        self
     }
 }
 
@@ -255,6 +268,21 @@ impl super::SandboxedHostIo {
         resolver::resolve_endpoint(endpoint, deadline)
     }
 
+    /// Resolve inside one execution without revoking a shared provider. The
+    /// product must still authorize every returned address before pinned I/O.
+    pub fn resolve_network_endpoint_controlled_until(
+        &self,
+        endpoint: &str,
+        end: Instant,
+        control: Arc<dyn HostIoControl>,
+    ) -> io::Result<Vec<SocketAddr>> {
+        let control = OperationControl::new(control);
+        control.check_io()?;
+        let mut deadline = self.network_deadline()?.with_control(control);
+        deadline.end = deadline.end.min(end);
+        resolver::resolve_endpoint(endpoint, deadline)
+    }
+
     /// Resolve with the engine's process-wide admission limit and an absolute
     /// caller deadline. A timed-out OS call keeps its worker permit until it
     /// exits. No resolver worker can open a connection or perform a guest effect.
@@ -307,6 +335,26 @@ impl super::SandboxedHostIo {
         destinations: &[SocketAddr],
         deadline: Instant,
     ) -> super::HostIoOutcome {
+        self.perform_pinned_network_candidates_controlled(
+            request,
+            granted,
+            destinations,
+            deadline,
+            Arc::new(UnrestrictedHostIoControl),
+        )
+    }
+
+    /// Policy-approved destinations with operation-local execution control.
+    /// Controls survive DNS-free connection selection, TLS and response waits;
+    /// no failure retries application bytes or mutates provider-wide revocation.
+    pub fn perform_pinned_network_candidates_controlled(
+        &self,
+        request: &super::HostIoRequest,
+        granted: &[super::HostIoCapability],
+        destinations: &[SocketAddr],
+        deadline: Instant,
+        control: Arc<dyn HostIoControl>,
+    ) -> super::HostIoOutcome {
         use super::{HostIoError, HostIoRequest};
 
         let capability = request.required_capability();
@@ -325,18 +373,10 @@ impl super::SandboxedHostIo {
                 });
             }
         };
-        self.network_revocation.check_host()?;
-        let outcome = self.perform_pinned_network_admitted(
-            request,
-            endpoint,
-            payload,
-            destinations,
-            deadline,
-        );
-        // Wrap all exits, including TLS-buffered completions and native faults.
-        // Requests and denied outcomes keep their existing journal wire shape.
-        self.network_revocation.check_host()?;
-        outcome
+        self.run_controlled_network(control, |mut scoped| {
+            scoped.end = scoped.end.min(deadline);
+            self.perform_pinned_network_admitted(request, endpoint, payload, destinations, scoped)
+        })
     }
 
     fn perform_pinned_network_admitted(
@@ -345,7 +385,7 @@ impl super::SandboxedHostIo {
         endpoint: &str,
         payload: Option<&[u8]>,
         destinations: &[SocketAddr],
-        end: Instant,
+        deadline: NetworkDeadline,
     ) -> super::HostIoOutcome {
         use super::{HostIoError, HostIoRequest, HostIoResponse};
 
@@ -377,8 +417,6 @@ impl super::SandboxedHostIo {
                 ),
             });
         }
-        let mut deadline = self.network_deadline().map_err(fail)?;
-        deadline.end = deadline.end.min(end);
         deadline.remaining().map_err(fail)?;
 
         if let HostIoRequest::NetworkRequest {

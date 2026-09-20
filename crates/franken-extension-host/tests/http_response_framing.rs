@@ -862,3 +862,167 @@ fn named_endpoint_replay_reuses_exact_outcome_after_the_server_is_gone() {
         encoded
     );
 }
+
+#[derive(Debug, Default)]
+struct ExecutionSignal(std::sync::atomic::AtomicBool);
+
+impl frankenengine_extension_host::host_io::HostIoControl for ExecutionSignal {
+    fn checkpoint(&self) -> Result<(), HostIoError> {
+        if self.0.load(std::sync::atomic::Ordering::Acquire) {
+            Err(HostIoError::Denied {
+                reason: "execution stopped".into(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn operation_control_interrupts_real_tcp_tls_and_pinned_waits_without_poisoning_provider() {
+    use std::sync::atomic::Ordering;
+    for use_tls in [false, true] {
+        for pinned in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let provider = SandboxedHostIo::with_root(directory.path())
+                .unwrap()
+                .with_network_timeout(Duration::from_secs(10))
+                .unwrap();
+            let (provider, tls_config) = install_loopback_tls(provider);
+            let signal = Arc::new(ExecutionSignal::default());
+            let sibling = provider.clone();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready, wait_ready) = mpsc::sync_channel(1);
+            let (release, wait_release) = mpsc::sync_channel(1);
+            let server = std::thread::spawn(move || {
+                let mut tcp = accept_revocation_peer(&listener);
+                if use_tls {
+                    let connection = rustls::ServerConnection::new(tls_config).unwrap();
+                    let mut tls = rustls::StreamOwned::new(connection, tcp);
+                    hold_after_request(&mut tls, &ready, &wait_release)
+                } else {
+                    hold_after_request(&mut tcp, &ready, &wait_release)
+                }
+            });
+            let request = HostIoRequest::NetworkRequest {
+                endpoint: address.to_string(),
+                payload: b"GET /once HTTP/1.1\r\nHost: loopback\r\n\r\n".to_vec(),
+                max_len: 4096,
+                use_tls,
+            };
+            let worker_request = request.clone();
+            let worker_signal = signal.clone();
+            let (done, wait_done) = mpsc::sync_channel(1);
+            let worker = std::thread::spawn(move || {
+                let result = if pinned {
+                    provider.perform_pinned_network_candidates_controlled(
+                        &worker_request,
+                        &[HostIoCapability::NetworkSend],
+                        &[address],
+                        std::time::Instant::now() + Duration::from_secs(10),
+                        worker_signal,
+                    )
+                } else {
+                    provider.perform_controlled(
+                        &worker_request,
+                        &[HostIoCapability::NetworkSend],
+                        worker_signal,
+                    )
+                };
+                let _ = done.send(result);
+            });
+            let entered = wait_ready.recv_timeout(Duration::from_secs(5));
+            signal.0.store(true, Ordering::Release);
+            let result = wait_done.recv_timeout(Duration::from_secs(2));
+            let _ = release.send(());
+            worker.join().unwrap();
+            let observed = server.join().unwrap();
+            assert!(entered.is_ok());
+            let HostIoRequest::NetworkRequest { payload, .. } = &request else {
+                unreachable!()
+            };
+            assert_eq!(&observed, payload);
+            let outcome =
+                result.expect("execution cancellation cannot wait for the held-open peer");
+            assert!(
+                matches!(&outcome, Err(HostIoError::Denied { reason }) if reason == "HOST_IO_EXECUTION_CANCELLED")
+            );
+            assert!(!sibling.network_revocation().is_revoked());
+            // A second real operation through the same provider proves that the
+            // cancelled call did not leave a stale mutable control binding.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let mut tcp = accept_revocation_peer(&listener);
+                tcp.write_all(b"sibling response").unwrap();
+            });
+            let sibling_request = HostIoRequest::NetworkRecv {
+                endpoint: address.to_string(),
+                max_len: 64,
+            };
+            assert_eq!(
+                sibling.perform_controlled(
+                    &sibling_request,
+                    &[HostIoCapability::NetworkRecv],
+                    Arc::new(ExecutionSignal::default())
+                ),
+                Ok(HostIoResponse::NetworkRecv {
+                    bytes: b"sibling response".to_vec()
+                })
+            );
+            server.join().unwrap();
+            let journal = InMemoryHostEffectJournal::recording();
+            journal.begin_execution().unwrap();
+            let reservation = journal.reserve_host_io(&request).unwrap();
+            journal
+                .complete_host_io(reservation, &request, &outcome)
+                .unwrap();
+            let entries = journal.finish_execution().unwrap();
+            let replay = InMemoryHostEffectJournal::replaying(entries.clone());
+            replay.begin_execution().unwrap();
+            assert_eq!(replay.replay_host_io(&request), Some(outcome));
+            assert_eq!(replay.finish_execution().unwrap(), entries);
+        }
+    }
+}
+
+#[test]
+fn cancelled_operation_denies_before_connect_and_cannot_weaken_provider_revocation() {
+    use std::sync::atomic::Ordering;
+    let directory = tempfile::tempdir().unwrap();
+    let provider = SandboxedHostIo::with_root(directory.path()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let control = Arc::new(ExecutionSignal::default());
+    control.0.store(true, Ordering::Release);
+    let request = HostIoRequest::NetworkRecv {
+        endpoint: address.to_string(),
+        max_len: 8,
+    };
+    assert!(matches!(
+        provider.perform_controlled(&request, &[HostIoCapability::NetworkRecv], control.clone()),
+        Err(HostIoError::Denied { .. })
+    ));
+    assert!(
+        provider
+            .resolve_network_endpoint_controlled_until(
+                &address.to_string(),
+                std::time::Instant::now() + Duration::from_secs(5),
+                control.clone()
+            )
+            .is_err()
+    );
+    assert!(!provider.network_revocation().is_revoked());
+    control.0.store(false, Ordering::Release);
+    provider.network_revocation().revoke();
+    assert!(matches!(
+        provider.perform_controlled(&request, &[HostIoCapability::NetworkRecv], control),
+        Err(HostIoError::Denied { .. })
+    ));
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}

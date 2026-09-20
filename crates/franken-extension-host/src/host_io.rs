@@ -15,10 +15,12 @@ use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+mod control;
 #[cfg(all(test, unix))]
 mod fd_admission_tests;
 mod http_response;
 mod network_deadline;
+pub use control::{HostIoControl, UnrestrictedHostIoControl};
 pub use http_response::{ParsedHttpResponse, parse_http_response};
 pub use network_deadline::NetworkRevocation;
 use network_deadline::{DeadlineTcpStream, NetworkDeadline};
@@ -287,6 +289,15 @@ pub enum HostIoRequest {
 }
 
 impl HostIoRequest {
+    /// Whether this request crosses the host network boundary.
+    #[must_use]
+    pub const fn is_network(&self) -> bool {
+        matches!(
+            self,
+            Self::NetworkSend { .. } | Self::NetworkRecv { .. } | Self::NetworkRequest { .. }
+        )
+    }
+
     #[must_use]
     pub const fn required_capability(&self) -> HostIoCapability {
         match self {
@@ -442,6 +453,27 @@ pub trait HostIoProvider: core::fmt::Debug + Send + Sync {
     /// Implementations must verify [`HostIoRequest::required_capability`] is
     /// present in `granted` before doing I/O and must fail closed otherwise.
     fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome;
+
+    /// Execute with a live, operation-local supervisor control. Network
+    /// providers must override this and poll during DNS, connect, TLS and I/O;
+    /// a boundary-only check cannot interrupt an already blocked operation.
+    /// Decorators must forward the control, not call the wrapped `perform`.
+    /// The default refuses network dispatch rather than silently dropping the
+    /// control. Non-network requests retain their existing synchronous contract.
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: std::sync::Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
+        control::OperationControl::new(control).check_host()?;
+        if request.is_network() {
+            return Err(HostIoError::NotImplemented {
+                what: "provider does not implement controlled network execution".to_string(),
+            });
+        }
+        self.perform(request, granted)
+    }
 }
 
 /// Default provider: denies every request.
@@ -457,6 +489,16 @@ impl HostIoProvider for DenyAllHostIo {
         Err(HostIoError::Denied {
             reason: "no sandboxed host I/O provider installed; fail-closed deny".to_string(),
         })
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: std::sync::Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
+        control::OperationControl::new(control).check_host()?;
+        self.perform(request, granted)
     }
 }
 
@@ -2282,7 +2324,11 @@ impl SandboxedHostIo {
     /// DNS admission and caller waiting are bounded by the same deadline.
     /// Endpoint authorization remains the product's policy; this mechanism
     /// does not broaden authority or retry a partially sent request.
-    fn connect(&self, endpoint: &str) -> Result<DeadlineTcpStream, HostIoError> {
+    fn connect(
+        &self,
+        endpoint: &str,
+        deadline: NetworkDeadline,
+    ) -> Result<DeadlineTcpStream, HostIoError> {
         if endpoint.is_empty() {
             return Err(HostIoError::SandboxViolation {
                 detail: "empty network endpoint".to_string(),
@@ -2293,15 +2339,17 @@ impl SandboxedHostIo {
                 detail: "network endpoint contains a NUL byte".to_string(),
             });
         }
-        let deadline = self.network_deadline().map_err(|err| HostIoError::Io {
-            detail: format!("network deadline for {endpoint}: {err}"),
-        })?;
         DeadlineTcpStream::connect_endpoint(endpoint, deadline).map_err(|err| HostIoError::Io {
             detail: format!("resolve/connect {endpoint}: {err}"),
         })
     }
 
-    fn network_send(&self, endpoint: &str, payload: &[u8]) -> HostIoOutcome {
+    fn network_send(
+        &self,
+        endpoint: &str,
+        payload: &[u8],
+        deadline: NetworkDeadline,
+    ) -> HostIoOutcome {
         if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.max_bytes {
             return Err(HostIoError::Io {
                 detail: format!(
@@ -2311,7 +2359,7 @@ impl SandboxedHostIo {
                 ),
             });
         }
-        let mut stream = self.connect(endpoint)?;
+        let mut stream = self.connect(endpoint, deadline)?;
         stream.write_all(payload).map_err(|err| HostIoError::Io {
             detail: format!("send to {endpoint}: {err}"),
         })?;
@@ -2365,11 +2413,16 @@ impl SandboxedHostIo {
         Ok(HostIoResponse::RandomRead { bytes })
     }
 
-    fn network_recv(&self, endpoint: &str, max_len: u64) -> HostIoOutcome {
+    fn network_recv(
+        &self,
+        endpoint: &str,
+        max_len: u64,
+        deadline: NetworkDeadline,
+    ) -> HostIoOutcome {
         // Bound the read by the smaller of the caller-requested length and the
         // provider's per-operation cap.
         let cap = max_len.min(self.max_bytes);
-        let mut stream = self.connect(endpoint)?;
+        let mut stream = self.connect(endpoint, deadline)?;
         let mut bytes = Vec::new();
         // Bounded read: cap+1 so a peer that streams more than the cap fails
         // closed rather than being silently truncated.
@@ -2404,6 +2457,7 @@ impl SandboxedHostIo {
         payload: &[u8],
         max_len: u64,
         use_tls: bool,
+        deadline: NetworkDeadline,
     ) -> HostIoOutcome {
         if u64::try_from(payload.len()).unwrap_or(u64::MAX) > self.max_bytes {
             return Err(HostIoError::Io {
@@ -2418,9 +2472,9 @@ impl SandboxedHostIo {
         // and the provider's per-operation cap.
         let cap = max_len.min(self.max_bytes);
         if use_tls {
-            return self.network_request_tls(endpoint, payload, cap);
+            return self.network_request_tls(endpoint, payload, cap, deadline);
         }
-        let mut stream = self.connect(endpoint)?;
+        let mut stream = self.connect(endpoint, deadline)?;
         stream.write_all(payload).map_err(|err| HostIoError::Io {
             detail: format!("send to {endpoint}: {err}"),
         })?;
@@ -2458,7 +2512,13 @@ impl SandboxedHostIo {
     /// (`Content-Length` + `Connection: close` synthesized by the engine's wire
     /// builder). A fully received length-delimited or chunked message needs no
     /// TLS close notification; a close-delimited body requires a clean TLS EOF.
-    fn network_request_tls(&self, endpoint: &str, payload: &[u8], cap: u64) -> HostIoOutcome {
+    fn network_request_tls(
+        &self,
+        endpoint: &str,
+        payload: &[u8],
+        cap: u64,
+        deadline: NetworkDeadline,
+    ) -> HostIoOutcome {
         // Authenticate the requested DNS name, never whichever IP happened to
         // connect. Numeric IPv4/IPv6 endpoints use the IP subjectAlternativeName
         // without SNI; the brackets and numeric scope are transport syntax only.
@@ -2485,7 +2545,7 @@ impl SandboxedHostIo {
             .map_err(|err| HostIoError::Io {
                 detail: format!("TLS client setup for {endpoint}: {err}"),
             })?;
-        let stream = self.connect(endpoint)?;
+        let stream = self.connect(endpoint, deadline)?;
         let mut tls = rustls::StreamOwned::new(conn, stream);
         tls.write_all(payload).map_err(|err| HostIoError::Io {
             detail: format!("TLS send to {endpoint}: {err}"),
@@ -2518,22 +2578,44 @@ impl HostIoProvider for SandboxedHostIo {
     }
 
     fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        self.perform_controlled(
+            request,
+            granted,
+            std::sync::Arc::new(UnrestrictedHostIoControl),
+        )
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: std::sync::Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
         let required = request.required_capability();
         if !capability_granted(granted, required) {
             return Err(HostIoError::CapabilityMissing {
                 capability: required,
             });
         }
-        let network = matches!(
-            request,
-            HostIoRequest::NetworkSend { .. }
-                | HostIoRequest::NetworkRecv { .. }
-                | HostIoRequest::NetworkRequest { .. }
-        );
-        if network {
-            self.network_revocation.check_host()?;
+        if request.is_network() {
+            return self.run_controlled_network(control, |deadline| match request {
+                HostIoRequest::NetworkSend { endpoint, payload } => {
+                    self.network_send(endpoint, payload, deadline)
+                }
+                HostIoRequest::NetworkRecv { endpoint, max_len } => {
+                    self.network_recv(endpoint, *max_len, deadline)
+                }
+                HostIoRequest::NetworkRequest {
+                    endpoint,
+                    payload,
+                    max_len,
+                    use_tls,
+                } => self.network_request(endpoint, payload, *max_len, *use_tls, deadline),
+                _ => unreachable!("network request classified above"),
+            });
         }
-        let outcome = match request {
+        control::OperationControl::new(control).check_host()?;
+        match request {
             HostIoRequest::FsRead { path } => self.fs_read(path),
             HostIoRequest::FsWrite { path, data } => self.fs_write(path, data),
             HostIoRequest::FsMeta {
@@ -2542,24 +2624,9 @@ impl HostIoProvider for SandboxedHostIo {
                 arguments,
                 data,
             } => self.fs_meta(*operation, path, arguments, data),
-            HostIoRequest::NetworkSend { endpoint, payload } => {
-                self.network_send(endpoint, payload)
-            }
-            HostIoRequest::NetworkRecv { endpoint, max_len } => {
-                self.network_recv(endpoint, *max_len)
-            }
-            HostIoRequest::NetworkRequest {
-                endpoint,
-                payload,
-                max_len,
-                use_tls,
-            } => self.network_request(endpoint, payload, *max_len, *use_tls),
             HostIoRequest::RandomRead { byte_len } => self.random_read(*byte_len),
-        };
-        if network {
-            self.network_revocation.check_host()?;
+            _ => unreachable!("network request handled above"),
         }
-        outcome
     }
 }
 

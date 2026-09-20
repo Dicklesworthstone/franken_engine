@@ -74,6 +74,7 @@ mod tests {
         NetworkDeadline {
             end: Instant::now() + Duration::from_secs(10),
             revocation: Some(signal.clone()),
+            control: None,
         }
     }
 

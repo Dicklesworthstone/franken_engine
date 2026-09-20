@@ -22,15 +22,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, InterpreterHook,
 };
+use crate::checkpoint::CancellationToken;
 use crate::ir_contract::Ir3Module;
 
+mod revocation;
 mod scheduling;
+pub use revocation::MAX_WORK_POOL_DEPTH;
 pub use scheduling::ExecutionAdmission;
 
 #[derive(Debug)]
 struct WorkPoolState {
     limit: u64,
     remaining: AtomicU64,
+    cancellation: CancellationToken,
+    depth: usize,
 }
 
 /// A shared, non-renewable allowance for native instruction reservations.
@@ -49,6 +54,8 @@ impl ExecutionWorkPool {
             state: Arc::new(WorkPoolState {
                 limit: instruction_limit,
                 remaining: AtomicU64::new(instruction_limit),
+                cancellation: CancellationToken::new(),
+                depth: 0,
             }),
         }
     }
@@ -68,6 +75,7 @@ impl ExecutionWorkPool {
     }
 
     fn charge(&self, instructions: u64) -> Result<(), WorkBudgetError> {
+        self.ensure_active()?;
         if instructions == 0 {
             return Err(WorkBudgetError::ZeroInstructionBudget);
         }
@@ -80,7 +88,9 @@ impl ExecutionWorkPool {
             .map_err(|remaining| WorkBudgetError::Exhausted {
                 requested: instructions,
                 remaining,
-            })
+            })?;
+        // A racing revocation may discard this reservation, never refund it.
+        self.ensure_active()
     }
 }
 
@@ -88,6 +98,12 @@ impl ExecutionWorkPool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkBudgetError {
     ZeroInstructionBudget,
+    /// This work scope or one of its ancestors has been permanently revoked.
+    Revoked,
+    /// Bound the cost of retaining and polling inherited scope signals.
+    HierarchyDepthExceeded {
+        max_depth: usize,
+    },
     Exhausted {
         requested: u64,
         remaining: u64,
@@ -101,6 +117,10 @@ impl fmt::Display for WorkBudgetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroInstructionBudget => f.write_str("instruction reservation must be nonzero"),
+            Self::Revoked => f.write_str("execution work scope has been revoked"),
+            Self::HierarchyDepthExceeded { max_depth } => {
+                write!(f, "execution work scope hierarchy exceeds depth {max_depth}")
+            }
             Self::Exhausted {
                 requested,
                 remaining,
@@ -133,8 +153,9 @@ impl std::error::Error for WorkBudgetError {
 /// The configured instruction budget is reserved in full on each call,
 /// including calls that fail capability checks or reject invalid IR. The
 /// native meter still enforces that per-call limit, including its existing
-/// module/callback execution paths. Memory limits, capabilities, cancellation,
-/// provenance, and hooks are passed through unchanged.
+/// module/callback execution paths. Memory limits, capabilities, provenance,
+/// and hooks are passed through unchanged. Caller cancellation is combined
+/// with live work-scope revocation at the existing native checkpoints.
 ///
 /// The raw interpreter is deliberately not exposed, and this owner is not
 /// cloneable. A caller cannot reset its native counter without paying again.
@@ -164,12 +185,14 @@ impl fmt::Debug for BudgetedInterpreter {
 impl BudgetedInterpreter {
     pub fn new(
         pool: ExecutionWorkPool,
-        config: InterpreterConfig,
+        mut config: InterpreterConfig,
         trace_id: impl Into<String>,
     ) -> Result<Self, WorkBudgetError> {
         if config.instruction_budget == 0 {
             return Err(WorkBudgetError::ZeroInstructionBudget);
         }
+        pool.ensure_active()?;
+        revocation::bind_cancellation(&pool.state.cancellation, &mut config);
         Ok(Self {
             pool,
             config,

@@ -6,25 +6,10 @@ use super::{ExecutionWorkPool, WorkBudgetError};
 use crate::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterHook,
 };
+use crate::checkpoint::CancellationToken;
 use crate::ir_contract::Ir3Module;
 
 impl ExecutionWorkPool {
-    /// Irreversibly delegate part of this allowance to a tenant or execution cell.
-    ///
-    /// The child has an independent balance. Neither this pool nor its other
-    /// children can spend that balance. Cloning a child shares its balance;
-    /// nesting partitions cannot mint credits. Dropping an unused child never
-    /// refunds its parent. A zero-size partition is an empty, unusable pool.
-    pub fn partition(&self, instruction_limit: u64) -> Result<Self, WorkBudgetError> {
-        // Allocate the child before the irreversible debit. Nothing fallible
-        // remains between a successful debit and returning the delegated owner.
-        let child = Self::new(instruction_limit);
-        if instruction_limit != 0 {
-            self.charge(instruction_limit)?;
-        }
-        Ok(child)
-    }
-
     /// Reserve work when enqueueing a job, before a native VM is constructed.
     ///
     /// The returned admission is movable but not cloneable or serializable.
@@ -32,9 +17,14 @@ impl ExecutionWorkPool {
     /// including cancellation before dispatch, permanently discards the quota.
     /// An admission is only a work allowance, never a capability grant.
     pub fn reserve(&self, instructions: u64) -> Result<ExecutionAdmission, WorkBudgetError> {
+        self.ensure_active()?;
+        // Bind the scope before the irreversible debit. A job retains this
+        // live signal even after it leaves the queue or its pool is dropped.
+        let scope = self.state.cancellation.child_token();
         self.charge(instructions)?;
         Ok(ExecutionAdmission {
             instruction_limit: instructions,
+            scope,
         })
     }
 }
@@ -47,10 +37,13 @@ impl ExecutionWorkPool {
 /// does not preserve potentially stale capability grants from enqueue time.
 /// Its reserved ceiling can tighten, but never enlarge, the native run limit.
 /// A host panic consumes the owner just like any other failed dispatch.
+/// Revoking its work scope denies a queued job before VM construction and
+/// requests cancellation of a running job through native checkpoints.
 #[derive(Debug)]
 #[must_use = "dropping an admission permanently discards its reserved allowance"]
 pub struct ExecutionAdmission {
     instruction_limit: u64,
+    scope: CancellationToken,
 }
 
 impl ExecutionAdmission {
@@ -74,9 +67,13 @@ impl ExecutionAdmission {
         trace_id: impl Into<String>,
         current_hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<ExecutionResult, WorkBudgetError> {
+        if self.scope.is_cancelled() {
+            return Err(WorkBudgetError::Revoked);
+        }
         if current_config.instruction_budget == 0 {
             return Err(WorkBudgetError::ZeroInstructionBudget);
         }
+        super::revocation::bind_cancellation(&self.scope, &mut current_config);
         current_config.instruction_budget =
             current_config.instruction_budget.min(self.instruction_limit);
         let mut core = InterpreterCore::new(current_config, trace_id);

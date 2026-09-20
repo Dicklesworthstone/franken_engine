@@ -281,38 +281,98 @@ impl JsString {
     /// clamps to the length; an empty needle matches at the clamped `from`.
     /// A position that splits a surrogate pair is a legal starting offset —
     /// never an error — per ES code-unit semantics. (bd-rdnhc)
+    ///
+    /// Matching takes O(n + m) work and O(m) scratch for n haystack units
+    /// and m needle units; the haystack is never materialized as a vector.
     pub fn utf16_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
-        let haystack = self.code_units_vec();
+        let haystack_len = self.utf16_len();
+        let from = from.min(haystack_len);
         let needle_units = needle.code_units_vec();
-        let from = from.min(haystack.len());
         if needle_units.is_empty() {
             return Some(from);
         }
-        if needle_units.len() > haystack.len() {
+        if needle_units.len() > haystack_len - from {
             return None;
         }
-        (from..=haystack.len() - needle_units.len())
-            .find(|&index| haystack[index..index + needle_units.len()] == needle_units[..])
+        search_utf16_units(self.encode_utf16().skip(from), &needle_units, false)
+            .map(|index| from + index)
     }
 
     /// Highest UTF-16 code-unit start index at or before `from` where
     /// `needle`'s exact unit sequence occurs (ES `String.prototype.lastIndexOf`
     /// grain). An empty needle matches at `min(from, length)`. (bd-rdnhc)
+    ///
+    /// Uses the same linear-time, needle-sized-scratch matcher as indexOf,
+    /// retaining overlapping matches while streaming the allowed prefix.
     pub fn utf16_last_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
-        let haystack = self.code_units_vec();
+        let haystack_len = self.utf16_len();
         let needle_units = needle.code_units_vec();
         if needle_units.is_empty() {
-            return Some(from.min(haystack.len()));
+            return Some(from.min(haystack_len));
         }
-        if needle_units.len() > haystack.len() {
+        if needle_units.len() > haystack_len {
             return None;
         }
-        let last_start = haystack.len() - needle_units.len();
-        let start = from.min(last_start);
-        (0..=start)
-            .rev()
-            .find(|&index| haystack[index..index + needle_units.len()] == needle_units[..])
+        let start = from.min(haystack_len - needle_units.len());
+        // start <= haystack_len - needle_units.len(), so this cannot overflow.
+        let end = start + needle_units.len();
+        search_utf16_units(self.encode_utf16().take(end), &needle_units, true)
     }
+}
+
+/// KMP over exact code units. Only the needle and its failure function need
+/// random access; streaming avoids an allocation proportional to the haystack.
+fn search_utf16_units(
+    haystack: impl Iterator<Item = u16>,
+    needle: &[u16],
+    find_last: bool,
+) -> Option<usize> {
+    search_utf16_units_with_eq(haystack, needle, find_last, |left, right| left == right)
+}
+
+// The comparison seam lets regression tests bound work without wall-clock
+// timing. Production specializes this with ordinary u16 equality.
+fn search_utf16_units_with_eq(
+    haystack: impl Iterator<Item = u16>,
+    needle: &[u16],
+    find_last: bool,
+    mut equal: impl FnMut(u16, u16) -> bool,
+) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(if find_last { haystack.count() } else { 0 });
+    }
+    let mut failure = vec![0_usize; needle.len()];
+    let mut matched = 0;
+    for index in 1..needle.len() {
+        while matched > 0 && !equal(needle[index], needle[matched]) {
+            matched = failure[matched - 1];
+        }
+        if equal(needle[index], needle[matched]) {
+            matched += 1;
+        }
+        failure[index] = matched;
+    }
+
+    matched = 0;
+    let mut found = None;
+    for (index, unit) in haystack.enumerate() {
+        while matched > 0 && !equal(unit, needle[matched]) {
+            matched = failure[matched - 1];
+        }
+        if equal(unit, needle[matched]) {
+            matched += 1;
+        }
+        if matched == needle.len() {
+            let start = index + 1 - needle.len();
+            if !find_last {
+                return Some(start);
+            }
+            found = Some(start);
+            // Keep the proper suffix so overlapping matches are not lost.
+            matched = failure[matched - 1];
+        }
+    }
+    found
 }
 
 /// UTF-16 high (leading) surrogate range check.
@@ -1241,5 +1301,133 @@ mod tests {
             astral.utf16_last_index_of(&JsString::from_code_units(&[LOW]), 99),
             Some(3)
         );
+    }
+
+    #[test]
+    fn utf16_search_matches_exhaustive_code_unit_oracle() {
+        fn corpus(max_len: usize) -> Vec<Vec<u16>> {
+            let mut all = vec![Vec::new()];
+            let mut level = vec![Vec::new()];
+            for _ in 0..max_len {
+                let mut next = Vec::new();
+                for prefix in &level {
+                    for unit in [0x61, HIGH, LOW] {
+                        let mut value = prefix.clone();
+                        value.push(unit);
+                        next.push(value);
+                    }
+                }
+                all.extend(next.iter().cloned());
+                level = next;
+            }
+            all
+        }
+
+        let needles = corpus(3);
+        for haystack in corpus(4) {
+            let string = JsString::from_code_units(&haystack);
+            for units in &needles {
+                let needle = JsString::from_code_units(units);
+                let matches: Vec<usize> = (0..=haystack.len())
+                    .filter(|&index| {
+                        haystack.get(index..index + units.len()) == Some(units.as_slice())
+                    })
+                    .collect();
+                for from in (0..=haystack.len() + 1).chain(std::iter::once(usize::MAX)) {
+                    let start = from.min(haystack.len());
+                    let first = matches.iter().copied().find(|&index| index >= start);
+                    let last = matches.iter().copied().rev().find(|&index| index <= start);
+                    assert_eq!(
+                        string.utf16_index_of(&needle, from),
+                        first,
+                        "indexOf: {haystack:?}, {units:?}, {from}"
+                    );
+                    assert_eq!(
+                        string.utf16_last_index_of(&needle, from),
+                        last,
+                        "lastIndexOf: {haystack:?}, {units:?}, {from}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn utf16_search_retains_overlapping_matches_and_clamps_extreme_offsets() {
+        let string = JsString::from("aaaaa");
+        let needle = JsString::from("aaa");
+        assert_eq!(string.utf16_index_of(&needle, 1), Some(1));
+        assert_eq!(string.utf16_index_of(&needle, usize::MAX), None);
+        assert_eq!(string.utf16_last_index_of(&needle, usize::MAX), Some(2));
+        assert_eq!(string.utf16_last_index_of(&needle, 1), Some(1));
+        assert_eq!(string.utf16_last_index_of(&needle, 0), Some(0));
+        assert_eq!(string.utf16_index_of(&JsString::empty(), usize::MAX), Some(5));
+        assert_eq!(
+            string.utf16_last_index_of(&JsString::empty(), usize::MAX),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn utf16_search_does_not_confuse_surrogates_with_their_projection() {
+        let string = JsString::from_code_units(&[0xFFFD, HIGH, LOW, LOW, HIGH]);
+        let high = JsString::from_code_units(&[HIGH]);
+        let low_high = JsString::from_code_units(&[LOW, HIGH]);
+        assert_eq!(string.utf16_index_of(&high, 0), Some(1));
+        assert_eq!(string.utf16_index_of(&high, 2), Some(4));
+        assert_eq!(string.utf16_last_index_of(&high, usize::MAX), Some(4));
+        assert_eq!(string.utf16_index_of(&low_high, 0), Some(3));
+        assert_eq!(
+            string.utf16_last_index_of(&JsString::from("\u{FFFD}"), usize::MAX),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn utf16_search_bounds_comparisons_for_adversarial_repeated_prefixes() {
+        let haystack = vec![0x61; 65_536];
+        let mut needle = vec![0x61; 8_192];
+        needle.push(0x62);
+        for find_last in [false, true] {
+            let mut comparisons = 0_usize;
+            let found = search_utf16_units_with_eq(
+                haystack.iter().copied(),
+                &needle,
+                find_last,
+                |left, right| {
+                    comparisons += 1;
+                    left == right
+                },
+            );
+            assert_eq!(found, None);
+            assert!(comparisons <= 4 * (haystack.len() + needle.len()));
+        }
+    }
+
+    #[test]
+    fn utf16_search_bounds_work_when_every_match_overlaps() {
+        let haystack = vec![0x61; 16_384];
+        let needle = vec![0x61; 4_096];
+        let mut comparisons = 0_usize;
+        let found = search_utf16_units_with_eq(
+            haystack.iter().copied(),
+            &needle,
+            true,
+            |left, right| {
+                comparisons += 1;
+                left == right
+            },
+        );
+        assert_eq!(found, Some(haystack.len() - needle.len()));
+        assert!(comparisons <= 4 * (haystack.len() + needle.len()));
+    }
+
+    #[test]
+    fn utf16_search_first_match_does_not_consume_the_remaining_stream() {
+        let haystack = (0..).map(|index| {
+            assert!(index < 3, "matcher read beyond the first match");
+            [1_u16, 2, 3][index]
+        });
+        assert_eq!(search_utf16_units(haystack, &[2, 3], false), Some(1));
     }
 }

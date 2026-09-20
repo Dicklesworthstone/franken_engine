@@ -13057,6 +13057,17 @@ impl InterpreterCore {
             None
         };
         let effect = create_fs_effect(operation, path, operation_arguments, content);
+        // A host boundary is also a cancellation checkpoint. Check before
+        // replay/recording or provider entry, so revocation preserves exactly
+        // the completed effect prefix rather than recording another attempt.
+        if self
+            .config
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(InterpreterError::Cancelled);
+        }
         // Build a Full handler stack backed by the provider (+ recorder) for this
         // dispatch. Full grants all capabilities so the stack's gate never
         // re-denies what the interpreter already authorized; the provider performs
@@ -13096,6 +13107,20 @@ impl InterpreterCore {
                 }
                 self.replace_pending_hostcall_result_label(Some(filesystem_exception_label))?;
                 return Err(error);
+            }
+            Err(EffectError::CapabilityDenied { .. })
+                if self
+                    .config
+                    .cancellation_token
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled) =>
+            {
+                // Cell-authorized providers report revoked dispatch as a host
+                // denial. Preserve the live cancellation at the interpreter
+                // boundary instead of turning it into an internal VM fault.
+                // Completed effects and their recorder entries remain intact;
+                // unrelated provider failures keep their original error path.
+                return Err(InterpreterError::Cancelled);
             }
             Err(err) => {
                 return Err(InterpreterError::InternalError {

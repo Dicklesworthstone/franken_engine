@@ -37,3 +37,75 @@ jobs:
 
       - name: Execute repeated-trial aggregation and tamper drills
         run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+
+  revocation-source-transfer:
+    name: Transfer reviewed revocation source blobs
+    if: >-
+      github.event.head_commit.message == 'chore(runtime): transfer reviewed revocation source blobs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 15254be312bdf4aa3092cdba588f6397d3c502d4
+          persist-credentials: false
+      - name: Apply pinned patch and upload exact source objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYTHON'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          assert os.environ['GITHUB_REPOSITORY'] == 'Dicklesworthstone/franken_engine'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == '15254be312bdf4aa3092cdba588f6397d3c502d4'
+          def git_hash(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          def api(path, payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/Dicklesworthstone/franken_engine' + path,
+                  data=data,
+                  headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                      'Accept': 'application/vnd.github+json',
+                      'Content-Type': 'application/json',
+                      'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          expected = {
+              'crates/franken-engine/src/baseline_interpreter.rs': (
+                  '34afe5b36dcdb271bb86bfea263b17839328bca1',
+                  '2eb880b925e8d0270fdc5b1ee2884d386cab257d',
+              ),
+              'crates/franken-engine/tests/orchestrator_execution_budgets.rs': (
+                  '399292253f564901d76d9d654549ade215428c3d',
+                  '68814dc06567891dd24d9f235949762ca92257b7',
+              ),
+          }
+          for path, (before, after) in expected.items():
+              assert git_hash(pathlib.Path(path).read_bytes()) == before, path
+          patches = [
+              ('98e918c1f97c7d43c0160796217216aab5b9caf9', 'e8e91bc2f0ba12d95ab5ea791a550df8a5198cc2c7d09df33cd0d8ac7449f58a'),
+              ('b64b9249310f3bec083304b7da4daa564e66ba4d', '5576b0a9e6af7e70ef248597550d89e9a4b0cf678b69fb78fdb5f353d47d02be'),
+          ]
+          for sha, digest in patches:
+              result = api('/git/blobs/' + sha)
+              assert result['encoding'] == 'base64'
+              patch = base64.b64decode(result['content'])
+              assert git_hash(patch) == sha
+              assert hashlib.sha256(patch).hexdigest() == digest
+              subprocess.run(['git', 'apply', '--check', '--index', '-'], input=patch, check=True)
+              subprocess.run(['git', 'apply', '--index', '-'], input=patch, check=True)
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          assert set(changed) == set(expected), changed
+          for path, (before, after) in expected.items():
+              data = pathlib.Path(path).read_bytes()
+              assert git_hash(data) == after, path
+              uploaded = api('/git/blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              assert uploaded['sha'] == after, (path, uploaded)
+              print('UPLOADED', path, after, flush=True)
+          print('UPLOAD_COMPLETE: two verified blobs; no commit or ref mutation', flush=True)
+          PYTHON

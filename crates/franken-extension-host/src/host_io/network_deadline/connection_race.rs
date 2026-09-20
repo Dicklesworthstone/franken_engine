@@ -62,8 +62,12 @@ fn interleaved(addresses: &[SocketAddr]) -> io::Result<Vec<SocketAddr>> {
             unique.push(*address);
         }
     }
-    let mut preferred = unique.iter().filter(|address| address.is_ipv6() == first_v6);
-    let mut alternate = unique.iter().filter(|address| address.is_ipv6() != first_v6);
+    let mut preferred = unique
+        .iter()
+        .filter(|address| address.is_ipv6() == first_v6);
+    let mut alternate = unique
+        .iter()
+        .filter(|address| address.is_ipv6() != first_v6);
     let mut result = Vec::with_capacity(unique.len());
     loop {
         let a = preferred.next();
@@ -156,7 +160,9 @@ fn race<C: Connector>(
         if pending.is_empty() && next == addresses.len() {
             return Err(last_error);
         }
-        let mut wake = pending.iter().fold(end, |wake, attempt| wake.min(attempt.end));
+        let mut wake = pending
+            .iter()
+            .fold(end, |wake, attempt| wake.min(attempt.end));
         if next < addresses.len() && pending.len() < MAX_PENDING {
             wake = wake.min(next_start);
         }
@@ -202,7 +208,7 @@ impl Connector for SocketConnector {
         )?;
         match connect(&socket, &address) {
             Ok(()) => {}
-            Err(error) if matches!(error, rustix::io::Errno::INPROGRESS | rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::INPROGRESS | rustix::io::Errno::INTR) => {}
             Err(error) => return Err(error.into()),
         }
         Ok(TcpStream::from(socket))
@@ -397,12 +403,7 @@ mod tests {
             (v4(2), Behavior::Ready(Duration::ZERO)),
         ]);
         let start = model.now;
-        let stream = race(
-            &[v6(1), v4(2)],
-            start + Duration::from_secs(10),
-            &mut model,
-        )
-        .unwrap();
+        let stream = race(&[v6(1), v4(2)], start + Duration::from_secs(10), &mut model).unwrap();
         assert_eq!(stream.address, v4(2));
         assert_eq!(
             model.starts,
@@ -430,12 +431,7 @@ mod tests {
             (v4(2), Behavior::Ready(Duration::ZERO)),
         ]);
         let start = model.now;
-        let stream = race(
-            &[v6(1), v4(2)],
-            start + Duration::from_secs(10),
-            &mut model,
-        )
-        .unwrap();
+        let stream = race(&[v6(1), v4(2)], start + Duration::from_secs(10), &mut model).unwrap();
         assert_eq!(stream.address, v4(2));
         assert_eq!(model.starts[1].1 - start, FAILURE_DELAY);
     }
@@ -447,12 +443,7 @@ mod tests {
             (v4(2), Behavior::Ready(Duration::ZERO)),
         ]);
         let start = model.now;
-        let stream = race(
-            &[v6(1), v4(2)],
-            start + Duration::from_secs(10),
-            &mut model,
-        )
-        .unwrap();
+        let stream = race(&[v6(1), v4(2)], start + Duration::from_secs(10), &mut model).unwrap();
         assert_eq!(stream.address, v4(2));
         assert_eq!(model.starts[1].1 - start, FAILURE_DELAY);
         assert_eq!(&*model.dropped.borrow(), &[v6(1)]);
@@ -540,6 +531,9 @@ mod tests {
         peer.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"exactly once");
         unused.set_nonblocking(true).unwrap();
-        assert_eq!(unused.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            unused.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
     }
 }

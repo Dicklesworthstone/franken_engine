@@ -25,9 +25,9 @@ rustls-pki-types = "1"
 webpki-roots = "1"
 
 [target.'cfg(unix)'.dependencies]
-# Safe process-group signalling and nonblocking pipe flags for bounded native
-# process teardown. The crate remains `#![forbid(unsafe_code)]`.
-rustix = { version = "1.1", features = ["fs", "process"] }
+# Safe process teardown and nonblocking, polled connection racing. The crate
+# remains `#![forbid(unsafe_code)]`; sockets are owned, never detached workers.
+rustix = { version = "1.1", features = ["fs", "process", "net", "event"] }
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["filters"] }

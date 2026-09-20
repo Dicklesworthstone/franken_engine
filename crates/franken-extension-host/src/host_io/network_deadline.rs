@@ -8,6 +8,8 @@ use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod connection_race;
 mod resolver;
 
 #[derive(Debug, Clone, Copy)]
@@ -48,17 +50,28 @@ pub(super) struct DeadlineTcpStream {
 }
 
 impl DeadlineTcpStream {
-    /// Resolve once, then try the bounded address list in resolver order. Each
-    /// remaining address gets a share of the remaining connection budget, so a
-    /// blackholed first address cannot consume every later address's chance.
+    /// Resolve once, retaining the resolver's first-family preference. Unix
+    /// races at most two owned sockets with staggered starts; other platforms
+    /// use bounded sequential failover. Neither path renews the shared budget
+    /// or sends guest bytes before selecting a connection. Pinned requests do
+    /// not use this entrypoint and never try another destination.
     pub(super) fn connect_endpoint(endpoint: &str, deadline: NetworkDeadline) -> io::Result<Self> {
         let addresses = resolver::resolve_endpoint(endpoint, deadline)?;
         if addresses.len() == 1 {
             return Self::connect(&addresses[0], deadline);
         }
-        Self::connect_addresses(&addresses, deadline, TcpStream::connect_timeout)
+        #[cfg(unix)]
+        {
+            let stream = connection_race::connect_addresses(&addresses, deadline)?;
+            Ok(Self { stream, deadline })
+        }
+        #[cfg(not(unix))]
+        {
+            Self::connect_addresses(&addresses, deadline, TcpStream::connect_timeout)
+        }
     }
 
+    #[cfg(any(not(unix), test))]
     fn connect_addresses<F>(
         addresses: &[SocketAddr],
         deadline: NetworkDeadline,

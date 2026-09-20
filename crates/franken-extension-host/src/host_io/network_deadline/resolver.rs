@@ -126,8 +126,12 @@ fn checked_addresses(addresses: Vec<SocketAddr>) -> io::Result<Vec<SocketAddr>> 
     // IPv4) addresses must not spend every dial opportunity before the other
     // family is tried. This neither resolves again nor invents a destination.
     let first_v6 = unique[0].is_ipv6();
-    let mut preferred = unique.iter().filter(|address| address.is_ipv6() == first_v6);
-    let mut alternate = unique.iter().filter(|address| address.is_ipv6() != first_v6);
+    let mut preferred = unique
+        .iter()
+        .filter(|address| address.is_ipv6() == first_v6);
+    let mut alternate = unique
+        .iter()
+        .filter(|address| address.is_ipv6() != first_v6);
     let mut ordered = Vec::with_capacity(unique.len());
     loop {
         let first = preferred.next();
@@ -308,10 +312,8 @@ mod tests {
             ["127.0.0.2:443", "127.0.0.1:80", "127.0.0.2:443"],
             ["[::2]:443", "[::1]:80", "[::2]:443"],
         ] {
-            let addresses: Vec<SocketAddr> = inputs
-                .iter()
-                .map(|input| input.parse().unwrap())
-                .collect();
+            let addresses: Vec<SocketAddr> =
+                inputs.iter().map(|input| input.parse().unwrap()).collect();
             let expected = vec![addresses[0], addresses[1]];
             assert_eq!(checked_addresses(addresses).unwrap(), expected);
         }

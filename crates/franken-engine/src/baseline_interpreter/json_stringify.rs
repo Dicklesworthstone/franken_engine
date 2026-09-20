@@ -47,6 +47,33 @@ impl StringifyState {
         self.charged -= bytes;
     }
 
+    /// Append an exact key with amortized linear copying. Charge the complete
+    /// capacity increment, including unused slots, before native allocation.
+    /// The returned charge belongs to this vector and must live until it drops,
+    /// even when a nested frame or guest callback allocates more scratch.
+    fn push_key(
+        &mut self,
+        core: &mut InterpreterCore,
+        keys: &mut Vec<JsString>,
+        key: &JsString,
+    ) -> Result<u64, InterpreterError> {
+        let additional = if keys.len() == keys.capacity() {
+            keys.capacity().max(8)
+        } else {
+            0
+        };
+        let slots = (additional as u64)
+            .saturating_mul(std::mem::size_of::<JsString>() as u64);
+        let bytes = slots.saturating_add(InterpreterCore::estimate_js_string_bytes(key));
+        self.reserve(core, bytes)?;
+        if additional != 0 && keys.try_reserve_exact(additional).is_err() {
+            self.release(core, bytes);
+            return Err(core.memory_budget_error(u64::MAX, core.heap_object_count_u32()));
+        }
+        keys.push(key.clone());
+        Ok(bytes)
+    }
+
     fn push(&mut self, core: &mut InterpreterCore, unit: u16) -> Result<(), InterpreterError> {
         if self.output.len().is_multiple_of(256) {
             core.json_charge_work()?;
@@ -370,15 +397,14 @@ impl InterpreterCore {
                     && !seen.contains(&key)
                 {
                     let bytes = Self::estimate_js_string_bytes(&key)
-                        .saturating_add(std::mem::size_of::<JsString>() as u64);
-                    // Charge the list and the deduplication set before insertion.
-                    state.reserve(self, bytes.saturating_mul(2).saturating_add(64))?;
-                    seen_bytes = seen_bytes.saturating_add(bytes).saturating_add(64);
-                    list.try_reserve_exact(1).map_err(|_| {
-                        self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-                    })?;
-                    seen.insert(key.clone());
-                    list.push(key);
+                        .saturating_add(std::mem::size_of::<JsString>() as u64)
+                        .saturating_add(64);
+                    // The set dies after option collection; the list's backing
+                    // capacity stays charged until the whole document finishes.
+                    state.reserve(self, bytes)?;
+                    seen_bytes = seen_bytes.saturating_add(bytes);
+                    state.push_key(self, &mut list, &key)?;
+                    seen.insert(key);
                 }
             }
             drop(seen);
@@ -430,14 +456,7 @@ impl InterpreterCore {
                 let observed = self.json_parse_context_label()?;
                 self.json_observe_label(observed)?;
                 if enumerable {
-                    let bytes = (std::mem::size_of::<JsString>() as u64)
-                        .saturating_add(Self::estimate_js_string_bytes(key));
-                    state.reserve(self, bytes)?;
-                    retained += bytes;
-                    selected.try_reserve_exact(1).map_err(|_| {
-                        self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-                    })?;
-                    selected.push(key.clone());
+                    retained = retained.saturating_add(state.push_key(self, &mut selected, key)?);
                 }
             }
         }
@@ -777,6 +796,117 @@ mod tests {
             stringify(&mut core),
             Err(InterpreterError::BudgetExhausted { .. })
         ));
+        assert!(core.pending_exception.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_accounted(&core);
+    }
+
+    #[test]
+    fn key_scratch_growth_is_logarithmic_and_capacity_is_charged() {
+        let mut core = core();
+        let mut state = StringifyState::default();
+        let mut keys = Vec::new();
+        let mut growths = 0;
+        let mut moved = 0;
+        let mut retained = 0_u64;
+        let mut payload = 0_u64;
+        for index in 0..16_384 {
+            let key = JsString::from(index.to_string());
+            let capacity = keys.capacity();
+            let length = keys.len();
+            payload += InterpreterCore::estimate_js_string_bytes(&key);
+            retained += state.push_key(&mut core, &mut keys, &key).unwrap();
+            if keys.capacity() != capacity {
+                growths += 1;
+                moved += length;
+            }
+            assert_eq!(state.charged, retained);
+            assert_eq!(core.json_parse_temporary_bytes, retained);
+            assert!(
+                retained >= payload + (keys.len() * std::mem::size_of::<JsString>()) as u64
+            );
+        }
+        assert!(growths <= 12, "reallocated {growths} times");
+        assert!(moved < 2 * keys.len(), "copied {moved} key slots");
+        assert_eq!(keys[0], JsString::from("0"));
+        assert_eq!(keys[16_383], JsString::from("16383"));
+        drop(keys);
+        state.release(&mut core, retained);
+        assert_eq!(state.charged, 0);
+        assert_accounted(&core);
+    }
+
+    #[test]
+    fn key_scratch_preserves_exact_units_duplicates_and_order() {
+        let mut core = core();
+        let mut state = StringifyState::default();
+        let mut keys = Vec::new();
+        let expected = [
+            JsString::from_code_units(&[0xd800]),
+            JsString::from("\u{fffd}"),
+            JsString::from_code_units(&[0xd801]),
+            JsString::from_code_units(&[0xdc00]),
+            JsString::from("plain"),
+            JsString::from_code_units(&[0xd800]),
+        ];
+        for key in &expected {
+            state.push_key(&mut core, &mut keys, key).unwrap();
+        }
+        assert_eq!(keys.as_slice(), expected.as_slice());
+        assert_ne!(keys[0], keys[1]);
+        assert_ne!(keys[0], keys[2]);
+        let charged = state.charged;
+        drop(keys);
+        state.release(&mut core, charged);
+        assert_accounted(&core);
+    }
+
+    #[test]
+    fn releasing_one_key_snapshot_keeps_other_scratch_charged() {
+        let mut core = core();
+        let mut state = StringifyState::default();
+        let mut outer = Vec::new();
+        let mut inner = Vec::new();
+        let mut outer_bytes = 0;
+        let mut inner_bytes = 0;
+        for index in 0..17 {
+            outer_bytes += state
+                .push_key(&mut core, &mut outer, &JsString::from(index.to_string()))
+                .unwrap();
+        }
+        for key in ["a", "b", "c"] {
+            inner_bytes += state
+                .push_key(&mut core, &mut inner, &JsString::from(key))
+                .unwrap();
+        }
+        assert_eq!(state.charged, outer_bytes + inner_bytes);
+        drop(inner);
+        state.release(&mut core, inner_bytes);
+        assert_eq!(state.charged, outer_bytes);
+        assert_eq!(core.json_parse_temporary_bytes, outer_bytes);
+        assert_eq!(outer.len(), 17);
+        drop(outer);
+        state.release(&mut core, outer_bytes);
+        assert_accounted(&core);
+    }
+
+    #[test]
+    fn large_object_serialization_preserves_keys_and_releases_snapshot_capacity() {
+        let mut core = core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let mut expected = String::from("{");
+        for index in 0..256 {
+            let key = format!("key{index:04}");
+            core.set_object_property(object, key.clone(), Value::Int(index))
+                .unwrap();
+            if index != 0 {
+                expected.push(',');
+            }
+            expected.push_str(&format!("\"{key}\":{index}"));
+        }
+        expected.push('}');
+        core.set_register(0, Value::Object(object)).unwrap();
+        assert_eq!(stringify(&mut core).unwrap(), Value::Str(JsString::from(expected)));
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
         assert_accounted(&core);

@@ -37,3 +37,62 @@ jobs:
 
       - name: Execute repeated-trial aggregation and tamper drills
         run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
+
+  live-scope-validation:
+    name: Live work-scope execution regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b75fa2255bce342cdffbb6d421e3de392fa1a459
+          persist-credentials: false
+      - name: Apply exact reviewed native patch
+        run: |
+          mkdir -p scope-validation
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, subprocess, zlib
+          encoded = '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'
+          patch = zlib.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(patch).hexdigest() == '9e95b98a15be59e54d60b20289a0bfbf58be51391c75f412539db113cb3eae7f'
+          pathlib.Path('scope-validation/source.patch').write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', 'scope-validation/source.patch'], check=True)
+          subprocess.run(['git', 'apply', 'scope-validation/source.patch'], check=True)
+          PY
+      - name: Export exact source blobs without moving any ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          expected = {'crates/franken-core/src/execution_orchestrator.rs':'4c231d0e398e06eddc1428bf900ccbdbb1b9a365','crates/franken-core/src/execution_work_budget.rs':'28a154c791585a29dea64da09ba2b79ebf54d742','crates/franken-core/src/execution_work_budget/revocation.rs':'e66730d1148a1afe9a0cc1f0da7f42f28b87bc55','crates/franken-core/tests/orchestrator_execution_budgets.rs':'5a6e6045677971b8dd9f97e34e1a4c7edd1f456b'}
+          for path, sha in expected.items():
+              assert subprocess.check_output(['git','hash-object',path], text=True).strip() == sha
+              body = json.dumps({'content':pathlib.Path(path).read_text(),'encoding':'utf-8'})
+              reply = subprocess.check_output(['gh','api','repos/Dicklesworthstone/franken_engine/git/blobs','--method','POST','-H','User-Agent: OpenAI File Downloader, XaiImageApiFetch/1.0','--input','-'],input=body,text=True)
+              assert json.loads(reply)['sha'] == sha
+              print('SOURCE_BLOB', path, sha, flush=True)
+          pathlib.Path('scope-validation/blobs.json').write_text(json.dumps(expected,indent=2))
+          PY
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+      - name: Test real native dispatch and shared-scope semantics
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-core --lib execution_work_budget -- --nocapture 2>&1 | tee scope-validation/work-pool.log
+          cargo +nightly test --locked -p frankenengine-core --lib ordinary_lane_router_observes_revocation -- --nocapture 2>&1 | tee scope-validation/native-revocation.log
+          cargo +nightly test --locked -p frankenengine-core --test orchestrator_execution_budgets -- --nocapture 2>&1 | tee scope-validation/public-orchestrator.log
+      - name: Retain exact patch and full test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-scope-validation
+          path: scope-validation/
+          retention-days: 7

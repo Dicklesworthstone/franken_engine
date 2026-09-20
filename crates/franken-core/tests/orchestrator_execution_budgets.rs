@@ -41,6 +41,65 @@ fn assert_closed(error: &OrchestratorError) {
 }
 
 #[test]
+fn revocation_after_admission_interrupts_ordinary_native_dispatch() {
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+        // The counter is the synchronization point: revocation happens only
+        // after reserve has debited the run. It may race reserve's final
+        // revocation check or native entry; both must refuse without refund.
+        let budget = 100_000_000;
+        let root = ExecutionWorkPool::new(budget * 2);
+        let tenant = root.partition(budget * 2).unwrap();
+        let worker_pool = tenant.clone();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut config = RuntimeConfig::default();
+            config.execution.deterministic_budget = budget;
+            config.execution.throughput_budget = budget;
+            let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+                OrchestratorConfig {
+                    force_lane: lane,
+                    work_pool: Some(worker_pool),
+                    ..OrchestratorConfig::default()
+                },
+                config,
+            )
+            .unwrap();
+            let error = orchestrator.execute(&package("while (true) {}")).unwrap_err();
+            assert!(
+                matches!(
+                    error.primary_error(),
+                    OrchestratorError::Interpreter(InterpreterError::Cancelled)
+                        | OrchestratorError::WorkBudget(
+                            runtime::execution_orchestrator::WorkBudgetError::Revoked
+                        )
+                ),
+                "{lane:?}: admitted execution must observe live revocation: {error:?}"
+            );
+            assert_closed(&error);
+            assert_eq!(orchestrator.execution_count(), 0);
+            done_tx.send(()).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while tenant.committed() == 0 {
+            assert!(!worker.is_finished(), "worker stopped before admission");
+            assert!(Instant::now() < deadline, "worker never reserved its budget");
+            std::thread::yield_now();
+        }
+        root.revoke();
+        done_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("revoked execution must terminate, not consume its full allowance");
+        worker.join().unwrap();
+        assert_eq!(tenant.committed(), budget);
+        assert_eq!(tenant.remaining(), budget, "cancellation is not a refund");
+    }
+}
+
+#[test]
 fn configured_instruction_limits_reach_both_native_profiles() {
     let package = package("while (true) {}");
     for (lane, budget) in [(LaneChoice::QuickJs, 7), (LaneChoice::V8, 11)] {

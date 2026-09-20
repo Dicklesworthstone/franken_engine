@@ -11,7 +11,40 @@ use crate::checkpoint::CancellationToken;
 /// This bounds the pool-owned part of checkpoint polling and retained signals.
 pub const MAX_WORK_POOL_DEPTH: usize = 64;
 
+/// Read-only, live cancellation of a work scope and its ancestors.
+///
+/// This is not an admission or a capability grant. It lets other runtime
+/// consumers observe the same irreversible signal without gaining access to
+/// `CancellationToken::reset` or the ability to cancel a parent or sibling.
+/// It deliberately cannot be serialized: a snapshot is not a live binding.
+#[derive(Debug, Clone)]
+pub struct WorkScopeRevocation {
+    scope: CancellationToken,
+}
+
+impl WorkScopeRevocation {
+    pub fn is_revoked(&self) -> bool {
+        self.scope.is_cancelled()
+    }
+}
+
 impl ExecutionWorkPool {
+    /// Observe revocation without granting execution or mutable token access.
+    /// The signal remains live even after the pool and its other owners drop.
+    pub fn revocation_signal(&self) -> WorkScopeRevocation {
+        WorkScopeRevocation {
+            scope: self.state.cancellation.clone(),
+        }
+    }
+
+    /// The ordinary core orchestrator has already charged its selected lane.
+    /// Bind that run to the pool without charging again or replacing any
+    /// caller cancellation. The engine crate uses the read-only signal above
+    /// at its execution-cell authority boundary instead.
+    pub(crate) fn bind_interpreter_cancellation(&self, config: &mut InterpreterConfig) {
+        bind_cancellation(&self.state.cancellation, config);
+    }
+
     /// Permanently revoke this scope and all its descendants, including work
     /// admitted before this call. Clones share this request; siblings do not.
     ///
@@ -93,6 +126,35 @@ mod tests {
     };
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn read_only_revocation_signal_tracks_ancestors_after_pool_drop() {
+        let root = ExecutionWorkPool::new(256);
+        let child = root.partition(128).unwrap();
+        let signal = child.revocation_signal();
+        let alias = signal.clone();
+        drop(child);
+        assert!(!signal.is_revoked());
+        root.revoke();
+        drop(root);
+        assert!(signal.is_revoked());
+        assert!(alias.is_revoked());
+    }
+
+    #[test]
+    fn read_only_revocation_signal_does_not_widen_child_cancellation() {
+        let root = ExecutionWorkPool::new(256);
+        let child = root.partition(128).unwrap();
+        let sibling = root.partition(128).unwrap();
+        let root_signal = root.revocation_signal();
+        let sibling_signal = sibling.revocation_signal();
+        child.revoke();
+        assert!(child.revocation_signal().is_revoked());
+        assert!(!root_signal.is_revoked());
+        assert!(!sibling_signal.is_revoked());
+        let _admission = sibling.reserve(128).unwrap();
+        assert_eq!(root.remaining(), 0);
+    }
 
     #[test]
     fn revoked_clones_deny_admission_and_delegation_without_debit() {

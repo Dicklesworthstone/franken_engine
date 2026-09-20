@@ -1732,6 +1732,14 @@ impl ExecutionOrchestrator {
             .and_then(|path| std::path::Path::new(path).parent())
             .map(|path| path.display().to_string());
 
+        // Admission alone only prevents future runs. Both configurations must
+        // retain the live scope signal so a tenant/ancestor revoked after the
+        // reservation interrupts this run at native checkpoints as well.
+        if let Some(pool) = self.config.work_pool.as_ref() {
+            pool.bind_interpreter_cancellation(&mut quickjs_config);
+            pool.bind_interpreter_cancellation(&mut v8_config);
+        }
+
         Ok(LaneRouter::with_configs(quickjs_config, v8_config))
     }
 
@@ -3454,6 +3462,85 @@ mod tests {
     use super::*;
     use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
     use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+
+    #[test]
+    fn ordinary_lane_router_observes_revocation_from_native_allocation() {
+        use crate::baseline_interpreter::{
+            AllocKind, FunctionRef, HookContext, ObjectRef, PropertyKey, Value,
+        };
+        use crate::parser::Es2020Parser;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct RevokeOnAllocation {
+            root: ExecutionWorkPool,
+            calls: AtomicUsize,
+        }
+        impl InterpreterHook for RevokeOnAllocation {
+            fn pre_property_access(
+                &self,
+                _: &HookContext,
+                _: &ObjectRef,
+                _: &PropertyKey,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_call(&self, _: &HookContext, _: &FunctionRef, _: &[Value]) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_allocation(&self, _: &HookContext, _: AllocKind, _: usize) -> HookAction {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                self.root.revoke();
+                HookAction::Allow
+            }
+            fn pre_import(&self, _: &HookContext, _: &str) -> HookAction {
+                HookAction::Allow
+            }
+        }
+
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let root = ExecutionWorkPool::new(200_000);
+            let tenant = root.partition(200_000).unwrap();
+            let mut runtime = RuntimeConfig::default();
+            runtime.execution.deterministic_budget = 100_000;
+            runtime.execution.throughput_budget = 100_000;
+            let orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+                OrchestratorConfig {
+                    work_pool: Some(tenant.clone()),
+                    ..OrchestratorConfig::default()
+                },
+                runtime,
+            )
+            .unwrap();
+            let package = ExtensionPackage {
+                source: "let object = {}; while (true) {}".to_string(),
+                ..simple_package()
+            };
+            let syntax = CanonicalEs2020Parser
+                .parse(package.source.as_str(), ParseGoal::Script)
+                .unwrap();
+            let ir3 = lower_ir0_to_ir3(
+                &Ir0Module::from_syntax_tree(syntax, "revocation.js"),
+                &LoweringContext::new("revocation", "revocation", "revocation"),
+            )
+            .unwrap()
+            .ir3;
+            let _admission = tenant.reserve(100_000).unwrap();
+            let mut router = orchestrator.lane_router_for_execution(&package, &ir3).unwrap();
+            let hook = Arc::new(RevokeOnAllocation {
+                root,
+                calls: AtomicUsize::new(0),
+            });
+            let result = router.execute_with_hook(
+                &ir3,
+                "live-revocation",
+                Some(lane),
+                Some(hook.clone()),
+            );
+            assert!(matches!(result, Err(InterpreterError::Cancelled)), "{result:?}");
+            assert!(hook.calls.load(Ordering::Relaxed) > 0);
+            assert_eq!(tenant.remaining(), 100_000);
+        }
+    }
 
     fn simple_package() -> ExtensionPackage {
         ExtensionPackage {

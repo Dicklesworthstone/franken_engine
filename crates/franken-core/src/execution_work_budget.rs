@@ -27,7 +27,7 @@ use crate::ir_contract::Ir3Module;
 
 mod revocation;
 mod scheduling;
-pub use revocation::MAX_WORK_POOL_DEPTH;
+pub use revocation::{MAX_WORK_POOL_DEPTH, WorkScopeRevocation};
 pub use scheduling::ExecutionAdmission;
 
 #[derive(Debug)]

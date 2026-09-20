@@ -57,15 +57,278 @@ jobs:
       - name: Apply exact reviewed native patch
         run: |
           mkdir -p scope-validation
-          python3 - <<'PY'
-          import base64, hashlib, pathlib, subprocess, zlib
-          encoded = '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'
-          patch = zlib.decompress(base64.b64decode(encoded))
-          assert hashlib.sha256(patch).hexdigest() == '9e95b98a15be59e54d60b20289a0bfbf58be51391c75f412539db113cb3eae7f'
-          pathlib.Path('scope-validation/source.patch').write_bytes(patch)
-          subprocess.run(['git', 'apply', '--check', 'scope-validation/source.patch'], check=True)
-          subprocess.run(['git', 'apply', 'scope-validation/source.patch'], check=True)
-          PY
+          cat > scope-validation/source.patch <<'PATCH'
+          diff --git a/crates/franken-core/src/execution_orchestrator.rs b/crates/franken-core/src/execution_orchestrator.rs
+          index 26a66cd..4c231d0 100644
+          --- a/crates/franken-core/src/execution_orchestrator.rs
+          +++ b/crates/franken-core/src/execution_orchestrator.rs
+          @@ -1732,6 +1732,14 @@ impl ExecutionOrchestrator {
+                       .and_then(|path| std::path::Path::new(path).parent())
+                       .map(|path| path.display().to_string());
+           
+          +        // Admission alone only prevents future runs. Both configurations must
+          +        // retain the live scope signal so a tenant/ancestor revoked after the
+          +        // reservation interrupts this run at native checkpoints as well.
+          +        if let Some(pool) = self.config.work_pool.as_ref() {
+          +            pool.bind_interpreter_cancellation(&mut quickjs_config);
+          +            pool.bind_interpreter_cancellation(&mut v8_config);
+          +        }
+          +
+                   Ok(LaneRouter::with_configs(quickjs_config, v8_config))
+               }
+           
+          @@ -3455,6 +3463,84 @@ mod tests {
+               use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
+               use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+           
+          +    #[test]
+          +    fn ordinary_lane_router_observes_revocation_from_native_allocation() {
+          +        use crate::baseline_interpreter::{
+          +            AllocKind, FunctionRef, HookContext, ObjectRef, PropertyKey, Value,
+          +        };
+          +        use std::sync::atomic::{AtomicUsize, Ordering};
+          +
+          +        struct RevokeOnAllocation {
+          +            root: ExecutionWorkPool,
+          +            calls: AtomicUsize,
+          +        }
+          +        impl InterpreterHook for RevokeOnAllocation {
+          +            fn pre_property_access(
+          +                &self,
+          +                _: &HookContext,
+          +                _: &ObjectRef,
+          +                _: &PropertyKey,
+          +            ) -> HookAction {
+          +                HookAction::Allow
+          +            }
+          +            fn pre_call(&self, _: &HookContext, _: &FunctionRef, _: &[Value]) -> HookAction {
+          +                HookAction::Allow
+          +            }
+          +            fn pre_allocation(&self, _: &HookContext, _: AllocKind, _: usize) -> HookAction {
+          +                self.calls.fetch_add(1, Ordering::Relaxed);
+          +                self.root.revoke();
+          +                HookAction::Allow
+          +            }
+          +            fn pre_import(&self, _: &HookContext, _: &str) -> HookAction {
+          +                HookAction::Allow
+          +            }
+          +        }
+          +
+          +        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+          +            let root = ExecutionWorkPool::new(200_000);
+          +            let tenant = root.partition(200_000).unwrap();
+          +            let mut runtime = RuntimeConfig::default();
+          +            runtime.execution.deterministic_budget = 100_000;
+          +            runtime.execution.throughput_budget = 100_000;
+          +            let orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+          +                OrchestratorConfig {
+          +                    work_pool: Some(tenant.clone()),
+          +                    ..OrchestratorConfig::default()
+          +                },
+          +                runtime,
+          +            )
+          +            .unwrap();
+          +            let package = ExtensionPackage {
+          +                source: "let object = {}; while (true) {}".to_string(),
+          +                ..simple_package()
+          +            };
+          +            let syntax = CanonicalEs2020Parser
+          +                .parse(&package.source, ParseGoal::Script)
+          +                .unwrap();
+          +            let ir3 = lower_ir0_to_ir3(
+          +                &Ir0Module::from_syntax_tree(syntax, "revocation.js"),
+          +                &LoweringContext::new("revocation", "revocation", "revocation"),
+          +            )
+          +            .unwrap()
+          +            .ir3;
+          +            let _admission = tenant.reserve(100_000).unwrap();
+          +            let mut router = orchestrator.lane_router_for_execution(&package, &ir3).unwrap();
+          +            let hook = Arc::new(RevokeOnAllocation {
+          +                root,
+          +                calls: AtomicUsize::new(0),
+          +            });
+          +            let result = router.execute_with_hook(
+          +                &ir3,
+          +                "live-revocation",
+          +                Some(lane),
+          +                Some(hook.clone()),
+          +            );
+          +            assert!(matches!(result, Err(InterpreterError::Cancelled)), "{result:?}");
+          +            assert!(hook.calls.load(Ordering::Relaxed) > 0);
+          +            assert_eq!(tenant.remaining(), 100_000);
+          +        }
+          +    }
+          +
+               fn simple_package() -> ExtensionPackage {
+                   ExtensionPackage {
+                       extension_id: "test-ext-1".to_string(),
+          diff --git a/crates/franken-core/src/execution_work_budget.rs b/crates/franken-core/src/execution_work_budget.rs
+          index 4727908..28a154c 100644
+          --- a/crates/franken-core/src/execution_work_budget.rs
+          +++ b/crates/franken-core/src/execution_work_budget.rs
+          @@ -27,7 +27,7 @@ use crate::ir_contract::Ir3Module;
+           
+           mod revocation;
+           mod scheduling;
+          -pub use revocation::MAX_WORK_POOL_DEPTH;
+          +pub use revocation::{MAX_WORK_POOL_DEPTH, WorkScopeRevocation};
+           pub use scheduling::ExecutionAdmission;
+           
+           #[derive(Debug)]
+          diff --git a/crates/franken-core/src/execution_work_budget/revocation.rs b/crates/franken-core/src/execution_work_budget/revocation.rs
+          index 55300f8..e66730d 100644
+          --- a/crates/franken-core/src/execution_work_budget/revocation.rs
+          +++ b/crates/franken-core/src/execution_work_budget/revocation.rs
+          @@ -11,7 +11,40 @@ use crate::checkpoint::CancellationToken;
+           /// This bounds the pool-owned part of checkpoint polling and retained signals.
+           pub const MAX_WORK_POOL_DEPTH: usize = 64;
+           
+          +/// Read-only, live cancellation of a work scope and its ancestors.
+          +///
+          +/// This is not an admission or a capability grant. It lets other runtime
+          +/// consumers observe the same irreversible signal without gaining access to
+          +/// `CancellationToken::reset` or the ability to cancel a parent or sibling.
+          +/// It deliberately cannot be serialized: a snapshot is not a live binding.
+          +#[derive(Debug, Clone)]
+          +pub struct WorkScopeRevocation {
+          +    scope: CancellationToken,
+          +}
+          +
+          +impl WorkScopeRevocation {
+          +    pub fn is_revoked(&self) -> bool {
+          +        self.scope.is_cancelled()
+          +    }
+          +}
+          +
+           impl ExecutionWorkPool {
+          +    /// Observe revocation without granting execution or mutable token access.
+          +    /// The signal remains live even after the pool and its other owners drop.
+          +    pub fn revocation_signal(&self) -> WorkScopeRevocation {
+          +        WorkScopeRevocation {
+          +            scope: self.state.cancellation.clone(),
+          +        }
+          +    }
+          +
+          +    /// The ordinary core orchestrator has already charged its selected lane.
+          +    /// Bind that run to the pool without charging again or replacing any
+          +    /// caller cancellation. The engine crate uses the read-only signal above
+          +    /// at its execution-cell authority boundary instead.
+          +    pub(crate) fn bind_interpreter_cancellation(&self, config: &mut InterpreterConfig) {
+          +        bind_cancellation(&self.state.cancellation, config);
+          +    }
+          +
+               /// Permanently revoke this scope and all its descendants, including work
+               /// admitted before this call. Clones share this request; siblings do not.
+               ///
+          @@ -94,6 +127,35 @@ mod tests {
+               use std::sync::Barrier;
+               use std::sync::atomic::{AtomicUsize, Ordering};
+           
+          +    #[test]
+          +    fn read_only_revocation_signal_tracks_ancestors_after_pool_drop() {
+          +        let root = ExecutionWorkPool::new(256);
+          +        let child = root.partition(128).unwrap();
+          +        let signal = child.revocation_signal();
+          +        let alias = signal.clone();
+          +        drop(child);
+          +        assert!(!signal.is_revoked());
+          +        root.revoke();
+          +        drop(root);
+          +        assert!(signal.is_revoked());
+          +        assert!(alias.is_revoked());
+          +    }
+          +
+          +    #[test]
+          +    fn read_only_revocation_signal_does_not_widen_child_cancellation() {
+          +        let root = ExecutionWorkPool::new(256);
+          +        let child = root.partition(128).unwrap();
+          +        let sibling = root.partition(128).unwrap();
+          +        let root_signal = root.revocation_signal();
+          +        let sibling_signal = sibling.revocation_signal();
+          +        child.revoke();
+          +        assert!(child.revocation_signal().is_revoked());
+          +        assert!(!root_signal.is_revoked());
+          +        assert!(!sibling_signal.is_revoked());
+          +        let _admission = sibling.reserve(128).unwrap();
+          +        assert_eq!(root.remaining(), 0);
+          +    }
+          +
+               #[test]
+               fn revoked_clones_deny_admission_and_delegation_without_debit() {
+                   let pool = ExecutionWorkPool::new(256);
+          diff --git a/crates/franken-core/tests/orchestrator_execution_budgets.rs b/crates/franken-core/tests/orchestrator_execution_budgets.rs
+          index 9f7fbe8..5a6e604 100644
+          --- a/crates/franken-core/tests/orchestrator_execution_budgets.rs
+          +++ b/crates/franken-core/tests/orchestrator_execution_budgets.rs
+          @@ -40,6 +40,65 @@ fn assert_closed(error: &OrchestratorError) {
+               assert!(failure.cleanup.close_succeeded());
+           }
+           
+          +#[test]
+          +fn revocation_after_admission_interrupts_ordinary_native_dispatch() {
+          +    use runtime::execution_orchestrator::ExecutionWorkPool;
+          +    use std::sync::mpsc;
+          +    use std::time::{Duration, Instant};
+          +
+          +    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+          +        // The counter is the synchronization point: revocation happens only
+          +        // after reserve has debited the run. It may race reserve's final
+          +        // revocation check or native entry; both must refuse without refund.
+          +        let budget = 100_000_000;
+          +        let root = ExecutionWorkPool::new(budget * 2);
+          +        let tenant = root.partition(budget * 2).unwrap();
+          +        let worker_pool = tenant.clone();
+          +        let (done_tx, done_rx) = mpsc::channel();
+          +        let worker = std::thread::spawn(move || {
+          +            let mut config = RuntimeConfig::default();
+          +            config.execution.deterministic_budget = budget;
+          +            config.execution.throughput_budget = budget;
+          +            let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+          +                OrchestratorConfig {
+          +                    force_lane: lane,
+          +                    work_pool: Some(worker_pool),
+          +                    ..OrchestratorConfig::default()
+          +                },
+          +                config,
+          +            )
+          +            .unwrap();
+          +            let error = orchestrator.execute(&package("while (true) {}")).unwrap_err();
+          +            assert!(
+          +                matches!(
+          +                    error.primary_error(),
+          +                    OrchestratorError::Interpreter(InterpreterError::Cancelled)
+          +                        | OrchestratorError::WorkBudget(
+          +                            runtime::execution_orchestrator::WorkBudgetError::Revoked
+          +                        )
+          +                ),
+          +                "{lane:?}: admitted execution must observe live revocation: {error:?}"
+          +            );
+          +            assert_closed(&error);
+          +            assert_eq!(orchestrator.execution_count(), 0);
+          +            done_tx.send(()).unwrap();
+          +        });
+          +        let deadline = Instant::now() + Duration::from_secs(30);
+          +        while tenant.committed() == 0 {
+          +            assert!(!worker.is_finished(), "worker stopped before admission");
+          +            assert!(Instant::now() < deadline, "worker never reserved its budget");
+          +            std::thread::yield_now();
+          +        }
+          +        root.revoke();
+          +        done_rx
+          +            .recv_timeout(Duration::from_secs(30))
+          +            .expect("revoked execution must terminate, not consume its full allowance");
+          +        worker.join().unwrap();
+          +        assert_eq!(tenant.committed(), budget);
+          +        assert_eq!(tenant.remaining(), budget, "cancellation is not a refund");
+          +    }
+          +}
+          +
+           #[test]
+           fn configured_instruction_limits_reach_both_native_profiles() {
+               let package = package("while (true) {}");
+          PATCH
+          git apply --check scope-validation/source.patch
+          git apply scope-validation/source.patch
       - name: Export exact source blobs without moving any ref
         env:
           GH_TOKEN: ${{ github.token }}

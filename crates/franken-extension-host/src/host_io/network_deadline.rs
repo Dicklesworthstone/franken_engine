@@ -53,21 +53,26 @@ impl DeadlineTcpStream {
     /// Resolve once, retaining the resolver's first-family preference. Unix
     /// races at most two owned sockets with staggered starts; other platforms
     /// use bounded sequential failover. Neither path renews the shared budget
-    /// or sends guest bytes before selecting a connection. Pinned requests do
-    /// not use this entrypoint and never try another destination.
+    /// or sends guest bytes before selecting a connection.
     pub(super) fn connect_endpoint(endpoint: &str, deadline: NetworkDeadline) -> io::Result<Self> {
         let addresses = resolver::resolve_endpoint(endpoint, deadline)?;
+        Self::connect_approved_addresses(&addresses, deadline)
+    }
+
+    /// Consume only an already-resolved, validated set. Unlike connect_endpoint,
+    /// this cannot consult DNS or add any address beyond the approved list.
+    fn connect_approved_addresses(addresses: &[SocketAddr], deadline: NetworkDeadline) -> io::Result<Self> {
         if addresses.len() == 1 {
             return Self::connect(&addresses[0], deadline);
         }
         #[cfg(unix)]
         {
-            let stream = connection_race::connect_addresses(&addresses, deadline)?;
+            let stream = connection_race::connect_addresses(addresses, deadline)?;
             Ok(Self { stream, deadline })
         }
         #[cfg(not(unix))]
         {
-            Self::connect_addresses(&addresses, deadline, TcpStream::connect_timeout)
+            Self::connect_addresses(addresses, deadline, TcpStream::connect_timeout)
         }
     }
 
@@ -188,6 +193,28 @@ impl super::SandboxedHostIo {
         destination: SocketAddr,
         deadline: Instant,
     ) -> super::HostIoOutcome {
+        self.perform_pinned_network_candidates(request, granted, &[destination], deadline)
+    }
+
+    /// Connect to the first reachable member of an entirely policy-approved
+    /// address set. Every candidate is validated before the first socket, and
+    /// duplicates are removed without changing preference order. Unix reuses
+    /// the owned, two-socket staggered race; other platforms use sequential
+    /// failover. Both keep the remaining absolute budget, and losing sockets
+    /// are closed before application/TLS work starts on the selected stream.
+    ///
+    /// Failover ends at the first successful TCP connection. TLS authentication,
+    /// writes and reads execute once: failures after connecting NEVER redial a
+    /// second server or replay application bytes. The original authority is
+    /// retained for SNI and certificate verification, with no new DNS lookup.
+    /// The caller must authorize every destination, not just the first one.
+    pub fn perform_pinned_network_candidates(
+        &self,
+        request: &super::HostIoRequest,
+        granted: &[super::HostIoCapability],
+        destinations: &[SocketAddr],
+        deadline: Instant,
+    ) -> super::HostIoOutcome {
         use super::{HostIoError, HostIoRequest, HostIoResponse};
 
         let capability = request.required_capability();
@@ -209,7 +236,21 @@ impl super::SandboxedHostIo {
         let fail = |error: io::Error| HostIoError::Io {
             detail: format!("pinned network {endpoint}: {error}"),
         };
-        let identity = pinned_identity(endpoint, destination).map_err(fail)?;
+        if destinations.is_empty() || destinations.len() > 64 {
+            return Err(HostIoError::SandboxViolation {
+                detail: "pinned network requires between 1 and 64 approved addresses".to_string(),
+            });
+        }
+        let identity = pinned_identity(endpoint, destinations[0]).map_err(fail)?;
+        let mut unique = Vec::with_capacity(destinations.len());
+        for &destination in destinations {
+            // Validate the whole set before dialing. A mismatched later port
+            // or numeric identity must not leave an earlier side effect behind.
+            pinned_identity(endpoint, destination).map_err(fail)?;
+            if !unique.contains(&destination) {
+                unique.push(destination);
+            }
+        }
         if payload
             .is_some_and(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes)
         {
@@ -245,9 +286,11 @@ impl super::SandboxedHostIo {
                 .map_err(|error| HostIoError::Io {
                 detail: format!("TLS client setup: {error}"),
             })?;
-            // This is the sole connect operation. In particular, do not call
-            // self.connect(endpoint), which would resolve the name a second time.
-            let socket = DeadlineTcpStream::connect(&destination, deadline).map_err(fail)?;
+            // Only TCP connection failures can advance through approved IPs.
+            // Once a socket exists, no TLS or HTTP failure can trigger a retry.
+            let socket = DeadlineTcpStream::connect_approved_addresses(
+                &unique, deadline,
+            ).map_err(fail)?;
             let mut tls = rustls::StreamOwned::new(connection, socket);
             tls.write_all(payload).map_err(fail)?;
             tls.flush().map_err(fail)?;
@@ -261,7 +304,9 @@ impl super::SandboxedHostIo {
             return Ok(HostIoResponse::NetworkRequest { response });
         }
 
-        let mut stream = DeadlineTcpStream::connect(&destination, deadline).map_err(fail)?;
+        let mut stream = DeadlineTcpStream::connect_approved_addresses(
+            &unique, deadline,
+        ).map_err(fail)?;
         let outcome = match request {
             HostIoRequest::NetworkSend { payload, .. } => {
                 stream.write_all(payload).map_err(fail)?;
@@ -732,6 +777,125 @@ mod pinned_tests {
             listener.accept().unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn approved_candidates_fail_over_before_tls_and_preserve_original_identity() {
+        for bind in ["127.0.0.1:0", "[::1]:0"] {
+            let root = tempfile::tempdir().unwrap();
+            let key = rcgen::generate_simple_self_signed(vec!["service.invalid".into()]).unwrap();
+            let provider = SandboxedHostIo::with_root(root.path()).unwrap()
+                .with_extra_tls_roots_pem(key.cert.pem().as_bytes()).unwrap();
+            let listener = TcpListener::bind(bind).unwrap();
+            let live = listener.local_addr().unwrap();
+            let unavailable = SocketAddr::new("127.0.0.2".parse().unwrap(), live.port());
+            let server = serve(listener, &key);
+            let request = request("service.invalid", live.port(), true);
+            let result = provider.perform_pinned_network_candidates(
+                &request, &[HostIoCapability::NetworkSend], &[unavailable, live, live],
+                Instant::now() + Duration::from_secs(5),
+            );
+            let (sni, received) = server.join().unwrap();
+            assert!(result.is_ok(), "{bind}: {result:?}");
+            assert_eq!(sni.as_deref(), Some("service.invalid"));
+            let HostIoRequest::NetworkRequest { payload, .. } = request else { unreachable!() };
+            assert_eq!(received, payload);
+        }
+    }
+
+    #[test]
+    fn candidate_validation_is_all_or_nothing_before_any_socket() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = SandboxedHostIo::with_root(root.path()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let live = listener.local_addr().unwrap();
+        let wrong_port = SocketAddr::new(live.ip(), if live.port() == 1 { 2 } else { 1 });
+        let request = request("service.invalid", live.port(), true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        for candidates in [vec![], vec![live; 65], vec![live, wrong_port]] {
+            assert!(provider.perform_pinned_network_candidates(&request,
+                &[HostIoCapability::NetworkSend], &candidates, deadline).is_err());
+        }
+        let literal = self::request("127.0.0.1", live.port(), true);
+        let wrong_ip = SocketAddr::new("127.0.0.2".parse().unwrap(), live.port());
+        assert!(provider.perform_pinned_network_candidates(&literal,
+            &[HostIoCapability::NetworkSend], &[live, wrong_ip], deadline).is_err());
+        assert!(matches!(provider.perform_pinned_network_candidates(&request, &[], &[live], deadline),
+            Err(HostIoError::CapabilityMissing { .. })));
+        assert!(provider.perform_pinned_network_candidates(&request,
+            &[HostIoCapability::NetworkSend], &[live], Instant::now()).is_err());
+        assert_eq!(listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn tls_authentication_failure_never_advances_to_a_second_approved_server() {
+        let root = tempfile::tempdir().unwrap();
+        let key = rcgen::generate_simple_self_signed(vec!["wrong.invalid".into()]).unwrap();
+        let provider = SandboxedHostIo::with_root(root.path()).unwrap()
+            .with_extra_tls_roots_pem(key.cert.pem().as_bytes()).unwrap();
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let first_address = first.local_addr().unwrap();
+        let second = TcpListener::bind(SocketAddr::new("127.0.0.2".parse().unwrap(), first_address.port())).unwrap();
+        second.set_nonblocking(true).unwrap();
+        let second_address = second.local_addr().unwrap();
+        let server = serve(first, &key);
+        let result = provider.perform_pinned_network_candidates(
+            &request("service.invalid", first_address.port(), true), &[HostIoCapability::NetworkSend],
+            &[first_address, second_address], Instant::now() + Duration::from_secs(5),
+        );
+        let (_, received) = server.join().unwrap();
+        assert!(result.is_err());
+        assert!(received.is_empty());
+        assert_eq!(second.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn pre_send_failover_applies_to_raw_send_receive_and_plaintext_http() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = SandboxedHostIo::with_root(root.path()).unwrap();
+        for kind in 0..3 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let live = listener.local_addr().unwrap();
+            let unavailable = SocketAddr::new("127.0.0.2".parse().unwrap(), live.port());
+            let endpoint = format!("service.invalid:{}", live.port());
+            let request = match kind {
+                0 => HostIoRequest::NetworkSend { endpoint, payload: b"exactly once".to_vec() },
+                1 => HostIoRequest::NetworkRecv { endpoint, max_len: 4096 },
+                _ => self::request("service.invalid", live.port(), false),
+            };
+            let server = std::thread::spawn(move || {
+                let end = Instant::now() + Duration::from_secs(5);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < end => {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        other => panic!("bounded accept: {other:?}"),
+                    }
+                };
+                socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                socket.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut received = Vec::new();
+                if kind != 1 { socket.read_to_end(&mut received).unwrap(); }
+                if kind == 1 { socket.write_all(b"raw response").unwrap(); }
+                if kind == 2 { socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap(); }
+                received
+            });
+            let result = provider.perform_pinned_network_candidates(
+                &request, &[request.required_capability()], &[unavailable, live, live],
+                Instant::now() + Duration::from_secs(5),
+            );
+            let received = server.join().unwrap();
+            assert!(result.is_ok(), "{kind}: {result:?}");
+            match request {
+                HostIoRequest::NetworkSend { payload, .. } | HostIoRequest::NetworkRequest { payload, .. } => assert_eq!(received, payload),
+                HostIoRequest::NetworkRecv { .. } => assert_eq!(result, Ok(HostIoResponse::NetworkRecv { bytes: b"raw response".to_vec() })),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]

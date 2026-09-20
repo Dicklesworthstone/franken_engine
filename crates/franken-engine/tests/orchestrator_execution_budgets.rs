@@ -710,3 +710,116 @@ fn one_revocation_blocks_both_core_and_engine_public_entrypoints() {
     assert_eq!(core.execution_count(), 0);
     assert_eq!(pool.remaining(), 512);
 }
+
+#[test]
+fn live_scope_revocation_stops_native_work_and_further_real_effects() {
+    use frankenengine_extension_host::host_io::{
+        HostIoCapability, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
+        HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+    };
+    use runtime::checkpoint::CancellationToken;
+    use runtime::execution_cell::{CellError, CellExecutionError};
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // The first effect is real. Revoke only after the sandbox has written its
+    // bytes: unlike an admission-race test this proves native execution began.
+    #[derive(Debug)]
+    struct RevokeAfterEffect {
+        provider: SandboxedHostIo,
+        root: ExecutionWorkPool,
+        caller: CancellationToken,
+        calls: AtomicUsize,
+    }
+    impl HostIoProvider for RevokeAfterEffect {
+        fn name(&self) -> &str {
+            "revoke-after-real-effect"
+        }
+        fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+            self.provider.filesystem_exception_provenance()
+        }
+        fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let outcome = self.provider.perform(request, granted);
+            if outcome.is_ok() {
+                self.root.revoke();
+                // There is no caller cancellation here. Reset must not erase
+                // the independent, irreversible work-scope signal.
+                self.caller.reset();
+            }
+            outcome
+        }
+    }
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for tail in [
+            "while (true) {}",
+            "try { require('fs').writeFileSync('denied.txt', 'forbidden'); } catch (e) {} 42;",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = ExecutionWorkPool::new(8192);
+            let tenant = root.partition(8192).unwrap();
+            let caller = CancellationToken::new();
+            let provider = Arc::new(RevokeAfterEffect {
+                provider: SandboxedHostIo::with_root(directory.path()).unwrap(),
+                root: root.clone(),
+                caller: caller.clone(),
+                calls: AtomicUsize::new(0),
+            });
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+            let mut config = RuntimeConfig::default();
+            config.execution.deterministic_budget = 4096;
+            config.execution.throughput_budget = 4096;
+            let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+                OrchestratorConfig {
+                    force_lane: Some(lane),
+                    work_pool: Some(tenant.clone()),
+                    ..OrchestratorConfig::default()
+                },
+                config,
+            )
+            .unwrap();
+            orchestrator.set_cancellation_token(caller.clone());
+            orchestrator.set_host_io(provider.clone(), Some(recorder_dyn));
+            let mut package = package(&format!(
+                "require('fs').writeFileSync('allowed.txt', 'committed bytes'); {tail}"
+            ));
+            package.capabilities = ["vm_dispatch", "heap_allocate", "fs_read", "fs_write"]
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            let error = orchestrator.execute(&package).unwrap_err();
+            assert!(
+                matches!(
+                    error.primary_error(),
+                    OrchestratorError::Interpreter(InterpreterError::Cancelled)
+                        | OrchestratorError::Cell(CellError::ExecutionBoundary {
+                            error: CellExecutionError::Cancelled,
+                            ..
+                        })
+                ),
+                "{lane} {tail}: expected typed live cancellation, got {error:?}"
+            );
+            assert_closed(&error);
+            assert_eq!(
+                std::fs::read(directory.path().join("allowed.txt")).unwrap(),
+                b"committed bytes"
+            );
+            assert!(!directory.path().join("denied.txt").exists());
+            assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+            let entries = recorder.entries();
+            assert!(matches!(&entries[0].0, HostIoRequest::FsWrite { path, .. } if path == "allowed.txt"));
+            assert!(entries[0].1.is_ok(), "revocation cannot undo the completed effect");
+            assert_eq!(orchestrator.last_failed_host_effect_journal().len(), entries.len());
+            assert_eq!(orchestrator.last_failed_host_effect_journal_records().len(), entries.len());
+            assert!(orchestrator.last_failed_trace_id().is_some());
+            assert_eq!(orchestrator.execution_count(), 0);
+            assert_eq!(tenant.remaining(), 4096);
+            assert_eq!(tenant.committed(), 4096);
+            assert!(tenant.is_revoked());
+            assert!(!caller.is_cancelled(), "scope must not mutate caller state");
+        }
+    }
+}

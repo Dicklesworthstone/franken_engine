@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'crates/franken-core/**'
+      - 'crates/franken-engine/src/checkpoint.rs'
+      - 'crates/franken-engine/src/execution_orchestrator.rs'
+      - 'crates/franken-engine/src/bin/franken_shipped_path_parity.rs'
+      - 'crates/franken-engine/tests/orchestrator_execution_budgets.rs'
       - 'crates/franken-engine/src/baseline_interpreter*'
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
@@ -39,7 +43,8 @@ jobs:
           set -o pipefail
           cargo +stable test --locked -p frankenengine-engine --no-default-features \
             --test reflect_invocation_execution --test reflect_property_execution \
-            --test reflect_failure_confidentiality -- --nocapture 2>&1 | tee reflection-tests.log
+            --test reflect_failure_confidentiality --test orchestrator_execution_budgets \
+            -- --nocapture 2>&1 | tee reflection-tests.log
       - name: Retain reflection results
         if: always()
         uses: actions/upload-artifact@v4
@@ -77,6 +82,12 @@ jobs:
           cargo +nightly test --locked -p frankenengine-core --lib -- --nocapture > native-runtime-tests.log 2>&1 || status=$?
           tail -n 160 native-runtime-tests.log
           exit "$status"
+      - name: Run public native-core execution budget regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-core --test orchestrator_execution_budgets \
+            -- --nocapture 2>&1 | tee native-runtime-orchestrator.log
       - name: Retain complete test output
         if: always()
         uses: actions/upload-artifact@v4

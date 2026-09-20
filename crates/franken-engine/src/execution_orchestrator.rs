@@ -2509,6 +2509,16 @@ impl ExecutionOrchestrator {
                 .map(|pool| pool.reserve(instruction_budget))
                 .transpose()
                 .map_err(OrchestratorError::WorkBudget)?;
+            // Keep revocation live after admission. Binding at the cell rather
+            // than only in the interpreter also gates filesystem, process and
+            // timer authority. Caller cancel/reset epochs remain intact, and
+            // no mutable token for the tenant or its ancestors is exposed.
+            let cancellation_token = match self.config.work_pool.as_ref() {
+                Some(pool) => {
+                    cancellation_token.with_work_scope_revocation(pool.revocation_signal())
+                }
+                None => cancellation_token,
+            };
             cell.bind_execution_authority(CellExecutionAuthority::new(
                 CellExecutionAuthoritySnapshot {
                     cell_id: trace_id.clone(),

@@ -165,6 +165,9 @@ impl Default for DensityConfig {
 pub struct CancellationToken {
     #[serde(skip)]
     state: Arc<CancellationState>,
+    /// Live, read-only tenant signals. Serialization cannot transfer authority.
+    #[serde(skip)]
+    work_scopes: Arc<[frankenengine_core::execution_work_budget::WorkScopeRevocation]>,
 }
 
 #[derive(Debug, Default)]
@@ -178,7 +181,27 @@ impl CancellationToken {
     pub fn new() -> Self {
         Self {
             state: Arc::new(CancellationState::default()),
+            work_scopes: Arc::from([]),
         }
+    }
+
+    /// Attach an irreversible work-scope signal without replacing the caller's
+    /// cancellation epoch. Existing attachments remain live. Resetting this
+    /// token only resets the caller signal, never a tenant or ancestor scope.
+    pub fn with_work_scope_revocation(
+        &self,
+        scope: frankenengine_core::execution_work_budget::WorkScopeRevocation,
+    ) -> Self {
+        let mut work_scopes = self.work_scopes.to_vec();
+        work_scopes.push(scope);
+        Self {
+            state: Arc::clone(&self.state),
+            work_scopes: work_scopes.into(),
+        }
+    }
+
+    fn work_scope_revoked(&self) -> bool {
+        self.work_scopes.iter().any(|scope| scope.is_revoked())
     }
 
     /// Signal cancellation.
@@ -189,6 +212,7 @@ impl CancellationToken {
     /// Check if cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.cancel_epoch() > self.state.reset_epoch.load(Ordering::Acquire)
+            || self.work_scope_revoked()
     }
 
     /// Reset the token for new sessions after existing guards drain/finalize.
@@ -208,6 +232,7 @@ impl CancellationToken {
         let cancel_epoch = self.cancel_epoch();
         if cancel_epoch > observed_cancel_epoch
             || cancel_epoch > self.state.reset_epoch.load(Ordering::Acquire)
+            || self.work_scope_revoked()
         {
             Some(cancel_epoch)
         } else {
@@ -539,6 +564,80 @@ mod tests {
         let token2 = token1.clone();
         token1.cancel();
         assert!(token2.is_cancelled());
+    }
+
+    #[test]
+    fn work_scope_revocation_survives_reset_and_guard_recreation() {
+        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+        let root = ExecutionWorkPool::new(256);
+        let child = root.partition(128).unwrap();
+        let caller = CancellationToken::new();
+        let token = caller.with_work_scope_revocation(child.revocation_signal());
+        let mut existing = CheckpointGuard::new(
+            LoopSite::BytecodeDispatch,
+            "runtime",
+            "scope-existing",
+            DensityConfig::default(),
+            token.clone(),
+        );
+        root.revoke();
+        drop(root);
+        drop(child);
+        caller.reset();
+        token.reset();
+        assert!(token.is_cancelled());
+        assert!(!caller.is_cancelled(), "scope must not cancel the caller");
+        existing.tick();
+        assert_eq!(existing.check(), CheckpointAction::Drain);
+        let mut fresh = CheckpointGuard::new(
+            LoopSite::BytecodeDispatch,
+            "runtime",
+            "scope-fresh",
+            DensityConfig::default(),
+            token,
+        );
+        fresh.tick();
+        assert_eq!(fresh.check(), CheckpointAction::Drain);
+    }
+
+    #[test]
+    fn scope_attachment_preserves_unseen_caller_cancel_epoch() {
+        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+        let pool = ExecutionWorkPool::new(128);
+        let caller = CancellationToken::new();
+        let token = caller.with_work_scope_revocation(pool.revocation_signal());
+        let mut guard = CheckpointGuard::new(
+            LoopSite::BytecodeDispatch,
+            "runtime",
+            "caller-epoch",
+            DensityConfig::default(),
+            token.clone(),
+        );
+        caller.cancel();
+        assert!(token.is_cancelled());
+        caller.reset();
+        assert!(!token.is_cancelled());
+        guard.tick();
+        assert_eq!(guard.check(), CheckpointAction::Drain);
+        assert!(!pool.is_revoked());
+    }
+
+    #[test]
+    fn additional_scope_attachment_cannot_drop_an_earlier_scope() {
+        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+        let root = ExecutionWorkPool::new(256);
+        let child = root.partition(128).unwrap();
+        let sibling = root.partition(128).unwrap();
+        let caller = CancellationToken::new();
+        let token = caller
+            .with_work_scope_revocation(child.revocation_signal())
+            .with_work_scope_revocation(sibling.revocation_signal());
+        child.revoke();
+        token.reset();
+        assert!(token.is_cancelled());
+        assert!(!sibling.is_revoked());
+        assert!(!root.is_revoked());
+        assert!(!caller.is_cancelled());
     }
 
     #[test]

@@ -1413,6 +1413,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         OrchestratorError::Lowering(_) => FailureClass::Lowering,
         OrchestratorError::TsNormalization(_) => FailureClass::SourceIngestion,
         OrchestratorError::Interpreter(_)
+        | OrchestratorError::WorkBudget(_)
         | OrchestratorError::Ledger(_)
         | OrchestratorError::Saga(_)
         | OrchestratorError::Cell(_)
@@ -2577,6 +2578,18 @@ mod tests {
         };
 
         assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
+    }
+
+    #[test]
+    fn work_scope_refusals_are_classified_as_runtime_failures() {
+        use frankenengine_engine::execution_orchestrator::WorkBudgetError;
+        for refusal in [
+            WorkBudgetError::Revoked,
+            WorkBudgetError::Exhausted { requested: 128, remaining: 0 },
+        ] {
+            let error = OrchestratorError::WorkBudget(refusal);
+            assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
+        }
     }
 
     #[test]

@@ -261,7 +261,7 @@ fn native_failure_and_budget_exhaustion_burn_the_admitted_allowance() {
 }
 
 #[test]
-fn_validation_and_parsing_do_not_spend_native_instruction_reservations() {
+fn validation_and_parsing_do_not_spend_native_instruction_reservations() {
     use runtime::execution_orchestrator::ExecutionWorkPool;
     let pool = ExecutionWorkPool::new(128);
     let mut orchestrator = shared_orchestrator(&pool, Some(LaneChoice::QuickJs));
@@ -371,4 +371,139 @@ fn insufficient_admission_leaves_the_residual_pool_untouched() {
         assert_eq!(pool.committed(), 0);
         assert_eq!(orchestrator.execution_count(), 0);
     }
+}
+
+// Admission refusal through the ordinary orchestrator, including its cleanup
+// path. These pre-dispatch cases do not claim in-flight orchestrator cancellation.
+fn assert_scope_revoked(error: &OrchestratorError) {
+    use runtime::execution_orchestrator::WorkBudgetError;
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::WorkBudget(WorkBudgetError::Revoked)
+        ),
+        "expected work-scope revocation, got {error:?}"
+    );
+    assert_closed(error);
+}
+
+#[test]
+fn revoked_scope_denies_forced_and_adaptive_dispatch_with_unspent_quota() {
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+        let pool = ExecutionWorkPool::new(512);
+        let mut orchestrator = shared_orchestrator(&pool, lane);
+        pool.revoke();
+        let error = orchestrator.execute(&package("42;")).unwrap_err();
+        assert_scope_revoked(&error);
+        assert_eq!(orchestrator.execution_count(), 0);
+        assert_eq!(pool.remaining(), 512);
+        assert_eq!(pool.committed(), 0);
+    }
+}
+
+#[test]
+fn ancestor_revocation_reaches_existing_and_recreated_orchestrators() {
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    let root = ExecutionWorkPool::new(512);
+    let tenant = root.partition(512).unwrap();
+    let cell = tenant.partition(512).unwrap();
+    let mut existing = shared_orchestrator(&cell, Some(LaneChoice::QuickJs));
+    root.revoke();
+    assert_scope_revoked(&existing.execute(&package("42;")).unwrap_err());
+    drop(existing);
+    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+        let mut recreated = shared_orchestrator(&cell, lane);
+        assert_scope_revoked(&recreated.execute(&package("42;")).unwrap_err());
+        assert_eq!(recreated.execution_count(), 0);
+    }
+    assert_eq!(root.remaining(), 0);
+    assert_eq!(cell.remaining(), 512);
+    assert!(tenant.is_revoked() && cell.is_revoked());
+}
+
+#[test]
+fn tenant_revocation_stops_reuse_but_preserves_sibling_and_parent_execution() {
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    let root = ExecutionWorkPool::new(640);
+    let tenant_a = root.partition(256).unwrap();
+    let tenant_b = root.partition(256).unwrap();
+    let mut a = shared_orchestrator(&tenant_a, Some(LaneChoice::QuickJs));
+    let mut b = shared_orchestrator(&tenant_b, Some(LaneChoice::V8));
+    a.execute(&package("42;")).unwrap();
+    assert_eq!(tenant_a.remaining(), 128);
+    tenant_a.revoke();
+    assert_scope_revoked(&a.execute(&package("42;")).unwrap_err());
+    assert_eq!(a.execution_count(), 1);
+    assert_eq!(tenant_a.remaining(), 128);
+    b.execute(&package("42;")).unwrap();
+    shared_orchestrator(&root, Some(LaneChoice::QuickJs))
+        .execute(&package("42;"))
+        .unwrap();
+    assert!(!tenant_b.is_revoked() && !root.is_revoked());
+    assert_eq!(tenant_b.remaining(), 0);
+    assert_eq!(root.remaining(), 0);
+}
+
+#[test]
+fn scope_revocation_remains_typed_even_when_the_balance_is_insufficient() {
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    for available in [0, 127, 512] {
+        let pool = ExecutionWorkPool::new(available);
+        pool.revoke();
+        let mut orchestrator = shared_orchestrator(&pool, Some(LaneChoice::QuickJs));
+        assert_scope_revoked(&orchestrator.execute(&package("42;")).unwrap_err());
+        assert_eq!(pool.remaining(), available);
+        assert_eq!(pool.committed(), 0);
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+}
+
+#[test]
+fn revocation_reaches_preconfigured_workers_before_public_dispatch() {
+    use runtime::execution_orchestrator::ExecutionWorkPool;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let pool = ExecutionWorkPool::new(2048);
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let mut releases = Vec::new();
+    let workers: Vec<_> = (0..8)
+        .map(|index| {
+            let pool = pool.clone();
+            let ready = ready_tx.clone();
+            let (release_tx, release_rx) = mpsc::channel();
+            releases.push(release_tx);
+            std::thread::spawn(move || {
+                // Keep the native Rc-based runtime on its owning thread.
+                let lane = if index % 2 == 0 {
+                    LaneChoice::QuickJs
+                } else {
+                    LaneChoice::V8
+                };
+                let mut orchestrator = shared_orchestrator(&pool, Some(lane));
+                ready.send(()).unwrap();
+                release_rx.recv().unwrap();
+                assert_scope_revoked(&orchestrator.execute(&package("42;")).unwrap_err());
+                assert_eq!(orchestrator.execution_count(), 0);
+            })
+        })
+        .collect();
+    drop(ready_tx);
+    for _ in 0..workers.len() {
+        ready_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("worker must initialize before revocation");
+    }
+    pool.revoke();
+    for release in releases {
+        release.send(()).unwrap();
+    }
+    for worker in workers {
+        worker
+            .join()
+            .expect("revoked worker must cleanly deny dispatch");
+    }
+    assert_eq!(pool.remaining(), 2048);
+    assert_eq!(pool.committed(), 0);
 }

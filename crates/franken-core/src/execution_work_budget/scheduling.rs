@@ -51,6 +51,23 @@ impl ExecutionAdmission {
         self.instruction_limit
     }
 
+    /// Bind this admitted scope to a host-owned native dispatch boundary.
+    ///
+    /// The returned signal observes live ancestor revocation but has its own
+    /// local cancellation state. Cancelling or resetting it cannot revoke or
+    /// reactivate the pool, its siblings, or another admission. Keeping this
+    /// signal does not grant another execution or refund the prepaid quota.
+    /// Hosts must still enforce `instruction_limit` on the admitted execution.
+    ///
+    /// A revocation already visible here fails before dispatch. A later one
+    /// remains visible through the signal, including after this owner drops.
+    pub fn execution_cancellation(&self) -> Result<CancellationToken, WorkBudgetError> {
+        if self.scope.is_cancelled() {
+            return Err(WorkBudgetError::Revoked);
+        }
+        Ok(self.scope.child_token())
+    }
+
     pub fn execute(
         self,
         module: &Ir3Module,
@@ -331,5 +348,59 @@ mod tests {
         .unwrap();
         assert!(executed > 0 && executed <= 128);
         assert_eq!(pool.remaining(), 0);
+    }
+}
+
+#[cfg(test)]
+mod execution_cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_signal_cannot_cancel_or_reset_its_scope_or_other_admissions() {
+        let pool = ExecutionWorkPool::new(256);
+        let first = pool.reserve(64).unwrap();
+        let second = pool.reserve(64).unwrap();
+        let first_signal = first.execution_cancellation().unwrap();
+        let second_signal = second.execution_cancellation().unwrap();
+        first_signal.cancel();
+        assert!(first_signal.is_cancelled());
+        assert!(!second_signal.is_cancelled());
+        assert!(!pool.is_revoked());
+        first_signal.reset();
+        assert!(!first_signal.is_cancelled());
+        pool.revoke();
+        first_signal.reset();
+        second_signal.reset();
+        assert!(first_signal.is_cancelled() && second_signal.is_cancelled());
+        assert!(pool.is_revoked());
+        assert_eq!(pool.remaining(), 128);
+    }
+
+    #[test]
+    fn dispatch_signal_retains_live_ancestors_after_admission_and_pool_drop() {
+        let root = ExecutionWorkPool::new(128);
+        let tenant = root.partition(128).unwrap();
+        let admission = tenant.reserve(64).unwrap();
+        let signal = admission.execution_cancellation().unwrap();
+        drop(admission);
+        drop(tenant);
+        assert!(!signal.is_cancelled());
+        root.revoke();
+        assert!(signal.is_cancelled());
+        signal.reset();
+        assert!(signal.is_cancelled());
+        assert_eq!(root.committed(), 128);
+    }
+
+    #[test]
+    fn already_revoked_admission_cannot_bind_a_new_dispatch() {
+        let pool = ExecutionWorkPool::new(128);
+        let admission = pool.reserve(64).unwrap();
+        pool.revoke();
+        assert_eq!(
+            admission.execution_cancellation().unwrap_err(),
+            WorkBudgetError::Revoked
+        );
+        assert_eq!(pool.remaining(), 64);
     }
 }

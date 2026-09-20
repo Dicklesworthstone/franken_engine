@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: main-safety-${{ github.ref }}
-  cancel-in-progress: true
+  group: scope-validation-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   fast-contracts:
@@ -20,7 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Compile Python contract tools
         run: |
           python3 -m py_compile scripts/agent_route.py
@@ -28,24 +27,21 @@ jobs:
           python3 -m py_compile scripts/red_team_trial_common.py
           python3 -m py_compile scripts/red_team_trial_reader.py
           python3 -m py_compile scripts/aggregate_red_team_trials.py
-
       - name: Validate architectural change routing
         run: bash scripts/e2e/agent_change_route_smoke.sh
-
       - name: Execute comparator positive and ambiguity drills
         run: bash scripts/e2e/red_team_compromise_rate_metric_comparator_smoke.sh
-
       - name: Execute repeated-trial aggregation and tamper drills
         run: bash scripts/e2e/red_team_repeated_trial_harness_smoke.sh
 
   live-scope-validation:
-    name: Live work-scope execution regressions
+    name: Core and engine live work-scope regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
     env:
-      CARGO_BUILD_JOBS: '2'
+      CARGO_BUILD_JOBS: '1'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -54,278 +50,353 @@ jobs:
         with:
           ref: b75fa2255bce342cdffbb6d421e3de392fa1a459
           persist-credentials: false
-      - name: Apply exact reviewed native patch
+      - name: Retrieve previously checksum-verified source blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p scope-validation
+          python3 - <<'PY'
+          import base64, json, pathlib, subprocess
+          blobs = {'crates/franken-core/src/execution_orchestrator.rs':'4c231d0e398e06eddc1428bf900ccbdbb1b9a365','crates/franken-core/src/execution_work_budget.rs':'28a154c791585a29dea64da09ba2b79ebf54d742','crates/franken-core/src/execution_work_budget/revocation.rs':'e66730d1148a1afe9a0cc1f0da7f42f28b87bc55','crates/franken-core/tests/orchestrator_execution_budgets.rs':'5a6e6045677971b8dd9f97e34e1a4c7edd1f456b'}
+          for path, sha in blobs.items():
+              reply = json.loads(subprocess.check_output(['gh','api','repos/Dicklesworthstone/franken_engine/git/blobs/'+sha,'-H','User-Agent: OpenAI File Downloader, XaiImageApiFetch/1.0'],text=True))
+              assert reply['encoding'] == 'base64'
+              pathlib.Path(path).write_bytes(base64.b64decode(reply['content']))
+              assert subprocess.check_output(['git','hash-object',path],text=True).strip() == sha
+          PY
+      - name: Apply reviewed engine authority and regression patch
+        run: |
           cat > scope-validation/source.patch <<'PATCH'
           diff --git a/crates/franken-core/src/execution_orchestrator.rs b/crates/franken-core/src/execution_orchestrator.rs
-          index 26a66cd..4c231d0 100644
           --- a/crates/franken-core/src/execution_orchestrator.rs
           +++ b/crates/franken-core/src/execution_orchestrator.rs
-          @@ -1732,6 +1732,14 @@ impl ExecutionOrchestrator {
-                       .and_then(|path| std::path::Path::new(path).parent())
-                       .map(|path| path.display().to_string());
+          @@ -3471,6 +3471,7 @@
+                   use crate::baseline_interpreter::{
+                       AllocKind, FunctionRef, HookContext, ObjectRef, PropertyKey, Value,
+                   };
+          +        use crate::parser::Es2020Parser;
+                   use std::sync::atomic::{AtomicUsize, Ordering};
            
-          +        // Admission alone only prevents future runs. Both configurations must
-          +        // retain the live scope signal so a tenant/ancestor revoked after the
-          +        // reservation interrupts this run at native checkpoints as well.
-          +        if let Some(pool) = self.config.work_pool.as_ref() {
-          +            pool.bind_interpreter_cancellation(&mut quickjs_config);
-          +            pool.bind_interpreter_cancellation(&mut v8_config);
-          +        }
-          +
-                   Ok(LaneRouter::with_configs(quickjs_config, v8_config))
+                   struct RevokeOnAllocation {
+          @@ -3515,7 +3516,7 @@
+                           ..simple_package()
+                       };
+                       let syntax = CanonicalEs2020Parser
+          -                .parse(&package.source, ParseGoal::Script)
+          +                .parse(package.source.as_str(), ParseGoal::Script)
+                           .unwrap();
+                       let ir3 = lower_ir0_to_ir3(
+                           &Ir0Module::from_syntax_tree(syntax, "revocation.js"),
+          diff --git a/crates/franken-engine/src/bin/franken_shipped_path_parity.rs b/crates/franken-engine/src/bin/franken_shipped_path_parity.rs
+          --- a/crates/franken-engine/src/bin/franken_shipped_path_parity.rs
+          +++ b/crates/franken-engine/src/bin/franken_shipped_path_parity.rs
+          @@ -1413,6 +1413,7 @@
+                   OrchestratorError::Lowering(_) => FailureClass::Lowering,
+                   OrchestratorError::TsNormalization(_) => FailureClass::SourceIngestion,
+                   OrchestratorError::Interpreter(_)
+          +        | OrchestratorError::WorkBudget(_)
+                   | OrchestratorError::Ledger(_)
+                   | OrchestratorError::Saga(_)
+                   | OrchestratorError::Cell(_)
+          @@ -2579,6 +2580,18 @@
+                   assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
                }
            
-          @@ -3455,6 +3463,84 @@ mod tests {
-               use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
-               use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
-           
           +    #[test]
-          +    fn ordinary_lane_router_observes_revocation_from_native_allocation() {
-          +        use crate::baseline_interpreter::{
-          +            AllocKind, FunctionRef, HookContext, ObjectRef, PropertyKey, Value,
-          +        };
-          +        use std::sync::atomic::{AtomicUsize, Ordering};
-          +
-          +        struct RevokeOnAllocation {
-          +            root: ExecutionWorkPool,
-          +            calls: AtomicUsize,
+          +    fn work_scope_refusals_are_classified_as_runtime_failures() {
+          +        use frankenengine_engine::execution_orchestrator::WorkBudgetError;
+          +        for refusal in [
+          +            WorkBudgetError::Revoked,
+          +            WorkBudgetError::Exhausted { requested: 128, remaining: 0 },
+          +        ] {
+          +            let error = OrchestratorError::WorkBudget(refusal);
+          +            assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
           +        }
-          +        impl InterpreterHook for RevokeOnAllocation {
-          +            fn pre_property_access(
-          +                &self,
-          +                _: &HookContext,
-          +                _: &ObjectRef,
-          +                _: &PropertyKey,
-          +            ) -> HookAction {
-          +                HookAction::Allow
-          +            }
-          +            fn pre_call(&self, _: &HookContext, _: &FunctionRef, _: &[Value]) -> HookAction {
-          +                HookAction::Allow
-          +            }
-          +            fn pre_allocation(&self, _: &HookContext, _: AllocKind, _: usize) -> HookAction {
-          +                self.calls.fetch_add(1, Ordering::Relaxed);
-          +                self.root.revoke();
-          +                HookAction::Allow
-          +            }
-          +            fn pre_import(&self, _: &HookContext, _: &str) -> HookAction {
-          +                HookAction::Allow
-          +            }
-          +        }
-          +
-          +        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-          +            let root = ExecutionWorkPool::new(200_000);
-          +            let tenant = root.partition(200_000).unwrap();
-          +            let mut runtime = RuntimeConfig::default();
-          +            runtime.execution.deterministic_budget = 100_000;
-          +            runtime.execution.throughput_budget = 100_000;
-          +            let orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
-          +                OrchestratorConfig {
-          +                    work_pool: Some(tenant.clone()),
-          +                    ..OrchestratorConfig::default()
-          +                },
-          +                runtime,
-          +            )
-          +            .unwrap();
-          +            let package = ExtensionPackage {
-          +                source: "let object = {}; while (true) {}".to_string(),
-          +                ..simple_package()
-          +            };
-          +            let syntax = CanonicalEs2020Parser
-          +                .parse(&package.source, ParseGoal::Script)
-          +                .unwrap();
-          +            let ir3 = lower_ir0_to_ir3(
-          +                &Ir0Module::from_syntax_tree(syntax, "revocation.js"),
-          +                &LoweringContext::new("revocation", "revocation", "revocation"),
-          +            )
-          +            .unwrap()
-          +            .ir3;
-          +            let _admission = tenant.reserve(100_000).unwrap();
-          +            let mut router = orchestrator.lane_router_for_execution(&package, &ir3).unwrap();
-          +            let hook = Arc::new(RevokeOnAllocation {
-          +                root,
-          +                calls: AtomicUsize::new(0),
-          +            });
-          +            let result = router.execute_with_hook(
-          +                &ir3,
-          +                "live-revocation",
-          +                Some(lane),
-          +                Some(hook.clone()),
-          +            );
-          +            assert!(matches!(result, Err(InterpreterError::Cancelled)), "{result:?}");
-          +            assert!(hook.calls.load(Ordering::Relaxed) > 0);
-          +            assert_eq!(tenant.remaining(), 100_000);
-          +        }
-          +    }
-          +
-               fn simple_package() -> ExtensionPackage {
-                   ExtensionPackage {
-                       extension_id: "test-ext-1".to_string(),
-          diff --git a/crates/franken-core/src/execution_work_budget.rs b/crates/franken-core/src/execution_work_budget.rs
-          index 4727908..28a154c 100644
-          --- a/crates/franken-core/src/execution_work_budget.rs
-          +++ b/crates/franken-core/src/execution_work_budget.rs
-          @@ -27,7 +27,7 @@ use crate::ir_contract::Ir3Module;
-           
-           mod revocation;
-           mod scheduling;
-          -pub use revocation::MAX_WORK_POOL_DEPTH;
-          +pub use revocation::{MAX_WORK_POOL_DEPTH, WorkScopeRevocation};
-           pub use scheduling::ExecutionAdmission;
-           
-           #[derive(Debug)]
-          diff --git a/crates/franken-core/src/execution_work_budget/revocation.rs b/crates/franken-core/src/execution_work_budget/revocation.rs
-          index 55300f8..e66730d 100644
-          --- a/crates/franken-core/src/execution_work_budget/revocation.rs
-          +++ b/crates/franken-core/src/execution_work_budget/revocation.rs
-          @@ -11,7 +11,40 @@ use crate::checkpoint::CancellationToken;
-           /// This bounds the pool-owned part of checkpoint polling and retained signals.
-           pub const MAX_WORK_POOL_DEPTH: usize = 64;
-           
-          +/// Read-only, live cancellation of a work scope and its ancestors.
-          +///
-          +/// This is not an admission or a capability grant. It lets other runtime
-          +/// consumers observe the same irreversible signal without gaining access to
-          +/// `CancellationToken::reset` or the ability to cancel a parent or sibling.
-          +/// It deliberately cannot be serialized: a snapshot is not a live binding.
-          +#[derive(Debug, Clone)]
-          +pub struct WorkScopeRevocation {
-          +    scope: CancellationToken,
-          +}
-          +
-          +impl WorkScopeRevocation {
-          +    pub fn is_revoked(&self) -> bool {
-          +        self.scope.is_cancelled()
-          +    }
-          +}
-          +
-           impl ExecutionWorkPool {
-          +    /// Observe revocation without granting execution or mutable token access.
-          +    /// The signal remains live even after the pool and its other owners drop.
-          +    pub fn revocation_signal(&self) -> WorkScopeRevocation {
-          +        WorkScopeRevocation {
-          +            scope: self.state.cancellation.clone(),
-          +        }
-          +    }
-          +
-          +    /// The ordinary core orchestrator has already charged its selected lane.
-          +    /// Bind that run to the pool without charging again or replacing any
-          +    /// caller cancellation. The engine crate uses the read-only signal above
-          +    /// at its execution-cell authority boundary instead.
-          +    pub(crate) fn bind_interpreter_cancellation(&self, config: &mut InterpreterConfig) {
-          +        bind_cancellation(&self.state.cancellation, config);
-          +    }
-          +
-               /// Permanently revoke this scope and all its descendants, including work
-               /// admitted before this call. Clones share this request; siblings do not.
-               ///
-          @@ -94,6 +127,35 @@ mod tests {
-               use std::sync::Barrier;
-               use std::sync::atomic::{AtomicUsize, Ordering};
-           
-          +    #[test]
-          +    fn read_only_revocation_signal_tracks_ancestors_after_pool_drop() {
-          +        let root = ExecutionWorkPool::new(256);
-          +        let child = root.partition(128).unwrap();
-          +        let signal = child.revocation_signal();
-          +        let alias = signal.clone();
-          +        drop(child);
-          +        assert!(!signal.is_revoked());
-          +        root.revoke();
-          +        drop(root);
-          +        assert!(signal.is_revoked());
-          +        assert!(alias.is_revoked());
-          +    }
-          +
-          +    #[test]
-          +    fn read_only_revocation_signal_does_not_widen_child_cancellation() {
-          +        let root = ExecutionWorkPool::new(256);
-          +        let child = root.partition(128).unwrap();
-          +        let sibling = root.partition(128).unwrap();
-          +        let root_signal = root.revocation_signal();
-          +        let sibling_signal = sibling.revocation_signal();
-          +        child.revoke();
-          +        assert!(child.revocation_signal().is_revoked());
-          +        assert!(!root_signal.is_revoked());
-          +        assert!(!sibling_signal.is_revoked());
-          +        let _admission = sibling.reserve(128).unwrap();
-          +        assert_eq!(root.remaining(), 0);
           +    }
           +
                #[test]
-               fn revoked_clones_deny_admission_and_delegation_without_debit() {
-                   let pool = ExecutionWorkPool::new(256);
-          diff --git a/crates/franken-core/tests/orchestrator_execution_budgets.rs b/crates/franken-core/tests/orchestrator_execution_budgets.rs
-          index 9f7fbe8..5a6e604 100644
-          --- a/crates/franken-core/tests/orchestrator_execution_budgets.rs
-          +++ b/crates/franken-core/tests/orchestrator_execution_budgets.rs
-          @@ -40,6 +40,65 @@ fn assert_closed(error: &OrchestratorError) {
-               assert!(failure.cleanup.close_succeeded());
+               fn process_spawn_attempt_failure_is_classified_as_runtime_bd_x85a7_1() {
+                   let error = OrchestratorError::ProcessSpawnAttempt(
+          diff --git a/crates/franken-engine/src/checkpoint.rs b/crates/franken-engine/src/checkpoint.rs
+          --- a/crates/franken-engine/src/checkpoint.rs
+          +++ b/crates/franken-engine/src/checkpoint.rs
+          @@ -165,6 +165,9 @@
+           pub struct CancellationToken {
+               #[serde(skip)]
+               state: Arc<CancellationState>,
+          +    /// Live, read-only tenant signals. Serialization cannot transfer authority.
+          +    #[serde(skip)]
+          +    work_scopes: Arc<[frankenengine_core::execution_work_budget::WorkScopeRevocation]>,
            }
            
-          +#[test]
-          +fn revocation_after_admission_interrupts_ordinary_native_dispatch() {
-          +    use runtime::execution_orchestrator::ExecutionWorkPool;
-          +    use std::sync::mpsc;
-          +    use std::time::{Duration, Instant};
+           #[derive(Debug, Default)]
+          @@ -178,9 +181,29 @@
+               pub fn new() -> Self {
+                   Self {
+                       state: Arc::new(CancellationState::default()),
+          +            work_scopes: Arc::from([]),
+                   }
+               }
+           
+          +    /// Attach an irreversible work-scope signal without replacing the caller's
+          +    /// cancellation epoch. Existing attachments remain live. Resetting this
+          +    /// token only resets the caller signal, never a tenant or ancestor scope.
+          +    pub fn with_work_scope_revocation(
+          +        &self,
+          +        scope: frankenengine_core::execution_work_budget::WorkScopeRevocation,
+          +    ) -> Self {
+          +        let mut work_scopes = self.work_scopes.to_vec();
+          +        work_scopes.push(scope);
+          +        Self {
+          +            state: Arc::clone(&self.state),
+          +            work_scopes: work_scopes.into(),
+          +        }
+          +    }
           +
-          +    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
-          +        // The counter is the synchronization point: revocation happens only
-          +        // after reserve has debited the run. It may race reserve's final
-          +        // revocation check or native entry; both must refuse without refund.
-          +        let budget = 100_000_000;
-          +        let root = ExecutionWorkPool::new(budget * 2);
-          +        let tenant = root.partition(budget * 2).unwrap();
-          +        let worker_pool = tenant.clone();
-          +        let (done_tx, done_rx) = mpsc::channel();
-          +        let worker = std::thread::spawn(move || {
+          +    fn work_scope_revoked(&self) -> bool {
+          +        self.work_scopes.iter().any(|scope| scope.is_revoked())
+          +    }
+          +
+               /// Signal cancellation.
+               pub fn cancel(&self) {
+                   self.state.cancel_epoch.fetch_add(1, Ordering::AcqRel);
+          @@ -189,6 +212,7 @@
+               /// Check if cancellation has been requested.
+               pub fn is_cancelled(&self) -> bool {
+                   self.cancel_epoch() > self.state.reset_epoch.load(Ordering::Acquire)
+          +            || self.work_scope_revoked()
+               }
+           
+               /// Reset the token for new sessions after existing guards drain/finalize.
+          @@ -208,6 +232,7 @@
+                   let cancel_epoch = self.cancel_epoch();
+                   if cancel_epoch > observed_cancel_epoch
+                       || cancel_epoch > self.state.reset_epoch.load(Ordering::Acquire)
+          +            || self.work_scope_revoked()
+                   {
+                       Some(cancel_epoch)
+                   } else {
+          @@ -541,6 +566,80 @@
+                   assert!(token2.is_cancelled());
+               }
+           
+          +    #[test]
+          +    fn work_scope_revocation_survives_reset_and_guard_recreation() {
+          +        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+          +        let root = ExecutionWorkPool::new(256);
+          +        let child = root.partition(128).unwrap();
+          +        let caller = CancellationToken::new();
+          +        let token = caller.with_work_scope_revocation(child.revocation_signal());
+          +        let mut existing = CheckpointGuard::new(
+          +            LoopSite::BytecodeDispatch,
+          +            "runtime",
+          +            "scope-existing",
+          +            DensityConfig::default(),
+          +            token.clone(),
+          +        );
+          +        root.revoke();
+          +        drop(root);
+          +        drop(child);
+          +        caller.reset();
+          +        token.reset();
+          +        assert!(token.is_cancelled());
+          +        assert!(!caller.is_cancelled(), "scope must not cancel the caller");
+          +        existing.tick();
+          +        assert_eq!(existing.check(), CheckpointAction::Drain);
+          +        let mut fresh = CheckpointGuard::new(
+          +            LoopSite::BytecodeDispatch,
+          +            "runtime",
+          +            "scope-fresh",
+          +            DensityConfig::default(),
+          +            token,
+          +        );
+          +        fresh.tick();
+          +        assert_eq!(fresh.check(), CheckpointAction::Drain);
+          +    }
+          +
+          +    #[test]
+          +    fn scope_attachment_preserves_unseen_caller_cancel_epoch() {
+          +        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+          +        let pool = ExecutionWorkPool::new(128);
+          +        let caller = CancellationToken::new();
+          +        let token = caller.with_work_scope_revocation(pool.revocation_signal());
+          +        let mut guard = CheckpointGuard::new(
+          +            LoopSite::BytecodeDispatch,
+          +            "runtime",
+          +            "caller-epoch",
+          +            DensityConfig::default(),
+          +            token.clone(),
+          +        );
+          +        caller.cancel();
+          +        assert!(token.is_cancelled());
+          +        caller.reset();
+          +        assert!(!token.is_cancelled());
+          +        guard.tick();
+          +        assert_eq!(guard.check(), CheckpointAction::Drain);
+          +        assert!(!pool.is_revoked());
+          +    }
+          +
+          +    #[test]
+          +    fn additional_scope_attachment_cannot_drop_an_earlier_scope() {
+          +        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+          +        let root = ExecutionWorkPool::new(256);
+          +        let child = root.partition(128).unwrap();
+          +        let sibling = root.partition(128).unwrap();
+          +        let caller = CancellationToken::new();
+          +        let token = caller
+          +            .with_work_scope_revocation(child.revocation_signal())
+          +            .with_work_scope_revocation(sibling.revocation_signal());
+          +        child.revoke();
+          +        token.reset();
+          +        assert!(token.is_cancelled());
+          +        assert!(!sibling.is_revoked());
+          +        assert!(!root.is_revoked());
+          +        assert!(!caller.is_cancelled());
+          +    }
+          +
+               #[test]
+               fn reset_does_not_hide_unseen_cancellation_from_existing_guard() {
+                   let token = CancellationToken::new();
+          diff --git a/crates/franken-engine/src/execution_orchestrator.rs b/crates/franken-engine/src/execution_orchestrator.rs
+          --- a/crates/franken-engine/src/execution_orchestrator.rs
+          +++ b/crates/franken-engine/src/execution_orchestrator.rs
+          @@ -2509,6 +2509,16 @@
+                           .map(|pool| pool.reserve(instruction_budget))
+                           .transpose()
+                           .map_err(OrchestratorError::WorkBudget)?;
+          +            // Keep revocation live after admission. Binding at the cell rather
+          +            // than only in the interpreter also gates filesystem, process and
+          +            // timer authority. Caller cancel/reset epochs remain intact, and
+          +            // no mutable token for the tenant or its ancestors is exposed.
+          +            let cancellation_token = match self.config.work_pool.as_ref() {
+          +                Some(pool) => {
+          +                    cancellation_token.with_work_scope_revocation(pool.revocation_signal())
+          +                }
+          +                None => cancellation_token,
+          +            };
+                       cell.bind_execution_authority(CellExecutionAuthority::new(
+                           CellExecutionAuthoritySnapshot {
+                               cell_id: trace_id.clone(),
+          diff --git a/crates/franken-engine/tests/orchestrator_execution_budgets.rs b/crates/franken-engine/tests/orchestrator_execution_budgets.rs
+          --- a/crates/franken-engine/tests/orchestrator_execution_budgets.rs
+          +++ b/crates/franken-engine/tests/orchestrator_execution_budgets.rs
+          @@ -710,3 +710,116 @@
+               assert_eq!(core.execution_count(), 0);
+               assert_eq!(pool.remaining(), 512);
+           }
+          +
+          +#[test]
+          +fn live_scope_revocation_stops_native_work_and_further_real_effects() {
+          +    use frankenengine_extension_host::host_io::{
+          +        HostIoCapability, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
+          +        HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+          +    };
+          +    use runtime::checkpoint::CancellationToken;
+          +    use runtime::execution_cell::{CellError, CellExecutionError};
+          +    use runtime::execution_orchestrator::ExecutionWorkPool;
+          +    use std::sync::Arc;
+          +    use std::sync::atomic::{AtomicUsize, Ordering};
+          +
+          +    // The first effect is real. Revoke only after the sandbox has written its
+          +    // bytes: unlike an admission-race test this proves native execution began.
+          +    #[derive(Debug)]
+          +    struct RevokeAfterEffect {
+          +        provider: SandboxedHostIo,
+          +        root: ExecutionWorkPool,
+          +        caller: CancellationToken,
+          +        calls: AtomicUsize,
+          +    }
+          +    impl HostIoProvider for RevokeAfterEffect {
+          +        fn name(&self) -> &str {
+          +            "revoke-after-real-effect"
+          +        }
+          +        fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+          +            self.provider.filesystem_exception_provenance()
+          +        }
+          +        fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+          +            self.calls.fetch_add(1, Ordering::Relaxed);
+          +            let outcome = self.provider.perform(request, granted);
+          +            if outcome.is_ok() {
+          +                self.root.revoke();
+          +                // There is no caller cancellation here. Reset must not erase
+          +                // the independent, irreversible work-scope signal.
+          +                self.caller.reset();
+          +            }
+          +            outcome
+          +        }
+          +    }
+          +
+          +    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+          +        for tail in [
+          +            "while (true) {}",
+          +            "try { require('fs').writeFileSync('denied.txt', 'forbidden'); } catch (e) {} 42;",
+          +        ] {
+          +            let directory = tempfile::tempdir().unwrap();
+          +            let root = ExecutionWorkPool::new(8192);
+          +            let tenant = root.partition(8192).unwrap();
+          +            let caller = CancellationToken::new();
+          +            let provider = Arc::new(RevokeAfterEffect {
+          +                provider: SandboxedHostIo::with_root(directory.path()).unwrap(),
+          +                root: root.clone(),
+          +                caller: caller.clone(),
+          +                calls: AtomicUsize::new(0),
+          +            });
+          +            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+          +            let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
           +            let mut config = RuntimeConfig::default();
-          +            config.execution.deterministic_budget = budget;
-          +            config.execution.throughput_budget = budget;
+          +            config.execution.deterministic_budget = 4096;
+          +            config.execution.throughput_budget = 4096;
           +            let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
           +                OrchestratorConfig {
-          +                    force_lane: lane,
-          +                    work_pool: Some(worker_pool),
+          +                    force_lane: Some(lane),
+          +                    work_pool: Some(tenant.clone()),
           +                    ..OrchestratorConfig::default()
           +                },
           +                config,
           +            )
           +            .unwrap();
-          +            let error = orchestrator.execute(&package("while (true) {}")).unwrap_err();
+          +            orchestrator.set_cancellation_token(caller.clone());
+          +            orchestrator.set_host_io(provider.clone(), Some(recorder_dyn));
+          +            let mut package = package(&format!(
+          +                "require('fs').writeFileSync('allowed.txt', 'committed bytes'); {tail}"
+          +            ));
+          +            package.capabilities = ["vm_dispatch", "heap_allocate", "fs_read", "fs_write"]
+          +                .into_iter()
+          +                .map(str::to_string)
+          +                .collect();
+          +            let error = orchestrator.execute(&package).unwrap_err();
           +            assert!(
           +                matches!(
           +                    error.primary_error(),
           +                    OrchestratorError::Interpreter(InterpreterError::Cancelled)
-          +                        | OrchestratorError::WorkBudget(
-          +                            runtime::execution_orchestrator::WorkBudgetError::Revoked
-          +                        )
+          +                        | OrchestratorError::Cell(CellError::ExecutionBoundary {
+          +                            error: CellExecutionError::Cancelled,
+          +                            ..
+          +                        })
           +                ),
-          +                "{lane:?}: admitted execution must observe live revocation: {error:?}"
+          +                "{lane} {tail}: expected typed live cancellation, got {error:?}"
           +            );
           +            assert_closed(&error);
+          +            assert_eq!(
+          +                std::fs::read(directory.path().join("allowed.txt")).unwrap(),
+          +                b"committed bytes"
+          +            );
+          +            assert!(!directory.path().join("denied.txt").exists());
+          +            assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+          +            let entries = recorder.entries();
+          +            assert!(matches!(&entries[0].0, HostIoRequest::FsWrite { path, .. } if path == "allowed.txt"));
+          +            assert!(entries[0].1.is_ok(), "revocation cannot undo the completed effect");
+          +            assert_eq!(orchestrator.last_failed_host_effect_journal().len(), entries.len());
+          +            assert_eq!(orchestrator.last_failed_host_effect_journal_records().len(), entries.len());
+          +            assert!(orchestrator.last_failed_trace_id().is_some());
           +            assert_eq!(orchestrator.execution_count(), 0);
-          +            done_tx.send(()).unwrap();
-          +        });
-          +        let deadline = Instant::now() + Duration::from_secs(30);
-          +        while tenant.committed() == 0 {
-          +            assert!(!worker.is_finished(), "worker stopped before admission");
-          +            assert!(Instant::now() < deadline, "worker never reserved its budget");
-          +            std::thread::yield_now();
+          +            assert_eq!(tenant.remaining(), 4096);
+          +            assert_eq!(tenant.committed(), 4096);
+          +            assert!(tenant.is_revoked());
+          +            assert!(!caller.is_cancelled(), "scope must not mutate caller state");
           +        }
-          +        root.revoke();
-          +        done_rx
-          +            .recv_timeout(Duration::from_secs(30))
-          +            .expect("revoked execution must terminate, not consume its full allowance");
-          +        worker.join().unwrap();
-          +        assert_eq!(tenant.committed(), budget);
-          +        assert_eq!(tenant.remaining(), budget, "cancellation is not a refund");
           +    }
           +}
-          +
-           #[test]
-           fn configured_instruction_limits_reach_both_native_profiles() {
-               let package = package("while (true) {}");
           PATCH
           git apply --check scope-validation/source.patch
           git apply scope-validation/source.patch
@@ -335,27 +406,67 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, pathlib, subprocess
-          expected = {'crates/franken-core/src/execution_orchestrator.rs':'4c231d0e398e06eddc1428bf900ccbdbb1b9a365','crates/franken-core/src/execution_work_budget.rs':'28a154c791585a29dea64da09ba2b79ebf54d742','crates/franken-core/src/execution_work_budget/revocation.rs':'e66730d1148a1afe9a0cc1f0da7f42f28b87bc55','crates/franken-core/tests/orchestrator_execution_budgets.rs':'5a6e6045677971b8dd9f97e34e1a4c7edd1f456b'}
+          expected = {'crates/franken-core/src/execution_orchestrator.rs':'9acd06f1fe6d90fec93641a0a6afb31b29dda19d','crates/franken-core/src/execution_work_budget.rs':'28a154c791585a29dea64da09ba2b79ebf54d742','crates/franken-core/src/execution_work_budget/revocation.rs':'e66730d1148a1afe9a0cc1f0da7f42f28b87bc55','crates/franken-core/tests/orchestrator_execution_budgets.rs':'5a6e6045677971b8dd9f97e34e1a4c7edd1f456b','crates/franken-engine/src/bin/franken_shipped_path_parity.rs':'b86d3e7cd0224aa773bbfbb34a6f47e44812b879','crates/franken-engine/src/checkpoint.rs':'f45235f0edf79909940df7ca0cf9bd1a1645c697','crates/franken-engine/src/execution_orchestrator.rs':'d13c8d8b6d8e66f591f32371eb8c48e731d2f0cc','crates/franken-engine/tests/orchestrator_execution_budgets.rs':'399292253f564901d76d9d654549ade215428c3d'}
           for path, sha in expected.items():
-              assert subprocess.check_output(['git','hash-object',path], text=True).strip() == sha
+              assert subprocess.check_output(['git','hash-object',path],text=True).strip() == sha, path
               body = json.dumps({'content':pathlib.Path(path).read_text(),'encoding':'utf-8'})
               reply = subprocess.check_output(['gh','api','repos/Dicklesworthstone/franken_engine/git/blobs','--method','POST','-H','User-Agent: OpenAI File Downloader, XaiImageApiFetch/1.0','--input','-'],input=body,text=True)
               assert json.loads(reply)['sha'] == sha
-              print('SOURCE_BLOB', path, sha, flush=True)
+              print('SOURCE_BLOB',path,sha,flush=True)
           pathlib.Path('scope-validation/blobs.json').write_text(json.dumps(expected,indent=2))
           PY
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
-      - name: Test real native dispatch and shared-scope semantics
+      - name: Core native dispatch and public execution regressions
         run: |
           set -o pipefail
           cargo +nightly test --locked -p frankenengine-core --lib execution_work_budget -- --nocapture 2>&1 | tee scope-validation/work-pool.log
           cargo +nightly test --locked -p frankenengine-core --lib ordinary_lane_router_observes_revocation -- --nocapture 2>&1 | tee scope-validation/native-revocation.log
-          cargo +nightly test --locked -p frankenengine-core --test orchestrator_execution_budgets -- --nocapture 2>&1 | tee scope-validation/public-orchestrator.log
-      - name: Retain exact patch and full test results
+          cargo +nightly test --locked -p frankenengine-core --test orchestrator_execution_budgets -- --nocapture 2>&1 | tee scope-validation/core-orchestrator.log
+      - name: Build complete production engine library
+        run: |
+          set -o pipefail
+          cargo +nightly build --locked -p frankenengine-engine --no-default-features --lib --message-format=json-render-diagnostics > scope-validation/build-artifacts.jsonl 2> >(tee scope-validation/engine-build.log >&2)
+      - name: Run unchanged-source engine integration and checkpoint tests
+        run: |
+          set -o pipefail
+          python3 - <<'PY' 2>&1 | tee scope-validation/engine-tests.log
+          import json, pathlib, subprocess
+          deps = pathlib.Path('target/debug/deps')
+          artifacts = {}
+          for line in pathlib.Path('scope-validation/build-artifacts.jsonl').read_text().splitlines():
+              record = json.loads(line)
+              if record.get('reason') == 'compiler-artifact':
+                  for name in record['filenames']:
+                      if name.endswith('.rlib'):
+                          artifacts[record['target']['name']] = name
+          def run_test(source, output, names):
+              command = ['rustup','run','nightly','rustc','--edition=2024','--test',source,'-C','debuginfo=0','-L','dependency='+str(deps),'-o',output]
+              for name in names:
+                  library = artifacts.get(name)
+                  if library is None:
+                      found = list(deps.glob('lib'+name+'-*.rlib'))
+                      assert len(found) == 1, (name, found)
+                      library = str(found[0])
+                  command += ['--extern',name+'='+library]
+              subprocess.run(command,check=True)
+              subprocess.run([output,'--nocapture'],check=True)
+          run_test('crates/franken-engine/tests/orchestrator_execution_budgets.rs','scope-validation/engine-orchestrator',['frankenengine_engine','frankenengine_core','frankenengine_extension_host','tempfile'])
+          run_test('crates/franken-engine/src/checkpoint.rs','scope-validation/checkpoint-tests',['frankenengine_core','serde','serde_json'])
+          PY
+      - name: Validate parity binary and complete core library
+        if: always()
+        run: |
+          set -o pipefail
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --bin franken_shipped_path_parity -- --nocapture 2>&1 | tee scope-validation/parity.log
+          cargo +nightly test --locked -p frankenengine-core --lib -- --nocapture 2>&1 | tee scope-validation/core-full.log
+      - name: Retain exact patch and full validation results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-scope-validation
-          path: scope-validation/
+          path: |
+            scope-validation/*.log
+            scope-validation/*.json*
+            scope-validation/*.patch
           retention-days: 7

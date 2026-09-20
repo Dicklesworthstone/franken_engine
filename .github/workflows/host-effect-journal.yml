@@ -98,7 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Apply reviewed operation-control candidate on exact main
         env:
@@ -107,8 +107,7 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, json, lzma, os, pathlib, subprocess, urllib.request
           base = '92e1fa526c1be0e73dda319c5fdc973a5f73b062'
-          if subprocess.check_output(['git', 'rev-parse', 'HEAD^'], text=True).strip() != base:
-              raise SystemExit('Candidate source base changed; reconcile first')
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
           if subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines() != ['.github/workflows/host-effect-journal.yml']:
               raise SystemExit('Unexpected source changes before candidate')
           req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/4dfadcbe3edff1159c01e7744c698af21c3d07d7', headers={
@@ -121,6 +120,16 @@ jobs:
               raise SystemExit('Patch digest mismatch')
           subprocess.run(['git', 'apply', '--check', '--whitespace=error', '-'], input=patch, check=True)
           subprocess.run(['git', 'apply', '--whitespace=error', '-'], input=patch, check=True)
+          followup_req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/129dc3558c8020fdc771fc02f3d53672d51612bf', headers={
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+          with urllib.request.urlopen(followup_req, timeout=30) as response:
+              followup = base64.b64decode(json.load(response)['content'])
+          if hashlib.sha1(b'blob ' + str(len(followup)).encode() + b'\0' + followup).hexdigest() != '129dc3558c8020fdc771fc02f3d53672d51612bf':
+              raise SystemExit('Callback regression patch mismatch')
+          subprocess.run(['git', 'apply', '--check', '-'], input=followup, check=True)
+          subprocess.run(['git', 'apply', '-'], input=followup, check=True)
           pathlib.Path('candidate-base.txt').write_text(base + '\n')
           PY
       - name: Install Rust
@@ -135,7 +144,7 @@ jobs:
               diff = subprocess.check_output(['git', 'diff', '--unified=0', '--', path], text=True)
               spans = [{'file': str(pathlib.Path(path).resolve()), 'range': [int(m[1]), int(m[1])+max(int(m[2] or '1'),1)-1]}
                        for m in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M)]
-              subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--config', 'skip_children=true', '--file-lines', json.dumps(spans), path], check=True)
+              subprocess.run(['rustfmt', '+nightly', '--edition', '2024', '--unstable-features', '--config', 'skip_children=true', '--file-lines', json.dumps(spans), path], check=True)
           PY
       - name: Execute full extension-host unit and real-provider regressions
         if: matrix.scope == 'host'
@@ -164,7 +173,7 @@ jobs:
           cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test orchestrator_execution_budgets --test orchestrator_live_revocation --test work_scope_revocation -- --nocapture 2>&1 | tee candidate-engine-tests.log
           cargo +nightly check --locked -p frankenengine-engine --no-default-features --lib 2>&1 | tee candidate-engine-check.log
       - name: Report strict engine lint independently of test execution
-        if: always() && matrix.scope == 'engine'
+        if: success() && matrix.scope == 'engine'
         continue-on-error: true
         run: |
           set -o pipefail

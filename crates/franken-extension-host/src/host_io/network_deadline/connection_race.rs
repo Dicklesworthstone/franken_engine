@@ -6,7 +6,7 @@
 //! losing sockets synchronously. No worker, TLS handshake or guest payload can
 //! outlive this race. DNS and the eventual request retain the original deadline.
 
-use super::NetworkDeadline;
+use super::{NetworkDeadline, NetworkRevocation, REVOCATION_POLL_INTERVAL};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, connect, socket_with};
 use std::io;
@@ -22,7 +22,11 @@ pub(super) fn connect_addresses(
     addresses: &[SocketAddr],
     deadline: NetworkDeadline,
 ) -> io::Result<TcpStream> {
-    let stream = race(addresses, deadline.end, &mut SocketConnector)?;
+    deadline.remaining()?;
+    let mut connector = SocketConnector {
+        revocation: deadline.revocation.clone(),
+    };
+    let stream = race(addresses, deadline.end, &mut connector)?;
     // The surrounding DeadlineTcpStream applies read/write timeouts. Do not
     // return a nonblocking socket to rustls or to its synchronous I/O callers.
     stream.set_nonblocking(false)?;
@@ -89,6 +93,7 @@ struct Pending<S> {
 trait Connector {
     type Stream;
 
+    fn check_active(&self) -> io::Result<()>;
     fn now(&self) -> Instant;
     fn start(&mut self, address: SocketAddr) -> io::Result<Self::Stream>;
     fn wait(
@@ -104,6 +109,7 @@ fn race<C: Connector>(
     end: Instant,
     connector: &mut C,
 ) -> io::Result<C::Stream> {
+    connector.check_active()?;
     remaining(end, connector.now())?;
     let addresses = interleaved(addresses)?;
     let mut pending = Vec::<Pending<C::Stream>>::with_capacity(MAX_PENDING);
@@ -112,6 +118,7 @@ fn race<C: Connector>(
     let mut next_start = last_start;
     let mut last_error = io::Error::new(io::ErrorKind::NotFound, "no connection addresses");
     loop {
+        connector.check_active()?;
         let now = connector.now();
         remaining(end, now)?;
         let before = pending.len();
@@ -129,12 +136,14 @@ fn race<C: Connector>(
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error),
                 };
+                connector.check_active()?;
                 remaining(end, connector.now())?;
                 if let Some(stream) = winner {
                     return Ok(stream);
                 }
             }
             let now = connector.now();
+            connector.check_active()?;
             let budget = remaining(end, now)?;
             // Reserve a share for every address still unattempted. Two stalled
             // sockets cannot monopolize all the time needed by later addresses.
@@ -175,6 +184,7 @@ fn race<C: Connector>(
         };
         // A ready socket observed after the common deadline is not a success.
         // Both that socket and all pending losers drop before returning error.
+        connector.check_active()?;
         remaining(end, connector.now())?;
         if let Some(stream) = winner {
             return Ok(stream);
@@ -185,16 +195,25 @@ fn race<C: Connector>(
     }
 }
 
-struct SocketConnector;
+struct SocketConnector {
+    revocation: Option<NetworkRevocation>,
+}
 
 impl Connector for SocketConnector {
     type Stream = TcpStream;
+
+    fn check_active(&self) -> io::Result<()> {
+        self.revocation
+            .as_ref()
+            .map_or(Ok(()), NetworkRevocation::check)
+    }
 
     fn now(&self) -> Instant {
         Instant::now()
     }
 
     fn start(&mut self, address: SocketAddr) -> io::Result<TcpStream> {
+        self.check_active()?;
         let family = if address.is_ipv6() {
             AddressFamily::INET6
         } else {
@@ -222,7 +241,13 @@ impl Connector for SocketConnector {
     ) -> io::Result<Option<TcpStream>> {
         // One second is representable by poll on every supported Unix target.
         // Waking early never extends either the attempt or operation deadline.
-        let timeout = timeout.min(Duration::from_secs(1));
+        self.check_active()?;
+        let limit = if self.revocation.is_some() {
+            REVOCATION_POLL_INTERVAL
+        } else {
+            Duration::from_secs(1)
+        };
+        let timeout = timeout.min(limit);
         let timeout = Timespec {
             tv_sec: timeout.as_secs() as _,
             tv_nsec: timeout.subsec_nanos() as _,
@@ -232,6 +257,7 @@ impl Connector for SocketConnector {
             .map(|attempt| PollFd::new(&attempt.stream, PollFlags::OUT))
             .collect();
         poll(&mut descriptors, Some(&timeout))?;
+        self.check_active()?;
         let ready: Vec<_> = descriptors
             .iter()
             .map(|descriptor| !descriptor.revents().is_empty())
@@ -304,6 +330,7 @@ mod tests {
         peak: usize,
         interrupts: usize,
         late_success: Duration,
+        revoke_at: Option<Instant>,
     }
 
     impl Model {
@@ -316,12 +343,21 @@ mod tests {
                 peak: 0,
                 interrupts: 0,
                 late_success: Duration::ZERO,
+                revoke_at: None,
             }
         }
     }
 
     impl Connector for Model {
         type Stream = ModelStream;
+
+        fn check_active(&self) -> io::Result<()> {
+            if self.revoke_at.is_some_and(|at| self.now >= at) {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok(())
+            }
+        }
 
         fn now(&self) -> Instant {
             self.now
@@ -394,6 +430,51 @@ mod tests {
             interleaved(&[v4(1), v4(2), v6(3)]).unwrap(),
             vec![v4(1), v6(3), v4(2)]
         );
+    }
+
+    #[test]
+    fn revocation_before_race_opens_no_socket() {
+        let mut model = Model::new(&[(v4(1), Behavior::Stall)]);
+        model.revoke_at = Some(model.now);
+        let end = model.now + Duration::from_secs(10);
+        assert_eq!(
+            race(&[v4(1)], end, &mut model).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(model.starts.is_empty());
+    }
+
+    #[test]
+    fn revocation_drops_all_pending_sockets_before_any_later_candidate() {
+        let mut model = Model::new(&[
+            (v6(1), Behavior::Stall),
+            (v4(2), Behavior::Stall),
+            (v6(3), Behavior::Ready(Duration::ZERO)),
+        ]);
+        model.revoke_at = Some(model.now + ATTEMPT_DELAY + Duration::from_millis(1));
+        let end = model.now + Duration::from_secs(10);
+        assert_eq!(
+            race(&[v6(1), v4(2), v6(3)], end, &mut model)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(model.starts.len(), 2);
+        let dropped = model.dropped.borrow();
+        assert_eq!(dropped.len(), 2);
+        assert!(dropped.contains(&v6(1)) && dropped.contains(&v4(2)));
+    }
+
+    #[test]
+    fn revocation_observed_with_a_winner_drops_that_winner_too() {
+        let mut model = Model::new(&[(v4(1), Behavior::Ready(Duration::from_millis(100)))]);
+        model.revoke_at = Some(model.now + Duration::from_millis(50));
+        let end = model.now + Duration::from_secs(10);
+        assert_eq!(
+            race(&[v4(1)], end, &mut model).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(*model.dropped.borrow(), vec![v4(1)]);
     }
 
     #[test]

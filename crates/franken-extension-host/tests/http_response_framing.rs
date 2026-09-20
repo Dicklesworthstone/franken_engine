@@ -23,6 +23,172 @@ const CHUNKED: &[u8] = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\
 const TRUNCATED: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nshort";
 const CLOSE_DELIMITED: &[u8] = b"HTTP/1.1 200 OK\r\n\r\nbody";
 
+// Both the accept and the held-open phase are bounded even when the provider
+// fails before connecting. A failed assertion must not strand a test server.
+fn accept_revocation_peer(listener: &TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                return stream;
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < end =>
+            {
+                std::thread::sleep(Duration::from_millis(1))
+            }
+            other => panic!("revocation test accept failed: {other:?}"),
+        }
+    }
+}
+
+fn hold_after_request<S: Read>(
+    stream: &mut S,
+    ready: &mpsc::SyncSender<()>,
+    release: &mpsc::Receiver<()>,
+) -> Vec<u8> {
+    let mut request = Vec::new();
+    let mut byte = [0; 1];
+    while !request.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).unwrap();
+        request.push(byte[0]);
+        assert!(request.len() <= 8192);
+    }
+    ready.send(()).unwrap();
+    // No response or EOF can explain the client's completion until the test
+    // releases this server after observing the revocation outcome.
+    let _ = release.recv_timeout(Duration::from_secs(5));
+    request
+}
+
+#[test]
+fn revocation_interrupts_tcp_and_tls_response_waits_and_replays_the_denial() {
+    for use_tls in [false, true] {
+        for pinned in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let provider = SandboxedHostIo::with_root(directory.path())
+                .unwrap()
+                .with_network_timeout(Duration::from_secs(10))
+                .unwrap();
+            let (provider, tls_config) = install_loopback_tls(provider);
+            let signal = provider.network_revocation();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready, wait_ready) = mpsc::sync_channel(1);
+            let (release, wait_release) = mpsc::sync_channel(1);
+            let server = std::thread::spawn(move || {
+                let mut tcp = accept_revocation_peer(&listener);
+                if use_tls {
+                    let connection = rustls::ServerConnection::new(tls_config).unwrap();
+                    let mut tls = rustls::StreamOwned::new(connection, tcp);
+                    hold_after_request(&mut tls, &ready, &wait_release)
+                } else {
+                    hold_after_request(&mut tcp, &ready, &wait_release)
+                }
+            });
+            let payload = b"GET /once HTTP/1.1\r\nHost: loopback\r\n\r\n".to_vec();
+            let request = HostIoRequest::NetworkRequest {
+                endpoint: address.to_string(),
+                payload: payload.clone(),
+                max_len: 4096,
+                use_tls,
+            };
+            let journal = Arc::new(InMemoryHostEffectJournal::recording());
+            journal.begin_execution().unwrap();
+            let worker_journal = Arc::clone(&journal);
+            let worker_request = request.clone();
+            let (done, wait_done) = mpsc::sync_channel(1);
+            let worker = std::thread::spawn(move || {
+                let reservation = worker_journal.reserve_host_io(&worker_request).unwrap();
+                let outcome = if pinned {
+                    provider.perform_pinned_network_candidates(
+                        &worker_request,
+                        &[HostIoCapability::NetworkSend],
+                        &[address, address],
+                        std::time::Instant::now() + Duration::from_secs(10),
+                    )
+                } else {
+                    provider.perform(&worker_request, &[HostIoCapability::NetworkSend])
+                };
+                worker_journal
+                    .complete_host_io(reservation, &worker_request, &outcome)
+                    .unwrap();
+                done.send(outcome).unwrap();
+            });
+            let observed_request = wait_ready.recv_timeout(Duration::from_secs(5));
+            signal.revoke();
+            let result = wait_done.recv_timeout(Duration::from_secs(2));
+            let _ = release.send(());
+            worker.join().unwrap();
+            let observed = server.join().unwrap();
+            assert!(observed_request.is_ok());
+            assert_eq!(observed, payload);
+            let outcome =
+                result.expect("revocation must not wait for the peer or ten-second deadline");
+            assert!(
+                matches!(&outcome, Err(HostIoError::Denied { .. })),
+                "{outcome:?}"
+            );
+            let entries = journal.finish_execution().unwrap();
+            assert_eq!(entries.len(), 1);
+            let replay = InMemoryHostEffectJournal::replaying(entries.clone());
+            replay.begin_execution().unwrap();
+            assert_eq!(replay.replay_host_io(&request), Some(outcome));
+            assert_eq!(replay.finish_execution().unwrap(), entries);
+        }
+    }
+}
+
+#[test]
+fn revocation_interrupts_a_tls_handshake_with_no_http_payload_or_peer_close() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = SandboxedHostIo::with_root(directory.path())
+        .unwrap()
+        .with_network_timeout(Duration::from_secs(10))
+        .unwrap();
+    let signal = provider.network_revocation();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (ready, wait_ready) = mpsc::sync_channel(1);
+    let (release, wait_release) = mpsc::sync_channel(1);
+    let server = std::thread::spawn(move || {
+        let mut peer = accept_revocation_peer(&listener);
+        let mut header = [0; 5];
+        peer.read_exact(&mut header).unwrap();
+        ready.send(()).unwrap();
+        let _ = wait_release.recv_timeout(Duration::from_secs(5));
+        header
+    });
+    let (done, wait_done) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let request = HostIoRequest::NetworkRequest {
+            endpoint: address.to_string(),
+            payload: b"GET /secret HTTP/1.1\r\n\r\n".to_vec(),
+            max_len: 4096,
+            use_tls: true,
+        };
+        done.send(provider.perform(&request, &[HostIoCapability::NetworkSend]))
+            .unwrap();
+    });
+    let handshake_started = wait_ready.recv_timeout(Duration::from_secs(5));
+    signal.revoke();
+    let result = wait_done.recv_timeout(Duration::from_secs(2));
+    let _ = release.send(());
+    worker.join().unwrap();
+    let header = server.join().unwrap();
+    assert!(handshake_started.is_ok());
+    assert_eq!(header[0], 22, "only a TLS handshake, never plaintext HTTP");
+    assert!(matches!(result.unwrap(), Err(HostIoError::Denied { .. })));
+}
+
 struct Exchange {
     outcome: HostIoOutcome,
     request: HostIoRequest,

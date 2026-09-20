@@ -161,27 +161,31 @@ where
     deadline.remaining()?;
     let owned_endpoint = endpoint.to_string();
     let (send, receive) = mpsc::sync_channel(1);
+    let worker_deadline = deadline.clone();
     std::thread::Builder::new()
         .name("franken-dns".to_string())
         .spawn(move || {
             // A delayed worker must not begin an already-expired lookup.
-            let result = deadline.remaining().and_then(|_| lookup(&owned_endpoint));
+            let result = worker_deadline
+                .remaining()
+                .and_then(|_| lookup(&owned_endpoint));
             drop(permit);
             // Sending into the single result slot never waits for the caller.
             // Late results are dropped; no worker is allowed to connect.
             let _ = send.send(result);
         })?;
-    let result = receive
-        .recv_timeout(deadline.remaining()?)
-        .map_err(|error| match error {
-            mpsc::RecvTimeoutError::Timeout => io::Error::new(
-                io::ErrorKind::TimedOut,
-                "network deadline exceeded during DNS lookup",
-            ),
-            mpsc::RecvTimeoutError::Disconnected => {
-                io::Error::other("DNS lookup worker terminated")
+    let result = loop {
+        match receive.recv_timeout(deadline.wait_slice()?) {
+            Ok(result) => break result,
+            // A short wait is only a revocation checkpoint, never a renewed
+            // effect deadline. Returning here leaves the worker's permit held.
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                deadline.remaining()?;
+                return Err(io::Error::other("DNS lookup worker terminated"));
             }
-        })?;
+        }
+    };
     // Even a result made ready just after the deadline cannot authorize I/O.
     deadline.remaining()?;
     result.and_then(checked_addresses)
@@ -249,9 +253,7 @@ mod tests {
     fn expired_deadline_rejects_even_a_numeric_endpoint() {
         let result = resolve_with(
             "127.0.0.1:80",
-            NetworkDeadline {
-                end: Instant::now(),
-            },
+            NetworkDeadline::at(Instant::now()),
             &ResolverBudget::new(1),
             |_| panic!("expired lookup must not run"),
         );
@@ -461,5 +463,45 @@ mod tests {
         assert!(!addresses.is_empty());
         assert!(addresses.len() <= MAX_ADDRESSES);
         assert!(addresses.iter().all(|address| address.port() == 43210));
+    }
+
+    #[test]
+    fn revoking_a_dns_wait_retains_the_worker_permit_until_lookup_exits() {
+        let signal = super::super::NetworkRevocation::default();
+        let mut deadline = NetworkDeadline::new(Duration::from_secs(10)).unwrap();
+        deadline.revocation = Some(signal.clone());
+        let budget = ResolverBudget::new(1);
+        let worker_budget = Arc::clone(&budget);
+        let (entered, wait_entered) = mpsc::sync_channel(1);
+        let (release, wait_release) = mpsc::sync_channel(1);
+        let (done, wait_done) = mpsc::sync_channel(1);
+        let caller = std::thread::spawn(move || {
+            let result = resolve_with("host.invalid:80", deadline, &worker_budget, move |_| {
+                entered.send(()).unwrap();
+                wait_release.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(vec![address()])
+            });
+            done.send(result).unwrap();
+        });
+        wait_entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        signal.revoke();
+        let result = wait_done.recv_timeout(Duration::from_secs(2));
+        let active = budget.active.load(Ordering::Acquire);
+        // Release the injected OS lookup even if an assertion below fails.
+        release.send(()).unwrap();
+        caller.join().unwrap();
+        assert_eq!(
+            result.unwrap().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            active, 1,
+            "revocation must not free an occupied OS-worker slot"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        while budget.active.load(Ordering::Acquire) != 0 {
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
     }
 }

@@ -20,6 +20,7 @@ mod fd_admission_tests;
 mod http_response;
 mod network_deadline;
 pub use http_response::{ParsedHttpResponse, parse_http_response};
+pub use network_deadline::NetworkRevocation;
 use network_deadline::{DeadlineTcpStream, NetworkDeadline};
 
 /// Capability a guest must hold for the host to perform a given I/O request.
@@ -664,6 +665,8 @@ pub struct SandboxedHostIo {
     root_fd: std::sync::Arc<OwnedFd>,
     max_bytes: u64,
     network_timeout: Duration,
+    /// Network-only containment authority, shared by every provider clone.
+    network_revocation: NetworkRevocation,
     random_bytes_remaining: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Trust anchors for `use_tls` round trips: the compiled-in webpki (Mozilla)
     /// roots by default, plus any operator-supplied extras added via
@@ -738,6 +741,7 @@ impl SandboxedHostIo {
             root_fd: std::sync::Arc::new(root_fd),
             max_bytes,
             network_timeout: SANDBOXED_HOST_IO_NETWORK_TIMEOUT,
+            network_revocation: NetworkRevocation::default(),
             random_bytes_remaining: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
                 SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES,
             )),
@@ -2289,10 +2293,9 @@ impl SandboxedHostIo {
                 detail: "network endpoint contains a NUL byte".to_string(),
             });
         }
-        let deadline =
-            NetworkDeadline::new(self.network_timeout).map_err(|err| HostIoError::Io {
-                detail: format!("network deadline for {endpoint}: {err}"),
-            })?;
+        let deadline = self.network_deadline().map_err(|err| HostIoError::Io {
+            detail: format!("network deadline for {endpoint}: {err}"),
+        })?;
         DeadlineTcpStream::connect_endpoint(endpoint, deadline).map_err(|err| HostIoError::Io {
             detail: format!("resolve/connect {endpoint}: {err}"),
         })
@@ -2366,11 +2369,11 @@ impl SandboxedHostIo {
         // Bound the read by the smaller of the caller-requested length and the
         // provider's per-operation cap.
         let cap = max_len.min(self.max_bytes);
-        let stream = self.connect(endpoint)?;
+        let mut stream = self.connect(endpoint)?;
         let mut bytes = Vec::new();
         // Bounded read: cap+1 so a peer that streams more than the cap fails
         // closed rather than being silently truncated.
-        stream
+        Read::by_ref(&mut stream)
             .take(cap.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|err| HostIoError::Io {
@@ -2381,6 +2384,9 @@ impl SandboxedHostIo {
                 detail: format!("network recv from {endpoint} exceeds the {cap}-byte cap"),
             });
         }
+        stream.check_active().map_err(|err| HostIoError::Io {
+            detail: format!("recv completion from {endpoint}: {err}"),
+        })?;
         Ok(HostIoResponse::NetworkRecv { bytes })
     }
 
@@ -2431,6 +2437,9 @@ impl SandboxedHostIo {
             HostIoError::Io {
                 detail: format!("HTTP recv from {endpoint}: {err}"),
             }
+        })?;
+        stream.check_active().map_err(|err| HostIoError::Io {
+            detail: format!("HTTP completion from {endpoint}: {err}"),
         })?;
         Ok(HostIoResponse::NetworkRequest { response })
     }
@@ -2492,6 +2501,9 @@ impl SandboxedHostIo {
                 detail: format!("TLS HTTP recv from {endpoint}: {err}"),
             }
         })?;
+        tls.sock.check_active().map_err(|err| HostIoError::Io {
+            detail: format!("TLS HTTP completion from {endpoint}: {err}"),
+        })?;
         Ok(HostIoResponse::NetworkRequest { response })
     }
 }
@@ -2512,7 +2524,16 @@ impl HostIoProvider for SandboxedHostIo {
                 capability: required,
             });
         }
-        match request {
+        let network = matches!(
+            request,
+            HostIoRequest::NetworkSend { .. }
+                | HostIoRequest::NetworkRecv { .. }
+                | HostIoRequest::NetworkRequest { .. }
+        );
+        if network {
+            self.network_revocation.check_host()?;
+        }
+        let outcome = match request {
             HostIoRequest::FsRead { path } => self.fs_read(path),
             HostIoRequest::FsWrite { path, data } => self.fs_write(path, data),
             HostIoRequest::FsMeta {
@@ -2534,7 +2555,11 @@ impl HostIoProvider for SandboxedHostIo {
                 use_tls,
             } => self.network_request(endpoint, payload, *max_len, *use_tls),
             HostIoRequest::RandomRead { byte_len } => self.random_read(*byte_len),
+        };
+        if network {
+            self.network_revocation.check_host()?;
         }
+        outcome
     }
 }
 

@@ -9,13 +9,13 @@ use std::time::Duration;
 use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
 use frankenengine_engine::execution_cell::{CellError, CellExecutionError};
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExecutionWorkPool, ExtensionPackage, OrchestratorConfig, OrchestratorError,
-    WorkBudgetError,
+    ExecutionOrchestrator, ExecutionWorkPool, ExtensionPackage, OrchestratorConfig,
+    OrchestratorError, WorkBudgetError,
 };
 use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_extension_host::host_io::{
-    HostIoCapability, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider, HostIoRecorder,
-    HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+    HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
+    HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
 };
 
 fn package(source: &str) -> ExtensionPackage {
@@ -162,7 +162,11 @@ fn in_flight_revocation_blocks_further_effects_and_success_in_every_profile() {
                 OrchestratorError::WorkBudget(WorkBudgetError::Revoked)
             ));
             assert_closed(&retry);
-            assert_eq!(recorder.entries(), history, "denied retry preserves history");
+            assert_eq!(
+                recorder.entries(),
+                history,
+                "denied retry preserves history"
+            );
             assert_eq!(pool.remaining(), 4096);
             assert_eq!(pool.committed(), 4096);
             assert_eq!(writes.load(Ordering::Relaxed), 1);
@@ -204,7 +208,9 @@ fn revoking_running_tenant_preserves_parent_and_sibling_progress() {
         assert!(tenant.is_revoked());
         assert!(!root.is_revoked() && !sibling.is_revoked());
         orchestrator(&root, lane).execute(&package("7;")).unwrap();
-        orchestrator(&sibling, lane).execute(&package("7;")).unwrap();
+        orchestrator(&sibling, lane)
+            .execute(&package("7;"))
+            .unwrap();
         assert_eq!(root.remaining(), 0);
         assert_eq!(sibling.remaining(), 0);
         assert_eq!(tenant.remaining(), 4096);
@@ -297,5 +303,152 @@ fn concurrent_ancestor_revocation_during_host_call_stops_the_next_effect() {
         assert!(history[0].1.is_ok());
         assert_eq!(runtime.last_failed_host_effect_journal().len(), 1);
         assert_eq!(runtime.last_failed_host_effect_journal_records().len(), 1);
+    }
+}
+
+/// The controller knows only the work pool, never the provider's network kill
+/// switch. A held-open real HTTP peer makes missing control propagation red.
+#[test]
+fn work_scope_revocation_interrupts_inflight_network_and_preserves_shared_provider() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+        let root = ExecutionWorkPool::new(16_384);
+        let tenant = root.partition(8192).unwrap();
+        let sibling = root.partition(4096).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let provider = Arc::new(
+            SandboxedHostIo::with_root(directory.path())
+                .unwrap()
+                .with_network_timeout(Duration::from_secs(15))
+                .unwrap(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (entered, wait_entered) = mpsc::sync_channel(1);
+        let (release, wait_release) = mpsc::sync_channel(1);
+        let server = std::thread::spawn(move || {
+            let end = Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < end =>
+                    {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    other => panic!("expected native network dispatch: {other:?}"),
+                }
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut byte = [0; 1];
+            while !bytes.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                bytes.push(byte[0]);
+                assert!(bytes.len() <= 8192);
+            }
+            entered.send(()).unwrap();
+            // Only the controller's observation of native completion releases
+            // this socket. Peer EOF and the fifteen-second limit cannot explain
+            // a successful cancellation test.
+            let _ = wait_release.recv_timeout(Duration::from_secs(10));
+            bytes
+        });
+        let mut work = filesystem_package(&format!(
+            "require('http').get('http://{address}/once', () => {{ require('fs').writeFileSync('forbidden.txt', 'no'); }});"
+        ));
+        work.capabilities.push("network_egress".into());
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        let mut runtime = orchestrator(&tenant, lane);
+        runtime.set_host_io(provider.clone(), Some(recorder_dyn));
+        let (done, wait_done) = mpsc::sync_channel(1);
+        // Keep the interpreter on this test thread; the controller revokes the
+        // tenant after receiving the actual request and never touches provider.
+        let revoked_tenant = tenant.clone();
+        let controller = std::thread::spawn(move || {
+            let entered = wait_entered.recv_timeout(Duration::from_secs(10));
+            revoked_tenant.revoke();
+            let completed = wait_done.recv_timeout(Duration::from_secs(3));
+            let _ = release.send(());
+            assert!(entered.is_ok(), "interpreter never sent the real request");
+            assert!(
+                completed.is_ok(),
+                "host network call ignored work-scope revocation"
+            );
+        });
+        let result = runtime.execute(&work);
+        let _ = done.send(());
+        controller.join().unwrap();
+        let observed = server.join().unwrap();
+        assert!(observed.starts_with(b"GET /once HTTP/1.1\r\n"));
+        let error = result.unwrap_err();
+        assert_live_refusal(&error);
+        assert_eq!(runtime.execution_count(), 0);
+        assert!(!directory.path().join("forbidden.txt").exists());
+        assert_eq!(tenant.committed(), 4096);
+        assert_eq!(recorder.entries().len(), 1);
+        assert!(matches!(
+            &recorder.entries()[0].1,
+            Err(HostIoError::Denied { .. })
+        ));
+        assert_eq!(runtime.last_failed_host_effect_journal().len(), 1);
+        assert!(!provider.network_revocation().is_revoked());
+        assert!(!root.is_revoked() && !sibling.is_revoked());
+
+        // Positive sibling execution through the same provider, not merely a
+        // boolean signal assertion: its HTTP response must reach native JS.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let end = Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < end =>
+                    {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    other => panic!("sibling network dispatch failed: {other:?}"),
+                }
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            socket.read_to_end(&mut bytes).unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+        });
+        let mut sibling_work = filesystem_package(&format!(
+            "require('http').get('http://{address}/sibling'); 42;"
+        ));
+        sibling_work.capabilities.push("network_egress".into());
+        let mut sibling_runtime = orchestrator(&sibling, lane);
+        let sibling_recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = sibling_recorder.clone();
+        sibling_runtime.set_host_io(provider, Some(recorder_dyn));
+        let result = sibling_runtime.execute(&sibling_work);
+        server.join().unwrap();
+        assert!(result.is_ok(), "sibling must retain authority: {result:?}");
+        let entries = sibling_recorder.entries();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(&entries[0].1, Ok(frankenengine_extension_host::host_io::HostIoResponse::NetworkRequest { response }) if response.ends_with(b"\r\n\r\nok"))
+        );
     }
 }

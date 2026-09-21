@@ -98,8 +98,8 @@ use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::host_io::{
-    HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
-    HostIoRecorder, HostIoRequest,
+    HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
+    HostIoProvider, HostIoRecorder, HostIoRequest, UnrestrictedHostIoControl,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessSpawnControl, ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnProvider,
@@ -181,6 +181,25 @@ impl CellAuthorizedHostIoProvider {
     }
 }
 
+/// Poll the same live token as the interpreter, including work-scope ancestry.
+/// This control is attached to one call; it never revokes a shared provider.
+#[derive(Debug)]
+struct CellHostIoControl {
+    cancellation_token: CancellationToken,
+    upstream: Arc<dyn HostIoControl>,
+}
+
+impl HostIoControl for CellHostIoControl {
+    fn checkpoint(&self) -> Result<(), HostIoError> {
+        if self.cancellation_token.is_cancelled() {
+            return Err(HostIoError::Denied {
+                reason: "HOST_IO_EXECUTION_CANCELLED".to_string(),
+            });
+        }
+        self.upstream.checkpoint()
+    }
+}
+
 impl HostIoProvider for CellAuthorizedHostIoProvider {
     fn name(&self) -> &str {
         self.provider.name()
@@ -191,6 +210,20 @@ impl HostIoProvider for CellAuthorizedHostIoProvider {
     }
 
     fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        self.perform_controlled(request, granted, Arc::new(UnrestrictedHostIoControl))
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
+        let control = Arc::new(CellHostIoControl {
+            cancellation_token: self.permit.cancellation_token().clone(),
+            upstream: control,
+        });
+        control.checkpoint()?;
         let required = runtime_capability_for_host_io(request.required_capability());
         let proposal = self
             .permit
@@ -203,7 +236,7 @@ impl HostIoProvider for CellAuthorizedHostIoProvider {
             .map_err(|error| HostIoError::Denied {
                 reason: format!("cell execution authority refused provider dispatch: {error}"),
             })?;
-        let outcome = self.provider.perform(request, granted);
+        let outcome = self.provider.perform_controlled(request, granted, control);
         let classification = if outcome.is_ok() {
             "provider_succeeded"
         } else {

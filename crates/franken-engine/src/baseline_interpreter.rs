@@ -13088,7 +13088,19 @@ impl InterpreterCore {
                 self.host_io_recorder.clone(),
             )
         };
-        let result = match stack.handle_effect(effect.as_ref()) {
+        let outcome = stack.handle_effect(effect.as_ref());
+        // The provider and journal have already settled the irreversible effect
+        // prefix. Cancellation is a host fault, not a catchable filesystem error
+        // or a callback result; observe it before translating any outcome.
+        if self
+            .config
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(InterpreterError::Cancelled);
+        }
+        let result = match outcome {
             Ok(result) => result,
             Err(EffectError::HandlerError {
                 message,
@@ -13287,7 +13299,19 @@ impl InterpreterCore {
                 self.host_io_recorder.clone(),
             )
         };
-        let result = match stack.handle_effect(effect.as_ref()) {
+        let outcome = stack.handle_effect(effect.as_ref());
+        // A supervisor cancellation must not become the ordinary policy-denial
+        // `undefined` value below. The failed effect remains journaled, but no
+        // response callback or following guest instruction may run.
+        if self
+            .config
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(InterpreterError::Cancelled);
+        }
+        let result = match outcome {
             Ok(result) => result,
             Err(EffectError::CapabilityDenied { .. }) => {
                 return Ok(Value::Undefined);

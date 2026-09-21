@@ -81,8 +81,8 @@ jobs:
   scoped-engine-diagnostic:
     # Temporary executable consumer for one real pre-cell failure; restore this
     # workflow after landing the scoped execution integration and its fix.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
     permissions:
       contents: write
     env:
@@ -94,34 +94,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
-      - name: Apply exact engine candidate and improve failing assertion diagnostics
+      - name: Apply exact engine candidate and retain its planning context
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import base64, hashlib, json, lzma, os, pathlib, subprocess, urllib.request
           base = '3f9f42030e6e1fefe548808dcfc21be8f6f33af3'
-          assert subprocess.check_output(['git', 'rev-parse', 'HEAD^'], text=True).strip() == base
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
           assert subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines() == ['.github/workflows/host-effect-journal.yml']
           req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs/f0724991f1f0aab2d6d47fc66abf45a4e2828900', headers={
               'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
               'Accept': 'application/vnd.github+json',
-              'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              'User-Agent': 'franken-engine-validation'})
           with urllib.request.urlopen(req, timeout=30) as response:
               patch = lzma.decompress(base64.b64decode(json.load(response)['content']))
           assert hashlib.sha256(patch).hexdigest() == '86cb0e5b4a5743fd0e9c696b4d28817d93f200b54132583c3d4ed8f98225e51f'
+          pathlib.Path('scoped-engine-candidate.patch').write_bytes(patch)
           subprocess.run(['git', 'apply', '--recount', '--check', '--whitespace=error', '-'], input=patch, check=True)
           subprocess.run(['git', 'apply', '--recount', '--whitespace=error', '-'], input=patch, check=True)
+          # Preserve the authoritative backlog for inspection, not a status claim.
+          beads = [json.loads(line) for line in pathlib.Path('.beads/issues.jsonl').read_text().splitlines() if line.strip()]
+          open_beads = [b for b in beads if b.get('status') in ('open', 'in_progress') and b.get('priority', 9) <= 1]
+          print('OPEN_PRIORITY_BEADS', len(open_beads))
+          for b in sorted(open_beads, key=lambda b: (b.get('priority', 9), b.get('id', '')))[:80]:
+              print(json.dumps({k: b.get(k) for k in ('id', 'title', 'status', 'priority')}))
           p = pathlib.Path('crates/franken-engine/Cargo.toml')
           original = p.read_text()
           pathlib.Path('/tmp/scoped-engine-original-manifest').write_text(original)
           import re
           p.write_text(re.sub(r'\[\[bin\]\][\s\S]*?(?=\n\[|\Z)', '', original.replace('[package]\n', '[package]\nautobins = false\n', 1)))
-          # A disposable driver calls the actual production parser and lowering
-          # pipeline. Its binary permits source-level diagnosis without another
-          # full engine build; it is not a replacement implementation or fixture.
+          # A disposable driver exercises the real parser and lowering pipeline.
           pathlib.Path('crates/franken-engine/tests/scoped_lowering_probe.rs').write_text('''
           use frankenengine_engine::ast::ParseGoal;
           use frankenengine_engine::ir_contract::Ir0Module;
@@ -131,7 +136,7 @@ jobs:
           #[test]
           fn probe_actual_source() {
               let source = std::env::var("FRANKEN_SOURCE_PROBE").unwrap_or_else(|_| "42;".into());
-              let tree = CanonicalEs2020Parser.parse(&source, ParseGoal::Script).expect("production parse");
+              let tree = CanonicalEs2020Parser.parse(source.as_str(), ParseGoal::Script).expect("production parse");
               let context = LoweringContext::new("probe", "probe", "probe")
                   .with_host_io_exception_provenance(HostIoExceptionProvenance::ProviderInternal);
               let result = lower_ir0_to_ir3(&Ir0Module::from_syntax_tree(tree, "probe.js"), &context);
@@ -161,7 +166,7 @@ jobs:
         run: |
           set -o pipefail
           cargo +nightly clippy --locked -p frankenengine-engine --no-default-features --lib -- -D warnings 2>&1 | tee scoped-engine-clippy.log
-      - name: Retain compiler-produced source probe and exact source blobs
+      - name: Retain compiled probes and exact candidate source blobs
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -174,15 +179,16 @@ jobs:
               data = pathlib.Path(path).read_bytes()
               expected = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
               req = urllib.request.Request('https://api.github.com/repos/Dicklesworthstone/franken_engine/git/blobs', data=json.dumps({'content': base64.b64encode(data).decode(), 'encoding': 'base64'}).encode(), method='POST', headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'franken-engine-validation'})
               with urllib.request.urlopen(req, timeout=60) as response:
                   assert json.load(response)['sha'] == expected
               manifest['files'].append({'path': path, 'sha': expected, 'mode': '100644', 'type': 'blob'})
           pathlib.Path('scoped-source-blobs.json').write_text(json.dumps(manifest, indent=2) + '\n')
-          for path in pathlib.Path('target/debug').rglob('scoped_lowering_probe-*'):
-              if path.is_file() and os.access(path, os.X_OK) and path.read_bytes()[:4] == b'\x7fELF':
-                  shutil.copyfile(path, 'scoped-lowering-probe')
-                  break
+          for prefix in ('scoped_lowering_probe', 'orchestrator_execution_budgets', 'orchestrator_live_revocation', 'work_scope_revocation'):
+              for path in pathlib.Path('target/debug').rglob(prefix + '-*'):
+                  if path.is_file() and os.access(path, os.X_OK) and path.read_bytes()[:4] == b'\x7fELF':
+                      shutil.copyfile(path, 'scoped-bin-' + prefix)
+                      break
           saved = pathlib.Path('/tmp/scoped-engine-original-manifest')
           if saved.exists():
               pathlib.Path('crates/franken-engine/Cargo.toml').write_bytes(saved.read_bytes())
@@ -191,12 +197,19 @@ jobs:
         if: always()
         with:
           name: scoped-engine-diagnostics
+          include-hidden-files: true
           path: |
             scoped-engine-*.log
+            scoped-engine-candidate.patch
             scoped-source-blobs.json
-            scoped-lowering-probe
+            scoped-bin-*
+            .beads/issues.jsonl
+            docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md
             crates/franken-engine/src/baseline_interpreter.rs
             crates/franken-engine/src/execution_orchestrator.rs
+            crates/franken-engine/src/lowering_pipeline.rs
+            crates/franken-engine/src/parser.rs
+            crates/franken-engine/src/ir_contract.rs
             crates/franken-engine/tests/orchestrator_live_revocation.rs
             crates/franken-engine/tests/orchestrator_execution_budgets.rs
             crates/franken-engine/tests/scoped_lowering_probe.rs

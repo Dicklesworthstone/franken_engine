@@ -644,26 +644,19 @@ fn test_effect_set_operations() {
 /// Test circular dependency detection.
 #[test]
 fn test_circular_dependency_detection() {
-    let mut stack = HandlerStack::new();
+    let mut stack =
+        HandlerStack::with_dependency_path(vec!["console:log".to_string()]);
 
-    // TODO: Need to find alternative way to test circular dependency
-    // since dependency_path field is now private
-    // stack.dependency_path.push("effect1".to_string());
-    // stack.dependency_path.push("effect2".to_string());
-
-    // Create an effect that would trigger circular dependency
+    // Create an effect that matches an entry in the dependency path
     let effect = ConsoleEffect {
         level: ConsoleLevel::Log,
-        args: vec!["effect1".to_string()], // Same name as in dependency path
+        args: vec!["effect1".to_string()],
     };
-
-    // TODO: Need to find alternative way to simulate circular dependency
-    // stack.dependency_path.push("console:log".to_string());
 
     let result = stack.handle_effect(&effect);
     assert!(matches!(
         result,
-        Err(EffectError::CircularDependency { .. })
+        Err(EffectError::CircularDependency { ref path }) if path == &["console:log"]
     ));
 }
 

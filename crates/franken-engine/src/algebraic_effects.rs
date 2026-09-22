@@ -425,6 +425,24 @@ impl HandlerStack {
         }
     }
 
+    /// Create a handler stack seeded with an initial dependency path.
+    ///
+    /// Useful for testing circular dependency detection or initializing
+    /// nested effect dispatch contexts.
+    pub fn with_dependency_path(dependency_path: Vec<String>) -> Self {
+        Self {
+            handlers: Vec::new(),
+            capabilities: EffectCapabilities::none(),
+            max_depth: 100,
+            dependency_path,
+        }
+    }
+
+    /// Return the current dependency path.
+    pub fn dependency_path(&self) -> &[String] {
+        &self.dependency_path
+    }
+
     /// Add a handler to the stack.
     ///
     /// Handlers are automatically ordered by priority. Higher priority

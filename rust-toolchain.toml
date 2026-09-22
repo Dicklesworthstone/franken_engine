@@ -1,0 +1,15 @@
+# Toolchain pin — gates must be reproducible.
+#
+# Unpinned, `cargo fmt --check` and `cargo clippy -- -D warnings` verdicts
+# floated with the operator's nightly (the fetch_update -> try_update std
+# rename alone flipped clippy red repo-wide the week of 2026-09-21). This
+# pin fixes the gate semantics for everyone: local agents, CI
+# (dtolnay/rust-toolchain@nightly installs are overridden by rustup's
+# directory resolution), and rch workers via `RUSTUP_TOOLCHAIN`.
+#
+# Bump only with a fresh full-gate run (check, clippy, fmt, test) recorded
+# in the commit message.
+[toolchain]
+channel = "nightly-2026-09-21"
+profile = "default"
+components = ["rustfmt", "clippy"]

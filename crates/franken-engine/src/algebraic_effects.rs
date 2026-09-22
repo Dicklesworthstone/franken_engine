@@ -2051,9 +2051,11 @@ mod tests {
         };
 
         assert_eq!(Effect::effect_name(&effect), "fs:read");
-        assert!(Effect::required_capabilities(&effect)
-            .custom_caps
-            .contains("fs:read"));
+        assert!(
+            Effect::required_capabilities(&effect)
+                .custom_caps
+                .contains("fs:read")
+        );
 
         let params = Effect::parameters(&effect);
         let (path, range) = params
@@ -2072,9 +2074,11 @@ mod tests {
         };
 
         assert_eq!(Effect::effect_name(&effect), "net:connect");
-        assert!(Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::NetworkEgress));
+        assert!(
+            Effect::required_capabilities(&effect)
+                .runtime_caps
+                .contains(&RuntimeCapability::NetworkEgress)
+        );
 
         let params = Effect::parameters(&effect);
         let (host, port, timeout) = params.downcast_ref::<(String, u16, Option<u64>)>().unwrap();
@@ -2094,9 +2098,11 @@ mod tests {
         };
 
         assert_eq!(Effect::effect_name(&effect), "policy:request");
-        assert!(Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::PolicyRead));
+        assert!(
+            Effect::required_capabilities(&effect)
+                .runtime_caps
+                .contains(&RuntimeCapability::PolicyRead)
+        );
 
         let params = Effect::parameters(&effect);
         let (query, ctx) = params
@@ -2276,9 +2282,11 @@ mod tests {
         };
 
         assert_eq!(Effect::effect_name(&effect), "builtin:call");
-        assert!(Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::VmDispatch));
+        assert!(
+            Effect::required_capabilities(&effect)
+                .runtime_caps
+                .contains(&RuntimeCapability::VmDispatch)
+        );
 
         let params = Effect::parameters(&effect);
         let (name, args) = params

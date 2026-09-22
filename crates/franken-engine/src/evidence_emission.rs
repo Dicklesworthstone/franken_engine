@@ -558,8 +558,17 @@ impl CanonicalEvidenceEmitter {
             });
         };
 
-        if self.entries.last().is_some_and(|last| self.epoch < last.epoch) {
-            self.push_event(request, "evidence_emit", "rejected", Some("epoch_regression"));
+        if self
+            .entries
+            .last()
+            .is_some_and(|last| self.epoch < last.epoch)
+        {
+            self.push_event(
+                request,
+                "evidence_emit",
+                "rejected",
+                Some("epoch_regression"),
+            );
             return Err(EvidenceEmissionError::BuildError {
                 detail: "evidence epoch is behind the retained ledger".to_string(),
             });

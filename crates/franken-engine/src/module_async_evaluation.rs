@@ -710,11 +710,12 @@ impl AsyncModuleEvaluator {
         specifier: &str,
         to: AsyncModulePhase,
     ) -> Result<(), AsyncEvalError> {
-        let state = self.states.get(specifier).ok_or_else(|| {
-            AsyncEvalError::ModuleNotFound {
+        let state = self
+            .states
+            .get(specifier)
+            .ok_or_else(|| AsyncEvalError::ModuleNotFound {
                 specifier: specifier.to_string(),
-            }
-        })?;
+            })?;
         if state.phase.is_terminal() {
             return Err(AsyncEvalError::InvalidPhaseTransition {
                 specifier: specifier.to_string(),
@@ -1212,7 +1213,11 @@ mod suspension_budget_tests {
     }
 
     fn check_count(eval: &AsyncModuleEvaluator) {
-        let retained: u64 = eval.states().values().map(|state| state.suspensions.len() as u64).sum();
+        let retained: u64 = eval
+            .states()
+            .values()
+            .map(|state| state.suspensions.len() as u64)
+            .sum();
         assert_eq!(eval.retained_suspension_count, retained);
         assert!(retained <= eval.config.max_total_suspensions);
         assert!(eval.states().values().all(|state| {
@@ -1226,18 +1231,25 @@ mod suspension_budget_tests {
         for name in ["a", "b", "c", "dep"] {
             eval.register_module(name, true, &[], Some(PromiseHandle(1)));
         }
-        eval.suspend_at_top_level_await("a", PromiseHandle(2)).unwrap();
-        eval.suspend_on_dependency("b", "dep", PromiseHandle(3)).unwrap();
+        eval.suspend_at_top_level_await("a", PromiseHandle(2))
+            .unwrap();
+        eval.suspend_on_dependency("b", "dep", PromiseHandle(3))
+            .unwrap();
         let before = snapshot(&eval);
         for dependency in [false, true] {
             let error = if dependency {
                 eval.suspend_on_dependency("c", "dep", PromiseHandle(4))
             } else {
                 eval.suspend_at_top_level_await("c", PromiseHandle(4))
-            }.unwrap_err();
-            assert_eq!(error, AsyncEvalError::SuspensionLimitExceeded {
-                specifier: "c".into(), limit: 2,
-            });
+            }
+            .unwrap_err();
+            assert_eq!(
+                error,
+                AsyncEvalError::SuspensionLimitExceeded {
+                    specifier: "c".into(),
+                    limit: 2,
+                }
+            );
             assert_eq!(snapshot(&eval), before);
         }
         check_count(&eval);
@@ -1250,19 +1262,26 @@ mod suspension_budget_tests {
             eval.register_module("a", true, &[], Some(PromiseHandle(1)));
             eval.register_module("dep", true, &[], Some(PromiseHandle(2)));
             if dependency_first {
-                eval.suspend_on_dependency("a", "dep", PromiseHandle(3)).unwrap();
+                eval.suspend_on_dependency("a", "dep", PromiseHandle(3))
+                    .unwrap();
             } else {
-                eval.suspend_at_top_level_await("a", PromiseHandle(3)).unwrap();
+                eval.suspend_at_top_level_await("a", PromiseHandle(3))
+                    .unwrap();
             }
             let before = snapshot(&eval);
             let error = if dependency_first {
                 eval.suspend_at_top_level_await("a", PromiseHandle(4))
             } else {
                 eval.suspend_on_dependency("a", "dep", PromiseHandle(4))
-            }.unwrap_err();
-            assert_eq!(error, AsyncEvalError::SuspensionLimitExceeded {
-                specifier: "a".into(), limit: 1,
-            });
+            }
+            .unwrap_err();
+            assert_eq!(
+                error,
+                AsyncEvalError::SuspensionLimitExceeded {
+                    specifier: "a".into(),
+                    limit: 1,
+                }
+            );
             assert_eq!(snapshot(&eval), before);
             check_count(&eval);
         }
@@ -1273,14 +1292,20 @@ mod suspension_budget_tests {
         let mut eval = evaluator(10, 0);
         eval.register_module("a", true, &[], Some(PromiseHandle(1)));
         let before = snapshot(&eval);
-        assert!(matches!(eval.suspend_at_top_level_await("a", PromiseHandle(2)),
-            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 0, .. })));
+        assert!(matches!(
+            eval.suspend_at_top_level_await("a", PromiseHandle(2)),
+            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 0, .. })
+        ));
         assert_eq!(snapshot(&eval), before);
-        assert!(matches!(eval.suspend_on_dependency("a", "dep", PromiseHandle(2)),
-            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 0, .. })));
+        assert!(matches!(
+            eval.suspend_on_dependency("a", "dep", PromiseHandle(2)),
+            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 0, .. })
+        ));
         assert_eq!(snapshot(&eval), before);
-        assert!(matches!(eval.suspend_at_top_level_await("missing", PromiseHandle(2)),
-            Err(AsyncEvalError::ModuleNotFound { .. })));
+        assert!(matches!(
+            eval.suspend_at_top_level_await("missing", PromiseHandle(2)),
+            Err(AsyncEvalError::ModuleNotFound { .. })
+        ));
         assert_eq!(snapshot(&eval), before);
     }
 
@@ -1290,15 +1315,24 @@ mod suspension_budget_tests {
         eval.register_module("a", true, &[], Some(PromiseHandle(1)));
         eval.register_module("b", true, &[], Some(PromiseHandle(2)));
         for promise in [3, 4] {
-            eval.suspend_at_top_level_await("a", PromiseHandle(promise)).unwrap();
+            eval.suspend_at_top_level_await("a", PromiseHandle(promise))
+                .unwrap();
             eval.resume_evaluation("a").unwrap();
         }
-        assert!(eval.states()["a"].suspensions.iter().all(|record| record.resolved));
+        assert!(
+            eval.states()["a"]
+                .suspensions
+                .iter()
+                .all(|record| record.resolved)
+        );
         let mut bindings = LiveBindingMap::new();
-        eval.reject_module("a", &JsValue::Int(7), &mut bindings).unwrap();
+        eval.reject_module("a", &JsValue::Int(7), &mut bindings)
+            .unwrap();
         let before = snapshot(&eval);
-        assert!(matches!(eval.suspend_at_top_level_await("b", PromiseHandle(5)),
-            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 2, .. })));
+        assert!(matches!(
+            eval.suspend_at_top_level_await("b", PromiseHandle(5)),
+            Err(AsyncEvalError::SuspensionLimitExceeded { limit: 2, .. })
+        ));
         assert_eq!(snapshot(&eval), before);
         check_count(&eval);
     }
@@ -1309,20 +1343,33 @@ mod suspension_budget_tests {
         for name in ["a", "b", "dep"] {
             eval.register_module(name, true, &[], Some(PromiseHandle(1)));
         }
-        eval.suspend_at_top_level_await("a", PromiseHandle(2)).unwrap();
-        eval.suspend_on_dependency("a", "dep", PromiseHandle(3)).unwrap();
-        eval.suspend_at_top_level_await("b", PromiseHandle(4)).unwrap();
+        eval.suspend_at_top_level_await("a", PromiseHandle(2))
+            .unwrap();
+        eval.suspend_on_dependency("a", "dep", PromiseHandle(3))
+            .unwrap();
+        eval.suspend_at_top_level_await("b", PromiseHandle(4))
+            .unwrap();
         assert_eq!(eval.retained_suspension_count, 3);
         let b = eval.states()["b"].clone();
         eval.register_module("a", false, &[], None);
         assert_eq!(eval.retained_suspension_count, 1);
         assert_eq!(eval.states()["b"], b);
-        assert!(!eval.pending_dependents.get("dep").is_some_and(|names| names.contains("a")));
-        eval.suspend_on_dependency("a", "dep", PromiseHandle(5)).unwrap();
-        eval.suspend_at_top_level_await("b", PromiseHandle(6)).unwrap();
+        assert!(
+            !eval
+                .pending_dependents
+                .get("dep")
+                .is_some_and(|names| names.contains("a"))
+        );
+        eval.suspend_on_dependency("a", "dep", PromiseHandle(5))
+            .unwrap();
+        eval.suspend_at_top_level_await("b", PromiseHandle(6))
+            .unwrap();
         assert_eq!(eval.retained_suspension_count, 3);
         let before = snapshot(&eval);
-        assert!(eval.suspend_at_top_level_await("dep", PromiseHandle(7)).is_err());
+        assert!(
+            eval.suspend_at_top_level_await("dep", PromiseHandle(7))
+                .is_err()
+        );
         assert_eq!(snapshot(&eval), before);
         eval.register_module("b", true, &[], Some(PromiseHandle(8)));
         assert_eq!(eval.retained_suspension_count, 1);
@@ -1334,21 +1381,36 @@ mod suspension_budget_tests {
         let mut eval = evaluator(10, 10);
         for name in ["done", "failed"] {
             eval.register_module(name, true, &[], Some(PromiseHandle(1)));
-            eval.suspend_at_top_level_await(name, PromiseHandle(2)).unwrap();
+            eval.suspend_at_top_level_await(name, PromiseHandle(2))
+                .unwrap();
         }
         eval.settle_module("done").unwrap();
-        eval.reject_module("failed", &JsValue::Int(9), &mut LiveBindingMap::new()).unwrap();
+        eval.reject_module("failed", &JsValue::Int(9), &mut LiveBindingMap::new())
+            .unwrap();
         let before = snapshot(&eval);
-        for (name, from) in [("done", AsyncModulePhase::Settled), ("failed", AsyncModulePhase::Rejected)] {
-            assert_eq!(eval.suspend_at_top_level_await(name, PromiseHandle(3)).unwrap_err(),
+        for (name, from) in [
+            ("done", AsyncModulePhase::Settled),
+            ("failed", AsyncModulePhase::Rejected),
+        ] {
+            assert_eq!(
+                eval.suspend_at_top_level_await(name, PromiseHandle(3))
+                    .unwrap_err(),
                 AsyncEvalError::InvalidPhaseTransition {
-                    specifier: name.into(), from, to: AsyncModulePhase::Suspended,
-                });
+                    specifier: name.into(),
+                    from,
+                    to: AsyncModulePhase::Suspended,
+                }
+            );
             assert_eq!(snapshot(&eval), before);
-            assert_eq!(eval.suspend_on_dependency(name, "dep", PromiseHandle(3)).unwrap_err(),
+            assert_eq!(
+                eval.suspend_on_dependency(name, "dep", PromiseHandle(3))
+                    .unwrap_err(),
                 AsyncEvalError::InvalidPhaseTransition {
-                    specifier: name.into(), from, to: AsyncModulePhase::AwaitingDependencies,
-                });
+                    specifier: name.into(),
+                    from,
+                    to: AsyncModulePhase::AwaitingDependencies,
+                }
+            );
             assert_eq!(snapshot(&eval), before);
         }
         check_count(&eval);
@@ -1375,9 +1437,16 @@ mod suspension_budget_tests {
                         eval.register_module(name, true, &[], Some(PromiseHandle(step)));
                         Ok(())
                     }
-                    4 if !eval.states()[name].phase.is_terminal() => eval.settle_module(name).map(|_| ()),
-                    5 if !eval.states()[name].phase.is_terminal() => eval.reject_module(name, &JsValue::Int(i64::from(step)),
-                        &mut LiveBindingMap::new()).map(|_| ()),
+                    4 if !eval.states()[name].phase.is_terminal() => {
+                        eval.settle_module(name).map(|_| ())
+                    }
+                    5 if !eval.states()[name].phase.is_terminal() => eval
+                        .reject_module(
+                            name,
+                            &JsValue::Int(i64::from(step)),
+                            &mut LiveBindingMap::new(),
+                        )
+                        .map(|_| ()),
                     6 => eval.notify_dependency_settled("m0").map(|_| ()),
                     _ => Ok(()),
                 };
@@ -2034,7 +2103,8 @@ mod tests {
     fn async_eval_result_counts() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("ok.js", false, &[], None);
-        eval.settle_module("ok.js").expect("complete synchronous body");
+        eval.settle_module("ok.js")
+            .expect("complete synchronous body");
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("bad.js", &js_error("err"), &mut bindings)
@@ -2890,8 +2960,15 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("dep.js", false, &[], None);
         eval.register_module("app.js", false, &["dep.js".into()], None);
-        assert_eq!(eval.states()["app.js"].phase, AsyncModulePhase::AwaitingDependencies);
-        assert!(eval.states()["app.js"].pending_dependencies.contains("dep.js"));
+        assert_eq!(
+            eval.states()["app.js"].phase,
+            AsyncModulePhase::AwaitingDependencies
+        );
+        assert!(
+            eval.states()["app.js"]
+                .pending_dependencies
+                .contains("dep.js")
+        );
         assert_eq!(eval.settle_module("dep.js").unwrap(), vec!["app.js"]);
         assert!(eval.states()["app.js"].all_dependencies_settled());
         assert!(!eval.states()["app.js"].phase.is_terminal());
@@ -2918,7 +2995,10 @@ mod tests {
         eval.register_module("app", false, &["left".into(), "right".into()], None);
         assert_eq!(eval.settle_module("root").unwrap(), vec!["left", "right"]);
         assert!(eval.settle_module("right").unwrap().is_empty());
-        assert_eq!(eval.states()["app"].pending_dependencies, BTreeSet::from(["left".into()]));
+        assert_eq!(
+            eval.states()["app"].pending_dependencies,
+            BTreeSet::from(["left".into()])
+        );
         assert_eq!(eval.settle_module("left").unwrap(), vec!["app"]);
         assert!(!eval.states()["app"].phase.is_terminal());
         eval.settle_module("app").unwrap();
@@ -2932,19 +3012,39 @@ mod tests {
         for mid_async in [false, true] {
             let mut eval = AsyncModuleEvaluator::with_defaults();
             eval.register_module("root", false, &[], None);
-            eval.register_module("mid", mid_async, &["root".into()], mid_async.then_some(PromiseHandle(1)));
+            eval.register_module(
+                "mid",
+                mid_async,
+                &["root".into()],
+                mid_async.then_some(PromiseHandle(1)),
+            );
             eval.register_module("leaf", false, &["mid".into()], None);
             eval.register_module("unrelated", false, &[], None);
             let mut bindings = empty_live_bindings();
-            let leaf_binding = bindings.register_cell(BindingCell::new("leaf", "x", "x", BindingType::Direct));
-            let linkage = eval.reject_module("root", &js_error("sync failure"), &mut bindings).unwrap();
-            assert_eq!(linkage.transitive_closure, BTreeSet::from(["leaf".into(), "mid".into()]));
+            let leaf_binding =
+                bindings.register_cell(BindingCell::new("leaf", "x", "x", BindingType::Direct));
+            let linkage = eval
+                .reject_module("root", &js_error("sync failure"), &mut bindings)
+                .unwrap();
+            assert_eq!(
+                linkage.transitive_closure,
+                BTreeSet::from(["leaf".into(), "mid".into()])
+            );
             for name in ["root", "mid", "leaf"] {
                 assert_eq!(eval.states()[name].phase, AsyncModulePhase::Rejected);
-                assert_eq!(eval.states()[name].rejection_reason_hash, Some(linkage.rejection_reason_hash.clone()));
+                assert_eq!(
+                    eval.states()[name].rejection_reason_hash,
+                    Some(linkage.rejection_reason_hash.clone())
+                );
             }
-            assert_eq!(bindings.get_cell(&leaf_binding).unwrap().state, BindingCellState::Dead);
-            assert_eq!(eval.states()["unrelated"].phase, AsyncModulePhase::Synchronous);
+            assert_eq!(
+                bindings.get_cell(&leaf_binding).unwrap().state,
+                BindingCellState::Dead
+            );
+            assert_eq!(
+                eval.states()["unrelated"].phase,
+                AsyncModulePhase::Synchronous
+            );
             assert!(!eval.finalize().all_settled);
         }
     }

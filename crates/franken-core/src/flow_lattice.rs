@@ -1208,7 +1208,11 @@ mod tests {
         let narrowed = logging.meet(&network);
         let secret = lattice.assign_source_label(&DataSource::EnvironmentVariable);
         assert_eq!(narrowed, Clearance::NeverSink);
-        assert!(lattice.check_flow(&secret, &narrowed, "blocked").is_blocked());
+        assert!(
+            lattice
+                .check_flow(&secret, &narrowed, "blocked")
+                .is_blocked()
+        );
         lattice
             .register_obligation(DeclassificationObligation {
                 obligation_id: "explicit-egress".into(),
@@ -1643,7 +1647,10 @@ mod tests {
 
         assert_eq!(lattice.events().len(), 2);
         assert_eq!(lattice.events()[0].outcome, "legal_by_lattice");
-        assert_eq!(lattice.events()[1].error_code.as_deref(), Some("FLOW_BLOCKED"));
+        assert_eq!(
+            lattice.events()[1].error_code.as_deref(),
+            Some("FLOW_BLOCKED")
+        );
         assert_eq!(lattice.events()[1].outcome, "blocked");
     }
 

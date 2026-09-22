@@ -910,7 +910,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn symbol_input_type_error_retains_context_and_allows_subsequent_parse() {
         let mut core = core();
@@ -954,7 +953,10 @@ mod tests {
         core.active_inline_callback_context_label = None;
         core.sync_estimated_memory_bytes().unwrap();
         core.set_register_label(0, Label::Public).unwrap();
-        assert_eq!(parse(&mut core, Value::str("123")).unwrap(), Value::Int(123));
+        assert_eq!(
+            parse(&mut core, Value::str("123")).unwrap(),
+            Value::Int(123)
+        );
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(core.pending_hostcall_result_label, Some(Label::Public));
@@ -982,7 +984,10 @@ mod tests {
                 .unwrap(),
             3
         );
-        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -1007,7 +1012,10 @@ mod tests {
                 .unwrap(),
             2
         );
-        assert_eq!(core.active_inline_callback_context_label, Some(Label::Public));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Public)
+        );
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -1031,7 +1039,10 @@ mod tests {
         ));
         // The owning JSON boundary materializes this error while the label
         // is still live. No guest heap mutation or scratch may be rolled back.
-        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert_eq!(
             core.heap[owner.0 as usize].properties.get("length"),
             Some(&Value::BigInt("1".into()))

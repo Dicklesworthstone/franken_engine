@@ -89,7 +89,13 @@ fn registration_result(
     let source = store.create();
     let result;
     if settled_first {
-        settle(&mut store, source, rejected, source_label.clone(), &mut queue);
+        settle(
+            &mut store,
+            source,
+            rejected,
+            source_label.clone(),
+            &mut queue,
+        );
         let projection = store
             .projected_then_memory_bytes(source, context_label, &queue)
             .expect("valid settled source");
@@ -102,7 +108,10 @@ fn registration_result(
         );
         assert_eq!(
             projection,
-            (store.estimated_memory_bytes(), queue.estimated_memory_bytes()),
+            (
+                store.estimated_memory_bytes(),
+                queue.estimated_memory_bytes()
+            ),
             "settled-registration preflight: {registration:?}, {source_label:?}, {context_label:?}"
         );
     } else {
@@ -118,7 +127,10 @@ fn registration_result(
         );
         assert_eq!(
             projection,
-            (store.estimated_memory_bytes(), queue.estimated_memory_bytes())
+            (
+                store.estimated_memory_bytes(),
+                queue.estimated_memory_bytes()
+            )
         );
         let payload = JsValue::Str("sensitive-payload".into());
         let projection = if rejected {
@@ -127,10 +139,19 @@ fn registration_result(
             store.projected_fulfill_memory_bytes(source, &payload, source_label, &queue)
         }
         .expect("valid pending source");
-        settle(&mut store, source, rejected, source_label.clone(), &mut queue);
+        settle(
+            &mut store,
+            source,
+            rejected,
+            source_label.clone(),
+            &mut queue,
+        );
         assert_eq!(
             projection,
-            (store.estimated_memory_bytes(), queue.estimated_memory_bytes()),
+            (
+                store.estimated_memory_bytes(),
+                queue.estimated_memory_bytes()
+            ),
             "settlement preflight: {registration:?}, {source_label:?}, {context_label:?}"
         );
     }
@@ -162,7 +183,8 @@ fn labels_and_payloads_do_not_depend_on_registration_timing() {
                     Registration::Handler,
                     Registration::Await,
                 ] {
-                    let before = registration_result(source, context, rejected, false, registration);
+                    let before =
+                        registration_result(source, context, rejected, false, registration);
                     let after = registration_result(source, context, rejected, true, registration);
                     assert_eq!(before, after);
                 }
@@ -220,7 +242,10 @@ fn pending_fanout_preflight_accounts_for_each_reaction_label() {
         settle(&mut store, source, rejected, label.clone(), &mut queue);
         assert_eq!(
             projection,
-            (store.estimated_memory_bytes(), queue.estimated_memory_bytes())
+            (
+                store.estimated_memory_bytes(),
+                queue.estimated_memory_bytes()
+            )
         );
         for context in contexts {
             assert_eq!(
@@ -246,7 +271,13 @@ fn native_adoption_preserves_both_source_and_registration_labels() {
             store
                 .register_native_adoption(source, target, context_label.clone())
                 .unwrap();
-            settle(&mut store, source, rejected, source_label.clone(), &mut queue);
+            settle(
+                &mut store,
+                source,
+                rejected,
+                source_label.clone(),
+                &mut queue,
+            );
             let task = queue.dequeue().unwrap();
             assert_eq!(reaction_label(&task), &source_label.join(&context_label));
             match task {

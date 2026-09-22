@@ -20,9 +20,18 @@ macro_rules! promise_label_conformance {
             fn labels() -> Vec<Label> {
                 let mut labels = Label::all_builtin().to_vec();
                 labels.extend([
-                    Label::Custom { name: "alpha".into(), level: 3 },
-                    Label::Custom { name: "zeta-longer-name".into(), level: 3 },
-                    Label::Custom { name: "above-builtins".into(), level: 7 },
+                    Label::Custom {
+                        name: "alpha".into(),
+                        level: 3,
+                    },
+                    Label::Custom {
+                        name: "zeta-longer-name".into(),
+                        level: 3,
+                    },
+                    Label::Custom {
+                        name: "above-builtins".into(),
+                        level: 7,
+                    },
                 ]);
                 labels
             }
@@ -42,7 +51,8 @@ macro_rules! promise_label_conformance {
                         store.reject(source, JsValue::Int(42), settlement_label.clone(), queue)
                     } else {
                         store.fulfill(source, JsValue::Int(42), settlement_label.clone(), queue)
-                    }.expect("first settlement succeeds");
+                    }
+                    .expect("first settlement succeeds");
                 };
                 if settled_first {
                     settle(&mut store, &mut queue);
@@ -55,10 +65,11 @@ macro_rules! promise_label_conformance {
                         registration_label.clone(),
                         &mut queue,
                     ),
-                    Registration::Await => store.then_for_await(
-                        source, registration_label.clone(), &mut queue,
-                    ),
-                }.expect("valid source accepts a reaction");
+                    Registration::Await => {
+                        store.then_for_await(source, registration_label.clone(), &mut queue)
+                    }
+                }
+                .expect("valid source accepts a reaction");
                 if !settled_first {
                     assert_eq!(queue.pending_count(), 0);
                     settle(&mut store, &mut queue);
@@ -70,34 +81,67 @@ macro_rules! promise_label_conformance {
                 assert!(queue.dequeue().is_none());
                 let expected_label = registration_label.join(settlement_label);
                 match (&task, registration, rejected) {
-                    (Microtask::PromiseReaction { handler, argument, result_promise, label },
-                     Registration::Then(expected_handler), false) => {
+                    (
+                        Microtask::PromiseReaction {
+                            handler,
+                            argument,
+                            result_promise,
+                            label,
+                        },
+                        Registration::Then(expected_handler),
+                        false,
+                    ) => {
                         assert_eq!(*handler, expected_handler);
                         assert_eq!(*argument, JsValue::Int(42));
                         assert_eq!(*result_promise, result);
                         assert_eq!(*label, expected_label);
                     }
-                    (Microtask::PromiseReaction { handler, argument, result_promise, label },
-                     Registration::Then(Some(expected_handler)), true) => {
+                    (
+                        Microtask::PromiseReaction {
+                            handler,
+                            argument,
+                            result_promise,
+                            label,
+                        },
+                        Registration::Then(Some(expected_handler)),
+                        true,
+                    ) => {
                         assert_eq!(*handler, Some(expected_handler));
                         assert_eq!(*argument, JsValue::Int(42));
                         assert_eq!(*result_promise, result);
                         assert_eq!(*label, expected_label);
                     }
-                    (Microtask::PromiseReaction { handler, argument, result_promise, label },
-                     Registration::Await, false) => {
+                    (
+                        Microtask::PromiseReaction {
+                            handler,
+                            argument,
+                            result_promise,
+                            label,
+                        },
+                        Registration::Await,
+                        false,
+                    ) => {
                         assert!(handler.is_none());
                         assert_eq!(*argument, JsValue::Int(42));
                         assert_eq!(*result_promise, result);
                         assert_eq!(*label, expected_label);
                     }
-                    (Microtask::PromiseRejection { reason, result_promise, label },
-                     Registration::Then(None) | Registration::Await, true) => {
+                    (
+                        Microtask::PromiseRejection {
+                            reason,
+                            result_promise,
+                            label,
+                        },
+                        Registration::Then(None) | Registration::Await,
+                        true,
+                    ) => {
                         assert_eq!(*reason, JsValue::Int(42));
                         assert_eq!(*result_promise, result);
                         assert_eq!(*label, expected_label);
                     }
-                    _ => panic!("wrong reaction kind: {task:?} for {registration:?}, rejected={rejected}"),
+                    _ => panic!(
+                        "wrong reaction kind: {task:?} for {registration:?}, rejected={rejected}"
+                    ),
                 }
                 task
             }
@@ -105,8 +149,20 @@ macro_rules! promise_label_conformance {
             fn check_all_labels(registration: Registration, rejected: bool) {
                 for registration_label in labels() {
                     for settlement_label in labels() {
-                        let early = observe(false, registration, rejected, &registration_label, &settlement_label);
-                        let late = observe(true, registration, rejected, &registration_label, &settlement_label);
+                        let early = observe(
+                            false,
+                            registration,
+                            rejected,
+                            &registration_label,
+                            &settlement_label,
+                        );
+                        let late = observe(
+                            true,
+                            registration,
+                            rejected,
+                            &registration_label,
+                            &settlement_label,
+                        );
                         assert_eq!(early, late, "timing changed the reaction's meaning");
                     }
                 }
@@ -147,14 +203,24 @@ macro_rules! promise_label_conformance {
                 let mut store = PromiseStore::new();
                 let mut queue = MicrotaskQueue::new();
                 let source = store.create();
-                let secret_child = store.then(source, None, None, Label::Secret, &mut queue).unwrap();
-                let public_child = store.then(source, None, None, Label::Public, &mut queue).unwrap();
-                store.fulfill(source, JsValue::Int(42), Label::Public, &mut queue).unwrap();
-                for (expected_child, expected_label) in [
-                    (secret_child, Label::Secret), (public_child, Label::Public),
-                ] {
+                let secret_child = store
+                    .then(source, None, None, Label::Secret, &mut queue)
+                    .unwrap();
+                let public_child = store
+                    .then(source, None, None, Label::Public, &mut queue)
+                    .unwrap();
+                store
+                    .fulfill(source, JsValue::Int(42), Label::Public, &mut queue)
+                    .unwrap();
+                for (expected_child, expected_label) in
+                    [(secret_child, Label::Secret), (public_child, Label::Public)]
+                {
                     match queue.dequeue().unwrap() {
-                        Microtask::PromiseReaction { result_promise, label, .. } => {
+                        Microtask::PromiseReaction {
+                            result_promise,
+                            label,
+                            ..
+                        } => {
                             assert_eq!(result_promise, expected_child);
                             assert_eq!(label, expected_label);
                         }
@@ -170,20 +236,33 @@ macro_rules! promise_label_conformance {
                 let mut store = PromiseStore::new();
                 let mut queue = MicrotaskQueue::new();
                 let source = store.reject_with(JsValue::Int(42), Label::Secret, &mut queue);
-                let middle = store.then(source, None, None, Label::Public, &mut queue).unwrap();
-                let leaf = store.then(middle, None, None, Label::Internal, &mut queue).unwrap();
+                let middle = store
+                    .then(source, None, None, Label::Public, &mut queue)
+                    .unwrap();
+                let leaf = store
+                    .then(middle, None, None, Label::Internal, &mut queue)
+                    .unwrap();
                 for expected_target in [middle, leaf] {
                     match queue.dequeue().unwrap() {
-                        Microtask::PromiseRejection { reason, result_promise, label } => {
+                        Microtask::PromiseRejection {
+                            reason,
+                            result_promise,
+                            label,
+                        } => {
                             assert_eq!(result_promise, expected_target);
                             assert_eq!(label, Label::Secret);
-                            store.reject(result_promise, reason, label, &mut queue).unwrap();
+                            store
+                                .reject(result_promise, reason, label, &mut queue)
+                                .unwrap();
                         }
                         other => panic!("implicit thrower did not propagate: {other:?}"),
                     }
                 }
                 assert_eq!(store.unhandled_rejections(), vec![leaf]);
-                assert_eq!(store.get(leaf).unwrap().state, PromiseState::Rejected(JsValue::Int(42)));
+                assert_eq!(
+                    store.get(leaf).unwrap().state,
+                    PromiseState::Rejected(JsValue::Int(42))
+                );
                 assert_eq!(store.get(leaf).unwrap().label, Label::Secret);
                 assert!(queue.is_empty());
             }
@@ -192,8 +271,16 @@ macro_rules! promise_label_conformance {
             fn invalid_source_does_not_allocate_a_result_promise() {
                 let mut store = PromiseStore::new();
                 let mut queue = MicrotaskQueue::new();
-                assert!(store.then(PromiseHandle(99), None, None, Label::Secret, &mut queue).is_err());
-                assert!(store.then_for_await(PromiseHandle(99), Label::Secret, &mut queue).is_err());
+                assert!(
+                    store
+                        .then(PromiseHandle(99), None, None, Label::Secret, &mut queue)
+                        .is_err()
+                );
+                assert!(
+                    store
+                        .then_for_await(PromiseHandle(99), Label::Secret, &mut queue)
+                        .is_err()
+                );
                 assert_eq!(store.len(), 0);
                 assert!(store.witness_log().is_empty());
                 assert!(queue.is_empty());

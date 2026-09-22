@@ -290,12 +290,12 @@ impl AttestationStore {
         attestation_id: &EngineObjectId,
         trace_id: &str,
     ) -> Result<(), AttestationError> {
-        let attestation = self
-            .attestations
-            .remove(attestation_id)
-            .ok_or_else(|| AttestationError::NotFound {
-                attestation_id: attestation_id.clone(),
-            })?;
+        let attestation =
+            self.attestations
+                .remove(attestation_id)
+                .ok_or_else(|| AttestationError::NotFound {
+                    attestation_id: attestation_id.clone(),
+                })?;
         if let Some(ids) = self.principal_index.get_mut(&attestation.principal_id) {
             ids.remove(attestation_id);
             if ids.is_empty() {
@@ -312,11 +312,7 @@ impl AttestationStore {
         Ok(())
     }
 
-    pub fn purge_expired(
-        &mut self,
-        current_time: DeterministicTimestamp,
-        trace_id: &str,
-    ) -> usize {
+    pub fn purge_expired(&mut self, current_time: DeterministicTimestamp, trace_id: &str) -> usize {
         let expired_ids = self
             .attestations
             .iter()
@@ -352,7 +348,10 @@ impl AttestationStore {
         std::mem::take(&mut self.audit_events)
     }
 
-    fn verify_content_identity(&self, attestation: &KeyAttestation) -> Result<(), AttestationError> {
+    fn verify_content_identity(
+        &self,
+        attestation: &KeyAttestation,
+    ) -> Result<(), AttestationError> {
         if attestation.expires_at.0 <= attestation.issued_at.0 {
             return Err(AttestationError::InvalidExpiry {
                 issued_at: attestation.issued_at,
@@ -466,7 +465,7 @@ mod tests {
     use super::*;
     use crate::key_attestation::{CreateAttestationInput, KeyAttestation};
     use crate::security_epoch::SecurityEpoch;
-    use crate::signature_preimage::{sign_preimage, SignaturePreimage, SigningKey};
+    use crate::signature_preimage::{SignaturePreimage, SigningKey, sign_preimage};
 
     const ZONE: &str = "test-zone";
 

@@ -1,17 +1,14 @@
-use super::{derive_id, EngineObjectId, IdError, ObjectDomain, SchemaId, OBJECT_ID_LEN};
+use super::{EngineObjectId, IdError, OBJECT_ID_LEN, ObjectDomain, SchemaId, derive_id};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Domain separator for SHA-256 schema identifiers.
 pub const SCHEMA_ID_SHA256_V2_DOMAIN: &[u8] = b"FrankenEngine.SchemaId.sha256.v2";
 /// Domain separator for SHA-256 object identifiers.
-pub const ENGINE_OBJECT_ID_SHA256_V2_DOMAIN: &[u8] =
-    b"FrankenEngine.EngineObjectId.sha256.v2";
+pub const ENGINE_OBJECT_ID_SHA256_V2_DOMAIN: &[u8] = b"FrankenEngine.EngineObjectId.sha256.v2";
 
 /// The derivation algorithm bound to a persisted schema or object identifier.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectIdDerivationVersion {
     /// Historical de-novo deterministic hash. Retained only for explicit replay
@@ -56,10 +53,7 @@ pub struct VersionedSchemaId {
 }
 
 impl VersionedSchemaId {
-    pub fn new(
-        derivation_version: ObjectIdDerivationVersion,
-        schema_id: SchemaId,
-    ) -> Self {
+    pub fn new(derivation_version: ObjectIdDerivationVersion, schema_id: SchemaId) -> Self {
         Self {
             derivation_version,
             schema_id,
@@ -85,10 +79,7 @@ pub struct VersionedEngineObjectId {
 }
 
 impl VersionedEngineObjectId {
-    pub fn new(
-        derivation_version: ObjectIdDerivationVersion,
-        object_id: EngineObjectId,
-    ) -> Self {
+    pub fn new(derivation_version: ObjectIdDerivationVersion, object_id: EngineObjectId) -> Self {
         Self {
             derivation_version,
             object_id,
@@ -134,7 +125,10 @@ impl std::fmt::Display for VersionedIdError {
         match self {
             Self::EmptyCanonicalBytes => formatter.write_str("canonical bytes are empty"),
             Self::LengthOverflow { field, length } => {
-                write!(formatter, "{field} length {length} exceeds u32 preimage encoding")
+                write!(
+                    formatter,
+                    "{field} length {length} exceeds u32 preimage encoding"
+                )
             }
             Self::DerivationVersionMismatch {
                 object_version,
@@ -144,7 +138,10 @@ impl std::fmt::Display for VersionedIdError {
                 "object derivation version {object_version} does not match schema derivation version {schema_version}"
             ),
             Self::IdMismatch { expected, computed } => {
-                write!(formatter, "ID mismatch: expected {expected}, computed {computed}")
+                write!(
+                    formatter,
+                    "ID mismatch: expected {expected}, computed {computed}"
+                )
             }
             Self::LegacyCompatibility(error) => {
                 write!(formatter, "legacy-v1 derivation failed: {error}")
@@ -176,11 +173,7 @@ pub fn derive_versioned_schema_id(
                 "schema_v2_domain",
                 SCHEMA_ID_SHA256_V2_DOMAIN,
             )?;
-            append_length_prefixed(
-                &mut preimage,
-                "schema_definition",
-                schema_definition,
-            )?;
+            append_length_prefixed(&mut preimage, "schema_definition", schema_definition)?;
             SchemaId::from_bytes(sha256(&preimage))
         }
     };
@@ -203,13 +196,10 @@ pub fn derive_versioned_id(
     }
 
     let object_id = match schema_id.derivation_version {
-        ObjectIdDerivationVersion::LegacyV1 => derive_id(
-            domain,
-            zone,
-            &schema_id.schema_id,
-            canonical_bytes,
-        )
-        .map_err(map_legacy_error)?,
+        ObjectIdDerivationVersion::LegacyV1 => {
+            derive_id(domain, zone, &schema_id.schema_id, canonical_bytes)
+                .map_err(map_legacy_error)?
+        }
         ObjectIdDerivationVersion::Sha256V2 => {
             let mut preimage = Vec::new();
             append_length_prefixed(
@@ -282,10 +272,7 @@ fn sha256(bytes: &[u8]) -> [u8; OBJECT_ID_LEN] {
     Sha256::digest(bytes).into()
 }
 
-fn constant_time_eq_versioned(
-    left: &[u8; OBJECT_ID_LEN],
-    right: &[u8; OBJECT_ID_LEN],
-) -> bool {
+fn constant_time_eq_versioned(left: &[u8; OBJECT_ID_LEN], right: &[u8; OBJECT_ID_LEN]) -> bool {
     let mut difference = 0_u8;
     for index in 0..OBJECT_ID_LEN {
         difference |= left[index] ^ right[index];
@@ -314,11 +301,9 @@ mod tests {
 
     #[test]
     fn versioned_legacy_api_preserves_committed_vectors() {
-        let schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::LegacyV1,
-            SCHEMA_DEFINITION,
-        )
-        .expect("legacy schema derivation");
+        let schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::LegacyV1, SCHEMA_DEFINITION)
+                .expect("legacy schema derivation");
         let object = derive_versioned_id(
             ObjectDomain::PolicyObject,
             "zone-a",
@@ -339,11 +324,9 @@ mod tests {
 
     #[test]
     fn sha256_v2_api_matches_migration_tool_vectors() {
-        let schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::Sha256V2,
-            SCHEMA_DEFINITION,
-        )
-        .expect("v2 schema derivation");
+        let schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, SCHEMA_DEFINITION)
+                .expect("v2 schema derivation");
         let object = derive_versioned_id(
             ObjectDomain::PolicyObject,
             "zone-a",
@@ -360,23 +343,23 @@ mod tests {
             object.to_hex(),
             "cdc31ac7ad5b4d68d7cbdae29179b3230608bd13afdfc641f2e1a4273913b545"
         );
-        assert!(verify_versioned_id(
-            &object,
-            ObjectDomain::PolicyObject,
-            "zone-a",
-            &schema,
-            CANONICAL_BYTES,
-        )
-        .is_ok());
+        assert!(
+            verify_versioned_id(
+                &object,
+                ObjectDomain::PolicyObject,
+                "zone-a",
+                &schema,
+                CANONICAL_BYTES,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn verification_rejects_version_mismatch_without_trying_both_algorithms() {
-        let v2_schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::Sha256V2,
-            SCHEMA_DEFINITION,
-        )
-        .expect("v2 schema derivation");
+        let v2_schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, SCHEMA_DEFINITION)
+                .expect("v2 schema derivation");
         let v2_object = derive_versioned_id(
             ObjectDomain::PolicyObject,
             "zone-a",
@@ -384,11 +367,9 @@ mod tests {
             CANONICAL_BYTES,
         )
         .expect("v2 object derivation");
-        let legacy_schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::LegacyV1,
-            SCHEMA_DEFINITION,
-        )
-        .expect("legacy schema derivation");
+        let legacy_schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::LegacyV1, SCHEMA_DEFINITION)
+                .expect("legacy schema derivation");
 
         let error = verify_versioned_id(
             &v2_object,
@@ -409,11 +390,9 @@ mod tests {
 
     #[test]
     fn v2_verification_rejects_tampered_content() {
-        let schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::Sha256V2,
-            SCHEMA_DEFINITION,
-        )
-        .expect("v2 schema derivation");
+        let schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, SCHEMA_DEFINITION)
+                .expect("v2 schema derivation");
         let object = derive_versioned_id(
             ObjectDomain::PolicyObject,
             "zone-a",

@@ -18,8 +18,8 @@ mod async_module_promise_bridge;
 mod async_module_scheduler;
 
 use async_module_scheduler::{
-    ASYNC_MODULE_SCHEDULER_COMPONENT, ASYNC_MODULE_SCHEDULER_SCHEMA_VERSION,
-    AsyncModuleScheduler, AsyncModuleSchedulerConfig, ModuleTask, SchedulerSnapshot,
+    ASYNC_MODULE_SCHEDULER_COMPONENT, ASYNC_MODULE_SCHEDULER_SCHEMA_VERSION, AsyncModuleScheduler,
+    AsyncModuleSchedulerConfig, ModuleTask, SchedulerSnapshot,
 };
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::module_async_evaluation::AsyncModulePhase;
@@ -51,7 +51,9 @@ struct ScenarioModule {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
-    Dispatch { save_as: String },
+    Dispatch {
+        save_as: String,
+    },
     Complete {
         task: String,
         #[serde(default = "undefined_value")]
@@ -59,7 +61,10 @@ enum Operation {
         #[serde(default = "public_label")]
         label: Label,
     },
-    Suspend { task: String, promise: String },
+    Suspend {
+        task: String,
+        promise: String,
+    },
     Reject {
         task: String,
         reason: JsValue,

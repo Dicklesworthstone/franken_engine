@@ -22,7 +22,11 @@ struct Activation<'vm> {
 }
 
 enum Transfer {
-    Call { function: u32, arguments: Vec<WasmBoundaryValue>, tail: bool },
+    Call {
+        function: u32,
+        arguments: Vec<WasmBoundaryValue>,
+        tail: bool,
+    },
     Return,
     Yield,
 }
@@ -30,17 +34,21 @@ enum Transfer {
 fn allocation<T>(count: usize) -> WasmNumericVmError {
     WasmStateError::AllocationFailed {
         bytes: (count as u64).saturating_mul(std::mem::size_of::<T>() as u64),
-    }.into()
+    }
+    .into()
 }
 
 fn add_base(meter: &mut ExecutionMeter<'_>, count: usize) -> Result<(), WasmNumericVmError> {
-    let actual = meter.live_value_base.checked_add(count)
-        .ok_or(WasmNumericVmError::LiveValueLimitExceeded {
-            actual: usize::MAX, max: meter.limits.max_live_values,
-        })?;
+    let actual = meter.live_value_base.checked_add(count).ok_or(
+        WasmNumericVmError::LiveValueLimitExceeded {
+            actual: usize::MAX,
+            max: meter.limits.max_live_values,
+        },
+    )?;
     if actual > meter.limits.max_live_values {
         return Err(WasmNumericVmError::LiveValueLimitExceeded {
-            actual, max: meter.limits.max_live_values,
+            actual,
+            max: meter.limits.max_live_values,
         });
     }
     meter.live_value_base = actual;
@@ -48,10 +56,11 @@ fn add_base(meter: &mut ExecutionMeter<'_>, count: usize) -> Result<(), WasmNume
 }
 
 fn remove_base(meter: &mut ExecutionMeter<'_>, count: usize) -> Result<(), WasmNumericVmError> {
-    meter.live_value_base = meter.live_value_base.checked_sub(count)
-        .ok_or_else(|| WasmNumericVmError::InvalidModule {
+    meter.live_value_base = meter.live_value_base.checked_sub(count).ok_or_else(|| {
+        WasmNumericVmError::InvalidModule {
             detail: "inconsistent live activation accounting".into(),
-        })?;
+        }
+    })?;
     Ok(())
 }
 
@@ -62,19 +71,29 @@ impl<'vm> Activation<'vm> {
         arguments: Cow<'_, [WasmBoundaryValue]>,
         meter: &mut ExecutionMeter<'_>,
     ) -> Result<Self, WasmNumericVmError> {
-        let index = (function as usize).checked_sub(vm.imports.len())
-            .ok_or(WasmNumericVmError::UnknownFunction { function_index: function })?;
-        let body = vm.functions.get(index)
-            .ok_or(WasmNumericVmError::UnknownFunction { function_index: function })?;
+        let index = (function as usize).checked_sub(vm.imports.len()).ok_or(
+            WasmNumericVmError::UnknownFunction {
+                function_index: function,
+            },
+        )?;
+        let body = vm
+            .functions
+            .get(index)
+            .ok_or(WasmNumericVmError::UnknownFunction {
+                function_index: function,
+            })?;
         let signature = vm.function_type(body.type_index)?;
         validate_arguments(function, signature, &arguments)?;
-        let local_count = arguments.len().checked_add(body.locals.len())
-            .ok_or(WasmNumericVmError::LocalLimitExceeded {
-                actual: usize::MAX, max: vm.limits.max_locals_per_call,
-            })?;
+        let local_count = arguments.len().checked_add(body.locals.len()).ok_or(
+            WasmNumericVmError::LocalLimitExceeded {
+                actual: usize::MAX,
+                max: vm.limits.max_locals_per_call,
+            },
+        )?;
         if local_count > vm.limits.max_locals_per_call {
             return Err(WasmNumericVmError::LocalLimitExceeded {
-                actual: local_count, max: vm.limits.max_locals_per_call,
+                actual: local_count,
+                max: vm.limits.max_locals_per_call,
             });
         }
         // Admission happens before copying arguments or allocating locals.
@@ -87,21 +106,33 @@ impl<'vm> Activation<'vm> {
             Cow::Owned(arguments) => arguments,
             Cow::Borrowed(arguments) => {
                 let mut owned = Vec::new();
-                owned.try_reserve_exact(local_count)
+                owned
+                    .try_reserve_exact(local_count)
                     .map_err(|_| allocation::<WasmBoundaryValue>(local_count))?;
                 owned.extend_from_slice(arguments);
                 owned
             }
         };
-        locals.try_reserve_exact(body.locals.len())
+        locals
+            .try_reserve_exact(body.locals.len())
             .map_err(|_| allocation::<WasmBoundaryValue>(local_count))?;
         locals.extend(body.locals.iter().copied().map(zero_value));
         let mut controls = Vec::new();
-        controls.try_reserve_exact(1).map_err(|_| allocation::<control::Frame>(1))?;
-        controls.push(control::Frame::function(signature.results.len(), body.code.len() - 1));
+        controls
+            .try_reserve_exact(1)
+            .map_err(|_| allocation::<control::Frame>(1))?;
+        controls.push(control::Frame::function(
+            signature.results.len(),
+            body.code.len() - 1,
+        ));
         Ok(Self {
-            function, body, signature, locals, stack: Vec::new(),
-            reader: CodeReader::new(&body.code), controls,
+            function,
+            body,
+            signature,
+            locals,
+            stack: Vec::new(),
+            reader: CodeReader::new(&body.code),
+            controls,
         })
     }
 
@@ -119,28 +150,39 @@ impl<'vm> Activation<'vm> {
             // committed when this invocation unwinds its flat frame vector.
             state.check_execution_cancellation()?;
             // Never consume an opcode/immediate until this slice can start it.
-            if slice.is_some_and(|slice| slice.exhausted(meter)) { return Ok(Transfer::Yield); }
+            if slice.is_some_and(|slice| slice.exhausted(meter)) {
+                return Ok(Transfer::Yield);
+            }
             let offset = self.reader.offset();
             let opcode = self.reader.read_u8(function)?;
             meter.tick()?;
             match opcode {
                 0x00..=0x05 | 0x0b..=0x0f => {
                     if control::execute(
-                        opcode, &self.body.control, &mut self.controls, &mut self.stack,
-                        &mut self.reader, meter, function,
+                        opcode,
+                        &self.body.control,
+                        &mut self.controls,
+                        &mut self.stack,
+                        &mut self.reader,
+                        meter,
+                        function,
                     )? {
                         self.validate_results()?;
                         return Ok(Transfer::Return);
                     }
                 }
-                0x1a => { pop_value(&mut self.stack, function, opcode)?; }
+                0x1a => {
+                    pop_value(&mut self.stack, function, opcode)?;
+                }
                 0x1b => execute_select(&mut self.stack, function, opcode)?,
                 0x20 => {
                     let index = self.reader.read_u32_leb(function)?;
-                    let value = self.locals.get(index as usize).cloned()
-                        .ok_or(WasmNumericVmError::InvalidLocal {
-                            function_index: function, local_index: index,
-                        })?;
+                    let value = self.locals.get(index as usize).cloned().ok_or(
+                        WasmNumericVmError::InvalidLocal {
+                            function_index: function,
+                            local_index: index,
+                        },
+                    )?;
                     push_value(&mut self.stack, value, meter)?;
                 }
                 0x21 | 0x22 => {
@@ -148,15 +190,26 @@ impl<'vm> Activation<'vm> {
                     let value = if opcode == 0x21 {
                         pop_value(&mut self.stack, function, opcode)?
                     } else {
-                        self.stack.last().cloned().ok_or(WasmNumericVmError::StackUnderflow {
-                            function_index: function, opcode,
-                        })?
+                        self.stack
+                            .last()
+                            .cloned()
+                            .ok_or(WasmNumericVmError::StackUnderflow {
+                                function_index: function,
+                                opcode,
+                            })?
                     };
-                    let slot = self.locals.get_mut(index as usize)
-                        .ok_or(WasmNumericVmError::InvalidLocal {
-                            function_index: function, local_index: index,
-                        })?;
-                    ensure_same_type(function, index as usize, slot.value_type(), value.value_type())?;
+                    let slot = self.locals.get_mut(index as usize).ok_or(
+                        WasmNumericVmError::InvalidLocal {
+                            function_index: function,
+                            local_index: index,
+                        },
+                    )?;
+                    ensure_same_type(
+                        function,
+                        index as usize,
+                        slot.value_type(),
+                        value.value_type(),
+                    )?;
                     *slot = value;
                 }
                 0x10..=0x13 => {
@@ -165,20 +218,31 @@ impl<'vm> Activation<'vm> {
                         index
                     } else {
                         let table = self.reader.read_u32_leb(function)?;
-                        let element = expect_i32(pop_value(&mut self.stack, function, opcode)?, function, 0)? as u32;
+                        let element =
+                            expect_i32(pop_value(&mut self.stack, function, opcode)?, function, 0)?
+                                as u32;
                         state.indirect_callee(vm, index, table, element, meter)?
                     };
                     let signature = vm.function_signature(callee)?;
                     let count = signature.params.len();
-                    let begin = self.stack.len().checked_sub(count)
-                        .ok_or(WasmNumericVmError::StackUnderflow { function_index: function, opcode })?;
+                    let begin = self.stack.len().checked_sub(count).ok_or(
+                        WasmNumericVmError::StackUnderflow {
+                            function_index: function,
+                            opcode,
+                        },
+                    )?;
                     let mut arguments = Vec::new();
-                    arguments.try_reserve_exact(count)
+                    arguments
+                        .try_reserve_exact(count)
                         .map_err(|_| allocation::<WasmBoundaryValue>(count))?;
                     // Move in ABI order, retaining only the caller's prefix.
                     arguments.extend(self.stack.drain(begin..));
                     validate_arguments(callee, signature, &arguments)?;
-                    return Ok(Transfer::Call { function: callee, arguments, tail: opcode >= 0x12 });
+                    return Ok(Transfer::Call {
+                        function: callee,
+                        arguments,
+                        tail: opcode >= 0x12,
+                    });
                 }
                 0x23..=0x40 | 0xfc => {
                     state.execute(opcode, &mut self.reader, &mut self.stack, meter, function)?;
@@ -200,9 +264,13 @@ impl<'vm> Activation<'vm> {
                     push_value(&mut self.stack, value, meter)?;
                 }
                 0x45..=0xc4 => control::execute_numeric(opcode, &mut self.stack, function)?,
-                _ => return Err(WasmNumericVmError::UnsupportedOpcode {
-                    function_index: function, opcode, offset,
-                }),
+                _ => {
+                    return Err(WasmNumericVmError::UnsupportedOpcode {
+                        function_index: function,
+                        opcode,
+                        offset,
+                    });
+                }
             }
         }
         Err(WasmNumericVmError::InvalidModule {
@@ -214,10 +282,12 @@ impl<'vm> Activation<'vm> {
         if self.stack.len() != self.signature.results.len() {
             return Err(WasmNumericVmError::ResultStackMismatch {
                 function_index: self.function,
-                expected: self.signature.results.len(), actual: self.stack.len(),
+                expected: self.signature.results.len(),
+                actual: self.stack.len(),
             });
         }
-        for (index, (expected, value)) in self.signature.results.iter().zip(&self.stack).enumerate() {
+        for (index, (expected, value)) in self.signature.results.iter().zip(&self.stack).enumerate()
+        {
             ensure_same_type(self.function, index, *expected, value.value_type())?;
         }
         Ok(())
@@ -229,11 +299,15 @@ fn resume(
     results: Vec<WasmBoundaryValue>,
     meter: &mut ExecutionMeter<'_>,
 ) -> Result<Option<Vec<WasmBoundaryValue>>, WasmNumericVmError> {
-    let Some(caller) = frames.last_mut() else { return Ok(Some(results)); };
+    let Some(caller) = frames.last_mut() else {
+        return Ok(Some(results));
+    };
     // These operands become active again; observe_stack counts them on each
     // result push, rather than counting the suspended prefix twice.
     remove_base(meter, caller.stack.len())?;
-    for value in results { push_value(&mut caller.stack, value, meter)?; }
+    for value in results {
+        push_value(&mut caller.stack, value, meter)?;
+    }
     Ok(None)
 }
 
@@ -258,8 +332,16 @@ pub(super) struct Machine<'vm, 'args> {
 }
 
 impl<'vm, 'args> Machine<'vm, 'args> {
-    pub(super) fn new(function: u32, arguments: Cow<'args, [WasmBoundaryValue]>, depth: u32) -> Self {
-        Self { frames: Vec::new(), pending: Some((function, arguments)), depth }
+    pub(super) fn new(
+        function: u32,
+        arguments: Cow<'args, [WasmBoundaryValue]>,
+        depth: u32,
+    ) -> Self {
+        Self {
+            frames: Vec::new(),
+            pending: Some((function, arguments)),
+            depth,
+        }
     }
 
     /// None means a suspension BEFORE the next opcode or pending callee.
@@ -274,11 +356,16 @@ impl<'vm, 'args> Machine<'vm, 'args> {
         state.attach_work_pool(meter);
         loop {
             state.check_execution_cancellation()?;
-            if slice.is_some_and(|slice| slice.exhausted(meter)) { return Ok(None); }
+            if slice.is_some_and(|slice| slice.exhausted(meter)) {
+                return Ok(None);
+            }
             if let Some((callee, arguments)) = self.pending.take() {
-                let call_depth = u32::try_from(self.frames.len()).ok()
+                let call_depth = u32::try_from(self.frames.len())
+                    .ok()
                     .and_then(|nested| self.depth.checked_add(nested))
-                    .ok_or(WasmNumericVmError::CallDepthExceeded { max: vm.limits.max_call_depth })?;
+                    .ok_or(WasmNumericVmError::CallDepthExceeded {
+                        max: vm.limits.max_call_depth,
+                    })?;
                 meter.enter_call(call_depth)?;
                 if (callee as usize) < vm.imports.len() {
                     add_base(meter, arguments.len())?;
@@ -288,16 +375,26 @@ impl<'vm, 'args> Machine<'vm, 'args> {
                         return Ok(Some(results));
                     }
                 } else {
-                    self.frames.try_reserve(1)
+                    self.frames
+                        .try_reserve(1)
                         .map_err(|_| allocation::<Activation<'_>>(self.frames.len() + 1))?;
-                    self.frames.push(Activation::new(vm, callee, arguments, meter)?);
+                    self.frames
+                        .push(Activation::new(vm, callee, arguments, meter)?);
                 }
             }
-            let transfer = self.frames.last_mut().ok_or_else(|| WasmNumericVmError::InvalidModule {
-                detail: "missing guest activation".into(),
-            })?.run(vm, meter, state, slice)?;
+            let transfer = self
+                .frames
+                .last_mut()
+                .ok_or_else(|| WasmNumericVmError::InvalidModule {
+                    detail: "missing guest activation".into(),
+                })?
+                .run(vm, meter, state, slice)?;
             match transfer {
-                Transfer::Call { function, arguments, tail } => {
+                Transfer::Call {
+                    function,
+                    arguments,
+                    tail,
+                } => {
                     if tail {
                         // Validation has checked the enclosing result contract;
                         // indirect dispatch has also checked the actual target.
@@ -405,9 +502,14 @@ impl<'call, 'vm> WasmCall<'call, 'vm> {
         arguments: &[WasmBoundaryValue],
     ) -> Result<Self, WasmNumericVmError> {
         if let Some(kind) = vm.state.export_kind(name) {
-            return Err(WasmNumericVmError::ExportIsNotFunction { name: name.into(), kind });
+            return Err(WasmNumericVmError::ExportIsNotFunction {
+                name: name.into(),
+                kind,
+            });
         }
-        let function = vm.exports.get(name)
+        let function = vm
+            .exports
+            .get(name)
             .ok_or_else(|| WasmNumericVmError::UnknownExport { name: name.into() })?
             .function_index;
         validate_arguments(function, vm.function_signature(function)?, arguments)?;
@@ -415,15 +517,19 @@ impl<'call, 'vm> WasmCall<'call, 'vm> {
         // it is cancelled before the first resume/activation admission.
         if arguments.len() > vm.limits.max_live_values {
             return Err(WasmNumericVmError::LiveValueLimitExceeded {
-                actual: arguments.len(), max: vm.limits.max_live_values,
+                actual: arguments.len(),
+                max: vm.limits.max_live_values,
             });
         }
         let mut owned = Vec::new();
-        owned.try_reserve_exact(arguments.len())
+        owned
+            .try_reserve_exact(arguments.len())
             .map_err(|_| allocation::<WasmBoundaryValue>(arguments.len()))?;
         owned.extend_from_slice(arguments);
         Ok(Self {
-            vm, state, machine: Machine::new(function, Cow::Owned(owned), 1),
+            vm,
+            state,
+            machine: Machine::new(function, Cow::Owned(owned), 1),
             meter: ExecutionMeter::new(&vm.limits),
         })
     }
@@ -437,9 +543,17 @@ impl<'call, 'vm> WasmCall<'call, 'vm> {
     /// This is cooperative scheduling, not preemption of blocking native code.
     /// An execution error consumes the continuation and preserves completed
     /// effects just like synchronous call_export. A zero quantum is unrepresentable.
-    pub fn resume(mut self, work: NonZeroU64) -> Result<WasmCallStep<'call, 'vm>, WasmNumericVmError> {
-        let slice = Slice { start: self.meter.instructions, work };
-        let outcome = self.machine.run(self.vm, &mut self.meter, self.state, Some(slice))?;
+    pub fn resume(
+        mut self,
+        work: NonZeroU64,
+    ) -> Result<WasmCallStep<'call, 'vm>, WasmNumericVmError> {
+        let slice = Slice {
+            start: self.meter.instructions,
+            work,
+        };
+        let outcome = self
+            .machine
+            .run(self.vm, &mut self.meter, self.state, Some(slice))?;
         // Preserve the synchronous path's completion check. An execution error
         // above retains precedence over a later cancellation request.
         self.state.check_execution_cancellation()?;
@@ -455,11 +569,17 @@ impl<'call, 'vm> WasmCall<'call, 'vm> {
     }
 
     /// Cumulative work across all slices, including host/bulk/setup charges.
-    pub fn instructions_executed(&self) -> u64 { self.meter.instructions }
+    pub fn instructions_executed(&self) -> u64 {
+        self.meter.instructions
+    }
 
-    pub fn peak_stack_values(&self) -> usize { self.meter.peak_stack_values }
+    pub fn peak_stack_values(&self) -> usize {
+        self.meter.peak_stack_values
+    }
 
-    pub fn max_call_depth(&self) -> u32 { self.meter.max_call_depth }
+    pub fn max_call_depth(&self) -> u32 {
+        self.meter.max_call_depth
+    }
 
     /// Release this invocation's frames and exclusive borrow, keeping effects
     /// completed before cancellation. Dropping the handle has the same effect.

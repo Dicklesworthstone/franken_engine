@@ -116,7 +116,10 @@ fn equal_active_revision_is_idempotent_but_older_revision_is_denied() {
     cache.try_restore_trust(MODULE, 4, &context()).unwrap();
     assert_eq!(cache.snapshot(), before);
     assert_eq!(
-        cache.try_restore_trust(MODULE, 3, &context()).unwrap_err().code,
+        cache
+            .try_restore_trust(MODULE, 3, &context())
+            .unwrap_err()
+            .code,
         CacheErrorCode::VersionRegression,
     );
     assert_eq!(cache.snapshot(), before);
@@ -129,7 +132,10 @@ fn saturated_trust_frontier_cannot_wrap_or_re_admit() {
     let before = cache.snapshot();
     for revision in [0, 1, u64::MAX - 1, u64::MAX] {
         assert_eq!(
-            cache.try_restore_trust(MODULE, revision, &context()).unwrap_err().code,
+            cache
+                .try_restore_trust(MODULE, revision, &context())
+                .unwrap_err()
+                .code,
             CacheErrorCode::VersionRegression,
         );
         assert_eq!(cache.snapshot(), before);
@@ -166,7 +172,10 @@ fn malformed_persisted_revocation_without_frontier_cannot_be_cleared() {
     let mut cache: ModuleCache = serde_json::from_value(serialized).unwrap();
     let before = cache.snapshot();
     assert_eq!(
-        cache.try_restore_trust(MODULE, u64::MAX, &context()).unwrap_err().code,
+        cache
+            .try_restore_trust(MODULE, u64::MAX, &context())
+            .unwrap_err()
+            .code,
         CacheErrorCode::VersionRegression,
     );
     assert_eq!(cache.snapshot(), before);
@@ -175,12 +184,22 @@ fn malformed_persisted_revocation_without_frontier_cannot_be_cleared() {
 #[test]
 fn denial_does_not_change_other_modules_or_subsequent_event_order() {
     let mut cache = ModuleCache::new();
-    cache.try_restore_trust("mod:other", 11, &context()).unwrap();
+    cache
+        .try_restore_trust("mod:other", 11, &context())
+        .unwrap();
     cache.invalidate_trust_revocation(MODULE, 9, &context());
     let before = cache.snapshot();
     cache.try_restore_trust(MODULE, 8, &context()).unwrap_err();
     assert_eq!(cache.snapshot(), before);
     cache.try_restore_trust(MODULE, 10, &context()).unwrap();
-    assert_eq!(cache.snapshot().latest_versions["mod:other"].trust_revision, 11);
-    assert!(cache.events().windows(2).all(|pair| pair[0].seq < pair[1].seq));
+    assert_eq!(
+        cache.snapshot().latest_versions["mod:other"].trust_revision,
+        11
+    );
+    assert!(
+        cache
+            .events()
+            .windows(2)
+            .all(|pair| pair[0].seq < pair[1].seq)
+    );
 }

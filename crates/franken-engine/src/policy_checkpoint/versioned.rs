@@ -5,20 +5,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, ObjectDomain,
-    ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId, VersionedIdError,
+    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId,
+    VersionedIdError, derive_versioned_id, derive_versioned_schema_id, verify_versioned_id,
 };
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    sign_preimage, verify_signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+    verify_signature,
 };
 use crate::sorted_multisig::{MultiSigError, SignerSignature, SortedSignatureArray};
 
 use super::compat::{
-    checkpoint_schema_id, verify_checkpoint_quorum, DeterministicTimestamp, PolicyCheckpoint,
-    PolicyHead, PolicyType,
+    DeterministicTimestamp, PolicyCheckpoint, PolicyHead, PolicyType, checkpoint_schema_id,
+    verify_checkpoint_quorum,
 };
 
 const CHECKPOINT_SCHEMA_V2: &[u8] = b"FrankenEngine.PolicyCheckpoint.sha256.v2";
@@ -289,7 +289,11 @@ impl PolicyCheckpointV2Builder {
         )?;
         self.policy_heads
             .sort_by(|left, right| left.policy_type.cmp(&right.policy_type));
-        validate_checkpoint_shape(&self.prev_checkpoint, self.checkpoint_seq, &self.policy_heads)?;
+        validate_checkpoint_shape(
+            &self.prev_checkpoint,
+            self.checkpoint_seq,
+            &self.policy_heads,
+        )?;
         build_checkpoint_v2(
             self.prev_checkpoint,
             self.checkpoint_seq,
@@ -356,10 +360,8 @@ fn build_checkpoint_v2(
         provenance.verify()?;
     }
 
-    let schema = derive_versioned_schema_id(
-        ObjectIdDerivationVersion::Sha256V2,
-        CHECKPOINT_SCHEMA_V2,
-    )?;
+    let schema =
+        derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, CHECKPOINT_SCHEMA_V2)?;
     let unsigned = build_unsigned_view_v2(
         &prev_checkpoint,
         checkpoint_seq,
@@ -387,8 +389,8 @@ fn build_checkpoint_v2(
             signature,
         ));
     }
-    let quorum_signatures =
-        SortedSignatureArray::from_unsorted(signatures).map_err(VersionedCheckpointError::MultiSig)?;
+    let quorum_signatures = SortedSignatureArray::from_unsorted(signatures)
+        .map_err(VersionedCheckpointError::MultiSig)?;
 
     let checkpoint = PolicyCheckpointV2 {
         persistence_schema: POLICY_CHECKPOINT_PERSISTENCE_SCHEMA_V2.to_string(),
@@ -507,7 +509,9 @@ fn optional_legacy_hash(provenance: Option<&LegacyPolicyCheckpointProvenance>) -
         .unwrap_or_default()
 }
 
-fn validate_legacy_mapping(checkpoint: &PolicyCheckpointV2) -> Result<(), VersionedCheckpointError> {
+fn validate_legacy_mapping(
+    checkpoint: &PolicyCheckpointV2,
+) -> Result<(), VersionedCheckpointError> {
     let Some(provenance) = &checkpoint.legacy_provenance else {
         return Ok(());
     };
@@ -530,7 +534,9 @@ fn validate_legacy_mapping(checkpoint: &PolicyCheckpointV2) -> Result<(), Versio
         ));
     }
     if checkpoint.created_at != legacy.created_at {
-        return Err(VersionedCheckpointError::LegacyMappingMismatch("created_at"));
+        return Err(VersionedCheckpointError::LegacyMappingMismatch(
+            "created_at",
+        ));
     }
     let expected_prev = legacy
         .prev_checkpoint
@@ -708,10 +714,14 @@ impl std::fmt::Display for VersionedCheckpointError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidZone => formatter.write_str("checkpoint zone must not be empty"),
-            Self::EmptySigningKeys => formatter.write_str("at least one checkpoint signer is required"),
+            Self::EmptySigningKeys => {
+                formatter.write_str("at least one checkpoint signer is required")
+            }
             Self::EmptyPolicyHeads => formatter.write_str("policy heads must not be empty"),
             Self::InvalidQuorumThreshold => formatter.write_str("invalid quorum threshold"),
-            Self::DuplicateAuthorizedSigner => formatter.write_str("authorized signer set contains duplicates"),
+            Self::DuplicateAuthorizedSigner => {
+                formatter.write_str("authorized signer set contains duplicates")
+            }
             Self::AuthorizedSignersNotCanonical => {
                 formatter.write_str("persisted authorized signers must be strictly sorted")
             }
@@ -735,11 +745,19 @@ impl std::fmt::Display for VersionedCheckpointError {
                 write!(formatter, "epoch regression: {previous} -> {current}")
             }
             Self::ZoneMismatch { previous, current } => {
-                write!(formatter, "checkpoint zone changed from {previous:?} to {current:?}")
+                write!(
+                    formatter,
+                    "checkpoint zone changed from {previous:?} to {current:?}"
+                )
             }
-            Self::ChainLinkageBroken => formatter.write_str("checkpoint predecessor identity mismatch"),
+            Self::ChainLinkageBroken => {
+                formatter.write_str("checkpoint predecessor identity mismatch")
+            }
             Self::UnsupportedSchema { actual } => {
-                write!(formatter, "unsupported checkpoint persistence schema {actual:?}")
+                write!(
+                    formatter,
+                    "unsupported checkpoint persistence schema {actual:?}"
+                )
             }
             Self::AlgorithmMismatch { field, actual } => {
                 write!(formatter, "{field} uses {actual}; sha256_v2 is required")
@@ -810,7 +828,10 @@ mod tests {
             .verify_quorum(1, &[signing_key.verification_key()])
             .expect("verify quorum");
         let value = serde_json::to_value(&checkpoint).expect("serialize checkpoint");
-        assert_eq!(value["persistence_schema"], POLICY_CHECKPOINT_PERSISTENCE_SCHEMA_V2);
+        assert_eq!(
+            value["persistence_schema"],
+            POLICY_CHECKPOINT_PERSISTENCE_SCHEMA_V2
+        );
         assert_eq!(value["checkpoint_id"]["derivation_version"], "sha256_v2");
         assert_eq!(value["zone"], "owner");
     }
@@ -930,7 +951,9 @@ mod tests {
         migrated.created_at = DeterministicTimestamp(31);
         assert!(matches!(
             migrated.validate_identity(),
-            Err(VersionedCheckpointError::LegacyMappingMismatch("created_at"))
+            Err(VersionedCheckpointError::LegacyMappingMismatch(
+                "created_at"
+            ))
         ));
     }
 

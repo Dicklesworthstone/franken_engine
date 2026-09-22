@@ -125,7 +125,10 @@ fn cycle_is_rejected_before_any_task_can_dispatch() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("dependency cycle"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("dependency cycle"),
+        "unexpected stderr: {stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
@@ -139,6 +142,9 @@ fn unknown_dependency_is_rejected_before_any_task_can_dispatch() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("depends on unknown module"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("depends on unknown module"),
+        "unexpected stderr: {stderr}"
+    );
     assert!(output.stdout.is_empty());
 }

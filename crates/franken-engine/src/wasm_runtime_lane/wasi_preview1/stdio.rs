@@ -38,8 +38,10 @@ pub struct WasiStdioLimits {
 impl Default for WasiStdioLimits {
     fn default() -> Self {
         Self {
-            max_stdin_bytes: 1024 * 1024, max_output_bytes: 1024 * 1024,
-            max_transfer_bytes: 64 * 1024, max_iovecs: 1024,
+            max_stdin_bytes: 1024 * 1024,
+            max_output_bytes: 1024 * 1024,
+            max_transfer_bytes: 64 * 1024,
+            max_iovecs: 1024,
         }
     }
 }
@@ -51,11 +53,17 @@ pub struct WasiCapturedOutput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WasiStdioAccessError { Busy, Poisoned }
+pub enum WasiStdioAccessError {
+    Busy,
+    Poisoned,
+}
 
 impl fmt::Display for WasiStdioAccessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self { Self::Busy => "WASI stream observer is busy", Self::Poisoned => "WASI stream state is poisoned" })
+        f.write_str(match self {
+            Self::Busy => "WASI stream observer is busy",
+            Self::Poisoned => "WASI stream state is poisoned",
+        })
     }
 }
 
@@ -75,7 +83,9 @@ struct Streams {
 /// the guest VM. Construct a new registry for independent stream positions.
 /// No method blocks on another thread, exposes a guest borrow, or refunds a cap.
 #[derive(Debug, Clone)]
-pub struct WasiStdio { streams: Arc<Mutex<Streams>> }
+pub struct WasiStdio {
+    streams: Arc<Mutex<Streams>>,
+}
 
 impl WasiStdio {
     fn access(&self) -> Result<MutexGuard<'_, Streams>, WasiStdioAccessError> {
@@ -124,7 +134,11 @@ impl WasiPreview1Config {
         limits: WasiStdioLimits,
         files: Option<WasiReadOnlyFiles>,
     ) -> Result<(WasmHostImports, WasiStdio), WasiPreview1Error> {
-        limit("stdin bytes", stdin.len() as u64, limits.max_stdin_bytes as u64)?;
+        limit(
+            "stdin bytes",
+            stdin.len() as u64,
+            limits.max_stdin_bytes as u64,
+        )?;
         let descriptors = match &files {
             Some(files) => descriptors::Table::with_files(files.max_open_descriptors)?,
             None => descriptors::Table::new(),
@@ -134,8 +148,12 @@ impl WasiPreview1Config {
         let mut imports = self.into_imports(granted)?;
         let observer = WasiStdio {
             streams: Arc::new(Mutex::new(Streams {
-                descriptors, files,
-                input: stdin, consumed: 0, output: WasiCapturedOutput::default(), emitted: 0,
+                descriptors,
+                files,
+                input: stdin,
+                consumed: 0,
+                output: WasiCapturedOutput::default(),
+                emitted: 0,
             })),
         };
         for (function, capability, read) in [
@@ -144,38 +162,59 @@ impl WasiPreview1Config {
         ] {
             let streams = Arc::clone(&observer.streams);
             let limits = limits.clone();
-            imports.define(WASI_PREVIEW1_MODULE, function, signature(4), BTreeSet::from([capability]), 1,
+            imports.define(
+                WASI_PREVIEW1_MODULE,
+                function,
+                signature(4),
+                BTreeSet::from([capability]),
+                1,
                 move |caller, arguments| {
                     let arguments = words(arguments)?;
-                    let outcome = if read { read_input(caller, arguments, &streams, &limits, None) }
-                        else { write_output(caller, arguments, &streams, &limits) };
+                    let outcome = if read {
+                        read_input(caller, arguments, &streams, &limits, None)
+                    } else {
+                        write_output(caller, arguments, &streams, &limits)
+                    };
                     match outcome {
                         Ok(()) => errno(SUCCESS),
                         Err(IoFailure::Errno(code)) => errno(code),
                         Err(IoFailure::Vm(error)) => Err(error),
                     }
-                })?;
+                },
+            )?;
         }
         descriptors::install(&mut imports, &observer.streams, has_files)?;
-        if has_files { files::install(&mut imports, &observer.streams, &limits)?; }
+        if has_files {
+            files::install(&mut imports, &observer.streams, &limits)?;
+        }
         Ok((imports, observer))
     }
 }
 
-enum IoFailure { Errno(i32), Vm(WasmNumericVmError) }
+enum IoFailure {
+    Errno(i32),
+    Vm(WasmNumericVmError),
+}
 impl From<WasmNumericVmError> for IoFailure {
-    fn from(error: WasmNumericVmError) -> Self { Self::Vm(error) }
+    fn from(error: WasmNumericVmError) -> Self {
+        Self::Vm(error)
+    }
 }
 type IoResult<T> = Result<T, IoFailure>;
 
 fn access(streams: &Mutex<Streams>) -> IoResult<MutexGuard<'_, Streams>> {
-    streams.try_lock().map_err(|error| IoFailure::Errno(match error {
-        TryLockError::WouldBlock => AGAIN,
-        TryLockError::Poisoned(_) => IO,
-    }))
+    streams.try_lock().map_err(|error| {
+        IoFailure::Errno(match error {
+            TryLockError::WouldBlock => AGAIN,
+            TryLockError::Poisoned(_) => IO,
+        })
+    })
 }
 
-struct IoPlan { buffers: Vec<(u32, u32)>, length: u32 }
+struct IoPlan {
+    buffers: Vec<(u32, u32)>,
+    length: u32,
+}
 
 fn prepare(
     caller: &mut WasmHostCaller<'_, '_>,
@@ -185,7 +224,9 @@ fn prepare(
     limits: &WasiStdioLimits,
 ) -> IoResult<IoPlan> {
     caller.checkpoint()?;
-    if count > limits.max_iovecs { return Err(IoFailure::Errno(INVAL)); }
+    if count > limits.max_iovecs {
+        return Err(IoFailure::Errno(INVAL));
+    }
     let bytes = count.checked_mul(8).ok_or(IoFailure::Errno(INVAL))?;
     if !valid_range(caller, table, u64::from(bytes)) || !valid_range(caller, result, 4) {
         return Err(IoFailure::Errno(FAULT));
@@ -194,7 +235,9 @@ fn prepare(
     // Bound count-controlled allocation and descriptor decoding before either.
     caller.charge_work(u64::from(count))?;
     let mut buffers = Vec::new();
-    buffers.try_reserve_exact(count as usize).map_err(|_| IoFailure::Errno(NOMEM))?;
+    buffers
+        .try_reserve_exact(count as usize)
+        .map_err(|_| IoFailure::Errno(NOMEM))?;
     let metadata = caller.read_memory(table, bytes)?;
     let mut length = 0_u32;
     for record in metadata.chunks_exact(8) {
@@ -203,7 +246,9 @@ fn prepare(
         if u64::from(address) + u64::from(width) > size {
             return Err(IoFailure::Errno(FAULT));
         }
-        length = length.checked_add(width).filter(|n| *n <= limits.max_transfer_bytes)
+        length = length
+            .checked_add(width)
+            .filter(|n| *n <= limits.max_transfer_bytes)
             .ok_or(IoFailure::Errno(NOBUFS))?;
         buffers.push((address, width));
     }
@@ -220,18 +265,31 @@ fn write_output(
     streams.descriptors.charge(caller)?;
     let stream = streams.descriptors.writable(fd)?;
     let plan = prepare(caller, table, count, result, limits)?;
-    let next = streams.emitted.checked_add(plan.length as usize)
-        .filter(|n| *n <= limits.max_output_bytes).ok_or(IoFailure::Errno(NOSPC))?;
+    let next = streams
+        .emitted
+        .checked_add(plan.length as usize)
+        .filter(|n| *n <= limits.max_output_bytes)
+        .ok_or(IoFailure::Errno(NOSPC))?;
     let native_copy = u64::from(plan.length).div_ceil(64) * 2;
-    let buffer_work = plan.buffers.iter().map(|(_, n)| u64::from(*n).div_ceil(64)).sum::<u64>();
+    let buffer_work = plan
+        .buffers
+        .iter()
+        .map(|(_, n)| u64::from(*n).div_ceil(64))
+        .sum::<u64>();
     require_work(caller, native_copy + buffer_work + 1)?;
     caller.charge_work(native_copy)?;
     let mut staged = Vec::new();
-    staged.try_reserve_exact(plan.length as usize).map_err(|_| IoFailure::Errno(NOMEM))?;
+    staged
+        .try_reserve_exact(plan.length as usize)
+        .map_err(|_| IoFailure::Errno(NOMEM))?;
     let output = if stream == descriptors::Stream::Output {
         &mut streams.output.stdout
-    } else { &mut streams.output.stderr };
-    output.try_reserve_exact(plan.length as usize).map_err(|_| IoFailure::Errno(NOMEM))?;
+    } else {
+        &mut streams.output.stderr
+    };
+    output
+        .try_reserve_exact(plan.length as usize)
+        .map_err(|_| IoFailure::Errno(NOMEM))?;
     for (address, width) in plan.buffers {
         staged.extend_from_slice(caller.read_memory(address, width)?);
     }
@@ -257,16 +315,29 @@ fn read_input(
     let descriptor = streams.descriptors.readable(fd)?;
     let slot = streams.descriptors.index(fd)?;
     let file = match descriptor.stream {
-        descriptors::Stream::File(index) => Some(Arc::clone(streams.files.as_ref()
-            .ok_or(IoFailure::Errno(BADF))?.bytes(index)?)),
+        descriptors::Stream::File(index) => Some(Arc::clone(
+            streams
+                .files
+                .as_ref()
+                .ok_or(IoFailure::Errno(BADF))?
+                .bytes(index)?,
+        )),
         _ => None,
     };
     if offset.is_some() {
-        if file.is_none() { return Err(IoFailure::Errno(descriptors::SPIPE)); }
+        if file.is_none() {
+            return Err(IoFailure::Errno(descriptors::SPIPE));
+        }
         descriptors::require_right(descriptor, descriptors::READ | descriptors::SEEK)?;
     }
-    let mut position = offset.unwrap_or(if file.is_some() { descriptor.cursor } else { streams.consumed as u64 });
-    let size = file.as_ref().map_or(streams.input.len(), |bytes| bytes.len()) as u64;
+    let mut position = offset.unwrap_or(if file.is_some() {
+        descriptor.cursor
+    } else {
+        streams.consumed as u64
+    });
+    let size = file
+        .as_ref()
+        .map_or(streams.input.len(), |bytes| bytes.len()) as u64;
     let plan = prepare(caller, table, count, result, limits)?;
     let actual = u64::from(plan.length).min(size.saturating_sub(position)) as usize;
     let mut remaining = actual;
@@ -279,9 +350,13 @@ fn read_input(
     require_work(caller, work)?;
     let mut remaining = actual;
     for (address, width) in plan.buffers {
-        if remaining == 0 { break; }
+        if remaining == 0 {
+            break;
+        }
         let copied = remaining.min(width as usize);
-        if copied == 0 { continue; }
+        if copied == 0 {
+            continue;
+        }
         let start = position as usize; // copied > 0 implies position < bounded payload length.
         if let Some(bytes) = &file {
             caller.write_memory(address, &bytes[start..start + copied])?;
@@ -292,8 +367,11 @@ fn read_input(
         // transcript refusal terminates the callback. No synthetic rollback.
         position += copied as u64;
         if offset.is_none() {
-            if file.is_some() { streams.descriptors.set_slot_cursor(slot, position); }
-            else { streams.consumed += copied; }
+            if file.is_some() {
+                streams.descriptors.set_slot_cursor(slot, position);
+            } else {
+                streams.consumed += copied;
+            }
         }
         remaining -= copied;
     }

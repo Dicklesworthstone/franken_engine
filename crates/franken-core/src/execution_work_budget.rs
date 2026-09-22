@@ -81,7 +81,7 @@ impl ExecutionWorkPool {
         }
         self.state
             .remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(instructions)
             })
             .map(|_| ())
@@ -119,7 +119,10 @@ impl fmt::Display for WorkBudgetError {
             Self::ZeroInstructionBudget => f.write_str("instruction reservation must be nonzero"),
             Self::Revoked => f.write_str("execution work scope has been revoked"),
             Self::HierarchyDepthExceeded { max_depth } => {
-                write!(f, "execution work scope hierarchy exceeds depth {max_depth}")
+                write!(
+                    f,
+                    "execution work scope hierarchy exceeds depth {max_depth}"
+                )
             }
             Self::Exhausted {
                 requested,
@@ -374,7 +377,9 @@ mod tests {
         for remaining in [128, 0] {
             assert!(matches!(
                 runtime.execute(&module),
-                Err(WorkBudgetError::Interpreter(InterpreterError::UncaughtException { .. }))
+                Err(WorkBudgetError::Interpreter(
+                    InterpreterError::UncaughtException { .. }
+                ))
             ));
             assert_eq!(pool.remaining(), remaining);
         }
@@ -390,7 +395,9 @@ mod tests {
         let pool = ExecutionWorkPool::new(128);
         assert!(matches!(
             interpreter(&pool, 128).execute(&module),
-            Err(WorkBudgetError::Interpreter(InterpreterError::BudgetExhausted { .. }))
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::BudgetExhausted { .. }
+            ))
         ));
         assert_eq!(pool.remaining(), 0);
     }
@@ -404,7 +411,9 @@ mod tests {
         let mut runtime = BudgetedInterpreter::new(pool.clone(), denied, "denied").unwrap();
         assert!(matches!(
             runtime.execute(&module),
-            Err(WorkBudgetError::Interpreter(InterpreterError::CapabilityDenied { .. }))
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::CapabilityDenied { .. }
+            ))
         ));
         assert_eq!(pool.remaining(), 0);
     }
@@ -418,7 +427,9 @@ mod tests {
         let mut runtime = BudgetedInterpreter::new(pool.clone(), limited, "memory").unwrap();
         assert!(matches!(
             runtime.execute(&module),
-            Err(WorkBudgetError::Interpreter(InterpreterError::MemoryBudgetExceeded { .. }))
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ))
         ));
         assert_eq!(pool.remaining(), 0);
     }
@@ -509,9 +520,8 @@ mod tests {
         let pool = ExecutionWorkPool::new(256);
         let mut runtime = interpreter(&pool, 128);
         runtime.set_hook(Arc::new(PanickingHook));
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.execute(&module)
-        }));
+        let unwind =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.execute(&module)));
         assert!(
             unwind.is_err(),
             "test must exercise the native allocation hook"

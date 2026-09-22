@@ -31,18 +31,12 @@ struct Response {
     start_execution: Option<WasmNumericExecution>,
 }
 
-fn decode_module_hex(
-    module_hex: &str,
-    limits: &WasmNumericLimits,
-) -> Result<Vec<u8>, String> {
+fn decode_module_hex(module_hex: &str, limits: &WasmNumericLimits) -> Result<Vec<u8>, String> {
     let module_hex = module_hex.trim();
     if module_hex.len() % 2 != 0 {
         return Err("module_hex must contain an even number of hexadecimal digits".to_string());
     }
-    let max_hex_digits = limits
-        .max_module_bytes
-        .checked_mul(2)
-        .unwrap_or(usize::MAX);
+    let max_hex_digits = limits.max_module_bytes.checked_mul(2).unwrap_or(usize::MAX);
     if module_hex.len() > max_hex_digits {
         return Err(format!(
             "module_hex represents {} bytes; limit is {}",
@@ -106,7 +100,8 @@ fn main() {
 mod tests {
     use super::*;
 
-    const ADD_I32_HEX: &str = "0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b";
+    const ADD_I32_HEX: &str =
+        "0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b";
 
     #[test]
     fn request_executes_real_parameterized_wasm() {
@@ -120,7 +115,12 @@ mod tests {
         assert_eq!(response.execution.results, vec![WasmBoundaryValue::I32(42)]);
         assert_eq!(response.available_exports, vec!["add".to_string()]);
         assert!(response.start_execution.is_none());
-        assert!(serde_json::to_value(&response).unwrap().get("start_execution").is_none());
+        assert!(
+            serde_json::to_value(&response)
+                .unwrap()
+                .get("start_execution")
+                .is_none()
+        );
     }
 
     #[test]

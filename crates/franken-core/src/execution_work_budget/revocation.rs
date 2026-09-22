@@ -401,9 +401,8 @@ mod tests {
             unwind: true,
         }));
         let source = module("let object = {}; object;");
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.execute(&source)
-        }));
+        let unwind =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.execute(&source)));
         assert!(unwind.is_err());
         assert!(calls.load(Ordering::Relaxed) > 0);
         assert!(pool.is_revoked());
@@ -530,10 +529,7 @@ mod tests {
         assert!(pool.committed() >= accepted);
         assert_eq!(pool.remaining() + pool.committed(), 128);
         let remaining = pool.remaining();
-        assert!(matches!(
-            pool.reserve(1),
-            Err(WorkBudgetError::Revoked)
-        ));
+        assert!(matches!(pool.reserve(1), Err(WorkBudgetError::Revoked)));
         assert_eq!(pool.remaining(), remaining);
     }
 }

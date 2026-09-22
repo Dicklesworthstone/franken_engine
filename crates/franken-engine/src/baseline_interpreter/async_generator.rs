@@ -325,12 +325,7 @@ impl InterpreterCore {
             {
                 let rejection = self.async_generator_exception(error, &label)?;
                 self.complete_async_generator_activation(id);
-                self.settle_async_generator_request(
-                    id,
-                    Err(rejection.value),
-                    true,
-                    rejection.label,
-                )
+                self.settle_async_generator_request(id, Err(rejection.value), true, rejection.label)
             }
             Err(error) => Err(error),
         }
@@ -572,12 +567,13 @@ impl InterpreterCore {
             for promise in [context.ticket, context.owned_source].into_iter().flatten() {
                 match epoch {
                     Some(epoch) => {
-                        let _ = self.promise_store.extend_terminal_rejection_without_jobs(
-                            promise, &label, epoch,
-                        );
+                        let _ = self
+                            .promise_store
+                            .extend_terminal_rejection_without_jobs(promise, &label, epoch);
                     }
                     None => {
-                        epoch = self.promise_store
+                        epoch = self
+                            .promise_store
                             .terminally_reject_without_jobs(promise, &label)
                             .ok();
                     }
@@ -740,9 +736,10 @@ impl InterpreterCore {
         let context = self.json_parse_context_label()?;
         let label = self.join_owned_label_with_temporary_budget(context, floor)?;
         let (value, thrown_label) = if is_thrown {
-            self.take_pending_exception_slot().ok_or_else(|| InterpreterError::InternalError {
-                details: "async generator lost its thrown value".into(),
-            })?
+            self.take_pending_exception_slot()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "async generator lost its thrown value".into(),
+                })?
         } else {
             (self.native_error_to_thrown_value(&error)?, Label::Public)
         };
@@ -823,31 +820,33 @@ impl InterpreterCore {
         // Close only this generator's child tickets, not their awaited sources:
         // another generator or ordinary Promise reaction may share a source.
         let promise_store = &mut self.promise_store;
-        self.async_generator_runtime.continuations.retain(|ticket, context| {
-            if context.generator_id != id {
-                return true;
-            }
-            for promise in [Some(PromiseHandle(*ticket)), context.owned_source]
-                .into_iter()
-                .flatten()
-            {
-                match epoch {
-                    Some(epoch) => {
-                        let _ = promise_store.extend_terminal_rejection_without_jobs(
-                            promise,
-                            &Label::Public,
-                            epoch,
-                        );
-                    }
-                    None => {
-                        epoch = promise_store
-                            .terminally_reject_without_jobs(promise, &Label::Public)
-                            .ok();
+        self.async_generator_runtime
+            .continuations
+            .retain(|ticket, context| {
+                if context.generator_id != id {
+                    return true;
+                }
+                for promise in [Some(PromiseHandle(*ticket)), context.owned_source]
+                    .into_iter()
+                    .flatten()
+                {
+                    match epoch {
+                        Some(epoch) => {
+                            let _ = promise_store.extend_terminal_rejection_without_jobs(
+                                promise,
+                                &Label::Public,
+                                epoch,
+                            );
+                        }
+                        None => {
+                            epoch = promise_store
+                                .terminally_reject_without_jobs(promise, &Label::Public)
+                                .ok();
+                        }
                     }
                 }
-            }
-            false
-        });
+                false
+            });
         if let Some(epoch) = epoch {
             self.close_terminal_async_promise_dependencies(epoch, &Label::Public);
         }
@@ -971,18 +970,23 @@ mod tests {
         core.execute(&module).unwrap();
         assert_eq!(core.async_generators.len(), 1);
         let promise = core.create_promise().unwrap();
-        core.async_generators[0].requests.push_back(AsyncGeneratorRequest {
-            kind: GeneratorResumeKind::Next,
-            argument: Value::Undefined,
-            label,
-            promise,
-        });
+        core.async_generators[0]
+            .requests
+            .push_back(AsyncGeneratorRequest {
+                kind: GeneratorResumeKind::Next,
+                argument: Value::Undefined,
+                label,
+                promise,
+            });
         core.sync_estimated_memory_bytes().unwrap();
         (core, 0, promise)
     }
 
     fn assert_accounting(core: &InterpreterCore) {
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -993,7 +997,9 @@ mod tests {
             .unwrap();
         let rejection = core
             .async_generator_exception(
-                InterpreterError::UncaughtException { value: "classified".into() },
+                InterpreterError::UncaughtException {
+                    value: "classified".into(),
+                },
                 &Label::Public,
             )
             .unwrap();
@@ -1008,20 +1014,32 @@ mod tests {
         let labels = [
             Label::Public,
             Label::Secret,
-            Label::Custom { name: "a".into(), level: 3 },
-            Label::Custom { name: "z".repeat(256), level: 3 },
-            Label::Custom { name: "low".into(), level: 1 },
+            Label::Custom {
+                name: "a".into(),
+                level: 3,
+            },
+            Label::Custom {
+                name: "z".repeat(256),
+                level: 3,
+            },
+            Label::Custom {
+                name: "low".into(),
+                level: 1,
+            },
         ];
         for floor in &labels {
             for thrown in &labels {
                 let mut core = core();
-                core.replace_pending_hostcall_result_label(Some(Label::Internal)).unwrap();
+                core.replace_pending_hostcall_result_label(Some(Label::Internal))
+                    .unwrap();
                 core.replace_pending_abrupt_slots(Some((Value::Int(9), thrown.clone())), None)
                     .unwrap();
-                let rejection = core.async_generator_exception(
-                    InterpreterError::UncaughtException { value: "9".into() },
-                    floor,
-                ).unwrap();
+                let rejection = core
+                    .async_generator_exception(
+                        InterpreterError::UncaughtException { value: "9".into() },
+                        floor,
+                    )
+                    .unwrap();
                 assert_eq!(rejection.value, Value::Int(9));
                 assert_eq!(rejection.label, floor.join(thrown).join(&Label::Internal));
                 assert_accounting(&core);
@@ -1032,11 +1050,17 @@ mod tests {
     #[test]
     fn native_type_error_keeps_the_callback_and_resumption_security_floor() {
         let mut core = core();
-        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
-        let rejection = core.async_generator_exception(
-            InterpreterError::TypeError { expected: "object".into(), got: "number".into() },
-            &Label::Confidential,
-        ).unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret))
+            .unwrap();
+        let rejection = core
+            .async_generator_exception(
+                InterpreterError::TypeError {
+                    expected: "object".into(),
+                    got: "number".into(),
+                },
+                &Label::Confidential,
+            )
+            .unwrap();
         assert!(matches!(rejection.value, Value::Object(_)));
         assert_eq!(rejection.label, Label::Secret);
         assert_accounting(&core);
@@ -1045,7 +1069,8 @@ mod tests {
     #[test]
     fn resource_failure_is_not_converted_or_allowed_to_consume_a_guest_exception() {
         let mut core = core();
-        core.replace_pending_abrupt_slots(Some((Value::Int(7), Label::Secret)), None).unwrap();
+        core.replace_pending_abrupt_slots(Some((Value::Int(7), Label::Secret)), None)
+            .unwrap();
         let error = InterpreterError::MemoryBudgetExceeded {
             requested_bytes: 2,
             max_bytes: 1,
@@ -1056,7 +1081,10 @@ mod tests {
             core.async_generator_exception(error, &Label::Public),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
-        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(7), Label::Secret)));
+        assert_eq!(
+            core.take_pending_exception_slot(),
+            Some((Value::Int(7), Label::Secret))
+        );
         assert_accounting(&core);
     }
 
@@ -1072,15 +1100,23 @@ mod tests {
                 let (mut core, id, promise) = request_core(request);
                 core.settle_async_generator_request(
                     id,
-                    if reject { Err(Value::Int(42)) } else { Ok(Value::Int(42)) },
+                    if reject {
+                        Err(Value::Int(42))
+                    } else {
+                        Ok(Value::Int(42))
+                    },
                     true,
                     body,
-                ).unwrap();
+                )
+                .unwrap();
                 let record = core.promise_store.get(promise).unwrap();
                 assert_eq!(record.label, expected);
                 assert_eq!(record.state.is_rejected(), reject);
                 assert!(core.async_generators[id as usize].requests.is_empty());
-                assert_eq!(core.async_generators[id as usize].phase, AsyncGeneratorPhase::Completed);
+                assert_eq!(
+                    core.async_generators[id as usize].phase,
+                    AsyncGeneratorPhase::Completed
+                );
                 assert_accounting(&core);
             }
         }
@@ -1090,7 +1126,8 @@ mod tests {
     fn result_value_and_done_keep_provenance_through_a_public_alias() {
         for done in [false, true] {
             let (mut core, id, promise) = request_core(Label::Public);
-            core.settle_async_generator_request(id, Ok(Value::Int(42)), done, Label::Secret).unwrap();
+            core.settle_async_generator_request(id, Ok(Value::Int(42)), done, Label::Secret)
+                .unwrap();
             let result = match &core.promise_store.get(promise).unwrap().state {
                 PromiseState::Fulfilled(value) => InterpreterCore::js_value_to_value(value),
                 _ => panic!("request must be fulfilled"),
@@ -1098,14 +1135,18 @@ mod tests {
             for (key, expected) in [("value", Value::Int(42)), ("done", Value::Bool(done))] {
                 // Deliberately discard the reference label: object provenance,
                 // not the incoming register, must protect both stored fields.
-                core.write_reg_with_label(0, result.clone(), Label::Public).unwrap();
-                core.write_reg_with_label(1, Value::Str(key.into()), Label::Public).unwrap();
+                core.write_reg_with_label(0, result.clone(), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(1, Value::Str(key.into()), Label::Public)
+                    .unwrap();
                 core.replace_pending_hostcall_result_label(None).unwrap();
-                let actual = core.reflect_property_builtin(
-                    None,
-                    RegRange { start: 0, count: 2 },
-                    ReflectPropertyOperation::Get,
-                ).unwrap();
+                let actual = core
+                    .reflect_property_builtin(
+                        None,
+                        RegRange { start: 0, count: 2 },
+                        ReflectPropertyOperation::Get,
+                    )
+                    .unwrap();
                 assert_eq!(actual, expected);
                 assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
                 assert_accounting(&core);
@@ -1116,12 +1157,27 @@ mod tests {
     #[test]
     fn sensitive_settlement_does_not_taint_a_separate_public_generator() {
         let mut core = core();
-        let secret = core.async_generator_result_object(Value::Int(1), false, &Label::Secret).unwrap();
-        let public = core.async_generator_result_object(Value::Int(2), false, &Label::Public).unwrap();
-        let Value::Object(secret_id) = secret else { panic!("object"); };
-        let Value::Object(public_id) = public else { panic!("object"); };
-        assert_eq!(core.object_mutation_labels.get(&secret_id), Some(&Label::Secret));
-        assert!(core.object_mutation_labels.get(&public_id).is_none_or(|label| *label == Label::Public));
+        let secret = core
+            .async_generator_result_object(Value::Int(1), false, &Label::Secret)
+            .unwrap();
+        let public = core
+            .async_generator_result_object(Value::Int(2), false, &Label::Public)
+            .unwrap();
+        let Value::Object(secret_id) = secret else {
+            panic!("object");
+        };
+        let Value::Object(public_id) = public else {
+            panic!("object");
+        };
+        assert_eq!(
+            core.object_mutation_labels.get(&secret_id),
+            Some(&Label::Secret)
+        );
+        assert!(
+            core.object_mutation_labels
+                .get(&public_id)
+                .is_none_or(|label| *label == Label::Public)
+        );
         assert_accounting(&core);
     }
 
@@ -1169,9 +1225,15 @@ mod tests {
         ));
         assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(core.promise_store.estimated_memory_bytes(), before);
-        assert_eq!(core.promise_store.get(request).unwrap().state, PromiseState::Pending);
+        assert_eq!(
+            core.promise_store.get(request).unwrap().state,
+            PromiseState::Pending
+        );
         assert_eq!(core.async_generators[id as usize].requests.len(), 1);
-        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert_eq!(
+            core.take_pending_exception_slot(),
+            Some((Value::Int(9), Label::Secret))
+        );
         assert_accounting(&core);
     }
 
@@ -1189,9 +1251,12 @@ mod tests {
         assert!(generator.requests.is_empty());
         assert!(generator.awaited.is_none());
         assert!(generator.delegation.is_none());
-        assert!(core.async_generator_runtime.continuations.values().all(|entry| {
-            entry.generator_id != id
-        }));
+        assert!(
+            core.async_generator_runtime
+                .continuations
+                .values()
+                .all(|entry| { entry.generator_id != id })
+        );
         let backing = &core.generators[generator.generator_id as usize];
         assert_eq!(backing.phase, GeneratorPhase::Completed);
         assert!(backing.invocation.is_none());
@@ -1203,7 +1268,11 @@ mod tests {
 
     #[test]
     fn cancelled_native_request_allocates_no_new_promise_or_result_object() {
-        for kind in [GeneratorResumeKind::Next, GeneratorResumeKind::Return, GeneratorResumeKind::Throw] {
+        for kind in [
+            GeneratorResumeKind::Next,
+            GeneratorResumeKind::Return,
+            GeneratorResumeKind::Throw,
+        ] {
             let (mut core, id, request) = request_core(Label::Secret);
             let backing = core.async_generators[id as usize].generator_id;
             let owner = Arc::clone(&core.generators[backing as usize].owner_module);
@@ -1212,14 +1281,24 @@ mod tests {
             cancel_token(&mut core);
             assert!(matches!(
                 core.enqueue_async_generator_request(
-                    owner.as_ref(), id, kind, Value::Int(42), Label::Public,
+                    owner.as_ref(),
+                    id,
+                    kind,
+                    Value::Int(42),
+                    Label::Public,
                 ),
                 Err(InterpreterError::Cancelled)
             ));
             assert_aborted(&core, id, request);
             assert_eq!(core.heap.len(), heap_len);
-            assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
-            assert_eq!(core.promise_store.get(marker).unwrap().state, PromiseState::Pending);
+            assert_eq!(
+                core.promise_store.get(request).unwrap().label,
+                Label::Secret
+            );
+            assert_eq!(
+                core.promise_store.get(marker).unwrap().state,
+                PromiseState::Pending
+            );
             assert_eq!(core.create_promise().unwrap().0, marker.0 + 1);
         }
     }
@@ -1229,11 +1308,22 @@ mod tests {
         let (mut core, id, request) = request_core(Label::Secret);
         let source = core.create_promise().unwrap();
         core.await_async_generator_value(
-            id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Secret,
-        ).unwrap();
-        let ticket = *core.async_generator_runtime.continuations.keys().next().unwrap();
+            id,
+            AwaitKind::ReturnResult,
+            Value::Promise(source.0),
+            Label::Secret,
+        )
+        .unwrap();
+        let ticket = *core
+            .async_generator_runtime
+            .continuations
+            .keys()
+            .next()
+            .unwrap();
         // A second, independent consumer of precisely the same source.
-        let other = core.register_promise_then_for_await(source, Label::Public).unwrap();
+        let other = core
+            .register_promise_then_for_await(source, Label::Public)
+            .unwrap();
         let backing = core.async_generators[id as usize].generator_id;
         let owner = Arc::clone(&core.generators[backing as usize].owner_module);
         cancel_token(&mut core);
@@ -1244,9 +1334,21 @@ mod tests {
             Err(InterpreterError::Cancelled)
         ));
         assert_aborted(&core, id, request);
-        assert!(core.promise_store.get(PromiseHandle(ticket)).unwrap().state.is_rejected());
-        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
-        assert_eq!(core.promise_store.get(other).unwrap().state, PromiseState::Pending);
+        assert!(
+            core.promise_store
+                .get(PromiseHandle(ticket))
+                .unwrap()
+                .state
+                .is_rejected()
+        );
+        assert_eq!(
+            core.promise_store.get(source).unwrap().state,
+            PromiseState::Pending
+        );
+        assert_eq!(
+            core.promise_store.get(other).unwrap().state,
+            PromiseState::Pending
+        );
         assert_eq!(core.config.max_total_memory_bytes, limit);
     }
 
@@ -1256,18 +1358,35 @@ mod tests {
             let (mut core, id, request) = request_core(Label::Public);
             let source = core.create_promise().unwrap();
             core.await_async_generator_value(
-                id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Secret,
-            ).unwrap();
-            let ticket = *core.async_generator_runtime.continuations.keys().next().unwrap();
+                id,
+                AwaitKind::ReturnResult,
+                Value::Promise(source.0),
+                Label::Secret,
+            )
+            .unwrap();
+            let ticket = *core
+                .async_generator_runtime
+                .continuations
+                .keys()
+                .next()
+                .unwrap();
             // Mirror the dispatcher's ownership transfer before it invokes
             // resume_async_generator_task, including the no-longer-indexed ticket.
-            let context = core.async_generator_runtime.continuations.remove(&ticket).unwrap();
+            let context = core
+                .async_generator_runtime
+                .continuations
+                .remove(&ticket)
+                .unwrap();
             core.sync_estimated_memory_bytes().unwrap();
             cancel_token(&mut core);
             assert!(matches!(
                 core.resume_async_generator_task(
                     context,
-                    if rejected { Err(JsValue::Int(42)) } else { Ok(JsValue::Int(42)) },
+                    if rejected {
+                        Err(JsValue::Int(42))
+                    } else {
+                        Ok(JsValue::Int(42))
+                    },
                     Label::Secret,
                     None,
                 ),
@@ -1277,7 +1396,10 @@ mod tests {
             let record = core.promise_store.get(PromiseHandle(ticket)).unwrap();
             assert!(record.state.is_rejected());
             assert_eq!(record.label, Label::Secret);
-            assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+            assert_eq!(
+                core.promise_store.get(source).unwrap().state,
+                PromiseState::Pending
+            );
         }
     }
 
@@ -1285,7 +1407,8 @@ mod tests {
     fn cancellation_before_await_conversion_preserves_guest_exception_and_heap() {
         let (mut core, id, request) = request_core(Label::Secret);
         let object = core.generator_result_object(Value::Int(42), false).unwrap();
-        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None).unwrap();
+        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None)
+            .unwrap();
         let marker = core.create_promise().unwrap();
         let heap_len = core.heap.len();
         cancel_token(&mut core);
@@ -1295,7 +1418,10 @@ mod tests {
         ));
         assert_aborted(&core, id, request);
         assert_eq!(core.heap.len(), heap_len);
-        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert_eq!(
+            core.take_pending_exception_slot(),
+            Some((Value::Int(9), Label::Secret))
+        );
         assert_eq!(core.create_promise().unwrap().0, marker.0 + 1);
     }
 
@@ -1311,7 +1437,10 @@ mod tests {
             ));
             assert_aborted(&core, id, request);
             assert_eq!(core.heap.len(), heap_len);
-            assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
+            assert_eq!(
+                core.promise_store.get(request).unwrap().label,
+                Label::Secret
+            );
         }
     }
 
@@ -1319,7 +1448,8 @@ mod tests {
     fn live_cancellation_token_preserves_successful_native_settlement() {
         let (mut core, id, request) = request_core(Label::Public);
         core.config.cancellation_token = Some(CancellationToken::new());
-        core.settle_async_generator_request(id, Ok(Value::Int(42)), true, Label::Secret).unwrap();
+        core.settle_async_generator_request(id, Ok(Value::Int(42)), true, Label::Secret)
+            .unwrap();
         let record = core.promise_store.get(request).unwrap();
         let PromiseState::Fulfilled(value) = &record.state else {
             panic!("a live token must not cancel execution");
@@ -1327,7 +1457,10 @@ mod tests {
         let Value::Object(object) = InterpreterCore::js_value_to_value(value) else {
             panic!("native iterator result object");
         };
-        assert_eq!(core.heap[object.0 as usize].properties.get("value"), Some(&Value::Int(42)));
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get("value"),
+            Some(&Value::Int(42))
+        );
         assert_eq!(record.label, Label::Secret);
         assert_accounting(&core);
     }
@@ -1343,7 +1476,9 @@ mod tests {
             exact_value: None,
         };
         let before = probe.estimated_memory_bytes();
-        probe.register_promise_then_for_await(source, Label::Public).unwrap();
+        probe
+            .register_promise_then_for_await(source, Label::Public)
+            .unwrap();
         (
             InterpreterCore::async_generator_continuation_bytes(&context),
             probe.estimated_memory_bytes() - before,
@@ -1364,14 +1499,20 @@ mod tests {
         core.config.max_total_memory_bytes = limit;
         assert!(matches!(
             core.await_async_generator_value(
-                id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Public,
+                id,
+                AwaitKind::ReturnResult,
+                Value::Promise(source.0),
+                Label::Public,
             ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_aborted(&core, id, request);
         assert_eq!(core.promise_store.len(), count, "no orphan await ticket");
         assert_eq!(core.promise_store.get(source).unwrap(), &source_before);
-        assert_eq!(serde_json::to_value(&core.event_loop.microtasks).unwrap(), queue);
+        assert_eq!(
+            serde_json::to_value(&core.event_loop.microtasks).unwrap(),
+            queue
+        );
         assert_eq!(core.config.max_total_memory_bytes, limit);
         assert!(core.estimated_memory_bytes() <= limit);
     }
@@ -1384,15 +1525,30 @@ mod tests {
         let limit = core.estimated_memory_bytes() + context_bytes + reaction_bytes;
         core.config.max_total_memory_bytes = limit;
         core.await_async_generator_value(
-            id, AwaitKind::ReturnResult, Value::Promise(source.0), Label::Public,
-        ).unwrap();
+            id,
+            AwaitKind::ReturnResult,
+            Value::Promise(source.0),
+            Label::Public,
+        )
+        .unwrap();
         assert_eq!(core.estimated_memory_bytes(), limit);
-        assert_eq!(core.async_generators[id as usize].phase, AsyncGeneratorPhase::SuspendedAwait);
-        let (&ticket, context) = core.async_generator_runtime.continuations.iter().next().unwrap();
+        assert_eq!(
+            core.async_generators[id as usize].phase,
+            AsyncGeneratorPhase::SuspendedAwait
+        );
+        let (&ticket, context) = core
+            .async_generator_runtime
+            .continuations
+            .iter()
+            .next()
+            .unwrap();
         assert_eq!(context.ticket, Some(PromiseHandle(ticket)));
         assert_eq!(context.owned_source, None);
         assert_eq!(context.generator_id, id);
-        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        assert_eq!(
+            core.promise_store.get(source).unwrap().state,
+            PromiseState::Pending
+        );
         assert_accounting(&core);
     }
 
@@ -1402,10 +1558,15 @@ mod tests {
             "async function* values() { yield 1; } const it = values();
              const input = { marker: 991, then: function(resolve) {} };",
         );
-        let object = core.heap.iter().position(|object| {
-            object.properties.get("marker") == Some(&Value::Int(991))
-        }).expect("thenable allocated by native execution");
-        assert!(matches!(core.heap[object].properties.get("then"), Some(Value::Closure(_))));
+        let object = core
+            .heap
+            .iter()
+            .position(|object| object.properties.get("marker") == Some(&Value::Int(991)))
+            .expect("thenable allocated by native execution");
+        assert!(matches!(
+            core.heap[object].properties.get("then"),
+            Some(Value::Closure(_))
+        ));
         (core, id, request, ObjectId(object as u32))
     }
 
@@ -1414,19 +1575,34 @@ mod tests {
         let (context_bytes, reaction_bytes) = await_registration_costs();
         let (mut probe, probe_id, _, object) = thenable_request_core();
         let before = probe.estimated_memory_bytes();
-        let (source, _) = probe.async_generator_thenable_source(probe_id, object, &Label::Public).unwrap();
-        assert_eq!(probe.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        let (source, _) = probe
+            .async_generator_thenable_source(probe_id, object, &Label::Public)
+            .unwrap();
+        assert_eq!(
+            probe.promise_store.get(source).unwrap().state,
+            PromiseState::Pending
+        );
         let source_bytes = probe.estimated_memory_bytes() - before;
 
         let (mut core, id, request, object) = thenable_request_core();
         let before_count = core.promise_store.len();
-        let limit = core.estimated_memory_bytes() + source_bytes + context_bytes.max(reaction_bytes);
+        let limit =
+            core.estimated_memory_bytes() + source_bytes + context_bytes.max(reaction_bytes);
         core.config.max_total_memory_bytes = limit;
         assert!(matches!(
-            core.await_async_generator_value(id, AwaitKind::ReturnResult, Value::Object(object), Label::Public),
+            core.await_async_generator_value(
+                id,
+                AwaitKind::ReturnResult,
+                Value::Object(object),
+                Label::Public
+            ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
-        assert_eq!(core.promise_store.len(), before_count + 1, "source exists, ticket was refused");
+        assert_eq!(
+            core.promise_store.len(),
+            before_count + 1,
+            "source exists, ticket was refused"
+        );
         assert!(core.promise_store.get(source).unwrap().state.is_rejected());
         assert_aborted(&core, id, request);
         assert_eq!(core.config.max_total_memory_bytes, limit);
@@ -1437,18 +1613,37 @@ mod tests {
     fn abort_retires_owned_thenable_source_as_well_as_its_ticket() {
         let (mut core, id, request, object) = thenable_request_core();
         let unrelated = core.create_promise().unwrap();
-        core.await_async_generator_value(id, AwaitKind::ReturnResult, Value::Object(object), Label::Public).unwrap();
-        let context = core.async_generator_runtime.continuations.values().next().unwrap();
+        core.await_async_generator_value(
+            id,
+            AwaitKind::ReturnResult,
+            Value::Object(object),
+            Label::Public,
+        )
+        .unwrap();
+        let context = core
+            .async_generator_runtime
+            .continuations
+            .values()
+            .next()
+            .unwrap();
         let ticket = context.ticket.unwrap();
-        let source = context.owned_source.expect("internal PromiseResolve source");
-        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        let source = context
+            .owned_source
+            .expect("internal PromiseResolve source");
+        assert_eq!(
+            core.promise_store.get(source).unwrap().state,
+            PromiseState::Pending
+        );
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
         core.abort_async_generator(id);
         assert_aborted(&core, id, request);
         for handle in [ticket, source] {
             assert!(core.promise_store.get(handle).unwrap().state.is_rejected());
         }
-        assert_eq!(core.promise_store.get(unrelated).unwrap().state, PromiseState::Pending);
+        assert_eq!(
+            core.promise_store.get(unrelated).unwrap().state,
+            PromiseState::Pending
+        );
     }
 
     #[test]
@@ -1456,12 +1651,24 @@ mod tests {
         let (mut core, id, request) = request_core(Label::Secret);
         let count = core.promise_store.len();
         let queue = serde_json::to_value(&core.event_loop.microtasks).unwrap();
-        assert!(core.await_async_generator_value(
-            id, AwaitKind::ReturnResult, Value::Promise(u32::MAX), Label::Public,
-        ).is_err());
+        assert!(
+            core.await_async_generator_value(
+                id,
+                AwaitKind::ReturnResult,
+                Value::Promise(u32::MAX),
+                Label::Public,
+            )
+            .is_err()
+        );
         assert_aborted(&core, id, request);
         assert_eq!(core.promise_store.len(), count);
-        assert_eq!(serde_json::to_value(&core.event_loop.microtasks).unwrap(), queue);
-        assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
+        assert_eq!(
+            serde_json::to_value(&core.event_loop.microtasks).unwrap(),
+            queue
+        );
+        assert_eq!(
+            core.promise_store.get(request).unwrap().label,
+            Label::Secret
+        );
     }
 }

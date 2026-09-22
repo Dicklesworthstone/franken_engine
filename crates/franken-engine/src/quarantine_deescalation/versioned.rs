@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, SchemaHash};
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, ObjectDomain,
-    ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId, VersionedIdError,
+    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId,
+    VersionedIdError, derive_versioned_id, derive_versioned_schema_id, verify_versioned_id,
 };
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    sign_object, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_object,
+    verify_signature,
 };
 
 use super::compat::{
@@ -189,10 +189,8 @@ impl ReAdmissionDecisionV2 {
         operator_key: &SigningKey,
     ) -> Result<Self, VersionedReAdmissionError> {
         validate_decision_fields(&operator_id, posterior_confidence_millionths)?;
-        let schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::Sha256V2,
-            DECISION_SCHEMA_V2,
-        )?;
+        let schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, DECISION_SCHEMA_V2)?;
         let identity_material = decision_identity_material(
             epoch,
             legacy_provenance.as_ref(),
@@ -240,10 +238,7 @@ impl ReAdmissionDecisionV2 {
                 actual: self.persistence_schema.clone(),
             });
         }
-        validate_decision_fields(
-            &self.operator_id,
-            self.posterior_confidence_millionths,
-        )?;
+        validate_decision_fields(&self.operator_id, self.posterior_confidence_millionths)?;
         require_v2_schema(
             "decision.schema_version",
             &self.schema_version,
@@ -375,10 +370,8 @@ impl ReAdmissionReceiptV2 {
             ));
         }
 
-        let schema = derive_versioned_schema_id(
-            ObjectIdDerivationVersion::Sha256V2,
-            RECEIPT_SCHEMA_V2,
-        )?;
+        let schema =
+            derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, RECEIPT_SCHEMA_V2)?;
         let material = receipt_content_material(
             epoch,
             legacy_provenance.as_ref(),
@@ -462,12 +455,7 @@ impl ReAdmissionReceiptV2 {
         if !self.decision.verify(operator_key)? {
             return Ok(false);
         }
-        Ok(verify_signature(
-            system_key,
-            &self.preimage_bytes(),
-            &self.system_signature,
-        )
-        .is_ok())
+        Ok(verify_signature(system_key, &self.preimage_bytes(), &self.system_signature).is_ok())
     }
 
     pub fn genesis_hash() -> ContentHash {
@@ -503,7 +491,10 @@ impl SignaturePreimage for ReAdmissionDecisionV2 {
             CanonicalValue::String(self.persistence_schema.clone()),
         );
         insert_schema_id(&mut map, "schema_version", &self.schema_version);
-        map.insert("epoch".to_string(), CanonicalValue::U64(self.epoch.as_u64()));
+        map.insert(
+            "epoch".to_string(),
+            CanonicalValue::U64(self.epoch.as_u64()),
+        );
         insert_object_id(&mut map, "decision_id", &self.decision_id);
         map.insert(
             "legacy_provenance_hash".to_string(),
@@ -565,7 +556,10 @@ impl SignaturePreimage for ReAdmissionReceiptV2 {
             CanonicalValue::String(self.persistence_schema.clone()),
         );
         insert_schema_id(&mut map, "schema_version", &self.schema_version);
-        map.insert("epoch".to_string(), CanonicalValue::U64(self.epoch.as_u64()));
+        map.insert(
+            "epoch".to_string(),
+            CanonicalValue::U64(self.epoch.as_u64()),
+        );
         insert_object_id(&mut map, "receipt_id", &self.receipt_id);
         insert_object_id(&mut map, "decision_id", &self.decision.decision_id);
         map.insert(
@@ -699,7 +693,9 @@ fn validate_legacy_decision_mapping(
         ));
     }
     if decision.operator_id != legacy.operator_id {
-        return Err(VersionedReAdmissionError::LegacyMappingMismatch("operator_id"));
+        return Err(VersionedReAdmissionError::LegacyMappingMismatch(
+            "operator_id",
+        ));
     }
     if decision.tee_attestation != legacy.tee_attestation {
         return Err(VersionedReAdmissionError::LegacyMappingMismatch(
@@ -742,7 +738,9 @@ fn validate_legacy_receipt_mapping(
         ));
     }
     if receipt.epoch != provenance.receipt.epoch {
-        return Err(VersionedReAdmissionError::LegacyMappingMismatch("receipt epoch"));
+        return Err(VersionedReAdmissionError::LegacyMappingMismatch(
+            "receipt epoch",
+        ));
     }
     if receipt.prev_evidence_hash != provenance.receipt.prev_evidence_hash {
         return Err(VersionedReAdmissionError::LegacyMappingMismatch(
@@ -864,12 +862,11 @@ fn append_metadata(
     bytes: &mut Vec<u8>,
     metadata: &BTreeMap<String, String>,
 ) -> Result<(), VersionedReAdmissionError> {
-    let count = u32::try_from(metadata.len()).map_err(|_| {
-        VersionedReAdmissionError::LengthOverflow {
+    let count =
+        u32::try_from(metadata.len()).map_err(|_| VersionedReAdmissionError::LengthOverflow {
             field: "metadata".to_string(),
             length: metadata.len(),
-        }
-    })?;
+        })?;
     bytes.extend_from_slice(&count.to_be_bytes());
     for (key, value) in metadata {
         append_length_prefixed(bytes, "metadata_key", key.as_bytes())?;
@@ -883,12 +880,11 @@ fn append_length_prefixed(
     field: &'static str,
     value: &[u8],
 ) -> Result<(), VersionedReAdmissionError> {
-    let length = u32::try_from(value.len()).map_err(|_| {
-        VersionedReAdmissionError::LengthOverflow {
+    let length =
+        u32::try_from(value.len()).map_err(|_| VersionedReAdmissionError::LengthOverflow {
             field: field.to_string(),
             length: value.len(),
-        }
-    })?;
+        })?;
     bytes.extend_from_slice(&length.to_be_bytes());
     bytes.extend_from_slice(value);
     Ok(())
@@ -949,9 +945,9 @@ pub enum VersionedReAdmissionError {
 impl std::fmt::Display for VersionedReAdmissionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidInput(detail) | Self::LegacyVerification(detail) | Self::Signing(detail) => {
-                formatter.write_str(detail)
-            }
+            Self::InvalidInput(detail)
+            | Self::LegacyVerification(detail)
+            | Self::Signing(detail) => formatter.write_str(detail),
             Self::UnsupportedSchema { actual } => {
                 write!(formatter, "unsupported persistence schema {actual:?}")
             }
@@ -990,7 +986,7 @@ impl From<VersionedIdError> for VersionedReAdmissionError {
 mod tests {
     use super::*;
     use crate::engine_object_id::{
-        derive_versioned_id, derive_versioned_schema_id, EngineObjectId, VersionedEngineObjectId,
+        EngineObjectId, VersionedEngineObjectId, derive_versioned_id, derive_versioned_schema_id,
     };
     use crate::signature_preimage::generate_keypair;
 
@@ -1046,7 +1042,11 @@ mod tests {
         let (operator_key, operator_verification_key) = generate_keypair();
         let (system_key, system_verification_key) = generate_keypair();
         let decision = fresh_decision(&operator_key);
-        assert!(decision.verify(&operator_verification_key).expect("decision verify"));
+        assert!(
+            decision
+                .verify(&operator_verification_key)
+                .expect("decision verify")
+        );
         assert_eq!(
             decision.decision_id.derivation_version,
             ObjectIdDerivationVersion::Sha256V2
@@ -1073,7 +1073,10 @@ mod tests {
         let (operator_key, _) = generate_keypair();
         let decision = fresh_decision(&operator_key);
         let value = serde_json::to_value(&decision).expect("serialize v2 decision");
-        assert_eq!(value["persistence_schema"], READMISSION_DECISION_PERSISTENCE_SCHEMA_V2);
+        assert_eq!(
+            value["persistence_schema"],
+            READMISSION_DECISION_PERSISTENCE_SCHEMA_V2
+        );
         assert_eq!(value["schema_version"]["derivation_version"], "sha256_v2");
         assert_eq!(value["decision_id"]["derivation_version"], "sha256_v2");
         let decoded: ReAdmissionDecisionV2 =
@@ -1230,7 +1233,9 @@ mod tests {
         migrated.operator_id = "different-operator".to_string();
         assert!(matches!(
             migrated.validate_identity(),
-            Err(VersionedReAdmissionError::LegacyMappingMismatch("operator_id"))
+            Err(VersionedReAdmissionError::LegacyMappingMismatch(
+                "operator_id"
+            ))
         ));
     }
 

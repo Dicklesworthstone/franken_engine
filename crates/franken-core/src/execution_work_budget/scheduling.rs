@@ -91,8 +91,9 @@ impl ExecutionAdmission {
             return Err(WorkBudgetError::ZeroInstructionBudget);
         }
         super::revocation::bind_cancellation(&self.scope, &mut current_config);
-        current_config.instruction_budget =
-            current_config.instruction_budget.min(self.instruction_limit);
+        current_config.instruction_budget = current_config
+            .instruction_budget
+            .min(self.instruction_limit);
         let mut core = InterpreterCore::new(current_config, trace_id);
         if let Some(hook) = current_hook {
             core.set_hook(hook);
@@ -253,7 +254,9 @@ mod tests {
         revoked.granted_capabilities.clear();
         assert!(matches!(
             job.execute(&source, revoked, "revoked"),
-            Err(WorkBudgetError::Interpreter(InterpreterError::CapabilityDenied { .. }))
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::CapabilityDenied { .. }
+            ))
         ));
         assert_eq!(pool.remaining(), 0);
     }

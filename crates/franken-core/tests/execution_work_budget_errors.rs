@@ -19,7 +19,10 @@ fn interpreter_cause_remains_downcastable_in_standard_error_chain() {
 fn admission_failures_do_not_fabricate_interpreter_causes() {
     for error in [
         WorkBudgetError::ZeroInstructionBudget,
-        WorkBudgetError::Exhausted { requested: 128, remaining: 0 },
+        WorkBudgetError::Exhausted {
+            requested: 128,
+            remaining: 0,
+        },
         WorkBudgetError::Interrupted,
     ] {
         assert!(std::error::Error::source(&error).is_none());

@@ -4,8 +4,8 @@
 //! signature, grant, revocation or transcript-scope checks. Unpublished state
 //! belongs to one future, never to an externally accessible partial instance.
 
-use super::*;
 use super::super::super::activation::{Machine, Slice};
+use super::*;
 use std::borrow::Cow;
 use std::future::Future;
 use std::num::NonZeroU64;
@@ -34,7 +34,10 @@ impl WasmNumericVm {
         &self,
         work: NonZeroU64,
     ) -> impl Future<Output = Result<WasmNumericInstance<'_>, WasmNumericVmError>>
-           + Send + Sync + Unpin + '_ {
+    + Send
+    + Sync
+    + Unpin
+    + '_ {
         Startup::new(self, None, work)
     }
 
@@ -53,7 +56,10 @@ impl WasmNumericVm {
         imports: WasmHostImports,
         work: NonZeroU64,
     ) -> impl Future<Output = Result<WasmNumericInstance<'_>, WasmNumericVmError>>
-           + Send + Sync + Unpin + '_ {
+    + Send
+    + Sync
+    + Unpin
+    + '_ {
         Startup::new(self, Some(imports), work)
     }
 
@@ -63,9 +69,12 @@ impl WasmNumericVm {
     pub(crate) fn cooperative_startup_driver<'vm>(
         &'vm self,
         imports: Option<WasmHostImports>,
-    ) -> impl FnMut(NonZeroU64) -> Result<
-        (u64, Option<WasmNumericInstance<'vm>>), WasmNumericVmError,
-    > + Send + Sync + 'vm {
+    ) -> impl FnMut(
+        NonZeroU64,
+    ) -> Result<(u64, Option<WasmNumericInstance<'vm>>), WasmNumericVmError>
+    + Send
+    + Sync
+    + 'vm {
         let mut startup = Startup::new(self, imports, NonZeroU64::MIN);
         move |work| {
             startup.work = work;
@@ -88,9 +97,16 @@ struct Startup<'vm> {
 impl<'vm> Startup<'vm> {
     fn new(vm: &'vm WasmNumericVm, imports: Option<WasmHostImports>, work: NonZeroU64) -> Self {
         Self {
-            vm, imports, instance: None,
-            machine: vm.state.start.map(|function| Machine::new(function, Cow::Borrowed(&[]), 1)),
-            meter: ExecutionMeter::new(&vm.limits), work, finished: false,
+            vm,
+            imports,
+            instance: None,
+            machine: vm
+                .state
+                .start
+                .map(|function| Machine::new(function, Cow::Borrowed(&[]), 1)),
+            meter: ExecutionMeter::new(&vm.limits),
+            work,
+            finished: false,
         }
     }
 
@@ -104,18 +120,27 @@ impl<'vm> Startup<'vm> {
             state.host_imports = self.imports.take();
             state.check_execution_cancellation()?;
             self.instance = Some(WasmNumericInstance {
-                vm: self.vm, state, start_execution: None,
+                vm: self.vm,
+                state,
+                start_execution: None,
             });
         }
         let instance = self.instance.as_mut().expect("prepared startup state");
         instance.state.check_execution_cancellation()?;
-        let Some(machine) = self.machine.as_mut() else { return Ok(true); };
-        let slice = Slice { start: self.meter.instructions, work: self.work };
+        let Some(machine) = self.machine.as_mut() else {
+            return Ok(true);
+        };
+        let slice = Slice {
+            start: self.meter.instructions,
+            work: self.work,
+        };
         let outcome = machine.run(self.vm, &mut self.meter, &mut instance.state, Some(slice))?;
         // Preserve the first execution failure; only successful execution or
         // suspension reaches this final cancellation check, as on sync calls.
         instance.state.check_execution_cancellation()?;
-        let Some(results) = outcome else { return Ok(false); };
+        let Some(results) = outcome else {
+            return Ok(false);
+        };
         instance.start_execution = Some(WasmNumericExecution {
             results,
             instructions_executed: self.meter.instructions,
@@ -128,7 +153,10 @@ impl<'vm> Startup<'vm> {
 
 impl<'vm> Startup<'vm> {
     fn advance(&mut self) -> Result<Option<WasmNumericInstance<'vm>>, WasmNumericVmError> {
-        assert!(!self.finished, "startup future polled after completion or panic");
+        assert!(
+            !self.finished,
+            "startup future polled after completion or panic"
+        );
         // Pessimistic terminal state prevents reentry after a provider panic.
         self.finished = true;
         match self.run_slice() {
@@ -187,8 +215,8 @@ impl WasmNumericVm {
     pub(crate) fn cooperative_command_driver(
         &self,
         imports: WasmHostImports,
-    ) -> impl FnMut(NonZeroU64) -> Result<(u64, Option<u32>), WasmNumericVmError>
-           + Send + Sync + '_ {
+    ) -> impl FnMut(NonZeroU64) -> Result<(u64, Option<u32>), WasmNumericVmError> + Send + Sync + '_
+    {
         let mut command = Command {
             startup: Startup::new(self, Some(imports), NonZeroU64::MIN),
             entry: None,
@@ -207,11 +235,16 @@ impl Command<'_> {
         let vm = self.startup.vm;
         if let Some(kind) = vm.state.export_kind("_start") {
             return Err(WasmNumericVmError::ExportIsNotFunction {
-                name: "_start".into(), kind,
+                name: "_start".into(),
+                kind,
             });
         }
-        let function = vm.exports.get("_start")
-            .ok_or_else(|| WasmNumericVmError::UnknownExport { name: "_start".into() })?
+        let function = vm
+            .exports
+            .get("_start")
+            .ok_or_else(|| WasmNumericVmError::UnknownExport {
+                name: "_start".into(),
+            })?
             .function_index;
         let signature = vm.function_signature(function)?;
         if !signature.params.is_empty() || !signature.results.is_empty() {
@@ -234,7 +267,9 @@ impl Command<'_> {
             if self.startup.run_slice()? {
                 self.running_entry = true;
                 self.startup.machine = Some(Machine::new(
-                    self.entry.expect("validated command entry"), Cow::Borrowed(&[]), 1,
+                    self.entry.expect("validated command entry"),
+                    Cow::Borrowed(&[]),
+                    1,
                 ));
             }
             // Even an absent/empty binary start yields here. A later resume
@@ -242,11 +277,25 @@ impl Command<'_> {
             return Ok(None);
         }
         let startup = &mut self.startup;
-        let instance = startup.instance.as_mut().expect("initialized private command");
+        let instance = startup
+            .instance
+            .as_mut()
+            .expect("initialized private command");
         instance.state.check_execution_cancellation()?;
-        let slice = Slice { start: startup.meter.instructions, work };
-        let results = startup.machine.as_mut().expect("command entry machine")
-            .run(startup.vm, &mut startup.meter, &mut instance.state, Some(slice))?;
+        let slice = Slice {
+            start: startup.meter.instructions,
+            work,
+        };
+        let results = startup
+            .machine
+            .as_mut()
+            .expect("command entry machine")
+            .run(
+                startup.vm,
+                &mut startup.meter,
+                &mut instance.state,
+                Some(slice),
+            )?;
         // Preserve execution failures over later controls. ProcessExit remains
         // terminal through the existing host gate, including replayed exits.
         instance.state.check_execution_cancellation()?;
@@ -257,9 +306,9 @@ impl Command<'_> {
         assert!(!self.finished, "command resumed after completion or panic");
         self.finished = true;
         let outcome = match self.run_slice(work) {
-            Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code }))) => {
-                Ok(Some(code))
-            }
+            Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit {
+                code,
+            }))) => Ok(Some(code)),
             other => other,
         };
         if matches!(&outcome, Ok(None)) {

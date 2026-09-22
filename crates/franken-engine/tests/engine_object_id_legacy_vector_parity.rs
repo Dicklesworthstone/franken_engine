@@ -7,13 +7,8 @@ fn current_legacy_runtime_matches_migration_vector() {
     let definition = br#"{"type":"Policy"}"#;
     let canonical = br#"{"allow":true}"#;
     let schema_id = SchemaId::from_definition(definition);
-    let object_id = derive_id(
-        ObjectDomain::PolicyObject,
-        "zone-a",
-        &schema_id,
-        canonical,
-    )
-    .expect("legacy derivation should accept non-empty canonical bytes");
+    let object_id = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema_id, canonical)
+        .expect("legacy derivation should accept non-empty canonical bytes");
 
     assert_eq!(
         schema_id.to_string(),
@@ -28,13 +23,5 @@ fn current_legacy_runtime_matches_migration_vector() {
 #[test]
 fn current_legacy_runtime_still_rejects_empty_canonical_bytes() {
     let schema_id = SchemaId::from_definition(b"schema");
-    assert!(
-        derive_id(
-            ObjectDomain::EvidenceRecord,
-            "zone",
-            &schema_id,
-            b"",
-        )
-        .is_err()
-    );
+    assert!(derive_id(ObjectDomain::EvidenceRecord, "zone", &schema_id, b"",).is_err());
 }

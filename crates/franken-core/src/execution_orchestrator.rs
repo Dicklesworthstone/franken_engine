@@ -1810,7 +1810,8 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the internal enforcement capabilities required by the lowered module.
-        let routed = self.lane_router_for_execution(package, ir3)?
+        let routed = self
+            .lane_router_for_execution(package, ir3)?
             .execute_with_hook(
                 ir3,
                 trace_id,
@@ -3525,18 +3526,19 @@ mod tests {
             .unwrap()
             .ir3;
             let _admission = tenant.reserve(100_000).unwrap();
-            let mut router = orchestrator.lane_router_for_execution(&package, &ir3).unwrap();
+            let mut router = orchestrator
+                .lane_router_for_execution(&package, &ir3)
+                .unwrap();
             let hook = Arc::new(RevokeOnAllocation {
                 root,
                 calls: AtomicUsize::new(0),
             });
-            let result = router.execute_with_hook(
-                &ir3,
-                "live-revocation",
-                Some(lane),
-                Some(hook.clone()),
+            let result =
+                router.execute_with_hook(&ir3, "live-revocation", Some(lane), Some(hook.clone()));
+            assert!(
+                matches!(result, Err(InterpreterError::Cancelled)),
+                "{result:?}"
             );
-            assert!(matches!(result, Err(InterpreterError::Cancelled)), "{result:?}");
             assert!(hook.calls.load(Ordering::Relaxed) > 0);
             assert_eq!(tenant.remaining(), 100_000);
         }

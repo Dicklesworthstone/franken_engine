@@ -62,16 +62,41 @@ pub struct RegisteredModuleGraph {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModuleGraphError {
-    ModuleLimitExceeded { actual: usize, max: usize },
-    EdgeLimitExceeded { actual: usize, max: usize },
+    ModuleLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
+    EdgeLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
     EmptySpecifier,
-    SpecifierTooLong { specifier: String, actual: usize, max: usize },
-    DuplicateModule { specifier: String },
-    DuplicateDependency { module: String, dependency: String },
-    UnknownDependency { module: String, dependency: String },
-    SelfDependency { module: String },
-    Cycle { modules: Vec<String> },
-    Scheduler { module: String, detail: String },
+    SpecifierTooLong {
+        specifier: String,
+        actual: usize,
+        max: usize,
+    },
+    DuplicateModule {
+        specifier: String,
+    },
+    DuplicateDependency {
+        module: String,
+        dependency: String,
+    },
+    UnknownDependency {
+        module: String,
+        dependency: String,
+    },
+    SelfDependency {
+        module: String,
+    },
+    Cycle {
+        modules: Vec<String>,
+    },
+    Scheduler {
+        module: String,
+        detail: String,
+    },
 }
 
 impl fmt::Display for ModuleGraphError {
@@ -81,7 +106,10 @@ impl fmt::Display for ModuleGraphError {
                 write!(f, "module graph has {actual} modules; limit is {max}")
             }
             Self::EdgeLimitExceeded { actual, max } => {
-                write!(f, "module graph has {actual} dependency edges; limit is {max}")
+                write!(
+                    f,
+                    "module graph has {actual} dependency edges; limit is {max}"
+                )
             }
             Self::EmptySpecifier => f.write_str("module graph contains an empty specifier"),
             Self::SpecifierTooLong {
@@ -247,7 +275,11 @@ pub fn register_module_graph(
             let node = by_name
                 .get(specifier.as_str())
                 .expect("plan only contains validated module names");
-            (node.specifier.as_str(), node.has_top_level_await, node.dependencies.as_slice())
+            (
+                node.specifier.as_str(),
+                node.has_top_level_await,
+                node.dependencies.as_slice(),
+            )
         }))
         .map_err(|error| ModuleGraphError::Scheduler {
             module: "<graph>".to_string(),
@@ -265,10 +297,12 @@ pub fn register_module_graph(
                 node.has_top_level_await,
                 &node.dependencies,
             )
-            .map_err(|error: AsyncModuleSchedulerError| ModuleGraphError::Scheduler {
-                module: node.specifier.clone(),
-                detail: error.to_string(),
-            })?;
+            .map_err(
+                |error: AsyncModuleSchedulerError| ModuleGraphError::Scheduler {
+                    module: node.specifier.clone(),
+                    detail: error.to_string(),
+                },
+            )?;
         if let Some(promise) = promise {
             evaluation_promises.insert(node.specifier.clone(), promise);
         }
@@ -319,12 +353,8 @@ mod tests {
     fn missing_dependency_fails_before_scheduler_mutation() {
         let nodes = vec![node("app.mjs", &["missing.mjs"])];
         let mut scheduler = AsyncModuleScheduler::default();
-        let error = register_module_graph(
-            &mut scheduler,
-            &nodes,
-            &ModuleGraphLimits::default(),
-        )
-        .unwrap_err();
+        let error = register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default())
+            .unwrap_err();
         assert!(matches!(error, ModuleGraphError::UnknownDependency { .. }));
         assert_eq!(scheduler.snapshot().registered_modules, 0);
     }
@@ -333,19 +363,18 @@ mod tests {
     fn cycle_fails_before_scheduler_mutation() {
         let nodes = vec![node("a.mjs", &["b.mjs"]), node("b.mjs", &["a.mjs"])];
         let mut scheduler = AsyncModuleScheduler::default();
-        let error = register_module_graph(
-            &mut scheduler,
-            &nodes,
-            &ModuleGraphLimits::default(),
-        )
-        .unwrap_err();
+        let error = register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default())
+            .unwrap_err();
         assert!(matches!(error, ModuleGraphError::Cycle { .. }));
         assert_eq!(scheduler.snapshot().registered_modules, 0);
     }
 
     #[test]
     fn duplicate_dependency_is_rejected() {
-        let nodes = vec![node("dep.mjs", &[]), node("app.mjs", &["dep.mjs", "dep.mjs"])];
+        let nodes = vec![
+            node("dep.mjs", &[]),
+            node("app.mjs", &["dep.mjs", "dep.mjs"]),
+        ];
         assert!(matches!(
             plan_module_graph(&nodes, &ModuleGraphLimits::default()).unwrap_err(),
             ModuleGraphError::DuplicateDependency { .. }
@@ -353,7 +382,10 @@ mod tests {
     }
 
     fn async_node(name: &str, deps: &[&str]) -> ModuleGraphNode {
-        ModuleGraphNode { has_top_level_await: true, ..node(name, deps) }
+        ModuleGraphNode {
+            has_top_level_await: true,
+            ..node(name, deps)
+        }
     }
 
     fn scheduler_state(scheduler: &AsyncModuleScheduler) -> serde_json::Value {
@@ -378,8 +410,9 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ModuleGraphError::Scheduler { .. }));
         assert_eq!(scheduler_state(&scheduler), before);
-        let accepted = register_module_graph(&mut scheduler, &nodes[..1], &ModuleGraphLimits::default())
-            .unwrap();
+        let accepted =
+            register_module_graph(&mut scheduler, &nodes[..1], &ModuleGraphLimits::default())
+                .unwrap();
         assert_eq!(accepted.evaluation_promises["a"], PromiseHandle(0));
         assert_eq!(scheduler.next_task().unwrap().unwrap().sequence, 0);
     }
@@ -392,7 +425,9 @@ mod tests {
         });
         let nodes = [async_node("a", &[]), async_node("b", &[])];
         let before = scheduler_state(&scheduler);
-        assert!(register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).is_err());
+        assert!(
+            register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).is_err()
+        );
         assert_eq!(scheduler_state(&scheduler), before);
         assert_eq!(scheduler.create_pending_promise(), PromiseHandle(0));
         assert!(scheduler.next_task().unwrap().is_none());
@@ -402,11 +437,20 @@ mod tests {
     fn collision_with_a_late_node_preserves_the_existing_runtime() {
         let mut scheduler = AsyncModuleScheduler::default();
         scheduler.register_module("z", true, &[]).unwrap();
-        let nodes = [async_node("a", &[]), async_node("b", &[]), async_node("z", &[])];
+        let nodes = [
+            async_node("a", &[]),
+            async_node("b", &[]),
+            async_node("z", &[]),
+        ];
         let before = scheduler_state(&scheduler);
-        assert!(register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).is_err());
+        assert!(
+            register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).is_err()
+        );
         assert_eq!(scheduler_state(&scheduler), before);
-        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "z");
+        assert_eq!(
+            scheduler.next_task().unwrap().unwrap().module_specifier,
+            "z"
+        );
         assert!(scheduler.next_task().unwrap().is_none());
     }
 
@@ -421,11 +465,17 @@ mod tests {
         scheduler.register_module("occupied", false, &[]).unwrap();
         let nodes = [async_node("a", &[]), async_node("b", &[])];
         let before = scheduler_state(&scheduler);
-        assert!(register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).is_err());
+        assert!(
+            register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).is_err()
+        );
         assert_eq!(scheduler_state(&scheduler), before);
         assert_eq!(scheduler.in_flight_task("active"), Some(&active));
-        assert_eq!(scheduler.next_task().unwrap().unwrap().module_specifier, "occupied");
-        let graph = register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).unwrap();
+        assert_eq!(
+            scheduler.next_task().unwrap().unwrap().module_specifier,
+            "occupied"
+        );
+        let graph =
+            register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).unwrap();
         assert_eq!(graph.evaluation_promises["a"], PromiseHandle(1));
         assert_eq!(graph.evaluation_promises["b"], PromiseHandle(2));
         assert_eq!(scheduler.in_flight_task("active"), Some(&active));
@@ -447,7 +497,8 @@ mod tests {
             node("middle", &["dep"]),
             async_node("dep", &[]),
         ];
-        let graph = register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).unwrap();
+        let graph =
+            register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).unwrap();
         assert_eq!(graph.plan.registration_order, vec!["dep", "middle", "app"]);
         assert_eq!(scheduler.snapshot().registered_modules, 3);
         assert_eq!(scheduler.snapshot().ready_tasks, 1);
@@ -455,7 +506,9 @@ mod tests {
             let task = scheduler.next_task().unwrap().unwrap();
             assert_eq!(task.module_specifier, expected);
             assert!(scheduler.next_task().unwrap().is_none());
-            scheduler.complete_task(&task, JsValue::Undefined, Label::Public).unwrap();
+            scheduler
+                .complete_task(&task, JsValue::Undefined, Label::Public)
+                .unwrap();
         }
         assert_eq!(scheduler.snapshot().ready_tasks, 0);
         assert_eq!(scheduler.snapshot().in_flight_tasks, 0);
@@ -485,8 +538,13 @@ mod tests {
                 // not the new whole-graph admission prediction.
                 let mut reference = AsyncModuleScheduler::default();
                 for specifier in &plan.registration_order {
-                    let entry = nodes.iter().find(|entry| &entry.specifier == specifier).unwrap();
-                    reference.register_module(specifier, entry.has_top_level_await, &entry.dependencies).unwrap();
+                    let entry = nodes
+                        .iter()
+                        .find(|entry| &entry.specifier == specifier)
+                        .unwrap();
+                    reference
+                        .register_module(specifier, entry.has_top_level_await, &entry.dependencies)
+                        .unwrap();
                 }
                 let needed = reference.snapshot().ready_tasks;
                 assert!(needed > 0);

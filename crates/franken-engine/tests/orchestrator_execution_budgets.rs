@@ -124,7 +124,9 @@ fn operator_can_grant_more_than_the_default_instruction_allowance() {
     let default_budget = runtime.execution.deterministic_budget;
     runtime.execution.deterministic_budget = 2_000_000;
     let result = orchestrator(LaneChoice::QuickJs, runtime)
-        .execute(&package("let count = 0; while (count < 20000) { count = count + 1; } count;"))
+        .execute(&package(
+            "let count = 0; while (count < 20000) { count = count + 1; } count;",
+        ))
         .expect("configured allowance must not silently revert to profile defaults");
     assert!(result.instructions_executed > default_budget);
     assert!(result.instructions_executed <= 2_000_000);
@@ -170,7 +172,9 @@ fn configured_budget_is_bound_into_the_cell_authority_transcript() {
             .cell_execution_transcript
             .as_ref()
             .expect("successful native execution retains its authority transcript");
-        transcript.verify().expect("configured authority must replay");
+        transcript
+            .verify()
+            .expect("configured authority must replay");
         assert_eq!(transcript.authority.instruction_budget, budget);
         assert!(result.instructions_executed <= budget);
     }
@@ -217,7 +221,11 @@ fn ordinary_execute_cannot_reset_the_shared_allowance() {
     for remaining in [128, 0] {
         let result = orchestrator.execute(&package("42;")).unwrap();
         assert!(result.instructions_executed > 0 && result.instructions_executed < 128);
-        assert_eq!(pool.remaining(), remaining, "early completion is not a refund");
+        assert_eq!(
+            pool.remaining(),
+            remaining,
+            "early completion is not a refund"
+        );
     }
     let error = orchestrator.execute(&package("42;")).unwrap_err();
     assert_shared_denial(&error, 128, 0);
@@ -240,11 +248,9 @@ fn cloned_orchestrator_configuration_shares_instead_of_minting_work() {
     };
     let mut runtime = RuntimeConfig::default();
     runtime.execution.deterministic_budget = 128;
-    let mut first = ExecutionOrchestrator::try_new_lab_with_runtime_config(
-        config.clone(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let mut first =
+        ExecutionOrchestrator::try_new_lab_with_runtime_config(config.clone(), runtime.clone())
+            .unwrap();
     let mut second =
         ExecutionOrchestrator::try_new_lab_with_runtime_config(config, runtime).unwrap();
     first.execute(&package("42;")).unwrap();
@@ -287,7 +293,10 @@ fn validation_and_parsing_do_not_spend_native_instruction_reservations() {
     let mut orchestrator = shared_orchestrator(&pool, Some(LaneChoice::QuickJs));
     for source in ["", "let = ;"] {
         let error = orchestrator.execute(&package(source)).unwrap_err();
-        assert!(!matches!(error.primary_error(), OrchestratorError::WorkBudget(_)));
+        assert!(!matches!(
+            error.primary_error(),
+            OrchestratorError::WorkBudget(_)
+        ));
         assert_eq!(pool.remaining(), 128);
     }
     orchestrator.execute(&package("42;")).unwrap();
@@ -447,7 +456,10 @@ fn shared_denial_prevents_real_filesystem_effects_and_preserves_recorder_history
         .map(str::to_string)
         .collect();
     let result = orchestrator.execute(&admitted).unwrap();
-    assert_eq!(std::fs::read(root.path().join("allowed.txt")).unwrap(), b"real effect bytes");
+    assert_eq!(
+        std::fs::read(root.path().join("allowed.txt")).unwrap(),
+        b"real effect bytes"
+    );
     assert!(!result.host_effect_transcript.is_empty());
     let previous_entries = recorder.entries();
     assert!(!previous_entries.is_empty());
@@ -714,8 +726,8 @@ fn one_revocation_blocks_both_core_and_engine_public_entrypoints() {
 #[test]
 fn live_scope_revocation_stops_native_work_and_further_real_effects() {
     use frankenengine_extension_host::host_io::{
-        HostIoCapability, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
-        HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+        HostIoCapability, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider, HostIoRecorder,
+        HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
     };
     use runtime::checkpoint::CancellationToken;
     use runtime::execution_cell::{CellError, CellExecutionError};
@@ -810,10 +822,21 @@ fn live_scope_revocation_stops_native_work_and_further_real_effects() {
             assert!(!directory.path().join("denied.txt").exists());
             assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
             let entries = recorder.entries();
-            assert!(matches!(&entries[0].0, HostIoRequest::FsWrite { path, .. } if path == "allowed.txt"));
-            assert!(entries[0].1.is_ok(), "revocation cannot undo the completed effect");
-            assert_eq!(orchestrator.last_failed_host_effect_journal().len(), entries.len());
-            assert_eq!(orchestrator.last_failed_host_effect_journal_records().len(), entries.len());
+            assert!(
+                matches!(&entries[0].0, HostIoRequest::FsWrite { path, .. } if path == "allowed.txt")
+            );
+            assert!(
+                entries[0].1.is_ok(),
+                "revocation cannot undo the completed effect"
+            );
+            assert_eq!(
+                orchestrator.last_failed_host_effect_journal().len(),
+                entries.len()
+            );
+            assert_eq!(
+                orchestrator.last_failed_host_effect_journal_records().len(),
+                entries.len()
+            );
             assert!(orchestrator.last_failed_trace_id().is_some());
             assert_eq!(orchestrator.execution_count(), 0);
             assert_eq!(tenant.remaining(), 4096);
@@ -895,7 +918,11 @@ mod live_scope_revocation {
                 let sibling = parent.partition(4096).unwrap();
                 let provider = Arc::new(RevokeAfterRealIo {
                     inner: SandboxedHostIo::with_root(root.path()).unwrap(),
-                    revoke: if revoke_ancestor { parent.clone() } else { tenant.clone() },
+                    revoke: if revoke_ancestor {
+                        parent.clone()
+                    } else {
+                        tenant.clone()
+                    },
                     calls: AtomicUsize::new(0),
                 });
                 let recorder = Arc::new(InMemoryHostIoTranscript::recording());
@@ -935,17 +962,26 @@ mod live_scope_revocation {
                 );
                 assert_eq!(orchestrator.execution_count(), 0);
                 assert_eq!(tenant.remaining(), 4096, "interruption is not a refund");
-                assert!(!supervisor.is_cancelled(), "scope must not cancel its caller");
+                assert!(
+                    !supervisor.is_cancelled(),
+                    "scope must not cancel its caller"
+                );
                 supervisor.reset();
                 assert_scope_revoked(&orchestrator.execute(&package("42;")).unwrap_err());
-                assert_eq!(recorder.entries(), history, "retry denial must preserve evidence");
+                assert_eq!(
+                    recorder.entries(),
+                    history,
+                    "retry denial must preserve evidence"
+                );
                 assert_eq!(sibling.remaining(), 4096);
                 if !revoke_ancestor {
                     configured(&sibling, lane).execute(&package("42;")).unwrap();
                     assert_eq!(sibling.remaining(), 0);
                 } else {
                     assert_scope_revoked(
-                        &configured(&sibling, lane).execute(&package("42;")).unwrap_err(),
+                        &configured(&sibling, lane)
+                            .execute(&package("42;"))
+                            .unwrap_err(),
                     );
                 }
             }
@@ -1037,17 +1073,18 @@ mod live_scope_revocation {
                 Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
                 Some(recorder.clone()),
             );
-            let work = filesystem_package(
-                "require('fs').writeFileSync('forbidden.txt', 'not admitted');",
-            );
+            let work =
+                filesystem_package("require('fs').writeFileSync('forbidden.txt', 'not admitted');");
             let error = orchestrator.execute(&work).unwrap_err();
             assert!(
                 matches!(
                     error.primary_error(),
-                    OrchestratorError::Cell(runtime::execution_cell::CellError::ExecutionBoundary {
-                        error: runtime::execution_cell::CellExecutionError::Cancelled,
-                        ..
-                    })
+                    OrchestratorError::Cell(
+                        runtime::execution_cell::CellError::ExecutionBoundary {
+                            error: runtime::execution_cell::CellExecutionError::Cancelled,
+                            ..
+                        }
+                    )
                 ),
                 "{lane:?}: {error:?}"
             );

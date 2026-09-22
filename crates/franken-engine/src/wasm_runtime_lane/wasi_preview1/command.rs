@@ -5,8 +5,8 @@
 //! that state. External/captured host effects already completed are not undone.
 
 use super::super::numeric::{
-    WasmHostError, WasmHostImports, WasmNumericExecution, WasmNumericVm,
-    WasmNumericVmError, WasmStateError,
+    WasmHostError, WasmHostImports, WasmNumericExecution, WasmNumericVm, WasmNumericVmError,
+    WasmStateError,
 };
 
 /// The point at which an explicit guest exit ended the command.

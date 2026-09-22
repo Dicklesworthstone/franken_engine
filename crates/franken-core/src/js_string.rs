@@ -1361,7 +1361,10 @@ mod tests {
         assert_eq!(string.utf16_last_index_of(&needle, usize::MAX), Some(2));
         assert_eq!(string.utf16_last_index_of(&needle, 1), Some(1));
         assert_eq!(string.utf16_last_index_of(&needle, 0), Some(0));
-        assert_eq!(string.utf16_index_of(&JsString::empty(), usize::MAX), Some(5));
+        assert_eq!(
+            string.utf16_index_of(&JsString::empty(), usize::MAX),
+            Some(5)
+        );
         assert_eq!(
             string.utf16_last_index_of(&JsString::empty(), usize::MAX),
             Some(5)
@@ -1409,15 +1412,11 @@ mod tests {
         let haystack = vec![0x61; 16_384];
         let needle = vec![0x61; 4_096];
         let mut comparisons = 0_usize;
-        let found = search_utf16_units_with_eq(
-            haystack.iter().copied(),
-            &needle,
-            true,
-            |left, right| {
+        let found =
+            search_utf16_units_with_eq(haystack.iter().copied(), &needle, true, |left, right| {
                 comparisons += 1;
                 left == right
-            },
-        );
+            });
         assert_eq!(found, Some(haystack.len() - needle.len()));
         assert!(comparisons <= 4 * (haystack.len() + needle.len()));
     }

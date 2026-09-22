@@ -582,8 +582,8 @@ impl FlowEnvelope {
         let envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
         let mut advisories = Vec::new();
         let mut declassification_obligation = None;
-        let requires_sealed_sink_declassification =
-            *sink_clearance == ClearanceClass::SealedSink && source.level() >= Label::Secret.level();
+        let requires_sealed_sink_declassification = *sink_clearance == ClearanceClass::SealedSink
+            && source.level() >= Label::Secret.level();
 
         if flow_in_scope && requires_sealed_sink_declassification {
             declassification_obligation =

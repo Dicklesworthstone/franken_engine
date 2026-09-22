@@ -68,7 +68,9 @@ fn revocation_after_admission_interrupts_ordinary_native_dispatch() {
                 config,
             )
             .unwrap();
-            let error = orchestrator.execute(&package("while (true) {}")).unwrap_err();
+            let error = orchestrator
+                .execute(&package("while (true) {}"))
+                .unwrap_err();
             assert!(
                 matches!(
                     error.primary_error(),
@@ -86,7 +88,10 @@ fn revocation_after_admission_interrupts_ordinary_native_dispatch() {
         let deadline = Instant::now() + Duration::from_secs(30);
         while tenant.committed() == 0 {
             assert!(!worker.is_finished(), "worker stopped before admission");
-            assert!(Instant::now() < deadline, "worker never reserved its budget");
+            assert!(
+                Instant::now() < deadline,
+                "worker never reserved its budget"
+            );
             std::thread::yield_now();
         }
         root.revoke();
@@ -182,7 +187,9 @@ fn operator_can_grant_more_than_the_default_instruction_allowance() {
     let default_budget = runtime.execution.deterministic_budget;
     runtime.execution.deterministic_budget = 2_000_000;
     let result = orchestrator(LaneChoice::QuickJs, runtime)
-        .execute(&package("let count = 0; while (count < 20000) { count = count + 1; } count;"))
+        .execute(&package(
+            "let count = 0; while (count < 20000) { count = count + 1; } count;",
+        ))
         .expect("configured allowance must not silently revert to profile defaults");
     assert!(result.instructions_executed > default_budget);
     assert!(result.instructions_executed <= 2_000_000);
@@ -256,7 +263,11 @@ fn ordinary_execute_cannot_reset_the_shared_allowance() {
     for remaining in [128, 0] {
         let result = orchestrator.execute(&package("42;")).unwrap();
         assert!(result.instructions_executed > 0 && result.instructions_executed < 128);
-        assert_eq!(pool.remaining(), remaining, "early completion is not a refund");
+        assert_eq!(
+            pool.remaining(),
+            remaining,
+            "early completion is not a refund"
+        );
     }
     let error = orchestrator.execute(&package("42;")).unwrap_err();
     assert_shared_denial(&error, 128, 0);
@@ -279,11 +290,9 @@ fn cloned_orchestrator_configuration_shares_instead_of_minting_work() {
     };
     let mut runtime = RuntimeConfig::default();
     runtime.execution.deterministic_budget = 128;
-    let mut first = ExecutionOrchestrator::try_new_lab_with_runtime_config(
-        config.clone(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let mut first =
+        ExecutionOrchestrator::try_new_lab_with_runtime_config(config.clone(), runtime.clone())
+            .unwrap();
     let mut second =
         ExecutionOrchestrator::try_new_lab_with_runtime_config(config, runtime).unwrap();
     first.execute(&package("42;")).unwrap();
@@ -326,7 +335,10 @@ fn validation_and_parsing_do_not_spend_native_instruction_reservations() {
     let mut orchestrator = shared_orchestrator(&pool, Some(LaneChoice::QuickJs));
     for source in ["", "let = ;"] {
         let error = orchestrator.execute(&package(source)).unwrap_err();
-        assert!(!matches!(error.primary_error(), OrchestratorError::WorkBudget(_)));
+        assert!(!matches!(
+            error.primary_error(),
+            OrchestratorError::WorkBudget(_)
+        ));
         assert_eq!(pool.remaining(), 128);
     }
     orchestrator.execute(&package("42;")).unwrap();

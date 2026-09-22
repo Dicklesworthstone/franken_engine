@@ -6,20 +6,20 @@ use serde::{Deserialize, Serialize};
 use crate::capability_token::PrincipalId;
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, ObjectDomain,
-    ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId, VersionedIdError,
+    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId,
+    VersionedIdError, derive_versioned_id, derive_versioned_schema_id, verify_versioned_id,
 };
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::principal_key_roles::KeyRole;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    sign_preimage, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+    verify_signature,
 };
 
 use super::compat::{
-    attestation_schema_id, AttestationError, AttestationNonce, DevicePosture, DevicePostureVerifier,
-    KeyAttestation,
+    AttestationError, AttestationNonce, DevicePosture, DevicePostureVerifier, KeyAttestation,
+    attestation_schema_id,
 };
 use super::strict_store::NonceRegistry;
 
@@ -91,7 +91,8 @@ impl KeyAttestationV2 {
         owner_signing_key: &SigningKey,
         input: CreateKeyAttestationV2Input<'_>,
     ) -> Result<Self, KeyAttestationV2Error> {
-        let principal_id = PrincipalId::from_verification_key(&owner_signing_key.verification_key());
+        let principal_id =
+            PrincipalId::from_verification_key(&owner_signing_key.verification_key());
         build_attestation_v2(
             owner_signing_key,
             principal_id,
@@ -455,12 +456,12 @@ impl AttestationStoreV2 {
         id: &PersistedEngineObjectId,
         trace_id: &str,
     ) -> Result<(), KeyAttestationV2Error> {
-        let attestation = self
-            .attestations
-            .remove(id)
-            .ok_or_else(|| KeyAttestationV2Error::NotFound {
-                attestation_id: id.clone(),
-            })?;
+        let attestation =
+            self.attestations
+                .remove(id)
+                .ok_or_else(|| KeyAttestationV2Error::NotFound {
+                    attestation_id: id.clone(),
+                })?;
         if let Some(ids) = self.principal_index.get_mut(&attestation.principal_id) {
             ids.remove(id);
             if ids.is_empty() {
@@ -477,11 +478,7 @@ impl AttestationStoreV2 {
         Ok(())
     }
 
-    pub fn purge_expired(
-        &mut self,
-        current_time: DeterministicTimestamp,
-        trace_id: &str,
-    ) -> usize {
+    pub fn purge_expired(&mut self, current_time: DeterministicTimestamp, trace_id: &str) -> usize {
         let ids = self
             .attestations
             .iter()
@@ -527,7 +524,9 @@ impl AttestationStoreV2 {
                     actual: attestation.zone.clone(),
                 });
             }
-            let high_water = self.nonce_registry.high_water_for(&attestation.principal_id);
+            let high_water = self
+                .nonce_registry
+                .high_water_for(&attestation.principal_id);
             if high_water < attestation.nonce.as_u64() {
                 return Err(KeyAttestationV2Error::NonceHighWaterRollback {
                     principal: attestation.principal_id.clone(),
@@ -545,7 +544,8 @@ impl AttestationStoreV2 {
 
     fn validate_structure(&self) -> Result<(), KeyAttestationV2Error> {
         validate_zone(&self.zone)?;
-        let mut expected: BTreeMap<PrincipalId, BTreeSet<PersistedEngineObjectId>> = BTreeMap::new();
+        let mut expected: BTreeMap<PrincipalId, BTreeSet<PersistedEngineObjectId>> =
+            BTreeMap::new();
         for attestation in self.attestations.values() {
             attestation.validate_identity()?;
             if attestation.zone != self.zone {
@@ -554,7 +554,9 @@ impl AttestationStoreV2 {
                     actual: attestation.zone.clone(),
                 });
             }
-            let high_water = self.nonce_registry.high_water_for(&attestation.principal_id);
+            let high_water = self
+                .nonce_registry
+                .high_water_for(&attestation.principal_id);
             if high_water < attestation.nonce.as_u64() {
                 return Err(KeyAttestationV2Error::NonceHighWaterRollback {
                     principal: attestation.principal_id.clone(),
@@ -619,10 +621,8 @@ fn build_attestation_v2(
         provenance.verify()?;
     }
 
-    let schema = derive_versioned_schema_id(
-        ObjectIdDerivationVersion::Sha256V2,
-        ATTESTATION_SCHEMA_V2,
-    )?;
+    let schema =
+        derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, ATTESTATION_SCHEMA_V2)?;
     let material = identity_material(
         &owner_principal,
         &attested_key,
@@ -635,12 +635,7 @@ fn build_attestation_v2(
         &zone,
         legacy_provenance.as_ref(),
     );
-    let attestation_id = derive_versioned_id(
-        ObjectDomain::Attestation,
-        &zone,
-        &schema,
-        &material,
-    )?;
+    let attestation_id = derive_versioned_id(ObjectDomain::Attestation, &zone, &schema, &material)?;
     let mut attestation = KeyAttestationV2 {
         persistence_schema: KEY_ATTESTATION_PERSISTENCE_SCHEMA_V2.to_string(),
         schema_version: PersistedSchemaId::from_versioned(schema),
@@ -658,8 +653,9 @@ fn build_attestation_v2(
         legacy_provenance,
     };
     attestation.validate_identity()?;
-    attestation.owner_signature = sign_preimage(owner_signing_key, &attestation.preimage_bytes())
-        .map_err(|error| KeyAttestationV2Error::SignatureInvalid(error.to_string()))?;
+    attestation.owner_signature =
+        sign_preimage(owner_signing_key, &attestation.preimage_bytes())
+            .map_err(|error| KeyAttestationV2Error::SignatureInvalid(error.to_string()))?;
     Ok(attestation)
 }
 
@@ -700,8 +696,12 @@ fn validate_legacy_attestation(
     if expected != attestation.attestation_id {
         return Err(KeyAttestationV2Error::LegacyIdentityMismatch);
     }
-    verify_signature(owner_vk, &attestation.preimage_bytes(), &attestation.owner_signature)
-        .map_err(|error| KeyAttestationV2Error::LegacyVerification(error.to_string()))
+    verify_signature(
+        owner_vk,
+        &attestation.preimage_bytes(),
+        &attestation.owner_signature,
+    )
+    .map_err(|error| KeyAttestationV2Error::LegacyVerification(error.to_string()))
 }
 
 fn legacy_identity_material(
@@ -865,7 +865,9 @@ fn validate_legacy_mapping(attestation: &KeyAttestationV2) -> Result<(), KeyAtte
         return Err(KeyAttestationV2Error::LegacyMappingMismatch("nonce"));
     }
     if attestation.device_posture != legacy.device_posture {
-        return Err(KeyAttestationV2Error::LegacyMappingMismatch("device_posture"));
+        return Err(KeyAttestationV2Error::LegacyMappingMismatch(
+            "device_posture",
+        ));
     }
     if attestation.zone != legacy.zone {
         return Err(KeyAttestationV2Error::LegacyMappingMismatch("zone"));
@@ -1037,25 +1039,41 @@ impl std::fmt::Display for KeyAttestationV2Error {
                 actual.to_hex()
             ),
             Self::UnsupportedSchema { actual } => {
-                write!(formatter, "unsupported attestation persistence schema {actual:?}")
+                write!(
+                    formatter,
+                    "unsupported attestation persistence schema {actual:?}"
+                )
             }
             Self::AlgorithmMismatch { field, actual } => {
                 write!(formatter, "{field} uses {actual}; sha256_v2 is required")
             }
             Self::SchemaMismatch => formatter.write_str("attestation schema id does not match v2"),
             Self::SignatureInvalid(detail) => write!(formatter, "signature invalid: {detail}"),
-            Self::LegacyVerification(detail) => write!(formatter, "legacy verification failed: {detail}"),
-            Self::LegacyIdentityMismatch => formatter.write_str("legacy attestation_id is not content-derived"),
+            Self::LegacyVerification(detail) => {
+                write!(formatter, "legacy verification failed: {detail}")
+            }
+            Self::LegacyIdentityMismatch => {
+                formatter.write_str("legacy attestation_id is not content-derived")
+            }
             Self::LegacyMappingMismatch(field) => {
-                write!(formatter, "legacy attestation migration mismatch at {field}")
+                write!(
+                    formatter,
+                    "legacy attestation migration mismatch at {field}"
+                )
             }
             Self::ZoneMismatch { expected, actual } => {
-                write!(formatter, "zone mismatch: expected {expected:?}, got {actual:?}")
+                write!(
+                    formatter,
+                    "zone mismatch: expected {expected:?}, got {actual:?}"
+                )
             }
             Self::Expired {
                 expires_at,
                 current_time,
-            } => write!(formatter, "attestation expired at {expires_at}; now {current_time}"),
+            } => write!(
+                formatter,
+                "attestation expired at {expires_at}; now {current_time}"
+            ),
             Self::DuplicateAttestation { attestation_id } => write!(
                 formatter,
                 "duplicate attestation {}:{}",
@@ -1069,7 +1087,11 @@ impl std::fmt::Display for KeyAttestationV2Error {
                 attestation_id.to_hex()
             ),
             Self::MissingOwnerKey { principal } => {
-                write!(formatter, "missing owner key for principal {}", principal.to_hex())
+                write!(
+                    formatter,
+                    "missing owner key for principal {}",
+                    principal.to_hex()
+                )
             }
             Self::NonceHighWaterRollback {
                 principal,
@@ -1173,7 +1195,8 @@ mod tests {
             )
             .expect("register");
         let encoded = serde_json::to_vec(&store).expect("JSON serialize store");
-        let decoded: AttestationStoreV2 = serde_json::from_slice(&encoded).expect("JSON deserialize store");
+        let decoded: AttestationStoreV2 =
+            serde_json::from_slice(&encoded).expect("JSON deserialize store");
         let owners = BTreeMap::from([(principal, owner.verification_key())]);
         decoded.validate_loaded(&owners).expect("validate loaded");
         assert_eq!(decoded.total_count(), 1);

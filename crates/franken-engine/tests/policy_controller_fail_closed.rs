@@ -63,7 +63,10 @@ fn unknown_cost_cannot_make_an_action_look_free() {
         .select_action(&distribution, SecurityEpoch::GENESIS, "missing-cost")
         .expect_err("missing malicious-state cost must not authorize allow");
     assert!(error.to_string().contains("malicious"));
-    assert_eq!(error.error_code(), FrankenErrorCode::PolicyControllerDecisionError);
+    assert_eq!(
+        error.error_code(),
+        FrankenErrorCode::PolicyControllerDecisionError
+    );
     assert_eq!(controller.decision_count(), 0);
     assert!(controller.decisions().is_empty());
 }
@@ -83,10 +86,15 @@ fn malformed_posteriors_fail_without_mutation_even_after_deserialization() {
     for case in cases {
         let json = serde_json::to_string(&posterior(case)).expect("serialize fixture");
         let distribution: Posterior = serde_json::from_str(&json).expect("deserialize fixture");
-        assert!(matches!(distribution.validate(), Err(DecisionInputError::InvalidPosterior { .. })));
-        assert!(controller
-            .select_action(&distribution, SecurityEpoch::GENESIS, "bad-posterior")
-            .is_err());
+        assert!(matches!(
+            distribution.validate(),
+            Err(DecisionInputError::InvalidPosterior { .. })
+        ));
+        assert!(
+            controller
+                .select_action(&distribution, SecurityEpoch::GENESIS, "bad-posterior")
+                .is_err()
+        );
         assert_eq!(controller.decision_count(), 0);
         assert!(controller.decisions().is_empty());
     }
@@ -124,17 +132,30 @@ fn round_once_changes_the_winner_and_evidence_agrees() {
     assert_eq!(selection.action, "cheap");
     assert_eq!(selection.expected_loss, 0);
     let evidence = controller
-        .build_evidence(&selection, &distribution, SecurityEpoch::GENESIS, "round-once")
+        .build_evidence(
+            &selection,
+            &distribution,
+            SecurityEpoch::GENESIS,
+            "round-once",
+        )
         .expect("valid evidence");
     let losses: BTreeMap<_, _> = evidence
         .candidates
         .iter()
-        .map(|candidate| (candidate.action_name.as_str(), candidate.expected_loss_millionths))
+        .map(|candidate| {
+            (
+                candidate.action_name.as_str(),
+                candidate.expected_loss_millionths,
+            )
+        })
         .collect();
     assert_eq!(losses["expensive"], 1);
     assert_eq!(losses["cheap"], 0);
     assert_eq!(evidence.chosen_action.action_name, selection.action);
-    assert_eq!(evidence.chosen_action.expected_loss_millionths, selection.expected_loss);
+    assert_eq!(
+        evidence.chosen_action.expected_loss_millionths,
+        selection.expected_loss
+    );
 }
 
 #[test]
@@ -145,9 +166,11 @@ fn failed_decision_does_not_consume_an_id_or_damage_prior_history() {
         .select_action(&distribution, SecurityEpoch::GENESIS, "first")
         .expect("first valid decision");
     assert_eq!(first.action, "deny");
-    assert!(controller
-        .select_action(&posterior(&[]), SecurityEpoch::GENESIS, "invalid")
-        .is_err());
+    assert!(
+        controller
+            .select_action(&posterior(&[]), SecurityEpoch::GENESIS, "invalid")
+            .is_err()
+    );
     assert_eq!(controller.decision_count(), 1);
     assert_eq!(controller.decisions(), std::slice::from_ref(&first));
     let second = controller
@@ -172,12 +195,21 @@ fn evidence_rejects_invalid_posterior_and_incomplete_replacement_model() {
     let mut incomplete = LossMatrix::new();
     incomplete.set("benign", "allow", 0);
     controller.update_loss_matrix(incomplete);
-    assert!(controller
-        .build_evidence(&selection, &distribution, SecurityEpoch::GENESIS, "bad-model")
-        .is_err());
-    assert!(controller
-        .select_action(&distribution, SecurityEpoch::GENESIS, "bad-model")
-        .is_err());
+    assert!(
+        controller
+            .build_evidence(
+                &selection,
+                &distribution,
+                SecurityEpoch::GENESIS,
+                "bad-model"
+            )
+            .is_err()
+    );
+    assert!(
+        controller
+            .select_action(&distribution, SecurityEpoch::GENESIS, "bad-model")
+            .is_err()
+    );
     assert_eq!(controller.decision_count(), 1);
     assert_eq!(controller.decisions(), std::slice::from_ref(&selection));
 
@@ -195,11 +227,18 @@ fn zero_mass_states_do_not_require_costs_but_positive_mass_states_do() {
     let mut controller = controller(&["allow"], matrix);
     let zero_mass = posterior(&[("benign", 1_000_000), ("unmodeled", 0)]);
     assert_eq!(
-        controller.select_action(&zero_mass, SecurityEpoch::GENESIS, "zero").unwrap().expected_loss,
+        controller
+            .select_action(&zero_mass, SecurityEpoch::GENESIS, "zero")
+            .unwrap()
+            .expected_loss,
         0
     );
     let positive_mass = posterior(&[("benign", 999_999), ("unmodeled", 1)]);
-    assert!(controller.select_action(&positive_mass, SecurityEpoch::GENESIS, "positive").is_err());
+    assert!(
+        controller
+            .select_action(&positive_mass, SecurityEpoch::GENESIS, "positive")
+            .is_err()
+    );
     assert_eq!(controller.decision_count(), 1);
 }
 
@@ -213,9 +252,15 @@ fn guardrail_blocked_actions_still_require_an_auditable_model() {
         description: "allow is blocked but remains an evidence candidate".into(),
         blocked_actions: vec!["allow".into()],
     });
-    assert!(controller
-        .select_action(&posterior(&[("benign", 1_000_000)]), SecurityEpoch::GENESIS, "guardrail")
-        .is_err());
+    assert!(
+        controller
+            .select_action(
+                &posterior(&[("benign", 1_000_000)]),
+                SecurityEpoch::GENESIS,
+                "guardrail"
+            )
+            .is_err()
+    );
     assert_eq!(controller.decision_count(), 0);
 }
 

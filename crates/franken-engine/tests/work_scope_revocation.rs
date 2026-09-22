@@ -141,7 +141,11 @@ fn observing_and_cancelling_one_session_neither_grants_work_nor_revokes_other_se
     assert_eq!(pool.remaining(), 96);
     drop(admission);
     drop(first);
-    assert_eq!(pool.remaining(), 96, "dropping observers never refunds work");
+    assert_eq!(
+        pool.remaining(),
+        96,
+        "dropping observers never refunds work"
+    );
     assert_eq!(pool.committed(), 32);
     pool.revoke();
     assert_eq!(independent_guard.check(), CheckpointAction::Drain);
@@ -152,7 +156,8 @@ fn tenant_scope_revocation_leaves_parent_and_sibling_guards_and_balances_usable(
     let root = ExecutionWorkPool::new(384);
     let tenant = root.partition(128).unwrap();
     let sibling = root.partition(128).unwrap();
-    let tenant_token = CancellationToken::new().with_work_scope_revocation(tenant.revocation_signal());
+    let tenant_token =
+        CancellationToken::new().with_work_scope_revocation(tenant.revocation_signal());
     let sibling_token =
         CancellationToken::new().with_work_scope_revocation(sibling.revocation_signal());
     let root_token = CancellationToken::new().with_work_scope_revocation(root.revocation_signal());

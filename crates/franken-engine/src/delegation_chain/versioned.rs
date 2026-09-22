@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
 use crate::capability_token::{
-    verify_versioned_token, PrincipalId, VersionedCapabilityToken, VersionedTokenError,
-    VersionedVerificationContext,
+    PrincipalId, VersionedCapabilityToken, VersionedTokenError, VersionedVerificationContext,
+    verify_versioned_token,
 };
 use crate::engine_object_id::PersistedEngineObjectId;
 use crate::hash_tiers::ContentHash;
@@ -199,7 +199,9 @@ pub enum VersionedChainError {
 impl std::fmt::Display for VersionedChainError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyChain => formatter.write_str("delegation chain is empty (no ambient authority)"),
+            Self::EmptyChain => {
+                formatter.write_str("delegation chain is empty (no ambient authority)")
+            }
             Self::DepthExceeded {
                 max_depth,
                 actual_depth,
@@ -211,10 +213,16 @@ impl std::fmt::Display for VersionedChainError {
                 write!(formatter, "unauthorized root issuer: {root_issuer}")
             }
             Self::TokenIdentityFailed { index, error } => {
-                write!(formatter, "delegation link {index} identity failed: {error}")
+                write!(
+                    formatter,
+                    "delegation link {index} identity failed: {error}"
+                )
             }
             Self::MissingCheckpointBinding { index } => {
-                write!(formatter, "delegation link {index} missing checkpoint binding")
+                write!(
+                    formatter,
+                    "delegation link {index} missing checkpoint binding"
+                )
             }
             Self::MissingRevocationFreshnessBinding { index } => write!(
                 formatter,
@@ -227,7 +235,10 @@ impl std::fmt::Display for VersionedChainError {
                 token_id.to_hex()
             ),
             Self::TokenVerificationFailed { index, error } => {
-                write!(formatter, "delegation link {index} verification failed: {error}")
+                write!(
+                    formatter,
+                    "delegation link {index} verification failed: {error}"
+                )
             }
             Self::AttenuationViolation {
                 index,
@@ -340,9 +351,8 @@ pub fn verify_versioned_chain<R: VersionedRevocationOracle>(
         } else {
             leaf_delegate.clone()
         };
-        verify_versioned_token(token, &delegate, &token_context).map_err(|error| {
-            VersionedChainError::TokenVerificationFailed { index, error }
-        })?;
+        verify_versioned_token(token, &delegate, &token_context)
+            .map_err(|error| VersionedChainError::TokenVerificationFailed { index, error })?;
 
         if index + 1 < chain.len() {
             let child = &chain.links[index + 1];
@@ -425,7 +435,7 @@ mod tests {
         RevocationFreshnessRef, VersionedCheckpointRef, VersionedTokenBuilder,
     };
     use crate::engine_object_id::{
-        derive_versioned_id, derive_versioned_schema_id, ObjectDomain, ObjectIdDerivationVersion,
+        ObjectDomain, ObjectIdDerivationVersion, derive_versioned_id, derive_versioned_schema_id,
     };
     use crate::policy_checkpoint::DeterministicTimestamp;
     use crate::signature_preimage::SigningKey;
@@ -500,7 +510,10 @@ mod tests {
             token(
                 &root,
                 PrincipalId::from_verification_key(&middle.verification_key()),
-                &[RuntimeCapability::VmDispatch, RuntimeCapability::NetworkEgress],
+                &[
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::NetworkEgress,
+                ],
             ),
             token(
                 &middle,
@@ -515,12 +528,11 @@ mod tests {
         ];
         let checkpoint = checkpoint();
         let freshness = freshness();
-        let mut context = VersionedDelegationVerificationContext::with_authorized_root(
-            root.verification_key(),
-        )
-        .with_checkpoint_id(checkpoint.checkpoint_id)
-        .with_revocation_head_hash(freshness.revocation_head_hash)
-        .with_required_zone("zone-a");
+        let mut context =
+            VersionedDelegationVerificationContext::with_authorized_root(root.verification_key())
+                .with_checkpoint_id(checkpoint.checkpoint_id)
+                .with_revocation_head_hash(freshness.revocation_head_hash)
+                .with_required_zone("zone-a");
         context.current_tick = 500;
         context.verifier_checkpoint_seq = checkpoint.min_checkpoint_seq;
         context.verifier_revocation_seq = freshness.min_revocation_seq;
@@ -609,7 +621,10 @@ mod tests {
         chain.links[2] = token(
             &key(3),
             leaf_delegate.clone(),
-            &[RuntimeCapability::VmDispatch, RuntimeCapability::NetworkEgress],
+            &[
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::NetworkEgress,
+            ],
         );
         chain.links[2]
             .verify_signature()

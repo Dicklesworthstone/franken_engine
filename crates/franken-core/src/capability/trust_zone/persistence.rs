@@ -5,9 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::capability::RuntimeCapability;
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, EngineObjectId,
-    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId,
-    VersionedEngineObjectId, VersionedIdError,
+    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, VersionedIdError,
+    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id,
 };
 
 use super::{TrustZone, TrustZoneClass};
@@ -16,8 +15,7 @@ const LEGACY_TRUST_ZONE_SCHEMA: &[u8] = b"frankenengine.trust-zone.v1";
 const VERSIONED_TRUST_ZONE_SCHEMA: &[u8] = b"frankenengine.trust-zone.persistence.v2";
 
 /// Stable outer schema for self-describing persisted trust-zone records.
-pub const TRUST_ZONE_PERSISTENCE_SCHEMA_V2: &str =
-    "frankenengine.trust-zone.persistence.v2";
+pub const TRUST_ZONE_PERSISTENCE_SCHEMA_V2: &str = "frankenengine.trust-zone.persistence.v2";
 
 /// Self-describing persistence model for trust-zone metadata.
 ///
@@ -120,7 +118,11 @@ impl PersistedTrustZone {
             &self.declared_ceiling,
             &self.effective_ceiling,
         )?;
-        if self.parent_zone.as_ref().is_some_and(|parent| parent == &self.zone_id) {
+        if self
+            .parent_zone
+            .as_ref()
+            .is_some_and(|parent| parent == &self.zone_id)
+        {
             return Err(TrustZonePersistenceError::SelfParent {
                 zone_name: self.zone_name.clone(),
             });
@@ -243,12 +245,7 @@ pub fn derive_persisted_trust_zone_id(
     declared_ceiling: &BTreeSet<RuntimeCapability>,
     effective_ceiling: &BTreeSet<RuntimeCapability>,
 ) -> Result<PersistedEngineObjectId, TrustZonePersistenceError> {
-    validate_policy_fields(
-        zone_name,
-        created_by,
-        declared_ceiling,
-        effective_ceiling,
-    )?;
+    validate_policy_fields(zone_name, created_by, declared_ceiling, effective_ceiling)?;
     let schema_definition = match derivation_version {
         ObjectIdDerivationVersion::LegacyV1 => LEGACY_TRUST_ZONE_SCHEMA,
         ObjectIdDerivationVersion::Sha256V2 => VERSIONED_TRUST_ZONE_SCHEMA,
@@ -264,12 +261,8 @@ pub fn derive_persisted_trust_zone_id(
         declared_ceiling,
         effective_ceiling,
     )?;
-    let object_id = derive_versioned_id(
-        ObjectDomain::PolicyObject,
-        zone_name,
-        &schema,
-        &canonical,
-    )?;
+    let object_id =
+        derive_versioned_id(ObjectDomain::PolicyObject, zone_name, &schema, &canonical)?;
     Ok(PersistedEngineObjectId::from_versioned(object_id))
 }
 
@@ -373,12 +366,11 @@ fn append_length_prefixed(
     bytes: &[u8],
 ) -> Result<(), TrustZonePersistenceError> {
     let field = field.into();
-    let length = u32::try_from(bytes.len()).map_err(|_| {
-        TrustZonePersistenceError::LengthOverflow {
+    let length =
+        u32::try_from(bytes.len()).map_err(|_| TrustZonePersistenceError::LengthOverflow {
             field: field.clone(),
             length: bytes.len(),
-        }
-    })?;
+        })?;
     output.extend_from_slice(&length.to_be_bytes());
     output.extend_from_slice(bytes);
     Ok(())
@@ -394,7 +386,9 @@ fn validate_policy_fields(
         return Err(TrustZonePersistenceError::EmptyField { field: "zone_name" });
     }
     if created_by.trim().is_empty() {
-        return Err(TrustZonePersistenceError::EmptyField { field: "created_by" });
+        return Err(TrustZonePersistenceError::EmptyField {
+            field: "created_by",
+        });
     }
     if !effective_ceiling.is_subset(declared_ceiling) {
         return Err(TrustZonePersistenceError::EffectiveCeilingExceedsDeclared);
@@ -420,11 +414,14 @@ impl std::fmt::Display for TrustZonePersistenceError {
                 "unsupported trust-zone persistence schema {actual:?}"
             ),
             Self::EmptyField { field } => write!(formatter, "{field} must not be empty"),
-            Self::EffectiveCeilingExceedsDeclared => formatter.write_str(
-                "effective_ceiling must be a subset of declared_ceiling",
-            ),
+            Self::EffectiveCeilingExceedsDeclared => {
+                formatter.write_str("effective_ceiling must be a subset of declared_ceiling")
+            }
             Self::SelfParent { zone_name } => {
-                write!(formatter, "trust zone {zone_name:?} cannot be its own parent")
+                write!(
+                    formatter,
+                    "trust zone {zone_name:?} cannot be its own parent"
+                )
             }
             Self::LengthOverflow { field, length } => write!(
                 formatter,
@@ -453,15 +450,13 @@ impl From<VersionedIdError> for TrustZonePersistenceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine_object_id::{EngineObjectId, VersionedEngineObjectId};
 
     fn capabilities(values: &[RuntimeCapability]) -> BTreeSet<RuntimeCapability> {
         values.iter().copied().collect()
     }
 
-    fn valid_sets() -> (
-        BTreeSet<RuntimeCapability>,
-        BTreeSet<RuntimeCapability>,
-    ) {
+    fn valid_sets() -> (BTreeSet<RuntimeCapability>, BTreeSet<RuntimeCapability>) {
         (
             capabilities(&[
                 RuntimeCapability::VmDispatch,
@@ -557,9 +552,10 @@ mod tests {
         let (declared, effective) = valid_sets();
         let raw = EngineObjectId([8; 32]);
         let legacy_parent = PersistedEngineObjectId::legacy(raw.clone());
-        let v2_parent = PersistedEngineObjectId::from_versioned(
-            VersionedEngineObjectId::new(ObjectIdDerivationVersion::Sha256V2, raw),
-        );
+        let v2_parent = PersistedEngineObjectId::from_versioned(VersionedEngineObjectId::new(
+            ObjectIdDerivationVersion::Sha256V2,
+            raw,
+        ));
         let legacy_parent_child = derive_persisted_trust_zone_id(
             ObjectIdDerivationVersion::Sha256V2,
             "team",

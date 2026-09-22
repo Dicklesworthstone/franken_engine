@@ -62,8 +62,7 @@ impl StringifyState {
         } else {
             0
         };
-        let slots = (additional as u64)
-            .saturating_mul(std::mem::size_of::<JsString>() as u64);
+        let slots = (additional as u64).saturating_mul(std::mem::size_of::<JsString>() as u64);
         let bytes = slots.saturating_add(InterpreterCore::estimate_js_string_bytes(key));
         self.reserve(core, bytes)?;
         if additional != 0 && keys.try_reserve_exact(additional).is_err() {
@@ -765,7 +764,10 @@ mod tests {
             core.heap[object.0 as usize].properties.get("self"),
             Some(&Value::Object(object))
         );
-        assert_eq!(core.object_mutation_labels.get(&object), Some(&Label::Secret));
+        assert_eq!(
+            core.object_mutation_labels.get(&object),
+            Some(&Label::Secret)
+        );
     }
 
     #[test]
@@ -822,9 +824,7 @@ mod tests {
             }
             assert_eq!(state.charged, retained);
             assert_eq!(core.json_parse_temporary_bytes, retained);
-            assert!(
-                retained >= payload + (keys.len() * std::mem::size_of::<JsString>()) as u64
-            );
+            assert!(retained >= payload + (keys.len() * std::mem::size_of::<JsString>()) as u64);
         }
         assert!(growths <= 12, "reallocated {growths} times");
         assert!(moved < 2 * keys.len(), "copied {moved} key slots");
@@ -906,7 +906,10 @@ mod tests {
         }
         expected.push('}');
         core.set_register(0, Value::Object(object)).unwrap();
-        assert_eq!(stringify(&mut core).unwrap(), Value::Str(JsString::from(expected)));
+        assert_eq!(
+            stringify(&mut core).unwrap(),
+            Value::Str(JsString::from(expected))
+        );
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
         assert_accounted(&core);

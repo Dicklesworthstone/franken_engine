@@ -10,9 +10,9 @@ mod strict_store;
 mod versioned;
 
 pub use compat::{
-    attestation_schema, attestation_schema_id, AttestationError, AttestationEvent,
-    AttestationEventType, AttestationNonce, CreateAttestationInput, DevicePosture,
-    DevicePostureVerifier, KeyAttestation,
+    AttestationError, AttestationEvent, AttestationEventType, AttestationNonce,
+    CreateAttestationInput, DevicePosture, DevicePostureVerifier, KeyAttestation,
+    attestation_schema, attestation_schema_id,
 };
 pub use strict_store::{AttestationStore, NonceRegistry};
 pub use versioned::*;

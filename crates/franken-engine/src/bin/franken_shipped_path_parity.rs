@@ -2585,7 +2585,10 @@ mod tests {
         use frankenengine_engine::execution_orchestrator::WorkBudgetError;
         for refusal in [
             WorkBudgetError::Revoked,
-            WorkBudgetError::Exhausted { requested: 128, remaining: 0 },
+            WorkBudgetError::Exhausted {
+                requested: 128,
+                remaining: 0,
+            },
         ] {
             let error = OrchestratorError::WorkBudget(refusal);
             assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);

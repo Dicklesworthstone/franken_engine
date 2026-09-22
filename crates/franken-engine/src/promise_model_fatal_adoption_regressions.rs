@@ -248,7 +248,9 @@ fn fatal_adoption_compacts_labels_without_extra_jobs_or_witnesses() {
         adopt(&mut store, source, target);
         let witness = store.witness_log().to_vec();
         let before_bytes = store.estimated_memory_bytes();
-        let epoch = store.terminally_reject_without_jobs(source, &label).unwrap();
+        let epoch = store
+            .terminally_reject_without_jobs(source, &label)
+            .unwrap();
         for handle in [source, target] {
             let record = store.get(handle).unwrap();
             assert_eq!(record.label.level(), label.level());
@@ -292,7 +294,10 @@ fn fatal_adoption_snapshot_retains_final_state_without_temporary_links() {
         assert_eq!(record.state, PromiseState::Rejected(JsValue::Undefined));
         assert_eq!(record.label, Label::Secret);
         assert!(record.reactions.is_empty());
-        assert_eq!(record.terminal_epoch, 0, "transient marker is not persisted");
+        assert_eq!(
+            record.terminal_epoch, 0,
+            "transient marker is not persisted"
+        );
     }
 }
 
@@ -339,7 +344,10 @@ fn fatal_adoption_generated_graphs_match_independent_reachability() {
             } else {
                 assert_eq!(store.get(handle).unwrap().state, PromiseState::Pending);
                 assert_eq!(store.get(handle).unwrap().terminal_epoch, 0);
-                assert_eq!(store.get(handle).unwrap().reactions.len(), 2 * edges[index].len());
+                assert_eq!(
+                    store.get(handle).unwrap().reactions.len(),
+                    2 * edges[index].len()
+                );
             }
         }
     }

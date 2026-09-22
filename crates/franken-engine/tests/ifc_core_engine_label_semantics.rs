@@ -167,7 +167,10 @@ macro_rules! envelope_contract {
                     extension_id: "extension".into(),
                     producible_labels: [source.clone()].into(),
                     accessible_clearances: [sink].into(),
-                    authorized_declassifications: grants.iter().map(|grant| (*grant).into()).collect(),
+                    authorized_declassifications: grants
+                        .iter()
+                        .map(|grant| (*grant).into())
+                        .collect(),
                     policy_ref: "policy".into(),
                     epoch_id: 7,
                     schema_version: IfcSchemaVersion::CURRENT,
@@ -200,10 +203,12 @@ macro_rules! envelope_contract {
                         ),
                         _ => assert_eq!(
                             assessment.advisories,
-                            vec![FlowAuthorizationAdvisory::DeclassificationObligationRequired {
-                                source_label: source,
-                                sink_clearance: sink,
-                            }]
+                            vec![
+                                FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                                    source_label: source,
+                                    sink_clearance: sink,
+                                }
+                            ]
                         ),
                     }
                 }
@@ -322,7 +327,9 @@ envelope_contract!(engine_envelopes, frankenengine_engine);
 
 #[test]
 fn core_and_engine_serialize_identical_authorization_assessments() {
-    use frankenengine_engine::ifc_artifacts::{ClearanceClass, FlowEnvelope, IfcSchemaVersion, Label};
+    use frankenengine_engine::ifc_artifacts::{
+        ClearanceClass, FlowEnvelope, IfcSchemaVersion, Label,
+    };
     let mut sources = Label::all_builtin().to_vec();
     for level in [0, 1, 2, 3, 4, u32::MAX] {
         sources.push(Label::Custom {

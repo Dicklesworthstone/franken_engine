@@ -7,12 +7,12 @@ pub use frankenengine_engine::module_live_binding;
 pub use frankenengine_engine::object_model;
 pub use frankenengine_engine::promise_model;
 
+#[path = "../src/async_module_graph.rs"]
+mod async_module_graph;
 #[path = "../src/async_module_promise_bridge.rs"]
 mod async_module_promise_bridge;
 #[path = "../src/async_module_scheduler.rs"]
 mod async_module_scheduler;
-#[path = "../src/async_module_graph.rs"]
-mod async_module_graph;
 
 use async_module_graph::{
     ModuleGraphError, ModuleGraphLimits, ModuleGraphNode, register_module_graph,
@@ -38,12 +38,8 @@ fn arbitrary_discovery_order_executes_dependency_first() {
         node("lib.mjs", false, &["base.mjs"]),
     ];
     let mut scheduler = AsyncModuleScheduler::default();
-    let registered = register_module_graph(
-        &mut scheduler,
-        &nodes,
-        &ModuleGraphLimits::default(),
-    )
-    .expect("valid graph");
+    let registered = register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default())
+        .expect("valid graph");
     assert_eq!(
         registered.plan.registration_order,
         vec!["base.mjs", "lib.mjs", "app.mjs"]
@@ -84,12 +80,8 @@ fn invalid_graph_is_transactional_at_registration_boundary() {
         node("bad.mjs", true, &["missing.mjs"]),
     ];
     let mut scheduler = AsyncModuleScheduler::default();
-    let error = register_module_graph(
-        &mut scheduler,
-        &nodes,
-        &ModuleGraphLimits::default(),
-    )
-    .unwrap_err();
+    let error =
+        register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).unwrap_err();
     assert!(matches!(error, ModuleGraphError::UnknownDependency { .. }));
     assert_eq!(scheduler.snapshot().registered_modules, 0);
     assert!(scheduler.next_task().unwrap().is_none());
@@ -102,12 +94,8 @@ fn cyclic_graph_is_rejected_before_any_runtime_state_exists() {
         node("b.mjs", false, &["a.mjs"]),
     ];
     let mut scheduler = AsyncModuleScheduler::default();
-    let error = register_module_graph(
-        &mut scheduler,
-        &nodes,
-        &ModuleGraphLimits::default(),
-    )
-    .unwrap_err();
+    let error =
+        register_module_graph(&mut scheduler, &nodes, &ModuleGraphLimits::default()).unwrap_err();
     match error {
         ModuleGraphError::Cycle { modules } => {
             assert_eq!(modules, vec!["a.mjs", "b.mjs"]);

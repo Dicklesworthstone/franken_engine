@@ -6,21 +6,19 @@ use serde::{Deserialize, Serialize};
 use crate::capability_token::PrincipalId;
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, EngineObjectId,
-    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId,
-    VersionedIdError,
+    EngineObjectId, ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId,
+    PersistedSchemaId, VersionedIdError, derive_versioned_id, derive_versioned_schema_id,
+    verify_versioned_id,
 };
 use crate::hash_tiers::ContentHash;
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    sign_preimage, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+    verify_signature,
 };
 
-use super::compat::{
-    revocation_schema_id, Revocation, RevocationReason, RevocationTargetType,
-};
+use super::compat::{Revocation, RevocationReason, RevocationTargetType, revocation_schema_id};
 
 const REVOCATION_SCHEMA_V2: &[u8] = b"FrankenEngine.Revocation.sha256.v2";
 const REVOCATION_EVENT_SCHEMA_V2: &[u8] = b"FrankenEngine.RevocationEvent.sha256.v2";
@@ -223,11 +221,8 @@ impl RevocationEventV2 {
         if self.event_seq > 0 && self.prev_event.is_none() {
             return Err(RevocationV2Error::MissingPredecessor);
         }
-        let material = event_identity_material(
-            &self.revocation,
-            self.event_seq,
-            self.prev_event.as_ref(),
-        );
+        let material =
+            event_identity_material(&self.revocation, self.event_seq, self.prev_event.as_ref());
         verify_versioned_id(
             &self.event_id.to_versioned(),
             ObjectDomain::Revocation,
@@ -350,7 +345,8 @@ impl RevocationChainV2 {
 
     pub fn authorize_revocation_key(&mut self, key: VerificationKey) -> PrincipalId {
         let principal = PrincipalId::from_verification_key(&key);
-        self.authorized_revocation_keys.insert(principal.clone(), key);
+        self.authorized_revocation_keys
+            .insert(principal.clone(), key);
         principal
     }
 
@@ -417,10 +413,7 @@ impl RevocationChainV2 {
         self.is_revoked(&PersistedEngineObjectId::legacy(target_id.clone()))
     }
 
-    pub fn lookup_revocation(
-        &self,
-        target_id: &PersistedEngineObjectId,
-    ) -> Option<&RevocationV2> {
+    pub fn lookup_revocation(&self, target_id: &PersistedEngineObjectId) -> Option<&RevocationV2> {
         self.revocation_index
             .get(target_id)
             .and_then(|sequence| self.events.get(*sequence as usize))
@@ -632,10 +625,8 @@ fn build_revocation_v2(
         provenance.verify()?;
     }
     let issued_by = PrincipalId::from_verification_key(&issuer_key.verification_key());
-    let schema = derive_versioned_schema_id(
-        ObjectIdDerivationVersion::Sha256V2,
-        REVOCATION_SCHEMA_V2,
-    )?;
+    let schema =
+        derive_versioned_schema_id(ObjectIdDerivationVersion::Sha256V2, REVOCATION_SCHEMA_V2)?;
     let material = revocation_identity_material(
         target_type,
         &target_id,
@@ -645,12 +636,7 @@ fn build_revocation_v2(
         &zone,
         legacy_provenance.as_ref(),
     )?;
-    let revocation_id = derive_versioned_id(
-        ObjectDomain::Revocation,
-        &zone,
-        &schema,
-        &material,
-    )?;
+    let revocation_id = derive_versioned_id(ObjectDomain::Revocation, &zone, &schema, &material)?;
     let mut revocation = RevocationV2 {
         persistence_schema: REVOCATION_PERSISTENCE_SCHEMA_V2.to_string(),
         schema_version: PersistedSchemaId::from_versioned(schema),
@@ -689,12 +675,7 @@ fn build_head_v2(
         event.revocation.issued_at,
         zone,
     );
-    let head_id = derive_versioned_id(
-        ObjectDomain::Revocation,
-        zone,
-        &schema,
-        &material,
-    )?;
+    let head_id = derive_versioned_id(ObjectDomain::Revocation, zone, &schema, &material)?;
     let mut head = RevocationHeadV2 {
         persistence_schema: REVOCATION_HEAD_PERSISTENCE_SCHEMA_V2.to_string(),
         schema_version: PersistedSchemaId::from_versioned(schema),
@@ -810,7 +791,10 @@ fn event_canonical_view(event: &RevocationEventV2) -> CanonicalValue {
     );
     insert_schema_id(&mut map, "schema_version", &event.schema_version);
     insert_object_id(&mut map, "event_id", &event.event_id);
-    map.insert("event_seq".to_string(), CanonicalValue::U64(event.event_seq));
+    map.insert(
+        "event_seq".to_string(),
+        CanonicalValue::U64(event.event_seq),
+    );
     insert_optional_object_id(&mut map, "prev_event", event.prev_event.as_ref());
     map.insert(
         "revocation".to_string(),
@@ -1007,10 +991,7 @@ fn insert_optional_object_id(
     match value {
         Some(value) => insert_object_id(map, field, value),
         None => {
-            map.insert(
-                format!("{field}_derivation_version"),
-                CanonicalValue::Null,
-            );
+            map.insert(format!("{field}_derivation_version"), CanonicalValue::Null);
             map.insert(field.to_string(), CanonicalValue::Null);
         }
     }
@@ -1141,7 +1122,9 @@ impl std::fmt::Display for RevocationV2Error {
             Self::SchemaMismatch { field } => write!(formatter, "{field} does not match v2"),
             Self::SignatureInvalid(detail) => write!(formatter, "signature invalid: {detail}"),
             Self::IssuerKeyMismatch => formatter.write_str("issuer key does not match issued_by"),
-            Self::LegacyVerification(detail) => write!(formatter, "legacy verification failed: {detail}"),
+            Self::LegacyVerification(detail) => {
+                write!(formatter, "legacy verification failed: {detail}")
+            }
             Self::LegacyIdentityMismatch => {
                 formatter.write_str("legacy revocation_id is not content-derived from target_id")
             }
@@ -1152,9 +1135,14 @@ impl std::fmt::Display for RevocationV2Error {
                 write!(formatter, "revocation issuer {principal} is not authorized")
             }
             Self::UnauthorizedHeadSigner { principal } => {
-                write!(formatter, "revocation head signer {principal} is not authorized")
+                write!(
+                    formatter,
+                    "revocation head signer {principal} is not authorized"
+                )
             }
-            Self::NoAuthorizedHeadSigner => formatter.write_str("no authorized head signer configured"),
+            Self::NoAuthorizedHeadSigner => {
+                formatter.write_str("no authorized head signer configured")
+            }
             Self::DuplicateTarget { target_id } => write!(
                 formatter,
                 "duplicate revocation target {}:{}",
@@ -1162,19 +1150,34 @@ impl std::fmt::Display for RevocationV2Error {
                 target_id.to_hex()
             ),
             Self::InvalidGenesis => formatter.write_str("genesis event must have no predecessor"),
-            Self::MissingPredecessor => formatter.write_str("non-genesis event is missing predecessor"),
+            Self::MissingPredecessor => {
+                formatter.write_str("non-genesis event is missing predecessor")
+            }
             Self::SequenceDiscontinuity { expected, actual } => {
-                write!(formatter, "sequence discontinuity: expected {expected}, got {actual}")
+                write!(
+                    formatter,
+                    "sequence discontinuity: expected {expected}, got {actual}"
+                )
             }
             Self::ChainLinkMismatch { sequence } => {
-                write!(formatter, "chain predecessor mismatch at sequence {sequence}")
+                write!(
+                    formatter,
+                    "chain predecessor mismatch at sequence {sequence}"
+                )
             }
             Self::ChainHashMismatch => formatter.write_str("revocation chain hash mismatch"),
-            Self::MissingHead => formatter.write_str("non-empty revocation chain is missing a head"),
-            Self::UnexpectedHeadOnEmptyChain => formatter.write_str("empty revocation chain has a head"),
+            Self::MissingHead => {
+                formatter.write_str("non-empty revocation chain is missing a head")
+            }
+            Self::UnexpectedHeadOnEmptyChain => {
+                formatter.write_str("empty revocation chain has a head")
+            }
             Self::HeadMismatch => formatter.write_str("revocation head does not match chain tip"),
             Self::ZoneMismatch { expected, actual } => {
-                write!(formatter, "zone mismatch: expected {expected:?}, got {actual:?}")
+                write!(
+                    formatter,
+                    "zone mismatch: expected {expected:?}, got {actual:?}"
+                )
             }
             Self::EpochRegression { previous, current } => {
                 write!(formatter, "epoch regression: {previous} -> {current}")
@@ -1227,10 +1230,7 @@ mod tests {
         }
     }
 
-    fn revocation(
-        issuer: &SigningKey,
-        target_id: PersistedEngineObjectId,
-    ) -> RevocationV2 {
+    fn revocation(issuer: &SigningKey, target_id: PersistedEngineObjectId) -> RevocationV2 {
         RevocationV2::new(
             RevocationTargetType::Token,
             target_id,
@@ -1252,15 +1252,14 @@ mod tests {
     #[test]
     fn revocation_id_is_sha256_v2_and_recomputed() {
         let issuer = key(1);
-        let mut revocation = revocation(
-            &issuer,
-            target(2, ObjectIdDerivationVersion::Sha256V2),
-        );
+        let mut revocation = revocation(&issuer, target(2, ObjectIdDerivationVersion::Sha256V2));
         assert_eq!(
             revocation.revocation_id.derivation_version,
             ObjectIdDerivationVersion::Sha256V2
         );
-        revocation.verify(&issuer.verification_key()).expect("verify");
+        revocation
+            .verify(&issuer.verification_key())
+            .expect("verify");
         revocation.revocation_id.object_id.0[0] ^= 1;
         assert!(revocation.validate_identity().is_err());
     }
@@ -1412,10 +1411,7 @@ mod tests {
         let issuer = key(1);
         let head_key = key(2);
         let stranger = key(3);
-        let revocation = revocation(
-            &issuer,
-            target(11, ObjectIdDerivationVersion::Sha256V2),
-        );
+        let revocation = revocation(&issuer, target(11, ObjectIdDerivationVersion::Sha256V2));
         let mut no_issuer = RevocationChainV2::new(ZONE)
             .expect("chain")
             .with_authorized_head_key(head_key.verification_key());
@@ -1461,7 +1457,9 @@ mod tests {
             migrated.target_id.derivation_version,
             ObjectIdDerivationVersion::LegacyV1
         );
-        migrated.verify(&issuer.verification_key()).expect("verify v2");
+        migrated
+            .verify(&issuer.verification_key())
+            .expect("verify v2");
     }
 
     #[test]

@@ -18,86 +18,157 @@ mod prepaid;
 
 use super::*;
 use crate::capability::RuntimeCapability;
-use crate::checkpoint::{CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite};
+use crate::checkpoint::{
+    CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
+};
+use crate::hash_tiers::ContentHash;
 use crate::wasm_runtime_lane::WasmFunctionSignature;
+use crate::wasm_runtime_lane::host_replay::{
+    self, WasmHostRecording, WasmHostReplay, WasmHostTraceError, WasmHostTraceLimits,
+    WasmHostTranscript,
+};
 use crate::wasm_runtime_lane::memory_pool::{MemoryReservation, WasmMemoryPool};
 use crate::wasm_runtime_lane::work_pool::{WasmWorkPool, WasmWorkPoolExhausted};
 use std::collections::BTreeSet;
-use crate::hash_tiers::ContentHash;
-use crate::wasm_runtime_lane::host_replay::{
-    self, WasmHostRecording, WasmHostReplay, WasmHostTraceError,
-    WasmHostTraceLimits, WasmHostTranscript,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WasmHostError {
-    DuplicateBinding { module: String, name: String },
-    MissingBinding { module: String, name: String },
-    SignatureMismatch { module: String, name: String },
-    CapabilityDenied { module: String, name: String, capability: RuntimeCapability },
+    DuplicateBinding {
+        module: String,
+        name: String,
+    },
+    MissingBinding {
+        module: String,
+        name: String,
+    },
+    SignatureMismatch {
+        module: String,
+        name: String,
+    },
+    CapabilityDenied {
+        module: String,
+        name: String,
+        capability: RuntimeCapability,
+    },
     MissingAuthority,
     ZeroCallCost,
     MissingMemory,
     MemoryPoolAlreadyBound,
     MemoryPoolRevoked,
-    MemoryPoolDepthExceeded { max: usize },
-    MemoryPoolExhausted { requested_pages: u64, available_pages: u64 },
+    MemoryPoolDepthExceeded {
+        max: usize,
+    },
+    MemoryPoolExhausted {
+        requested_pages: u64,
+        available_pages: u64,
+    },
     WorkPoolAlreadyBound,
     WorkPool(WasmWorkPoolExhausted),
-    PrepaidWorkExceeded { requested: u64, remaining: u64 },
+    PrepaidWorkExceeded {
+        requested: u64,
+        remaining: u64,
+    },
     PrepaidWorkInterrupted,
     /// A prior native callback unwound without completing its host boundary.
     HostCallInterrupted,
     /// Normal termination of this guest instance, never the embedding process.
-    ProcessExit { code: u32 },
+    ProcessExit {
+        code: u32,
+    },
     Cancelled,
     CancellationAlreadyBound,
     ExecutionCancelled,
     ExecutionCancellationAlreadyBound,
-    CapabilityRevocationAlreadyBound { capability: RuntimeCapability },
+    CapabilityRevocationAlreadyBound {
+        capability: RuntimeCapability,
+    },
     Trace(WasmHostTraceError),
-    Trap { message: String },
+    Trap {
+        message: String,
+    },
 }
 
 impl WasmHostError {
     /// Bound provider diagnostics without splitting a UTF-8 code point.
     pub fn trap(message: &str) -> Self {
         let mut end = message.len().min(4096);
-        while !message.is_char_boundary(end) { end -= 1; }
-        Self::Trap { message: message[..end].to_owned() }
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self::Trap {
+            message: message[..end].to_owned(),
+        }
     }
 }
 
 impl fmt::Display for WasmHostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DuplicateBinding { module, name } => write!(f, "duplicate wasm host binding {module}.{name}"),
-            Self::MissingBinding { module, name } => write!(f, "missing wasm host binding {module}.{name}"),
-            Self::SignatureMismatch { module, name } => write!(f, "wasm host binding {module}.{name} has the wrong signature"),
-            Self::CapabilityDenied { module, name, capability } => write!(f, "wasm host binding {module}.{name} requires {capability}"),
-            Self::MissingAuthority => f.write_str("wasm host binding requires explicit capability authority"),
+            Self::DuplicateBinding { module, name } => {
+                write!(f, "duplicate wasm host binding {module}.{name}")
+            }
+            Self::MissingBinding { module, name } => {
+                write!(f, "missing wasm host binding {module}.{name}")
+            }
+            Self::SignatureMismatch { module, name } => write!(
+                f,
+                "wasm host binding {module}.{name} has the wrong signature"
+            ),
+            Self::CapabilityDenied {
+                module,
+                name,
+                capability,
+            } => write!(f, "wasm host binding {module}.{name} requires {capability}"),
+            Self::MissingAuthority => {
+                f.write_str("wasm host binding requires explicit capability authority")
+            }
             Self::ZeroCallCost => f.write_str("wasm host binding requires a nonzero call cost"),
-            Self::MissingMemory => f.write_str("wasm host buffer access requires guest memory zero"),
+            Self::MissingMemory => {
+                f.write_str("wasm host buffer access requires guest memory zero")
+            }
             Self::MemoryPoolAlreadyBound => f.write_str("wasm memory pool is already bound"),
             Self::WorkPoolAlreadyBound => f.write_str("wasm work pool is already bound"),
             Self::WorkPool(error) => write!(f, "{error}"),
-            Self::PrepaidWorkExceeded { requested, remaining } => {
-                write!(f, "wasm prepaid host work needs {requested} units, only {remaining} remain")
+            Self::PrepaidWorkExceeded {
+                requested,
+                remaining,
+            } => {
+                write!(
+                    f,
+                    "wasm prepaid host work needs {requested} units, only {remaining} remain"
+                )
             }
             Self::PrepaidWorkInterrupted => f.write_str("wasm prepaid host operation unwound"),
             Self::MemoryPoolRevoked => f.write_str("wasm memory pool execution scope was revoked"),
-            Self::MemoryPoolDepthExceeded { max } => write!(f, "wasm memory pool nesting exceeds {max}"),
-            Self::MemoryPoolExhausted { requested_pages, available_pages } => {
-                write!(f, "wasm memory reservation needs {requested_pages} pages, only {available_pages} available")
+            Self::MemoryPoolDepthExceeded { max } => {
+                write!(f, "wasm memory pool nesting exceeds {max}")
             }
-            Self::HostCallInterrupted => f.write_str("wasm instance cannot execute after an interrupted host callback"),
+            Self::MemoryPoolExhausted {
+                requested_pages,
+                available_pages,
+            } => {
+                write!(
+                    f,
+                    "wasm memory reservation needs {requested_pages} pages, only {available_pages} available"
+                )
+            }
+            Self::HostCallInterrupted => {
+                f.write_str("wasm instance cannot execute after an interrupted host callback")
+            }
             Self::ProcessExit { code } => write!(f, "wasm guest exited with status {code}"),
             Self::Cancelled => f.write_str("wasm host cancellation scope was cancelled"),
-            Self::CancellationAlreadyBound => f.write_str("wasm host cancellation scope is already bound"),
+            Self::CancellationAlreadyBound => {
+                f.write_str("wasm host cancellation scope is already bound")
+            }
             Self::ExecutionCancelled => f.write_str("wasm instance execution was cancelled"),
-            Self::ExecutionCancellationAlreadyBound => f.write_str("wasm instance execution cancellation is already bound"),
+            Self::ExecutionCancellationAlreadyBound => {
+                f.write_str("wasm instance execution cancellation is already bound")
+            }
             Self::CapabilityRevocationAlreadyBound { capability } => {
-                write!(f, "wasm host revocation signal is already bound for {capability}")
+                write!(
+                    f,
+                    "wasm host revocation signal is already bound for {capability}"
+                )
             }
             Self::Trace(error) => write!(f, "{error}"),
             Self::Trap { message } => write!(f, "wasm host trap: {message}"),
@@ -108,13 +179,17 @@ impl fmt::Display for WasmHostError {
 impl std::error::Error for WasmHostError {}
 
 impl From<WasmHostError> for WasmNumericVmError {
-    fn from(error: WasmHostError) -> Self { WasmStateError::Host(error).into() }
+    fn from(error: WasmHostError) -> Self {
+        WasmStateError::Host(error).into()
+    }
 }
 
 type Callback = dyn FnMut(
-    &mut WasmHostCaller<'_, '_>,
-    &[WasmBoundaryValue],
-) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError> + Send + Sync;
+        &mut WasmHostCaller<'_, '_>,
+        &[WasmBoundaryValue],
+    ) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError>
+    + Send
+    + Sync;
 
 struct Binding {
     signature: WasmFunctionSignature,
@@ -200,8 +275,10 @@ pub struct WasmHostImports {
 impl WasmHostImports {
     pub fn new(granted: BTreeSet<RuntimeCapability>) -> Self {
         Self {
-            bindings: BTreeMap::new(), granted,
-            trace: host_replay::TraceMode::default(), cancellation: None,
+            bindings: BTreeMap::new(),
+            granted,
+            trace: host_replay::TraceMode::default(),
+            cancellation: None,
             execution_cancellation: None,
             revocations: BTreeMap::new(),
             exit_status: None,
@@ -234,7 +311,9 @@ impl WasmHostImports {
     /// guest/host checkpoints. This cannot replace explicit execution/service
     /// signals, and their existing failure precedence is preserved.
     pub fn bind_memory_pool(&mut self, pool: WasmMemoryPool) -> Result<(), WasmHostError> {
-        if self.memory_pool.is_some() { return Err(WasmHostError::MemoryPoolAlreadyBound); }
+        if self.memory_pool.is_some() {
+            return Err(WasmHostError::MemoryPoolAlreadyBound);
+        }
         self.memory_pool = Some(pool);
         Ok(())
     }
@@ -251,7 +330,9 @@ impl WasmHostImports {
     /// guest work accounting. Replay must pay its own CURRENT pool; a transcript
     /// cannot restore a recorded balance or widen the live caller's authority.
     pub fn bind_work_pool(&mut self, pool: WasmWorkPool) -> Result<(), WasmHostError> {
-        if self.work_pool.is_some() { return Err(WasmHostError::WorkPoolAlreadyBound); }
+        if self.work_pool.is_some() {
+            return Err(WasmHostError::WorkPoolAlreadyBound);
+        }
         self.work_pool = Some(pool);
         Ok(())
     }
@@ -299,7 +380,9 @@ impl WasmHostImports {
             return Err(WasmHostError::ExecutionCancellationAlreadyBound);
         }
         self.execution_cancellation = Some(HostCancellation::at_site(
-            token, trace_id, LoopSite::BytecodeDispatch,
+            token,
+            trace_id,
+            LoopSite::BytecodeDispatch,
         ));
         Ok(())
     }
@@ -323,7 +406,8 @@ impl WasmHostImports {
         if self.revocations.contains_key(&capability) {
             return Err(WasmHostError::CapabilityRevocationAlreadyBound { capability });
         }
-        self.revocations.insert(capability, HostCancellation::new(token, trace_id));
+        self.revocations
+            .insert(capability, HostCancellation::new(token, trace_id));
         Ok(())
     }
 
@@ -331,7 +415,11 @@ impl WasmHostImports {
         self.check_host_integrity()?;
         check_exit(self.exit_status)?;
         check_execution_scope(&mut self.execution_cancellation)?;
-        if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+        if self
+            .cancellation
+            .as_mut()
+            .is_some_and(HostCancellation::is_cancelled)
+        {
             return Err(WasmHostError::Cancelled.into());
         }
         check_memory_pool(self.memory_pool.as_ref())?;
@@ -339,21 +427,31 @@ impl WasmHostImports {
     }
 
     fn check_host_integrity(&self) -> Result<(), WasmNumericVmError> {
-        if self.host_call_in_progress { Err(WasmHostError::HostCallInterrupted.into()) }
-        else { Ok(()) }
+        if self.host_call_in_progress {
+            Err(WasmHostError::HostCallInterrupted.into())
+        } else {
+            Ok(())
+        }
     }
 
     /// Record entered providers, including startup. The observer survives a
     /// failed start. Recording is opt-in and adds metered memory hashing;
     /// callers must protect the resulting buffers as sensitive incident data.
-    pub fn record_calls(&mut self, limits: WasmHostTraceLimits) -> Result<WasmHostRecording, WasmHostTraceError> {
+    pub fn record_calls(
+        &mut self,
+        limits: WasmHostTraceLimits,
+    ) -> Result<WasmHostRecording, WasmHostTraceError> {
         self.trace.record(limits)
     }
 
     /// Replay trusted recorded effects instead of invoking providers. Existing
     /// binding signatures, fixed costs and capability requirements still apply.
     /// Verify the returned observer's complete consumption after the run.
-    pub fn replay_calls(&mut self, transcript: WasmHostTranscript, limits: WasmHostTraceLimits) -> Result<WasmHostReplay, WasmHostTraceError> {
+    pub fn replay_calls(
+        &mut self,
+        transcript: WasmHostTranscript,
+        limits: WasmHostTraceLimits,
+    ) -> Result<WasmHostReplay, WasmHostTraceError> {
         self.trace.replay(transcript, limits)
     }
 
@@ -366,7 +464,8 @@ impl WasmHostImports {
     /// Narrow a provider envelope to a resolved module's declared authority.
     /// Never infer a grant from a binding requirement or a process-wide policy.
     pub(crate) fn restrict_capabilities(&mut self, permitted: &BTreeSet<RuntimeCapability>) {
-        self.granted.retain(|capability| permitted.contains(capability));
+        self.granted
+            .retain(|capability| permitted.contains(capability));
     }
 
     /// Define an exact (module, name) binding. Duplicate registration fails
@@ -382,37 +481,62 @@ impl WasmHostImports {
         callback: F,
     ) -> Result<(), WasmHostError>
     where
-        F: FnMut(&mut WasmHostCaller<'_, '_>, &[WasmBoundaryValue])
-                -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError>
-            + Send + Sync + 'static,
+        F: FnMut(
+                &mut WasmHostCaller<'_, '_>,
+                &[WasmBoundaryValue],
+            ) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError>
+            + Send
+            + Sync
+            + 'static,
     {
-        if required.is_empty() { return Err(WasmHostError::MissingAuthority); }
-        if call_cost == 0 { return Err(WasmHostError::ZeroCallCost); }
+        if required.is_empty() {
+            return Err(WasmHostError::MissingAuthority);
+        }
+        if call_cost == 0 {
+            return Err(WasmHostError::ZeroCallCost);
+        }
         let module = module.into();
         let name = name.into();
-        if self.bindings.get(&module).is_some_and(|bindings| bindings.contains_key(&name)) {
+        if self
+            .bindings
+            .get(&module)
+            .is_some_and(|bindings| bindings.contains_key(&name))
+        {
             return Err(WasmHostError::DuplicateBinding { module, name });
         }
         required.insert(RuntimeCapability::VmDispatch);
-        self.bindings.entry(module).or_default().insert(name, Binding {
-            signature, required, call_cost, callback: Box::new(callback),
-        });
+        self.bindings.entry(module).or_default().insert(
+            name,
+            Binding {
+                signature,
+                required,
+                call_cost,
+                callback: Box::new(callback),
+            },
+        );
         Ok(())
     }
 
     fn validate(&mut self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
         self.trace.validate_module_scope()?;
         for import in &vm.imports {
-            let binding = self.bindings.get(&import.module)
+            let binding = self
+                .bindings
+                .get(&import.module)
                 .and_then(|bindings| bindings.get(&import.name))
                 .ok_or_else(|| WasmHostError::MissingBinding {
-                    module: import.module.clone(), name: import.name.clone(),
+                    module: import.module.clone(),
+                    name: import.name.clone(),
                 })?;
             let signature = vm.function_type(import.type_index)?;
-            if binding.signature.params != signature.params || binding.signature.results != signature.results {
+            if binding.signature.params != signature.params
+                || binding.signature.results != signature.results
+            {
                 return Err(WasmHostError::SignatureMismatch {
-                    module: import.module.clone(), name: import.name.clone(),
-                }.into());
+                    module: import.module.clone(),
+                    name: import.name.clone(),
+                }
+                .into());
             }
             check_authority(&self.granted, binding, import)?;
             check_revocations(&mut self.revocations, &binding.required, import)?;
@@ -425,14 +549,20 @@ impl WasmHostImports {
                 if memory.minimum > maximum {
                     return Err(WasmStateError::LimitExceeded {
                         resource: "initial memory pages".into(),
-                        actual: u64::from(memory.minimum), max: u64::from(maximum),
-                    }.into());
+                        actual: u64::from(memory.minimum),
+                        max: u64::from(maximum),
+                    }
+                    .into());
                 }
                 u64::from(maximum)
-            } else { 0 };
+            } else {
+                0
+            };
             if let Some(reservation) = &self.memory_reservation {
                 if reservation.pages() != pages {
-                    return Err(invalid("linked memory reservation changed its instance envelope"));
+                    return Err(invalid(
+                        "linked memory reservation changed its instance envelope",
+                    ));
                 }
             } else {
                 self.memory_reservation = Some(pool.reserve(pages)?);
@@ -449,8 +579,14 @@ fn check_exit(status: Option<u32>) -> Result<(), WasmNumericVmError> {
     }
 }
 
-fn remember_exit(status: &mut Option<u32>, outcome: &Result<Vec<WasmBoundaryValue>, WasmNumericVmError>) {
-    if let Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit { code }))) = outcome {
+fn remember_exit(
+    status: &mut Option<u32>,
+    outcome: &Result<Vec<WasmBoundaryValue>, WasmNumericVmError>,
+) {
+    if let Err(WasmNumericVmError::State(WasmStateError::Host(WasmHostError::ProcessExit {
+        code,
+    }))) = outcome
+    {
         // First terminal status wins. Recording failure cannot resurrect an
         // instance whose provider has already terminated it.
         status.get_or_insert(*code);
@@ -465,7 +601,9 @@ fn check_execution_scope(scope: &mut Option<HostCancellation>) -> Result<(), Was
 }
 
 fn check_memory_pool(pool: Option<&WasmMemoryPool>) -> Result<(), WasmNumericVmError> {
-    if let Some(pool) = pool { pool.check_active()?; }
+    if let Some(pool) = pool {
+        pool.check_active()?;
+    }
     Ok(())
 }
 
@@ -476,8 +614,11 @@ fn check_authority(
 ) -> Result<(), WasmNumericVmError> {
     if let Some(capability) = binding.required.difference(granted).next() {
         return Err(WasmHostError::CapabilityDenied {
-            module: import.module.clone(), name: import.name.clone(), capability: *capability,
-        }.into());
+            module: import.module.clone(),
+            name: import.name.clone(),
+            capability: *capability,
+        }
+        .into());
     }
     Ok(())
 }
@@ -488,12 +629,16 @@ fn check_revocations(
     import: &FunctionImport,
 ) -> Result<(), WasmNumericVmError> {
     for capability in required {
-        if revocations.get_mut(capability).is_some_and(HostCancellation::is_cancelled) {
+        if revocations
+            .get_mut(capability)
+            .is_some_and(HostCancellation::is_cancelled)
+        {
             return Err(WasmHostError::CapabilityDenied {
                 module: import.module.clone(),
                 name: import.name.clone(),
                 capability: *capability,
-            }.into());
+            }
+            .into());
         }
     }
     Ok(())
@@ -529,7 +674,9 @@ impl WasmHostCaller<'_, '_> {
     /// earlier budget, memory or live-control fault still wins. This does not
     /// preempt trusted Rust code or terminate the embedding process.
     pub fn exit(&mut self, code: u32) -> WasmNumericVmError {
-        if let Err(error) = self.checkpoint() { return error; }
+        if let Err(error) = self.checkpoint() {
+            return error;
+        }
         let code = *self.exit_status.get_or_insert(code);
         let error: WasmNumericVmError = WasmHostError::ProcessExit { code }.into();
         self.failure = Some(error.clone());
@@ -542,12 +689,18 @@ impl WasmHostCaller<'_, '_> {
     /// failure; ignoring it cannot resume guest execution when the callback
     /// returns. Poll between bounded units of provider work or external I/O.
     pub fn checkpoint(&mut self) -> Result<(), WasmNumericVmError> {
-        if let Some(error) = &self.failure { return Err(error.clone()); }
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
         if let Err(error) = check_execution_scope(self.execution_cancellation) {
             self.failure = Some(error.clone());
             return Err(error);
         }
-        if self.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+        if self
+            .cancellation
+            .as_mut()
+            .is_some_and(HostCancellation::is_cancelled)
+        {
             let error: WasmNumericVmError = WasmHostError::Cancelled.into();
             self.failure = Some(error.clone());
             return Err(error);
@@ -574,11 +727,7 @@ impl WasmHostCaller<'_, '_> {
     /// empty range is valid at, but never beyond, the end of an existing memory.
     /// Charge one work unit per 64 bytes before exposing any bytes. Processing
     /// beyond this access charge still needs the provider's own work metering.
-    pub fn read_memory(
-        &mut self,
-        address: u32,
-        length: u32,
-    ) -> Result<&[u8], WasmNumericVmError> {
+    pub fn read_memory(&mut self, address: u32, length: u32) -> Result<&[u8], WasmNumericVmError> {
         let range = self.prepare_memory_access(address, length as usize)?;
         let memory = self.memory.as_ref().ok_or(WasmHostError::MissingMemory)?;
         Ok(&memory.bytes[range])
@@ -588,11 +737,7 @@ impl WasmHostCaller<'_, '_> {
     /// precharging copy work. Refusal never leaves a partial write. Completed
     /// writes remain visible if a later host operation or guest instruction
     /// traps, just like completed guest stores; this is not a transaction.
-    pub fn write_memory(
-        &mut self,
-        address: u32,
-        bytes: &[u8],
-    ) -> Result<(), WasmNumericVmError> {
+    pub fn write_memory(&mut self, address: u32, bytes: &[u8]) -> Result<(), WasmNumericVmError> {
         let range = self.prepare_memory_access(address, bytes.len())?;
         // Retain the effect before mutation. A recorder refusal is latched
         // just like a bounds/budget refusal and cannot be ignored by providers.
@@ -633,9 +778,18 @@ impl WasmHostCaller<'_, '_> {
     /// a current upper bound, not a reservation against other instances.
     /// A provider must still charge before work; the actual debit is atomic.
     pub fn remaining_work(&self) -> u64 {
-        if let Some(remaining) = self.prepaid_work { return remaining; }
-        let local = self.meter.limits.max_instructions.saturating_sub(self.meter.instructions);
-        self.meter.work_pool.as_ref().map_or(local, |pool| local.min(pool.remaining()))
+        if let Some(remaining) = self.prepaid_work {
+            return remaining;
+        }
+        let local = self
+            .meter
+            .limits
+            .max_instructions
+            .saturating_sub(self.meter.instructions);
+        self.meter
+            .work_pool
+            .as_ref()
+            .map_or(local, |pool| local.min(pool.remaining()))
     }
 
     pub fn charge_work(&mut self, units: u64) -> Result<(), WasmNumericVmError> {
@@ -643,8 +797,10 @@ impl WasmHostCaller<'_, '_> {
         if let Some(remaining) = self.prepaid_work.as_mut() {
             let Some(next) = remaining.checked_sub(units) else {
                 let error: WasmNumericVmError = WasmHostError::PrepaidWorkExceeded {
-                    requested: units, remaining: *remaining,
-                }.into();
+                    requested: units,
+                    remaining: *remaining,
+                }
+                .into();
                 self.failure = Some(error.clone());
                 return Err(error);
             };
@@ -662,15 +818,24 @@ impl WasmHostCaller<'_, '_> {
 impl WasmNumericVm {
     /// Inspect the validated numeric ABI without instantiating or running a
     /// start function. This grants neither an import binding nor host authority.
-    pub fn export_signature(&self, name: &str) -> Result<WasmFunctionSignature, WasmNumericVmError> {
+    pub fn export_signature(
+        &self,
+        name: &str,
+    ) -> Result<WasmFunctionSignature, WasmNumericVmError> {
         if let Some(kind) = self.state.export_kind(name) {
-            return Err(WasmNumericVmError::ExportIsNotFunction { name: name.into(), kind });
+            return Err(WasmNumericVmError::ExportIsNotFunction {
+                name: name.into(),
+                kind,
+            });
         }
-        let export = self.exports.get(name)
+        let export = self
+            .exports
+            .get(name)
             .ok_or_else(|| WasmNumericVmError::UnknownExport { name: name.into() })?;
         let signature = self.function_signature(export.function_index)?;
         Ok(WasmFunctionSignature {
-            params: signature.params.clone(), results: signature.results.clone(),
+            params: signature.params.clone(),
+            results: signature.results.clone(),
         })
     }
 
@@ -698,13 +863,18 @@ impl WasmNumericInstance<'_> {
     /// A provider that panicked after requesting exit still has an interrupted
     /// host boundary; this stored status must not be treated as successful completion.
     pub fn process_exit_status(&self) -> Option<u32> {
-        self.state.host_imports.as_ref().and_then(|imports| imports.exit_status)
+        self.state
+            .host_imports
+            .as_ref()
+            .and_then(|imports| imports.exit_status)
     }
 
     /// Attenuate host authority between invocations. Subsequent direct,
     /// indirect, and exported-import calls all recheck this same envelope.
     pub fn revoke_host_capability(&mut self, capability: RuntimeCapability) -> bool {
-        self.state.host_imports.as_mut()
+        self.state
+            .host_imports
+            .as_mut()
             .is_some_and(|imports| imports.granted.remove(&capability))
     }
 }
@@ -714,13 +884,18 @@ impl InstanceState {
     /// instance's original quota before frame setup, host dispatch or opcodes;
     /// a fresh invocation meter or resumed slice never creates a fresh balance.
     pub(in super::super) fn attach_work_pool(&self, meter: &mut ExecutionMeter<'_>) {
-        meter.work_pool = self.host_imports.as_ref().and_then(|imports| imports.work_pool.clone());
+        meter.work_pool = self
+            .host_imports
+            .as_ref()
+            .and_then(|imports| imports.work_pool.clone());
     }
 
     /// Instruction/activation polling must not turn a host-only revocation
     /// into guest cancellation. Normal process exit is independently terminal
     /// for all guest execution. No registry means neither kind of subscription.
-    pub(in super::super) fn check_execution_cancellation(&mut self) -> Result<(), WasmNumericVmError> {
+    pub(in super::super) fn check_execution_cancellation(
+        &mut self,
+    ) -> Result<(), WasmNumericVmError> {
         if let Some(imports) = self.host_imports.as_mut() {
             imports.check_host_integrity()?;
             check_exit(imports.exit_status)?;
@@ -737,55 +912,89 @@ impl InstanceState {
         arguments: &[WasmBoundaryValue],
         meter: &mut ExecutionMeter<'_>,
     ) -> Result<Vec<WasmBoundaryValue>, WasmNumericVmError> {
-        let import = vm.imports.get(function_index as usize)
+        let import = vm
+            .imports
+            .get(function_index as usize)
             .ok_or(WasmNumericVmError::UnknownFunction { function_index })?;
         let Some(imports) = self.host_imports.as_mut() else {
             // Preserve the compute-only/default API's fail-closed behavior.
             return Err(WasmNumericVmError::ImportedFunctionUnsupported {
-                function_index, module: import.module.clone(), name: import.name.clone(),
+                function_index,
+                module: import.module.clone(),
+                name: import.name.clone(),
             });
         };
         imports.check_cancellation()?;
         let signature = vm.function_type(import.type_index)?;
         validate_arguments(function_index, signature, arguments)?;
-        let binding = imports.bindings.get_mut(&import.module)
+        let binding = imports
+            .bindings
+            .get_mut(&import.module)
             .and_then(|bindings| bindings.get_mut(&import.name))
             .ok_or_else(|| WasmHostError::MissingBinding {
-                module: import.module.clone(), name: import.name.clone(),
+                module: import.module.clone(),
+                name: import.name.clone(),
             })?;
         check_authority(&imports.granted, binding, import)?;
         check_revocations(&mut imports.revocations, &binding.required, import)?;
         // Precharge ABI checking as well as the provider's declared fixed cost.
         // Overflow is a refusal, never a wrapped/saturated cheap host call.
-        let abi_work = (signature.params.len().saturating_add(signature.results.len()) as u64).div_ceil(64);
-        let cost = binding.call_cost.checked_add(abi_work)
-            .ok_or(WasmNumericVmError::InstructionBudgetExceeded { max: meter.limits.max_instructions })?;
+        let abi_work = (signature
+            .params
+            .len()
+            .saturating_add(signature.results.len()) as u64)
+            .div_ceil(64);
+        let cost = binding.call_cost.checked_add(abi_work).ok_or(
+            WasmNumericVmError::InstructionBudgetExceeded {
+                max: meter.limits.max_instructions,
+            },
+        )?;
         meter.charge_work(cost)?;
         let memory_identity = if imports.trace.enabled() {
             if let Some(memory) = &self.memory {
                 meter.charge_work((memory.bytes.len() as u64).div_ceil(64))?;
-                Some((memory.bytes.len() as u64, ContentHash::compute(&memory.bytes)))
-            } else { None }
-        } else { None };
+                Some((
+                    memory.bytes.len() as u64,
+                    ContentHash::compute(&memory.bytes),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let entry_work = meter.instructions;
         let mut trace = imports.trace.begin(host_replay::CallContext {
-            module: &import.module, name: &import.name, function_index, arguments,
-            signature: &binding.signature, required: &binding.required,
-            call_cost: binding.call_cost, limits: meter.limits, entry_work,
-            call_depth: meter.max_call_depth, memory: memory_identity,
+            module: &import.module,
+            name: &import.name,
+            function_index,
+            arguments,
+            signature: &binding.signature,
+            required: &binding.required,
+            call_cost: binding.call_cost,
+            limits: meter.limits,
+            entry_work,
+            call_depth: meter.max_call_depth,
+            memory: memory_identity,
         })?;
         let outcome = if let host_replay::TraceCall::Replay(mut playback) = trace {
             // Validate every destination and charge all recorded provider work
             // before the first replay write. Divergence never partly replays a
             // callback. Earlier completed guest instructions remain intact.
             for write in &playback.call.writes {
-                self.memory.as_ref().ok_or(WasmHostError::MissingMemory)?
+                self.memory
+                    .as_ref()
+                    .ok_or(WasmHostError::MissingMemory)?
                     .range(write.address, 0, write.bytes.len())?;
             }
             meter.charge_work(playback.call.work)?;
             for write in &playback.call.writes {
                 check_execution_scope(&mut imports.execution_cancellation)?;
-                if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+                if imports
+                    .cancellation
+                    .as_mut()
+                    .is_some_and(HostCancellation::is_cancelled)
+                {
                     return Err(WasmHostError::Cancelled.into());
                 }
                 check_revocations(&mut imports.revocations, &binding.required, import)?;
@@ -795,7 +1004,11 @@ impl InstanceState {
                 memory.bytes[range].copy_from_slice(&write.bytes);
             }
             check_execution_scope(&mut imports.execution_cancellation)?;
-            if imports.cancellation.as_mut().is_some_and(HostCancellation::is_cancelled) {
+            if imports
+                .cancellation
+                .as_mut()
+                .is_some_and(HostCancellation::is_cancelled)
+            {
                 return Err(WasmHostError::Cancelled.into());
             }
             check_revocations(&mut imports.revocations, &binding.required, import)?;
@@ -813,10 +1026,15 @@ impl InstanceState {
             imports.host_call_in_progress = true;
             let outcome = {
                 let mut caller = WasmHostCaller {
-                    meter, memory: &mut self.memory, failure: None,
-                    recording: trace.recording(), cancellation: &mut imports.cancellation,
+                    meter,
+                    memory: &mut self.memory,
+                    failure: None,
+                    recording: trace.recording(),
+                    cancellation: &mut imports.cancellation,
                     execution_cancellation: &mut imports.execution_cancellation,
-                    revocations: &mut imports.revocations, required: &binding.required, import,
+                    revocations: &mut imports.revocations,
+                    required: &binding.required,
+                    import,
                     exit_status: &mut imports.exit_status,
                     memory_pool: imports.memory_pool.as_ref(),
                     prepaid_work: None,
@@ -841,11 +1059,16 @@ impl InstanceState {
         let results = outcome?;
         if results.len() != signature.results.len() {
             return Err(WasmNumericVmError::ResultStackMismatch {
-                function_index, expected: signature.results.len(), actual: results.len(),
+                function_index,
+                expected: signature.results.len(),
+                actual: results.len(),
             });
         }
-        for (index, (expected, actual)) in signature.results.iter()
-            .zip(results.iter().map(WasmBoundaryValue::value_type)).enumerate()
+        for (index, (expected, actual)) in signature
+            .results
+            .iter()
+            .zip(results.iter().map(WasmBoundaryValue::value_type))
+            .enumerate()
         {
             ensure_same_type(function_index, index, *expected, actual)?;
         }

@@ -29,22 +29,42 @@ fn unsupported(function: u32, offset: usize) -> WasmNumericVmError {
 
 #[derive(Clone, Copy)]
 enum Instruction {
-    Saturating { subopcode: u32, input: WasmValueType, output: WasmValueType },
-    MemoryInit { data_index: u32 },
-    DataDrop { data_index: u32 },
+    Saturating {
+        subopcode: u32,
+        input: WasmValueType,
+        output: WasmValueType,
+    },
+    MemoryInit {
+        data_index: u32,
+    },
+    DataDrop {
+        data_index: u32,
+    },
     MemoryCopy,
     MemoryFill,
-    TableInit { element: u32, table: u32 },
-    ElementDrop { element: u32 },
-    TableCopy { destination: u32, source: u32 },
-    TableSize { table: u32 },
+    TableInit {
+        element: u32,
+        table: u32,
+    },
+    ElementDrop {
+        element: u32,
+    },
+    TableCopy {
+        destination: u32,
+        source: u32,
+    },
+    TableSize {
+        table: u32,
+    },
 }
 
 fn memory_zero(reader: &mut CodeReader<'_>, function: u32) -> Result<(), WasmNumericVmError> {
     // A memory index is a u32 LEB, not a single-byte opcode. This accepts valid
     // padded encodings while still refusing a reference to any other memory.
     if reader.read_u32_leb(function)? != 0 {
-        return Err(invalid("bulk memory instruction requires memory index zero"));
+        return Err(invalid(
+            "bulk memory instruction requires memory index zero",
+        ));
     }
     Ok(())
 }
@@ -53,7 +73,11 @@ fn decode(reader: &mut CodeReader<'_>, function: u32) -> Result<Instruction, Was
     let offset = reader.offset().saturating_sub(1);
     let subopcode = reader.read_u32_leb(function)?;
     if let Some((input, output)) = conversion_signature(subopcode) {
-        return Ok(Instruction::Saturating { subopcode, input, output });
+        return Ok(Instruction::Saturating {
+            subopcode,
+            input,
+            output,
+        });
     }
     match subopcode {
         8 => {
@@ -61,7 +85,9 @@ fn decode(reader: &mut CodeReader<'_>, function: u32) -> Result<Instruction, Was
             memory_zero(reader, function)?;
             Ok(Instruction::MemoryInit { data_index })
         }
-        9 => Ok(Instruction::DataDrop { data_index: reader.read_u32_leb(function)? }),
+        9 => Ok(Instruction::DataDrop {
+            data_index: reader.read_u32_leb(function)?,
+        }),
         10 => {
             memory_zero(reader, function)?;
             memory_zero(reader, function)?;
@@ -76,12 +102,16 @@ fn decode(reader: &mut CodeReader<'_>, function: u32) -> Result<Instruction, Was
             element: reader.read_u32_leb(function)?,
             table: reader.read_u32_leb(function)?,
         }),
-        13 => Ok(Instruction::ElementDrop { element: reader.read_u32_leb(function)? }),
+        13 => Ok(Instruction::ElementDrop {
+            element: reader.read_u32_leb(function)?,
+        }),
         14 => Ok(Instruction::TableCopy {
             destination: reader.read_u32_leb(function)?,
             source: reader.read_u32_leb(function)?,
         }),
-        16 => Ok(Instruction::TableSize { table: reader.read_u32_leb(function)? }),
+        16 => Ok(Instruction::TableSize {
+            table: reader.read_u32_leb(function)?,
+        }),
         _ => Err(unsupported(function, offset)),
     }
 }
@@ -99,37 +129,61 @@ pub(super) fn validate(
         Instruction::TableInit { element, table } => {
             state.tables.validate_element(element)?;
             state.validate_table(table)?;
-            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+            Ok(StackEffect {
+                pop: [Some(WasmValueType::I32); 3],
+                push: None,
+            })
         }
         Instruction::ElementDrop { element } => {
             state.tables.validate_element(element)?;
-            Ok(StackEffect { pop: [None; 3], push: None })
+            Ok(StackEffect {
+                pop: [None; 3],
+                push: None,
+            })
         }
         Instruction::MemoryInit { data_index } => {
             state.validate_data(data_index)?;
             if state.memory.is_none() {
                 return Err(invalid("memory.init requires memory zero"));
             }
-            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+            Ok(StackEffect {
+                pop: [Some(WasmValueType::I32); 3],
+                push: None,
+            })
         }
         Instruction::DataDrop { data_index } => {
             state.validate_data(data_index)?;
-            Ok(StackEffect { pop: [None; 3], push: None })
+            Ok(StackEffect {
+                pop: [None; 3],
+                push: None,
+            })
         }
-        Instruction::TableCopy { destination, source } => {
+        Instruction::TableCopy {
+            destination,
+            source,
+        } => {
             state.validate_table(destination)?;
             state.validate_table(source)?;
-            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+            Ok(StackEffect {
+                pop: [Some(WasmValueType::I32); 3],
+                push: None,
+            })
         }
         Instruction::TableSize { table } => {
             state.validate_table(table)?;
-            Ok(StackEffect { pop: [None; 3], push: Some(WasmValueType::I32) })
+            Ok(StackEffect {
+                pop: [None; 3],
+                push: Some(WasmValueType::I32),
+            })
         }
         Instruction::MemoryCopy | Instruction::MemoryFill => {
             if state.memory.is_none() {
                 return Err(invalid("bulk memory instruction requires memory zero"));
             }
-            Ok(StackEffect { pop: [Some(WasmValueType::I32); 3], push: None })
+            Ok(StackEffect {
+                pop: [Some(WasmValueType::I32); 3],
+                push: None,
+            })
         }
     }
 }
@@ -171,7 +225,10 @@ pub(super) fn execute(
     function: u32,
 ) -> Result<(), WasmNumericVmError> {
     let instruction = decode(reader, function)?;
-    if let Instruction::Saturating { subopcode, input, .. } = instruction {
+    if let Instruction::Saturating {
+        subopcode, input, ..
+    } = instruction
+    {
         return saturate(subopcode, input, stack, meter, function);
     }
     if let Instruction::ElementDrop { element } = instruction {
@@ -182,7 +239,9 @@ pub(super) fn execute(
         return push_value(stack, WasmBoundaryValue::I32(size as i32), meter);
     }
     if let Instruction::DataDrop { data_index } = instruction {
-        let segment = state.data.get_mut(data_index as usize)
+        let segment = state
+            .data
+            .get_mut(data_index as usize)
             .ok_or(WasmStateError::UnknownDataSegment { data_index })?;
         // Idempotent, including an already-dropped active segment. The VM's
         // opcode tick has already succeeded; no other instance is changed.
@@ -193,28 +252,47 @@ pub(super) fn execute(
     let source_or_byte = expect_i32(pop_value(stack, function, PREFIX)?, function, 1)? as u32;
     let destination = expect_i32(pop_value(stack, function, PREFIX)?, function, 0)? as u32;
     if let Instruction::TableInit { element, table } = instruction {
-        return state.tables.init(table, element, destination, source_or_byte, length, meter);
+        return state
+            .tables
+            .init(table, element, destination, source_or_byte, length, meter);
     }
-    if let Instruction::TableCopy { destination: to, source: from } = instruction {
-        return state.tables.copy(to, from, destination, source_or_byte, length, meter);
+    if let Instruction::TableCopy {
+        destination: to,
+        source: from,
+    } = instruction
+    {
+        return state
+            .tables
+            .copy(to, from, destination, source_or_byte, length, meter);
     }
-    let memory = state.memory.as_mut().ok_or_else(|| invalid("missing validated memory"))?;
+    let memory = state
+        .memory
+        .as_mut()
+        .ok_or_else(|| invalid("missing validated memory"))?;
     let destination_range = memory.range(destination, 0, length as usize)?;
     match instruction {
         Instruction::MemoryInit { data_index } => {
-            let data = state.data.get(data_index as usize)
+            let data = state
+                .data
+                .get(data_index as usize)
                 .ok_or(WasmStateError::UnknownDataSegment { data_index })?
-                .as_deref().unwrap_or(&[]);
+                .as_deref()
+                .unwrap_or(&[]);
             let end = u64::from(source_or_byte) + u64::from(length);
             if end > data.len() as u64 {
                 return Err(WasmStateError::DataSourceOutOfBounds {
-                    data_index, offset: source_or_byte, length, data_bytes: data.len() as u64,
-                }.into());
+                    data_index,
+                    offset: source_or_byte,
+                    length,
+                    data_bytes: data.len() as u64,
+                }
+                .into());
             }
             // Use the same per-64-byte work charge as memory.copy/fill/grow.
             // All checks and the complete charge precede the first write.
             meter.charge_work(u64::from(length).div_ceil(64))?;
-            memory.bytes[destination_range].copy_from_slice(&data[source_or_byte as usize..end as usize]);
+            memory.bytes[destination_range]
+                .copy_from_slice(&data[source_or_byte as usize..end as usize]);
         }
         Instruction::MemoryCopy => {
             let source_range = memory.range(source_or_byte, 0, length as usize)?;
@@ -222,7 +300,9 @@ pub(super) fn execute(
             // in addition to the VM's opcode tick. Neither refusal nor a
             // bounds trap may expose a partially copied destination.
             meter.charge_work(u64::from(length).div_ceil(64))?;
-            memory.bytes.copy_within(source_range, destination_range.start);
+            memory
+                .bytes
+                .copy_within(source_range, destination_range.start);
         }
         Instruction::MemoryFill => {
             meter.charge_work(u64::from(length).div_ceil(64))?;

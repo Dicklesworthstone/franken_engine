@@ -1256,7 +1256,11 @@ mod tests {
         let narrowed = logging.meet(&network);
         let secret = lattice.assign_source_label(&DataSource::EnvironmentVariable);
         assert_eq!(narrowed, Clearance::NeverSink);
-        assert!(lattice.check_flow(&secret, &narrowed, "blocked").is_blocked());
+        assert!(
+            lattice
+                .check_flow(&secret, &narrowed, "blocked")
+                .is_blocked()
+        );
         lattice
             .register_obligation(DeclassificationObligation {
                 obligation_id: "explicit-egress".into(),
@@ -3421,7 +3425,9 @@ mod tests {
         for label in &labels {
             let authority = AuthorityLattice::new(label.clone(), caps.clone(), budget);
             for clearance in &clearances {
-                let ordinary = lattice.check_flow(label, clearance, "consistency").is_legal();
+                let ordinary = lattice
+                    .check_flow(label, clearance, "consistency")
+                    .is_legal();
                 let unified = lattice
                     .check_unified_flow_authority(&authority, clearance.clone(), &caps, &budget)
                     .expect("evaluate unified authority");

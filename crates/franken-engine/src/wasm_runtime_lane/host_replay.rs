@@ -23,10 +23,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
+use super::numeric::{WasmHostError, WasmNumericLimits, WasmNumericVmError};
+use super::{WasmBoundaryValue, WasmFunctionSignature};
 use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
-use super::{WasmBoundaryValue, WasmFunctionSignature};
-use super::numeric::{WasmHostError, WasmNumericLimits, WasmNumericVmError};
 
 type Outcome = Result<Vec<WasmBoundaryValue>, WasmNumericVmError>;
 const VERSION: u32 = 2;
@@ -42,7 +42,12 @@ pub struct WasmHostTraceLimits {
 }
 
 impl Default for WasmHostTraceLimits {
-    fn default() -> Self { Self { max_calls: 4096, max_bytes: 8 * 1024 * 1024 } }
+    fn default() -> Self {
+        Self {
+            max_calls: 4096,
+            max_bytes: 8 * 1024 * 1024,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,41 +71,59 @@ impl fmt::Display for WasmHostTraceError {
             Self::LimitExceeded => f.write_str("host transcript limit exceeded"),
             Self::Unavailable => f.write_str("host transcript is busy, poisoned or incomplete"),
             Self::InvalidTranscript => f.write_str("invalid host transcript or digest"),
-            Self::ModuleMismatch => f.write_str("host transcript does not belong to this resolved module"),
+            Self::ModuleMismatch => {
+                f.write_str("host transcript does not belong to this resolved module")
+            }
             Self::Diverged { call } => write!(f, "host replay diverged at call {call}"),
             Self::Exhausted { call } => write!(f, "host replay exhausted before call {call}"),
-            Self::Incomplete { remaining } => write!(f, "host replay has {remaining} unconsumed calls"),
+            Self::Incomplete { remaining } => {
+                write!(f, "host replay has {remaining} unconsumed calls")
+            }
         }
     }
 }
 
 impl std::error::Error for WasmHostTraceError {}
 impl From<WasmHostTraceError> for WasmNumericVmError {
-    fn from(error: WasmHostTraceError) -> Self { WasmHostError::Trace(error).into() }
+    fn from(error: WasmHostTraceError) -> Self {
+        WasmHostError::Trace(error).into()
+    }
 }
 
 fn checked_limits(limits: WasmHostTraceLimits) -> Result<(), WasmHostTraceError> {
-    if limits.max_bytes < ENVELOPE_RESERVE { return Err(WasmHostTraceError::InvalidLimits); }
+    if limits.max_bytes < ENVELOPE_RESERVE {
+        return Err(WasmHostTraceError::InvalidLimits);
+    }
     Ok(())
 }
 
 // Stop serialization at the byte ceiling rather than allocating an unbounded
 // JSON buffer and checking afterward. Vec growth is fallible too.
-struct BoundedJson { bytes: Vec<u8>, max: usize }
+struct BoundedJson {
+    bytes: Vec<u8>,
+    max: usize,
+}
 impl Write for BoundedJson {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > self.max.saturating_sub(self.bytes.len()) {
             return Err(io::Error::other("transcript byte limit"));
         }
-        self.bytes.try_reserve(bytes.len()).map_err(io::Error::other)?;
+        self.bytes
+            .try_reserve(bytes.len())
+            .map_err(io::Error::other)?;
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn json(value: &impl Serialize, max: usize) -> Result<Vec<u8>, WasmHostTraceError> {
-    let mut writer = BoundedJson { bytes: Vec::new(), max };
+    let mut writer = BoundedJson {
+        bytes: Vec::new(),
+        max,
+    };
     serde_json::to_writer(&mut writer, value).map_err(|_| WasmHostTraceError::LimitExceeded)?;
     Ok(writer.bytes)
 }
@@ -138,11 +161,16 @@ pub(crate) struct CallContext<'a> {
 
 impl Header {
     fn matches(&self, other: &CallContext<'_>) -> bool {
-        self.module == other.module && self.name == other.name
-            && self.function_index == other.function_index && self.arguments.as_slice() == other.arguments
-            && self.signature == *other.signature && self.required == *other.required
-            && self.call_cost == other.call_cost && self.limits == *other.limits
-            && self.entry_work == other.entry_work && self.call_depth == other.call_depth
+        self.module == other.module
+            && self.name == other.name
+            && self.function_index == other.function_index
+            && self.arguments.as_slice() == other.arguments
+            && self.signature == *other.signature
+            && self.required == *other.required
+            && self.call_cost == other.call_cost
+            && self.limits == *other.limits
+            && self.entry_work == other.entry_work
+            && self.call_depth == other.call_depth
             && self.memory == other.memory
     }
 }
@@ -165,26 +193,43 @@ pub(crate) struct CallRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TranscriptData { version: u32, scope: ModuleScope, calls: Vec<CallRecord> }
+struct TranscriptData {
+    version: u32,
+    scope: ModuleScope,
+    calls: Vec<CallRecord>,
+}
 
 // An explicit enum makes the scope field mandatory on the wire. In particular,
 // an omitted field cannot deserialize as an implicitly unscoped Option::None.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ModuleScope { Unscoped, Resolved(ContentHash) }
+enum ModuleScope {
+    Unscoped,
+    Resolved(ContentHash),
+}
 
 /// Immutable recorded host effects. Deserialize only through `from_json`, which
 /// enforces the caller's byte/call ceilings, schema and content digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WasmHostTranscript { data: TranscriptData, digest: ContentHash }
+pub struct WasmHostTranscript {
+    data: TranscriptData,
+    digest: ContentHash,
+}
 
 impl WasmHostTranscript {
-    pub fn call_count(&self) -> usize { self.data.calls.len() }
-    pub fn digest(&self) -> ContentHash { self.digest }
+    pub fn call_count(&self) -> usize {
+        self.data.calls.len()
+    }
+    pub fn digest(&self) -> ContentHash {
+        self.digest
+    }
 
     /// Pinned canonical module-record hash for resolver-backed recordings.
     /// Raw numeric VM recordings have no module identity and return None.
     pub fn module_hash(&self) -> Option<ContentHash> {
-        match self.data.scope { ModuleScope::Unscoped => None, ModuleScope::Resolved(hash) => Some(hash) }
+        match self.data.scope {
+            ModuleScope::Unscoped => None,
+            ModuleScope::Resolved(hash) => Some(hash),
+        }
     }
 
     pub fn to_json(&self, limits: WasmHostTraceLimits) -> Result<Vec<u8>, WasmHostTraceError> {
@@ -192,42 +237,71 @@ impl WasmHostTranscript {
         json(self, limits.max_bytes)
     }
 
-    pub fn from_json(bytes: &[u8], limits: WasmHostTraceLimits) -> Result<Self, WasmHostTraceError> {
+    pub fn from_json(
+        bytes: &[u8],
+        limits: WasmHostTraceLimits,
+    ) -> Result<Self, WasmHostTraceError> {
         checked_limits(limits)?;
-        if bytes.len() > limits.max_bytes { return Err(WasmHostTraceError::LimitExceeded); }
+        if bytes.len() > limits.max_bytes {
+            return Err(WasmHostTraceError::LimitExceeded);
+        }
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Wire { data: TranscriptData, digest: ContentHash }
-        let wire: Wire = serde_json::from_slice(bytes).map_err(|_| WasmHostTraceError::InvalidTranscript)?;
-        let transcript = Self { data: wire.data, digest: wire.digest };
+        struct Wire {
+            data: TranscriptData,
+            digest: ContentHash,
+        }
+        let wire: Wire =
+            serde_json::from_slice(bytes).map_err(|_| WasmHostTraceError::InvalidTranscript)?;
+        let transcript = Self {
+            data: wire.data,
+            digest: wire.digest,
+        };
         transcript.validate(limits)?;
         Ok(transcript)
     }
 
     fn validate(&self, limits: WasmHostTraceLimits) -> Result<(), WasmHostTraceError> {
         checked_limits(limits)?;
-        if self.data.calls.len() > limits.max_calls { return Err(WasmHostTraceError::LimitExceeded); }
-        if self.data.version != VERSION { return Err(WasmHostTraceError::InvalidTranscript); }
+        if self.data.calls.len() > limits.max_calls {
+            return Err(WasmHostTraceError::LimitExceeded);
+        }
+        if self.data.version != VERSION {
+            return Err(WasmHostTraceError::InvalidTranscript);
+        }
         // Bound the complete envelope as well as the digest's payload.
         json(self, limits.max_bytes)?;
         let bytes = json(&self.data, limits.max_bytes)?;
-        if ContentHash::compute(&bytes) != self.digest { return Err(WasmHostTraceError::InvalidTranscript); }
+        if ContentHash::compute(&bytes) != self.digest {
+            return Err(WasmHostTraceError::InvalidTranscript);
+        }
         for call in &self.data.calls {
-            if call.header.entry_work.checked_add(call.work)
+            if call
+                .header
+                .entry_work
+                .checked_add(call.work)
                 .is_none_or(|work| work > call.header.limits.max_instructions)
-            { return Err(WasmHostTraceError::InvalidTranscript); }
+            {
+                return Err(WasmHostTraceError::InvalidTranscript);
+            }
             // Only completed writes are retained. Validate all ranges now,
             // including unsigned overflow, before any replay instance exists.
             let mut write_work = 0_u64;
             for write in &call.writes {
-                write_work = write_work.checked_add((write.bytes.len() as u64).div_ceil(64))
+                write_work = write_work
+                    .checked_add((write.bytes.len() as u64).div_ceil(64))
                     .ok_or(WasmHostTraceError::InvalidTranscript)?;
-                if call.header.memory.is_none_or(|(size, _)|
-                    (write.address as u64).checked_add(write.bytes.len() as u64)
-                        .is_none_or(|end| end > size))
-                { return Err(WasmHostTraceError::InvalidTranscript); }
+                if call.header.memory.is_none_or(|(size, _)| {
+                    (write.address as u64)
+                        .checked_add(write.bytes.len() as u64)
+                        .is_none_or(|end| end > size)
+                }) {
+                    return Err(WasmHostTraceError::InvalidTranscript);
+                }
             }
-            if write_work > call.work { return Err(WasmHostTraceError::InvalidTranscript); }
+            if write_work > call.work {
+                return Err(WasmHostTraceError::InvalidTranscript);
+            }
         }
         Ok(())
     }
@@ -244,7 +318,9 @@ struct RecordingState {
 }
 
 fn lock<T>(state: &Mutex<T>) -> Result<MutexGuard<'_, T>, WasmHostTraceError> {
-    state.try_lock().map_err(|_| WasmHostTraceError::Unavailable)
+    state
+        .try_lock()
+        .map_err(|_| WasmHostTraceError::Unavailable)
 }
 
 /// Read-only observer that survives a trapped start function. Inspection never
@@ -257,15 +333,25 @@ impl WasmHostRecording {
     fn new(limits: WasmHostTraceLimits) -> Result<Self, WasmHostTraceError> {
         checked_limits(limits)?;
         Ok(Self(Arc::new(Mutex::new(RecordingState {
-            limits, scope: ModuleScope::Unscoped, calls: Vec::new(),
-            used: ENVELOPE_RESERVE, active: false, failed: false,
+            limits,
+            scope: ModuleScope::Unscoped,
+            calls: Vec::new(),
+            used: ENVELOPE_RESERVE,
+            active: false,
+            failed: false,
         }))))
     }
 
     pub fn snapshot(&self) -> Result<WasmHostTranscript, WasmHostTraceError> {
         let state = lock(&self.0)?;
-        if state.failed || state.active { return Err(WasmHostTraceError::Unavailable); }
-        let data = TranscriptData { version: VERSION, scope: state.scope, calls: state.calls.clone() };
+        if state.failed || state.active {
+            return Err(WasmHostTraceError::Unavailable);
+        }
+        let data = TranscriptData {
+            version: VERSION,
+            scope: state.scope,
+            calls: state.calls.clone(),
+        };
         let digest = ContentHash::compute(&json(&data, state.limits.max_bytes)?);
         let transcript = WasmHostTranscript { data, digest };
         transcript.validate(state.limits)?;
@@ -292,12 +378,16 @@ pub struct WasmHostReplay(Arc<Mutex<ReplayState>>);
 impl WasmHostReplay {
     pub fn verify_complete(&self) -> Result<(), WasmHostTraceError> {
         let state = lock(&self.0)?;
-        if state.failed || state.active { return Err(WasmHostTraceError::Unavailable); }
+        if state.failed || state.active {
+            return Err(WasmHostTraceError::Unavailable);
+        }
         if state.transcript.module_hash() != state.bound_module {
             return Err(WasmHostTraceError::ModuleMismatch);
         }
         let remaining = state.transcript.call_count() - state.next;
-        if remaining != 0 { return Err(WasmHostTraceError::Incomplete { remaining }); }
+        if remaining != 0 {
+            return Err(WasmHostTraceError::Incomplete { remaining });
+        }
         Ok(())
     }
 }
@@ -311,20 +401,37 @@ pub(crate) enum TraceMode {
 }
 
 impl TraceMode {
-    pub fn enabled(&self) -> bool { !matches!(self, Self::Off) }
+    pub fn enabled(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
 
-    pub fn record(&mut self, limits: WasmHostTraceLimits) -> Result<WasmHostRecording, WasmHostTraceError> {
-        if self.enabled() { return Err(WasmHostTraceError::AlreadyConfigured); }
+    pub fn record(
+        &mut self,
+        limits: WasmHostTraceLimits,
+    ) -> Result<WasmHostRecording, WasmHostTraceError> {
+        if self.enabled() {
+            return Err(WasmHostTraceError::AlreadyConfigured);
+        }
         let recording = WasmHostRecording::new(limits)?;
         *self = Self::Record(recording.clone());
         Ok(recording)
     }
 
-    pub fn replay(&mut self, transcript: WasmHostTranscript, limits: WasmHostTraceLimits) -> Result<WasmHostReplay, WasmHostTraceError> {
-        if self.enabled() { return Err(WasmHostTraceError::AlreadyConfigured); }
+    pub fn replay(
+        &mut self,
+        transcript: WasmHostTranscript,
+        limits: WasmHostTraceLimits,
+    ) -> Result<WasmHostReplay, WasmHostTraceError> {
+        if self.enabled() {
+            return Err(WasmHostTraceError::AlreadyConfigured);
+        }
         transcript.validate(limits)?;
         let replay = WasmHostReplay(Arc::new(Mutex::new(ReplayState {
-            transcript, bound_module: None, next: 0, active: false, failed: false,
+            transcript,
+            bound_module: None,
+            next: 0,
+            active: false,
+            failed: false,
         })));
         *self = Self::Replay(replay.clone());
         Ok(replay)
@@ -337,8 +444,12 @@ impl TraceMode {
             Self::Off => Ok(()),
             Self::Record(recording) => {
                 let mut state = lock(&recording.0)?;
-                if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
-                if !state.calls.is_empty() || matches!(state.scope, ModuleScope::Resolved(old) if old != hash) {
+                if state.active || state.failed {
+                    return Err(WasmHostTraceError::Unavailable);
+                }
+                if !state.calls.is_empty()
+                    || matches!(state.scope, ModuleScope::Resolved(old) if old != hash)
+                {
                     state.failed = true;
                     return Err(WasmHostTraceError::ModuleMismatch);
                 }
@@ -347,8 +458,11 @@ impl TraceMode {
             }
             Self::Replay(replay) => {
                 let mut state = lock(&replay.0)?;
-                if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
-                if state.next != 0 || state.transcript.module_hash() != Some(hash)
+                if state.active || state.failed {
+                    return Err(WasmHostTraceError::Unavailable);
+                }
+                if state.next != 0
+                    || state.transcript.module_hash() != Some(hash)
                     || state.bound_module.is_some_and(|old| old != hash)
                 {
                     state.failed = true;
@@ -365,7 +479,9 @@ impl TraceMode {
     pub fn validate_module_scope(&self) -> Result<(), WasmHostTraceError> {
         if let Self::Replay(replay) = self {
             let mut state = lock(&replay.0)?;
-            if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
+            if state.active || state.failed {
+                return Err(WasmHostTraceError::Unavailable);
+            }
             if state.transcript.module_hash() != state.bound_module {
                 state.failed = true;
                 return Err(WasmHostTraceError::ModuleMismatch);
@@ -379,26 +495,39 @@ impl TraceMode {
             Self::Off => Ok(TraceCall::Off),
             Self::Record(recording) => {
                 let mut state = lock(&recording.0)?;
-                if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
+                if state.active || state.failed {
+                    return Err(WasmHostTraceError::Unavailable);
+                }
                 let room = state.limits.max_bytes.saturating_sub(state.used);
                 let encoded = json(&context, room);
-                if state.calls.len() >= state.limits.max_calls || encoded.is_err() || state.calls.try_reserve(1).is_err() {
+                if state.calls.len() >= state.limits.max_calls
+                    || encoded.is_err()
+                    || state.calls.try_reserve(1).is_err()
+                {
                     state.failed = true;
                     return Err(WasmHostTraceError::LimitExceeded);
                 }
                 let encoded = encoded?;
                 // Decode the already bounded shape rather than cloning before
                 // the byte limit has been checked. No user-controlled parser.
-                let header: Header = serde_json::from_slice(&encoded).map_err(|_| WasmHostTraceError::InvalidTranscript)?;
+                let header: Header = serde_json::from_slice(&encoded)
+                    .map_err(|_| WasmHostTraceError::InvalidTranscript)?;
                 state.active = true;
                 Ok(TraceCall::Record(CallRecording {
-                    owner: recording.clone(), header, writes: Vec::new(),
-                    room, used: encoded.len(), failed: false, finished: false,
+                    owner: recording.clone(),
+                    header,
+                    writes: Vec::new(),
+                    room,
+                    used: encoded.len(),
+                    failed: false,
+                    finished: false,
                 }))
             }
             Self::Replay(replay) => {
                 let mut state = lock(&replay.0)?;
-                if state.active || state.failed { return Err(WasmHostTraceError::Unavailable); }
+                if state.active || state.failed {
+                    return Err(WasmHostTraceError::Unavailable);
+                }
                 let index = state.next;
                 let Some(call) = state.transcript.data.calls.get(index) else {
                     state.failed = true;
@@ -410,19 +539,32 @@ impl TraceMode {
                 }
                 let call = call.clone();
                 state.active = true;
-                Ok(TraceCall::Replay(Playback { owner: replay.clone(), call, finished: false }))
+                Ok(TraceCall::Replay(Playback {
+                    owner: replay.clone(),
+                    call,
+                    finished: false,
+                }))
             }
         }
     }
 }
 
-pub(crate) enum TraceCall { Off, Record(CallRecording), Replay(Playback) }
+pub(crate) enum TraceCall {
+    Off,
+    Record(CallRecording),
+    Replay(Playback),
+}
 impl TraceCall {
     pub fn recording(&mut self) -> Option<&mut CallRecording> {
-        match self { Self::Record(recording) => Some(recording), _ => None }
+        match self {
+            Self::Record(recording) => Some(recording),
+            _ => None,
+        }
     }
     pub fn finish(mut self, work: u64, outcome: &Outcome) -> Result<(), WasmHostTraceError> {
-        if let Self::Record(recording) = &mut self { recording.finish(work, outcome)?; }
+        if let Self::Record(recording) = &mut self {
+            recording.finish(work, outcome)?;
+        }
         Ok(())
     }
 }
@@ -440,32 +582,67 @@ pub(crate) struct CallRecording {
 impl CallRecording {
     pub fn write(&mut self, address: u32, bytes: &[u8]) -> Result<(), WasmHostTraceError> {
         let result = self.append_write(address, bytes);
-        if result.is_err() { self.failed = true; }
+        if result.is_err() {
+            self.failed = true;
+        }
         result
     }
 
     fn append_write(&mut self, address: u32, bytes: &[u8]) -> Result<(), WasmHostTraceError> {
-        if self.failed { return Err(WasmHostTraceError::Unavailable); }
+        if self.failed {
+            return Err(WasmHostTraceError::Unavailable);
+        }
         #[derive(Serialize)]
-        struct WriteRef<'a> { address: u32, bytes: &'a [u8] }
-        let encoded = json(&WriteRef { address, bytes }, self.room.saturating_sub(self.used))?;
-        self.writes.try_reserve(1).map_err(|_| WasmHostTraceError::LimitExceeded)?;
+        struct WriteRef<'a> {
+            address: u32,
+            bytes: &'a [u8],
+        }
+        let encoded = json(
+            &WriteRef { address, bytes },
+            self.room.saturating_sub(self.used),
+        )?;
+        self.writes
+            .try_reserve(1)
+            .map_err(|_| WasmHostTraceError::LimitExceeded)?;
         let mut payload = Vec::new();
-        payload.try_reserve_exact(bytes.len()).map_err(|_| WasmHostTraceError::LimitExceeded)?;
+        payload
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| WasmHostTraceError::LimitExceeded)?;
         payload.extend_from_slice(bytes);
-        self.writes.push(MemoryWrite { address, bytes: payload });
+        self.writes.push(MemoryWrite {
+            address,
+            bytes: payload,
+        });
         self.used = self.used.saturating_add(encoded.len()).saturating_add(1);
         Ok(())
     }
 
     fn finish(&mut self, work: u64, outcome: &Outcome) -> Result<(), WasmHostTraceError> {
-        if self.failed { return Err(WasmHostTraceError::LimitExceeded); }
+        if self.failed {
+            return Err(WasmHostTraceError::LimitExceeded);
+        }
         #[derive(Serialize)]
-        struct RecordRef<'a> { header: &'a Header, writes: &'a [MemoryWrite], work: u64, outcome: &'a Outcome }
-        let bytes = json(&RecordRef { header: &self.header, writes: &self.writes, work, outcome }, self.room.saturating_sub(1))?;
+        struct RecordRef<'a> {
+            header: &'a Header,
+            writes: &'a [MemoryWrite],
+            work: u64,
+            outcome: &'a Outcome,
+        }
+        let bytes = json(
+            &RecordRef {
+                header: &self.header,
+                writes: &self.writes,
+                work,
+                outcome,
+            },
+            self.room.saturating_sub(1),
+        )?;
         let mut state = lock(&self.owner.0)?;
         state.calls.push(CallRecord {
-            header: self.header.clone(), writes: std::mem::take(&mut self.writes), work, outcome: outcome.clone(),
+            header: self.header.clone(),
+            writes: std::mem::take(&mut self.writes),
+            work,
+            outcome: outcome.clone(),
         });
         state.used += bytes.len() + 1;
         state.active = false;
@@ -476,14 +653,20 @@ impl CallRecording {
 
 impl Drop for CallRecording {
     fn drop(&mut self) {
-        if !self.finished && let Ok(mut state) = self.owner.0.lock() {
+        if !self.finished
+            && let Ok(mut state) = self.owner.0.lock()
+        {
             state.active = false;
             state.failed = true;
         }
     }
 }
 
-pub(crate) struct Playback { owner: WasmHostReplay, pub call: CallRecord, finished: bool }
+pub(crate) struct Playback {
+    owner: WasmHostReplay,
+    pub call: CallRecord,
+    finished: bool,
+}
 impl Playback {
     pub fn complete(&mut self) -> Result<(), WasmHostTraceError> {
         let mut state = lock(&self.owner.0)?;
@@ -495,7 +678,9 @@ impl Playback {
 }
 impl Drop for Playback {
     fn drop(&mut self) {
-        if !self.finished && let Ok(mut state) = self.owner.0.lock() {
+        if !self.finished
+            && let Ok(mut state) = self.owner.0.lock()
+        {
             state.active = false;
             state.failed = true;
         }

@@ -99,8 +99,15 @@ fn length_failure(
     core.set_register_label(6, label).unwrap();
     let mut module = lower("0;");
     module.instructions = vec![
-        Ir3Instruction::SetProperty { obj: 7, key: 5, val: 6 },
-        Ir3Instruction::BeginTry { catch_target: 6, finally_target: None },
+        Ir3Instruction::SetProperty {
+            obj: 7,
+            key: 5,
+            val: 6,
+        },
+        Ir3Instruction::BeginTry {
+            catch_target: 6,
+            finally_target: None,
+        },
         call(
             if construct {
                 "builtin:ReflectConstruct"
@@ -161,12 +168,31 @@ fn key_list_failure(
     // Publish the public aliases before the list acquires secret storage.
     // Neither the handler nor the proxy argument register is itself secret.
     module.instructions = vec![
-        Ir3Instruction::SetProperty { obj: 0, key: 10, val: 5 },
-        Ir3Instruction::SetProperty { obj: 1, key: 11, val: 12 },
-        Ir3Instruction::SetProperty { obj: 5, key: 8, val: 9 },
-        Ir3Instruction::SetProperty { obj: 5, key: 7, val: 6 },
+        Ir3Instruction::SetProperty {
+            obj: 0,
+            key: 10,
+            val: 5,
+        },
+        Ir3Instruction::SetProperty {
+            obj: 1,
+            key: 11,
+            val: 12,
+        },
+        Ir3Instruction::SetProperty {
+            obj: 5,
+            key: 8,
+            val: 9,
+        },
+        Ir3Instruction::SetProperty {
+            obj: 5,
+            key: 7,
+            val: 6,
+        },
         call("builtin:Proxy", 0, 2, 2),
-        Ir3Instruction::BeginTry { catch_target: 10, finally_target: None },
+        Ir3Instruction::BeginTry {
+            catch_target: 10,
+            finally_target: None,
+        },
         call("builtin:ReflectOwnKeys", 2, 1, 4),
         Ir3Instruction::EndTry,
         Ir3Instruction::LoadUndefined { dst: 16 },
@@ -179,7 +205,11 @@ fn key_list_failure(
     module.constant_pool.push("list".into());
     module.instructions.extend([
         Ir3Instruction::LoadStr { dst: 1, pool_index },
-        Ir3Instruction::GetProperty { obj: 0, key: 1, dst: 2 },
+        Ir3Instruction::GetProperty {
+            obj: 0,
+            key: 1,
+            dst: 2,
+        },
         Ir3Instruction::Return { value: 2 },
     ]);
     module.function_table = vec![Ir3FunctionDesc {
@@ -193,13 +223,29 @@ fn key_list_failure(
     (core, module, 2)
 }
 
-fn assert_confidential_failure(mut core: InterpreterCore, module: &Ir3Module, alias: u32, label: &Label) {
-    let result = core.execute(module).expect("the language fault must be caught");
-    assert!(matches!(result.value, Value::Object(_)), "expected the caught Error object");
-    assert_eq!(&result.completion_label, label, "native fault laundered its scoped observations");
+fn assert_confidential_failure(
+    mut core: InterpreterCore,
+    module: &Ir3Module,
+    alias: u32,
+    label: &Label,
+) {
+    let result = core
+        .execute(module)
+        .expect("the language fault must be caught");
+    assert!(
+        matches!(result.value, Value::Object(_)),
+        "expected the caught Error object"
+    );
+    assert_eq!(
+        &result.completion_label, label,
+        "native fault laundered its scoped observations"
+    );
     assert_eq!(core.get_register_label(alias).unwrap(), &Label::Public);
     assert!(core.console_output().is_empty());
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }
 
 fn assert_sink_denied(mut core: InterpreterCore, module: &Ir3Module) {
@@ -208,8 +254,14 @@ fn assert_sink_denied(mut core: InterpreterCore, module: &Ir3Module) {
         Err(InterpreterError::CapabilityDenied { capability })
             if capability == "console:log:confidentiality"
     ));
-    assert!(core.console_output().is_empty(), "a caught fault escaped to a public sink");
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert!(
+        core.console_output().is_empty(),
+        "a caught fault escaped to a public sink"
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }
 
 #[test]
@@ -266,8 +318,14 @@ fn oversized_reflection_lists_still_escape_guest_catch_as_resource_failures() {
         let module = lower(source);
         for config in configs() {
             let mut core = InterpreterCore::new(config, "reflect-resource-failure");
-            assert!(matches!(core.execute(&module), Err(InterpreterError::RegisterOutOfBounds { .. })));
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert!(matches!(
+                core.execute(&module),
+                Err(InterpreterError::RegisterOutOfBounds { .. })
+            ));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 }

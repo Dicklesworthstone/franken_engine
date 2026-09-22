@@ -22,7 +22,10 @@ fn node(name: &str, tla: bool, dependencies: &[&str]) -> ModuleGraphNode {
     ModuleGraphNode {
         specifier: name.to_string(),
         has_top_level_await: tla,
-        dependencies: dependencies.iter().map(|name| (*name).to_string()).collect(),
+        dependencies: dependencies
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect(),
     }
 }
 
@@ -75,9 +78,18 @@ fn bridge_records_fulfilled_await_without_resettling_or_retaining_waiter() {
     assert!(state.suspensions[0].resolved);
     assert!(state.suspensions[0].resume_seq > state.suspensions[0].suspension_seq);
     assert_eq!(bridge.active_await("app"), None);
-    assert_eq!(bridge.promise_store().get(evaluation).unwrap().state, PromiseState::Pending);
-    assert_eq!(serde_json::to_value(bridge.promise_store()).unwrap(), promises_before);
-    assert_eq!(serde_json::to_value(bridge.microtasks()).unwrap(), microtasks_before);
+    assert_eq!(
+        bridge.promise_store().get(evaluation).unwrap().state,
+        PromiseState::Pending
+    );
+    assert_eq!(
+        serde_json::to_value(bridge.promise_store()).unwrap(),
+        promises_before
+    );
+    assert_eq!(
+        serde_json::to_value(bridge.microtasks()).unwrap(),
+        microtasks_before
+    );
     assert_eq!(
         bridge
             .evaluator()
@@ -103,7 +115,10 @@ fn fulfilled_host_promise_hands_off_value_label_and_a_new_lease() {
 
     assert_eq!(runtime.snapshot().in_flight_tasks, 0);
     assert_eq!(runtime.snapshot().ready_tasks, 1);
-    assert_eq!(runtime.promise_result(evaluation).unwrap().0, &PromiseState::Pending);
+    assert_eq!(
+        runtime.promise_result(evaluation).unwrap().0,
+        &PromiseState::Pending
+    );
     assert!(runtime.resume_input(&start).is_err());
     let resume = runtime.next_task().unwrap().unwrap();
     assert_eq!(resume.kind, ModuleTaskKind::Resume);
@@ -115,7 +130,9 @@ fn fulfilled_host_promise_hands_off_value_label_and_a_new_lease() {
     assert_eq!(input.label, Label::Secret);
     assert_eq!(runtime.resume_input(&resume).unwrap(), Some(input));
     assert!(runtime.next_task().unwrap().is_none());
-    runtime.complete_task(&resume, JsValue::Int(7), Label::Secret).unwrap();
+    runtime
+        .complete_task(&resume, JsValue::Int(7), Label::Secret)
+        .unwrap();
     assert_eq!(runtime.module_phases()["app"], AsyncModulePhase::Settled);
 }
 
@@ -129,7 +146,9 @@ fn completed_dependency_evaluation_promise_can_be_awaited() {
     let provider_promise = runtime.evaluation_promise("provider").unwrap();
     let provider = runtime.next_task().unwrap().unwrap();
     assert_eq!(provider.module_specifier, "provider");
-    runtime.complete_task(&provider, JsValue::Int(13), Label::Confidential).unwrap();
+    runtime
+        .complete_task(&provider, JsValue::Int(13), Label::Confidential)
+        .unwrap();
     let app = runtime.next_task().unwrap().unwrap();
     assert_eq!(app.module_specifier, "app");
 
@@ -140,9 +159,15 @@ fn completed_dependency_evaluation_promise_can_be_awaited() {
     assert_eq!(input.promise, provider_promise);
     assert_eq!(input.value, JsValue::Int(13));
     assert_eq!(input.label, Label::Confidential);
-    assert_eq!(runtime.module_phases()["provider"], AsyncModulePhase::Settled);
     assert_eq!(
-        runtime.promise_result(runtime.evaluation_promise("app").unwrap()).unwrap().0,
+        runtime.module_phases()["provider"],
+        AsyncModulePhase::Settled
+    );
+    assert_eq!(
+        runtime
+            .promise_result(runtime.evaluation_promise("app").unwrap())
+            .unwrap()
+            .0,
         &PromiseState::Pending
     );
 }
@@ -153,7 +178,9 @@ fn fulfilled_undefined_is_a_real_resume_input() {
     let start = runtime.next_task().unwrap().unwrap();
     assert_eq!(runtime.resume_input(&start).unwrap(), None);
     let promise = runtime.create_pending_promise();
-    runtime.fulfill_awaited_promise(promise, JsValue::Undefined, Label::Public).unwrap();
+    runtime
+        .fulfill_awaited_promise(promise, JsValue::Undefined, Label::Public)
+        .unwrap();
     runtime.suspend_task(&start, promise).unwrap();
     let resume = runtime.next_task().unwrap().unwrap();
     let input = runtime.resume_input(&resume).unwrap().unwrap();
@@ -166,8 +193,12 @@ fn repeated_fulfilled_awaits_issue_distinct_leases_and_do_not_reuse_values() {
     let mut runtime = AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
     let first = runtime.create_pending_promise();
     let second = runtime.create_pending_promise();
-    runtime.fulfill_awaited_promise(first, JsValue::Int(1), Label::Secret).unwrap();
-    runtime.fulfill_awaited_promise(second, JsValue::Int(2), Label::Confidential).unwrap();
+    runtime
+        .fulfill_awaited_promise(first, JsValue::Int(1), Label::Secret)
+        .unwrap();
+    runtime
+        .fulfill_awaited_promise(second, JsValue::Int(2), Label::Confidential)
+        .unwrap();
     let mut task = runtime.next_task().unwrap().unwrap();
     for promise in [first, first, second, second, first] {
         let previous = task;
@@ -188,7 +219,9 @@ fn repeated_fulfilled_awaits_issue_distinct_leases_and_do_not_reuse_values() {
         assert_eq!(runtime.snapshot().ready_tasks, 0);
     }
     assert_eq!(runtime.snapshot().dispatched_tasks, 6);
-    runtime.complete_task(&task, JsValue::Undefined, Label::Secret).unwrap();
+    runtime
+        .complete_task(&task, JsValue::Undefined, Label::Secret)
+        .unwrap();
 }
 
 #[test]
@@ -198,7 +231,9 @@ fn already_ready_work_runs_before_a_fulfilled_await_continuation() {
     let app = scheduler.next_task().unwrap().unwrap();
     scheduler.register_module("other", false, &[]).unwrap();
     let promise = scheduler.create_pending_promise();
-    scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap();
+    scheduler
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+        .unwrap();
     scheduler.suspend_task(&app, promise).unwrap();
     assert_eq!(scheduler.snapshot().dispatched_tasks, 1);
     let other = scheduler.next_task().unwrap().unwrap();
@@ -218,7 +253,9 @@ fn full_ready_queue_refuses_before_any_mutation_and_original_lease_is_retryable(
     let app = scheduler.next_task().unwrap().unwrap();
     scheduler.register_module("other", false, &[]).unwrap();
     let promise = scheduler.create_pending_promise();
-    scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Secret).unwrap();
+    scheduler
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Secret)
+        .unwrap();
     let before = scheduler_state(&scheduler);
 
     assert!(matches!(
@@ -229,7 +266,9 @@ fn full_ready_queue_refuses_before_any_mutation_and_original_lease_is_retryable(
     assert_eq!(scheduler.in_flight_task("app"), Some(&app));
 
     let other = scheduler.next_task().unwrap().unwrap();
-    scheduler.complete_task(&other, JsValue::Undefined, Label::Public).unwrap();
+    scheduler
+        .complete_task(&other, JsValue::Undefined, Label::Public)
+        .unwrap();
     scheduler.suspend_task(&app, promise).unwrap();
     let resume = scheduler.next_task().unwrap().unwrap();
     assert_eq!(resume.module_specifier, "app");
@@ -248,14 +287,18 @@ fn resolved_await_history_still_consumes_the_per_module_suspension_budget() {
     scheduler.register_module("app", true, &[]).unwrap();
     let app = scheduler.next_task().unwrap().unwrap();
     let promise = scheduler.create_pending_promise();
-    scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap();
+    scheduler
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+        .unwrap();
     scheduler.suspend_task(&app, promise).unwrap();
     let resume = scheduler.next_task().unwrap().unwrap();
     let before = scheduler_state(&scheduler);
     assert!(scheduler.suspend_task(&resume, promise).is_err());
     assert_eq!(scheduler_state(&scheduler), before);
     assert_eq!(scheduler.in_flight_task("app"), Some(&resume));
-    scheduler.complete_task(&resume, JsValue::Undefined, Label::Public).unwrap();
+    scheduler
+        .complete_task(&resume, JsValue::Undefined, Label::Public)
+        .unwrap();
 }
 
 #[test]
@@ -272,7 +315,9 @@ fn resolved_await_history_still_consumes_the_global_suspension_budget() {
     let a = scheduler.next_task().unwrap().unwrap();
     let b = scheduler.next_task().unwrap().unwrap();
     let promise = scheduler.create_pending_promise();
-    scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap();
+    scheduler
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+        .unwrap();
     scheduler.suspend_task(&a, promise).unwrap();
     let before = scheduler_state(&scheduler);
     assert!(scheduler.suspend_task(&b, promise).is_err());
@@ -289,7 +334,9 @@ fn fulfilled_await_cannot_bypass_dispatch_budget() {
     scheduler.register_module("app", true, &[]).unwrap();
     let app = scheduler.next_task().unwrap().unwrap();
     let promise = scheduler.create_pending_promise();
-    scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap();
+    scheduler
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+        .unwrap();
     scheduler.suspend_task(&app, promise).unwrap();
     let before = scheduler_state(&scheduler);
     assert!(matches!(
@@ -310,19 +357,29 @@ fn pending_await_still_waits_for_settlement() {
     assert_eq!(scheduler.bridge().active_await("app"), Some(promise));
     assert!(scheduler.next_task().unwrap().is_none());
     assert_eq!(
-        scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap(),
+        scheduler
+            .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+            .unwrap(),
         vec!["app"]
     );
-    assert_eq!(scheduler.next_task().unwrap().unwrap().kind, ModuleTaskKind::Resume);
+    assert_eq!(
+        scheduler.next_task().unwrap().unwrap().kind,
+        ModuleTaskKind::Resume
+    );
 }
 
 #[test]
 fn invalid_handles_self_awaits_and_rejected_promises_leave_state_unchanged() {
     let mut scheduler = AsyncModuleScheduler::default();
-    let evaluation = scheduler.register_module("app", true, &[]).unwrap().unwrap();
+    let evaluation = scheduler
+        .register_module("app", true, &[])
+        .unwrap()
+        .unwrap();
     let app = scheduler.next_task().unwrap().unwrap();
     let rejected = scheduler.create_pending_promise();
-    scheduler.reject_awaited_promise(rejected, JsValue::Int(9), Label::Secret).unwrap();
+    scheduler
+        .reject_awaited_promise(rejected, JsValue::Int(9), Label::Secret)
+        .unwrap();
     for promise in [PromiseHandle(u32::MAX), evaluation, rejected] {
         let before = scheduler_state(&scheduler);
         assert!(scheduler.suspend_task(&app, promise).is_err());
@@ -335,10 +392,14 @@ fn invalid_handles_self_awaits_and_rejected_promises_leave_state_unchanged() {
 fn fulfilled_await_does_not_relax_dependency_or_tla_checks() {
     let mut bridge = AsyncModulePromiseBridge::with_defaults();
     bridge.register_module("dependency", false, &[]).unwrap();
-    bridge.register_module("blocked", true, &["dependency".into()]).unwrap();
+    bridge
+        .register_module("blocked", true, &["dependency".into()])
+        .unwrap();
     bridge.register_module("sync", false, &[]).unwrap();
     let promise = bridge.create_pending_promise();
-    bridge.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap();
+    bridge
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+        .unwrap();
     let before = serde_json::to_value(bridge.evaluator().states()).unwrap();
     let events = bridge.evaluator().witness_events().to_vec();
     assert!(matches!(
@@ -349,7 +410,10 @@ fn fulfilled_await_does_not_relax_dependency_or_tla_checks() {
         bridge.suspend_module_on_promise("sync", promise),
         Err(AsyncModulePromiseBridgeError::ModuleNotTopLevelAwait { .. })
     ));
-    assert_eq!(serde_json::to_value(bridge.evaluator().states()).unwrap(), before);
+    assert_eq!(
+        serde_json::to_value(bridge.evaluator().states()).unwrap(),
+        before
+    );
     assert_eq!(bridge.evaluator().witness_events(), events.as_slice());
 }
 
@@ -358,7 +422,9 @@ fn rejected_await_behavior_is_not_silently_changed_by_the_fulfillment_fix() {
     let mut bridge = AsyncModulePromiseBridge::with_defaults();
     bridge.register_module("app", true, &[]).unwrap();
     let promise = bridge.create_pending_promise();
-    bridge.reject_awaited_promise(promise, JsValue::Int(9), Label::Secret).unwrap();
+    bridge
+        .reject_awaited_promise(promise, JsValue::Int(9), Label::Secret)
+        .unwrap();
     assert!(matches!(
         bridge.suspend_module_on_promise("app", promise),
         Err(AsyncModulePromiseBridgeError::AwaitPromiseNotPending {
@@ -374,7 +440,9 @@ fn old_lease_cannot_suspend_or_complete_the_new_continuation() {
     scheduler.register_module("app", true, &[]).unwrap();
     let start = scheduler.next_task().unwrap().unwrap();
     let promise = scheduler.create_pending_promise();
-    scheduler.fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public).unwrap();
+    scheduler
+        .fulfill_awaited_promise(promise, JsValue::Int(1), Label::Public)
+        .unwrap();
     scheduler.suspend_task(&start, promise).unwrap();
     let before = scheduler_state(&scheduler);
     assert!(scheduler.suspend_task(&start, promise).is_err());
@@ -382,7 +450,11 @@ fn old_lease_cannot_suspend_or_complete_the_new_continuation() {
     let resume = scheduler.next_task().unwrap().unwrap();
     let before = scheduler_state(&scheduler);
     assert!(scheduler.suspend_task(&start, promise).is_err());
-    assert!(scheduler.complete_task(&start, JsValue::Int(999), Label::Public).is_err());
+    assert!(
+        scheduler
+            .complete_task(&start, JsValue::Int(999), Label::Public)
+            .is_err()
+    );
     assert_eq!(scheduler_state(&scheduler), before);
     assert_eq!(scheduler.in_flight_task("app"), Some(&resume));
 }
@@ -393,13 +465,17 @@ fn replay_of_fulfilled_await_transitions_is_deterministic() {
         let mut scheduler = AsyncModuleScheduler::default();
         scheduler.register_module("app", true, &[]).unwrap();
         let promise = scheduler.create_pending_promise();
-        scheduler.fulfill_awaited_promise(promise, JsValue::Int(42), Label::Secret).unwrap();
+        scheduler
+            .fulfill_awaited_promise(promise, JsValue::Int(42), Label::Secret)
+            .unwrap();
         let mut task = scheduler.next_task().unwrap().unwrap();
         for _ in 0..8 {
             scheduler.suspend_task(&task, promise).unwrap();
             task = scheduler.next_task().unwrap().unwrap();
         }
-        scheduler.complete_task(&task, JsValue::Int(43), Label::Secret).unwrap();
+        scheduler
+            .complete_task(&task, JsValue::Int(43), Label::Secret)
+            .unwrap();
         scheduler_state(&scheduler)
     }
     assert_eq!(run(), run());

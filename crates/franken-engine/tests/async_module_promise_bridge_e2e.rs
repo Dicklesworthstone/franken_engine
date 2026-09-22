@@ -161,7 +161,10 @@ fn module_cannot_settle_while_inner_await_is_pending() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("still suspended"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("still suspended"),
+        "unexpected stderr: {stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
@@ -178,7 +181,10 @@ fn invalid_registration_fails_closed_at_process_boundary() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("already registered"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("already registered"),
+        "unexpected stderr: {stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
@@ -197,6 +203,9 @@ fn unknown_named_promise_fails_closed_at_process_boundary() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unknown named Promise"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("unknown named Promise"),
+        "unexpected stderr: {stderr}"
+    );
     assert!(output.stdout.is_empty());
 }

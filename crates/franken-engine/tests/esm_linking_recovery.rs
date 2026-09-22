@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 //! Linking lifecycle regressions. These exercise ModuleGraph, not a JS evaluator.
-use frankenengine_engine::esm_loader::{EsmLoaderError, EsmModule, ImportEntry, ModuleGraph, ModuleStatus};
+use frankenengine_engine::esm_loader::{
+    EsmLoaderError, EsmModule, ImportEntry, ModuleGraph, ModuleStatus,
+};
 use frankenengine_engine::module_resolver::ModuleSyntax;
 
 fn module(name: &str, dependencies: &[&str]) -> EsmModule {
@@ -33,7 +35,8 @@ fn assert_unlinked(graph: &ModuleGraph, names: &[&str]) {
 fn repeated_missing_dependency_never_becomes_a_successful_cycle() {
     let mut graph = graph(&[("root", &["missing"])]);
     let expected = EsmLoaderError::UnresolvedDependency {
-        specifier: "root".into(), dependency: "missing".into(),
+        specifier: "root".into(),
+        dependency: "missing".into(),
     };
     for _ in 0..3 {
         assert_eq!(graph.link().unwrap_err(), expected);
@@ -52,7 +55,10 @@ fn repaired_dependency_links_and_schedules_normally() {
     assert_unlinked(&graph, &["root", "middle"]);
     graph.add_module(module("missing", &[])).unwrap();
     assert_eq!(graph.link().unwrap().linked_count, 3);
-    assert_eq!(graph.evaluate().unwrap().eval_order, ["missing", "middle", "root"]);
+    assert_eq!(
+        graph.evaluate().unwrap().eval_order,
+        ["missing", "middle", "root"]
+    );
 }
 
 #[test]
@@ -66,15 +72,18 @@ fn failed_cycle_resets_every_unfinished_member() {
     let linked = graph.link().unwrap();
     assert_eq!(linked.linked_count, 3);
     assert_eq!(linked.cycle_count, 1);
-    assert_eq!(graph.get_module("a").unwrap().dfs_ancestor_index,
-               graph.get_module("b").unwrap().dfs_ancestor_index);
+    assert_eq!(
+        graph.get_module("a").unwrap().dfs_ancestor_index,
+        graph.get_module("b").unwrap().dfs_ancestor_index
+    );
 }
 
 #[test]
 fn completed_siblings_survive_a_later_failure_even_when_they_share_a_dependency() {
     let mut graph = graph(&[
         ("root", &["a", "b", "z-missing"]),
-        ("a", &[]), ("b", &["a"]),
+        ("a", &[]),
+        ("b", &["a"]),
     ]);
     graph.link().unwrap_err();
     assert_unlinked(&graph, &["root"]);
@@ -96,7 +105,9 @@ fn completed_siblings_survive_a_later_failure_even_when_they_share_a_dependency(
 fn diamond_dependencies_do_not_merge_distinct_components() {
     let mut graph = graph(&[
         ("root", &["left", "right"]),
-        ("left", &["shared"]), ("right", &["shared"]), ("shared", &[]),
+        ("left", &["shared"]),
+        ("right", &["shared"]),
+        ("shared", &[]),
     ]);
     assert_eq!(graph.link().unwrap().cycle_count, 0);
     for name in ["root", "left", "right", "shared"] {
@@ -108,8 +119,10 @@ fn diamond_dependencies_do_not_merge_distinct_components() {
 #[test]
 fn completed_external_component_does_not_capture_a_real_cycle() {
     let mut graph = graph(&[
-        ("root", &["a", "b"]), ("a", &[]),
-        ("b", &["c"]), ("c", &["a", "b"]),
+        ("root", &["a", "b"]),
+        ("a", &[]),
+        ("b", &["c"]),
+        ("c", &["a", "b"]),
     ]);
     assert_eq!(graph.link().unwrap().linked_count, 4);
     let a = graph.get_module("a").unwrap();
@@ -124,8 +137,10 @@ fn completed_external_component_does_not_capture_a_real_cycle() {
 #[test]
 fn failed_cycle_keeps_its_completed_external_dependencies() {
     let mut graph = graph(&[
-        ("root", &["a", "b"]), ("a", &[]),
-        ("b", &["c"]), ("c", &["a", "b", "z-missing"]),
+        ("root", &["a", "b"]),
+        ("a", &[]),
+        ("b", &["c"]),
+        ("c", &["a", "b", "z-missing"]),
     ]);
     graph.link().unwrap_err();
     assert_unlinked(&graph, &["root", "b", "c"]);
@@ -143,7 +158,10 @@ fn orphan_linking_state_is_not_an_authorized_cycle() {
     orphan.dfs_ancestor_index = Some(0);
     let before = orphan.clone();
     for _ in 0..2 {
-        assert!(matches!(graph.link(), Err(EsmLoaderError::InvalidStatus { .. })));
+        assert!(matches!(
+            graph.link(),
+            Err(EsmLoaderError::InvalidStatus { .. })
+        ));
         assert_unlinked(&graph, &["root"]);
         assert_eq!(graph.get_module("orphan"), Some(&before));
     }
@@ -151,7 +169,11 @@ fn orphan_linking_state_is_not_an_authorized_cycle() {
 
 #[test]
 fn relinking_preserves_modules_that_have_started_or_failed_evaluation() {
-    for state in [ModuleStatus::Evaluating, ModuleStatus::Evaluated, ModuleStatus::EvaluationError] {
+    for state in [
+        ModuleStatus::Evaluating,
+        ModuleStatus::Evaluated,
+        ModuleStatus::EvaluationError,
+    ] {
         let mut graph = graph(&[("root", &["dependency"]), ("dependency", &[])]);
         graph.link().unwrap();
         let dependency = graph.get_module_mut("dependency").unwrap();
@@ -195,7 +217,10 @@ fn depth_refusal_is_recoverable_without_stale_linking_markers() {
         let dependencies: Vec<&str> = if index < 512 { vec![&next] } else { vec![] };
         graph.add_module(module(&name, &dependencies)).unwrap();
     }
-    assert!(matches!(graph.link(), Err(EsmLoaderError::DepthExceeded { depth: 512, .. })));
+    assert!(matches!(
+        graph.link(),
+        Err(EsmLoaderError::DepthExceeded { depth: 512, .. })
+    ));
     for module in graph.modules() {
         assert_eq!(module.status, ModuleStatus::Unlinked);
         assert_eq!(module.dfs_index, None);
@@ -205,7 +230,10 @@ fn depth_refusal_is_recoverable_without_stale_linking_markers() {
     last.dependencies.clear();
     last.imports.clear();
     assert_eq!(graph.link().unwrap().linked_count, 512);
-    assert_eq!(graph.get_module("m512").unwrap().status, ModuleStatus::Unlinked);
+    assert_eq!(
+        graph.get_module("m512").unwrap().status,
+        ModuleStatus::Unlinked
+    );
 }
 
 #[test]
@@ -219,5 +247,9 @@ fn back_edge_at_depth_boundary_does_not_consume_a_new_activation() {
     let result = graph.link().unwrap();
     assert_eq!(result.linked_count, 512);
     assert_eq!(result.cycle_count, 1);
-    assert!(graph.modules().all(|module| module.status == ModuleStatus::Linked));
+    assert!(
+        graph
+            .modules()
+            .all(|module| module.status == ModuleStatus::Linked)
+    );
 }

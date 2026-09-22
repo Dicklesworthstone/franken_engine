@@ -47,27 +47,58 @@ fn source_snapshot() -> CacheSnapshot {
 fn legacy_hash(snapshot: &CacheSnapshot) -> ContentHash {
     fn fingerprint(value: &ModuleVersionFingerprint) -> CanonicalValue {
         CanonicalValue::Map(BTreeMap::from([
-            ("source_hash".into(), CanonicalValue::String(value.source_hash.to_hex())),
-            ("policy_version".into(), CanonicalValue::U64(value.policy_version)),
-            ("trust_revision".into(), CanonicalValue::U64(value.trust_revision)),
+            (
+                "source_hash".into(),
+                CanonicalValue::String(value.source_hash.to_hex()),
+            ),
+            (
+                "policy_version".into(),
+                CanonicalValue::U64(value.policy_version),
+            ),
+            (
+                "trust_revision".into(),
+                CanonicalValue::U64(value.trust_revision),
+            ),
         ]))
     }
-    let entries = snapshot.entries.iter().map(|entry| {
-        let key = CanonicalValue::Map(BTreeMap::from([
-            ("module_id".into(), CanonicalValue::String(entry.key.module_id.clone())),
-            ("version".into(), fingerprint(&entry.key.version)),
-        ]));
-        CanonicalValue::Map(BTreeMap::from([
-            ("key".into(), key),
-            ("artifact_hash".into(), CanonicalValue::String(entry.artifact_hash.to_hex())),
-            ("resolved_specifier".into(), CanonicalValue::String(entry.resolved_specifier.clone())),
-            ("inserted_seq".into(), CanonicalValue::U64(entry.inserted_seq)),
-        ]))
-    }).collect();
-    let versions = snapshot.latest_versions.iter()
-        .map(|(id, value)| (id.clone(), fingerprint(value))).collect();
-    let revoked = snapshot.revoked_modules.iter()
-        .map(|id| CanonicalValue::String(id.clone())).collect();
+    let entries = snapshot
+        .entries
+        .iter()
+        .map(|entry| {
+            let key = CanonicalValue::Map(BTreeMap::from([
+                (
+                    "module_id".into(),
+                    CanonicalValue::String(entry.key.module_id.clone()),
+                ),
+                ("version".into(), fingerprint(&entry.key.version)),
+            ]));
+            CanonicalValue::Map(BTreeMap::from([
+                ("key".into(), key),
+                (
+                    "artifact_hash".into(),
+                    CanonicalValue::String(entry.artifact_hash.to_hex()),
+                ),
+                (
+                    "resolved_specifier".into(),
+                    CanonicalValue::String(entry.resolved_specifier.clone()),
+                ),
+                (
+                    "inserted_seq".into(),
+                    CanonicalValue::U64(entry.inserted_seq),
+                ),
+            ]))
+        })
+        .collect();
+    let versions = snapshot
+        .latest_versions
+        .iter()
+        .map(|(id, value)| (id.clone(), fingerprint(value)))
+        .collect();
+    let revoked = snapshot
+        .revoked_modules
+        .iter()
+        .map(|id| CanonicalValue::String(id.clone()))
+        .collect();
     ContentHash::compute(&encode_value(&CanonicalValue::Map(BTreeMap::from([
         ("entries".into(), CanonicalValue::Array(entries)),
         ("latest_versions".into(), CanonicalValue::Map(versions)),
@@ -110,7 +141,9 @@ fn empty_snapshot_is_valid_and_does_not_remove_local_state() {
     let mut local = ModuleCache::new();
     insert(&mut local, "a", "a", 1, 1);
     let before = local.snapshot();
-    local.try_merge_snapshot(&ModuleCache::new().snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&ModuleCache::new().snapshot(), &context())
+        .unwrap();
     assert_eq!(local.snapshot(), before);
 }
 
@@ -131,7 +164,11 @@ fn changing_artifact_without_changing_digest_is_rejected() {
 #[test]
 fn changing_authority_without_changing_digest_is_rejected() {
     let mut snapshot = source_snapshot();
-    snapshot.latest_versions.get_mut("a").unwrap().trust_revision = 999;
+    snapshot
+        .latest_versions
+        .get_mut("a")
+        .unwrap()
+        .trust_revision = 999;
     snapshot.entries[0].key.version.trust_revision = 999;
     expect_invalid(&snapshot);
 }
@@ -184,7 +221,9 @@ fn correctly_hashed_revocation_without_frontier_is_rejected() {
 #[test]
 fn correctly_hashed_empty_identity_is_rejected() {
     let mut snapshot = source_snapshot();
-    snapshot.latest_versions.insert(" \t".into(), version("bad", 1, 1));
+    snapshot
+        .latest_versions
+        .insert(" \t".into(), version("bad", 1, 1));
     snapshot.state_hash = legacy_hash(&snapshot);
     expect_invalid(&snapshot);
 }
@@ -199,12 +238,18 @@ fn crossed_policy_and_trust_frontiers_cannot_roll_either_coordinate_backward() {
         // This sorts before the conflict. Staging it must not publish it.
         insert(&mut peer, "aaa-new", "new", 100, 100);
         let before = local.snapshot();
-        let error = local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+        let error = local
+            .try_merge_snapshot(&peer.snapshot(), &context())
+            .unwrap_err();
         assert_eq!(error.code, CacheErrorCode::VersionRegression);
         assert!(error.message.contains("incomparable authority frontiers"));
         assert_eq!(local.snapshot(), before);
         assert_eq!(local.state_hash(), before.state_hash);
-        assert!(local.get("protected", &version("peer", peer_policy, peer_trust)).is_none());
+        assert!(
+            local
+                .get("protected", &version("peer", peer_policy, peer_trust))
+                .is_none()
+        );
     }
 }
 
@@ -230,7 +275,8 @@ fn all_small_authority_pairs_either_merge_monotonically_or_refuse_atomically() {
                         assert_eq!(snapshot.latest_versions["m"].policy_version, lp.max(pp));
                         assert_eq!(snapshot.latest_versions["m"].trust_revision, lt.max(pt));
                         assert!(snapshot.entries.iter().all(|entry| {
-                            snapshot.latest_versions.get(&entry.key.module_id) == Some(&entry.key.version)
+                            snapshot.latest_versions.get(&entry.key.module_id)
+                                == Some(&entry.key.version)
                         }));
                     }
                 }
@@ -245,9 +291,13 @@ fn newer_coherent_snapshot_can_retry_after_an_incomparable_one() {
     let mut peer = ModuleCache::new();
     insert(&mut local, "m", "local", 7, 10);
     insert(&mut peer, "m", "peer", 8, 3);
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap_err();
     insert(&mut peer, "m", "peer", 8, 10);
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap();
     assert!(local.get("m", &version("peer", 8, 10)).is_some());
     assert!(local.get("m", &version("local", 7, 10)).is_none());
 }
@@ -259,10 +309,17 @@ fn newer_authority_beats_source_hash_order_and_old_peer_cannot_reverse_it() {
     let old = ModuleVersionFingerprint::new(ContentHash::from_bytes([0xff; 32]), 1, 1);
     let new = ModuleVersionFingerprint::new(ContentHash::from_bytes([0x00; 32]), 2, 2);
     for (cache, value) in [(&mut local, old.clone()), (&mut peer, new.clone())] {
-        cache.insert(CacheInsertRequest::new("m", value, ContentHash::compute(b"a"), "/m.js"), &context()).unwrap();
+        cache
+            .insert(
+                CacheInsertRequest::new("m", value, ContentHash::compute(b"a"), "/m.js"),
+                &context(),
+            )
+            .unwrap();
     }
     let old_snapshot = local.snapshot();
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap();
     assert!(local.get("m", &new).is_some());
     local.try_merge_snapshot(&old_snapshot, &context()).unwrap();
     assert!(local.get("m", &new).is_some());
@@ -277,12 +334,16 @@ fn valid_revocation_wins_over_both_local_and_incoming_allow_cache() {
     let mut revoker = ModuleCache::new();
     insert(&mut revoker, "m", "source", 1, 1);
     revoker.invalidate_trust_revocation("m", 2, &context());
-    local.try_merge_snapshot(&revoker.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&revoker.snapshot(), &context())
+        .unwrap();
     local.try_merge_snapshot(&stale_allow, &context()).unwrap();
     assert!(local.snapshot().revoked_modules.contains("m"));
     assert!(local.snapshot().entries.is_empty());
     assert!(local.get("m", &version("source", 1, 1)).is_none());
-    revoker.try_merge_snapshot(&local.snapshot(), &context()).unwrap();
+    revoker
+        .try_merge_snapshot(&local.snapshot(), &context())
+        .unwrap();
     assert_eq!(local.state_hash(), revoker.state_hash());
 }
 
@@ -292,7 +353,9 @@ fn peer_snapshot_is_not_permission_to_clear_a_local_revocation() {
     local.invalidate_trust_revocation("m", 2, &context());
     let mut peer = ModuleCache::new();
     insert(&mut peer, "m", "source", 1, 3);
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap();
     assert!(local.snapshot().revoked_modules.contains("m"));
     assert!(local.snapshot().entries.is_empty());
     assert_eq!(local.snapshot().latest_versions["m"].trust_revision, 3);
@@ -331,7 +394,17 @@ fn equivalent_artifacts_converge_when_insertion_sequences_differ() {
     let mut later = ModuleCache::new();
     insert(&mut first, "m", "source", 1, 1);
     // Advance only the local audit counter, not replicated state.
-    later.insert(CacheInsertRequest::new("", version("bad", 0, 0), ContentHash::compute(b"bad"), "/bad"), &context()).unwrap_err();
+    later
+        .insert(
+            CacheInsertRequest::new(
+                "",
+                version("bad", 0, 0),
+                ContentHash::compute(b"bad"),
+                "/bad",
+            ),
+            &context(),
+        )
+        .unwrap_err();
     insert(&mut later, "m", "source", 1, 1);
     assert_ne!(first.state_hash(), later.state_hash());
     let a = first.snapshot();
@@ -350,7 +423,10 @@ fn compatibility_merge_entry_point_records_corruption_denial() {
     snapshot.state_hash = ContentHash::compute(b"invalid");
     local.merge_snapshot(&snapshot, &context());
     assert_eq!(local.snapshot(), before);
-    assert_eq!(local.events().last().unwrap().error_code, "FE-MODCACHE-0004");
+    assert_eq!(
+        local.events().last().unwrap().error_code,
+        "FE-MODCACHE-0004"
+    );
 }
 
 #[test]
@@ -374,7 +450,8 @@ fn new_error_codes_do_not_reassign_existing_public_codes() {
     ];
     for (code, name) in expected {
         assert_eq!(code.stable_code(), name);
-        let roundtrip: CacheErrorCode = serde_json::from_str(&serde_json::to_string(&code).unwrap()).unwrap();
+        let roundtrip: CacheErrorCode =
+            serde_json::from_str(&serde_json::to_string(&code).unwrap()).unwrap();
         assert_eq!(roundtrip, code);
     }
 }
@@ -385,7 +462,9 @@ fn newer_revocation_with_older_policy_still_stops_execution() {
     insert(&mut local, "m", "live", 7, 3);
     let mut revoker = ModuleCache::new();
     revoker.invalidate_trust_revocation("m", 9, &context());
-    local.try_merge_snapshot(&revoker.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&revoker.snapshot(), &context())
+        .unwrap();
     let denied = local.snapshot();
     assert!(denied.revoked_modules.contains("m"));
     assert!(denied.entries.is_empty());
@@ -404,18 +483,30 @@ fn deny_only_floor_cannot_be_used_to_relabel_or_reinsert_an_artifact() {
     let original = local.snapshot();
     let mut revoker = ModuleCache::new();
     revoker.invalidate_trust_revocation("m", 9, &context());
-    local.try_merge_snapshot(&revoker.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&revoker.snapshot(), &context())
+        .unwrap();
     let floor = local.snapshot().latest_versions["m"].clone();
-    let request = CacheInsertRequest::new(
-        "m", floor, original.entries[0].artifact_hash, "/m.js",
+    let request = CacheInsertRequest::new("m", floor, original.entries[0].artifact_hash, "/m.js");
+    assert_eq!(
+        local.insert(request, &context()).unwrap_err().code,
+        CacheErrorCode::ModuleRevoked
     );
-    assert_eq!(local.insert(request, &context()).unwrap_err().code, CacheErrorCode::ModuleRevoked);
     local.try_restore_trust("m", 10, &context()).unwrap();
     assert!(local.snapshot().entries.is_empty());
     assert_eq!(
-        local.insert(CacheInsertRequest::new(
-            "m", version("rebuilt", 6, 10), ContentHash::compute(b"rebuilt"), "/m.js",
-        ), &context()).unwrap_err().code,
+        local
+            .insert(
+                CacheInsertRequest::new(
+                    "m",
+                    version("rebuilt", 6, 10),
+                    ContentHash::compute(b"rebuilt"),
+                    "/m.js",
+                ),
+                &context()
+            )
+            .unwrap_err()
+            .code,
         CacheErrorCode::VersionRegression,
     );
     insert(&mut local, "m", "rebuilt", 7, 10);
@@ -464,14 +555,19 @@ fn revoked_floor_saturates_without_losing_the_other_coordinate() {
     insert(&mut local, "m", "live", u64::MAX, 0);
     let mut revoker = ModuleCache::new();
     revoker.invalidate_trust_revocation("m", u64::MAX, &context());
-    local.try_merge_snapshot(&revoker.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&revoker.snapshot(), &context())
+        .unwrap();
     let snapshot = local.snapshot();
     assert_eq!(snapshot.latest_versions["m"].policy_version, u64::MAX);
     assert_eq!(snapshot.latest_versions["m"].trust_revision, u64::MAX);
     assert!(snapshot.revoked_modules.contains("m"));
     assert!(snapshot.entries.is_empty());
     assert_eq!(
-        local.try_restore_trust("m", u64::MAX, &context()).unwrap_err().code,
+        local
+            .try_restore_trust("m", u64::MAX, &context())
+            .unwrap_err()
+            .code,
         CacheErrorCode::VersionRegression,
     );
     assert_eq!(local.snapshot(), snapshot);
@@ -492,32 +588,51 @@ fn valid_revocation_survives_an_unrelated_artifact_or_authority_conflict() {
             peer.invalidate_trust_revocation(revoked_id, 9, &context());
             insert(&mut peer, "new-artifact", "new", 20, 20);
             if artifact_conflict {
-                peer.insert(CacheInsertRequest::new(
-                    "conflict", version("shared", 7, 10),
-                    ContentHash::compute(b"incompatible-build"), "/conflict.js",
-                ), &context()).unwrap();
+                peer.insert(
+                    CacheInsertRequest::new(
+                        "conflict",
+                        version("shared", 7, 10),
+                        ContentHash::compute(b"incompatible-build"),
+                        "/conflict.js",
+                    ),
+                    &context(),
+                )
+                .unwrap();
             } else {
                 insert(&mut peer, "conflict", "shared", 8, 3);
             }
             let events_before = local.events().len();
-            let error = local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
-            assert_eq!(error.code, if artifact_conflict {
-                CacheErrorCode::ConflictingArtifact
-            } else {
-                CacheErrorCode::VersionRegression
-            });
+            let error = local
+                .try_merge_snapshot(&peer.snapshot(), &context())
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if artifact_conflict {
+                    CacheErrorCode::ConflictingArtifact
+                } else {
+                    CacheErrorCode::VersionRegression
+                }
+            );
             let after = local.snapshot();
             assert!(after.revoked_modules.contains(revoked_id));
             assert_eq!(after.latest_versions[revoked_id].policy_version, 7);
             assert_eq!(after.latest_versions[revoked_id].trust_revision, 9);
             assert!(local.get(revoked_id, &version("live", 7, 3)).is_none());
-            assert!(after.entries.iter().all(|entry| entry.key.module_id != revoked_id));
+            assert!(
+                after
+                    .entries
+                    .iter()
+                    .all(|entry| entry.key.module_id != revoked_id)
+            );
             assert!(!after.latest_versions.contains_key("new-artifact"));
             for id in ["conflict", "unrelated"] {
                 assert_eq!(after.latest_versions[id], before.latest_versions[id]);
                 assert_eq!(
                     after.entries.iter().find(|entry| entry.key.module_id == id),
-                    before.entries.iter().find(|entry| entry.key.module_id == id),
+                    before
+                        .entries
+                        .iter()
+                        .find(|entry| entry.key.module_id == id),
                 );
             }
             assert_eq!(after.state_hash, legacy_hash(&after));
@@ -546,7 +661,10 @@ fn corrupted_snapshot_never_enters_the_revocation_phase() {
     corrupt.state_hash = ContentHash::compute(b"corrupted-in-transit");
     let event_count = local.events().len();
     assert_eq!(
-        local.try_merge_snapshot(&corrupt, &context()).unwrap_err().code,
+        local
+            .try_merge_snapshot(&corrupt, &context())
+            .unwrap_err()
+            .code,
         CacheErrorCode::InvalidSnapshot,
     );
     assert_eq!(local.snapshot(), before);
@@ -570,9 +688,20 @@ fn replaying_a_conflicted_snapshot_does_not_reapply_revocation_effects() {
         local.try_merge_snapshot(&snapshot, &context()).unwrap_err();
         assert_eq!(local.snapshot(), denied);
     }
-    assert_eq!(local.events().iter()
-        .filter(|event| event.event == "cache_merge_revocations").count(), 1);
-    assert!(local.events().windows(2).all(|pair| pair[0].seq < pair[1].seq));
+    assert_eq!(
+        local
+            .events()
+            .iter()
+            .filter(|event| event.event == "cache_merge_revocations")
+            .count(),
+        1
+    );
+    assert!(
+        local
+            .events()
+            .windows(2)
+            .all(|pair| pair[0].seq < pair[1].seq)
+    );
 }
 
 #[test]
@@ -583,16 +712,26 @@ fn coherent_retry_imports_artifacts_without_undoing_prior_revocations() {
     let mut peer = ModuleCache::new();
     peer.invalidate_trust_revocation("m", 9, &context());
     insert(&mut peer, "conflict", "shared", 8, 3);
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap_err();
     assert!(local.snapshot().revoked_modules.contains("m"));
     insert(&mut peer, "conflict", "shared", 8, 10);
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap();
     assert!(local.get("conflict", &version("shared", 8, 10)).is_some());
     assert!(local.get("m", &version("live", 7, 3)).is_none());
     assert!(local.snapshot().revoked_modules.contains("m"));
     local.try_restore_trust("m", 9, &context()).unwrap_err();
-    assert_eq!(local.events().iter()
-        .filter(|event| event.event == "cache_merge_revocations").count(), 1);
+    assert_eq!(
+        local
+            .events()
+            .iter()
+            .filter(|event| event.event == "cache_merge_revocations")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -603,14 +742,18 @@ fn existing_revocation_floor_advances_even_when_active_merge_is_refused() {
     let mut peer = ModuleCache::new();
     insert(&mut peer, "m", "peer", 7, 9);
     insert(&mut peer, "conflict", "shared", 8, 3);
-    local.try_merge_snapshot(&peer.snapshot(), &context()).unwrap_err();
+    local
+        .try_merge_snapshot(&peer.snapshot(), &context())
+        .unwrap_err();
     let snapshot = local.snapshot();
     assert!(snapshot.revoked_modules.contains("m"));
     assert_eq!(snapshot.latest_versions["m"].policy_version, 7);
     assert_eq!(snapshot.latest_versions["m"].trust_revision, 9);
     assert!(local.get("m", &version("peer", 7, 9)).is_none());
     for revision in [3, 4, 8, 9] {
-        local.try_restore_trust("m", revision, &context()).unwrap_err();
+        local
+            .try_restore_trust("m", revision, &context())
+            .unwrap_err();
         assert_eq!(local.snapshot(), snapshot);
     }
 }
@@ -627,5 +770,8 @@ fn compatibility_merge_also_applies_valid_revocations_before_conflict_denial() {
     assert!(local.snapshot().revoked_modules.contains("m"));
     assert!(local.get("m", &version("live", 7, 3)).is_none());
     assert!(local.get("conflict", &version("shared", 7, 10)).is_some());
-    assert_eq!(local.events().last().unwrap().error_code, "FE-MODCACHE-0002");
+    assert_eq!(
+        local.events().last().unwrap().error_code,
+        "FE-MODCACHE-0002"
+    );
 }

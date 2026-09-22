@@ -1,14 +1,14 @@
 //! Caller-supplied clock queries, never an ambient operating-system clock.
 
-use std::sync::{Arc, Mutex};
 use std::num::NonZeroU64;
+use std::sync::{Arc, Mutex};
 
-use super::WasiSourceError;
 use super::super::{
-    BTreeSet, HostResult, RuntimeCapability, WasmBoundaryValue, WasmFunctionSignature,
-    WasmHostCaller, WasmHostError, WasmHostImports, WasmValueType, WasiPreview1Error,
-    WASI_PREVIEW1_MODULE, FAULT, SUCCESS, errno, require_work, valid_range,
+    BTreeSet, FAULT, HostResult, RuntimeCapability, SUCCESS, WASI_PREVIEW1_MODULE,
+    WasiPreview1Error, WasmBoundaryValue, WasmFunctionSignature, WasmHostCaller, WasmHostError,
+    WasmHostImports, WasmValueType, errno, require_work, valid_range,
 };
+use super::WasiSourceError;
 
 /// Preview 1 clock IDs. Timestamps and resolutions are unsigned nanoseconds.
 /// Realtime's epoch is Unix time; a monotonic timestamp has no wall-clock meaning.
@@ -38,7 +38,10 @@ impl WasiClockId {
 pub enum WasiClockRequest {
     Resolution(WasiClockId),
     /// The requested maximum lag is forwarded with all 64 bits preserved.
-    Time { clock: WasiClockId, precision_ns: u64 },
+    Time {
+        clock: WasiClockId,
+        precision_ns: u64,
+    },
 }
 
 /// Explicit, bounded source for both Preview 1 clock imports. Resolution must
@@ -75,7 +78,10 @@ pub struct WasiClockLimits {
 
 impl Default for WasiClockLimits {
     fn default() -> Self {
-        Self { max_calls: 4096, call_work: NonZeroU64::MIN }
+        Self {
+            max_calls: 4096,
+            call_work: NonZeroU64::MIN,
+        }
     }
 }
 
@@ -103,17 +109,28 @@ impl WasmHostImports {
         limits: WasiClockLimits,
     ) -> Result<Self, WasiPreview1Error> {
         let source = Arc::new(Mutex::new(ClockState {
-            source, remaining: limits.max_calls, last_time: [None; 4],
+            source,
+            remaining: limits.max_calls,
+            last_time: [None; 4],
         }));
         for (name, is_time, params) in [
             ("clock_res_get", false, vec![WasmValueType::I32; 2]),
-            ("clock_time_get", true, vec![WasmValueType::I32, WasmValueType::I64, WasmValueType::I32]),
+            (
+                "clock_time_get",
+                true,
+                vec![WasmValueType::I32, WasmValueType::I64, WasmValueType::I32],
+            ),
         ] {
             let source = Arc::clone(&source);
             self.define(
-                WASI_PREVIEW1_MODULE, name,
-                WasmFunctionSignature { params, results: vec![WasmValueType::I32] },
-                BTreeSet::from([RuntimeCapability::Timer]), limits.call_work.get(),
+                WASI_PREVIEW1_MODULE,
+                name,
+                WasmFunctionSignature {
+                    params,
+                    results: vec![WasmValueType::I32],
+                },
+                BTreeSet::from([RuntimeCapability::Timer]),
+                limits.call_work.get(),
                 move |caller, args| query(caller, args, is_time, &source),
             )?;
         }
@@ -131,22 +148,37 @@ fn query<S: WasiClockSource>(
     caller.checkpoint()?;
     let (id, precision_ns, address) = match (is_time, args) {
         (false, [I32(id), I32(address)]) => (*id as u32, 0, *address as u32),
-        (true, [I32(id), I64(precision), I32(address)]) => (*id as u32, *precision as u64, *address as u32),
+        (true, [I32(id), I64(precision), I32(address)]) => {
+            (*id as u32, *precision as u64, *address as u32)
+        }
         _ => return Err(WasmHostError::trap("invalid WASI clock ABI").into()),
     };
-    let Some(clock) = WasiClockId::decode(id) else { return errno(28); }; // INVAL
-    if !valid_range(caller, address, 8) { return errno(FAULT); }
+    let Some(clock) = WasiClockId::decode(id) else {
+        return errno(28);
+    }; // INVAL
+    if !valid_range(caller, address, 8) {
+        return errno(FAULT);
+    }
     require_work(caller, 1)?;
     // Only the two callbacks in this non-cloneable registry own this mutex.
     // Instance execution is exclusive. Poisoning is a VM fault, not a synthetic
     // timestamp or guest errno; the host interruption gate also prevents reentry.
-    let mut state = source.lock().map_err(|_| WasmHostError::trap("WASI clock source was interrupted"))?;
-    if state.remaining == 0 { return errno(42); } // NOBUFS
+    let mut state = source
+        .lock()
+        .map_err(|_| WasmHostError::trap("WASI clock source was interrupted"))?;
+    if state.remaining == 0 {
+        return errno(42);
+    } // NOBUFS
     caller.checkpoint()?;
     state.remaining -= 1;
     let request = if is_time {
-        WasiClockRequest::Time { clock, precision_ns }
-    } else { WasiClockRequest::Resolution(clock) };
+        WasiClockRequest::Time {
+            clock,
+            precision_ns,
+        }
+    } else {
+        WasiClockRequest::Resolution(clock)
+    };
     let result = state.source.read(request);
     caller.checkpoint()?;
     let value = match result {
@@ -160,6 +192,8 @@ fn query<S: WasiClockSource>(
         return errno(29); // IO: do not publish an invalid source reading
     }
     caller.write_memory(address, &value.to_le_bytes())?;
-    if is_time { state.last_time[clock as usize] = Some(value); }
+    if is_time {
+        state.last_time[clock as usize] = Some(value);
+    }
     errno(SUCCESS)
 }

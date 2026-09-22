@@ -284,7 +284,8 @@ impl AsyncModuleRuntime {
         value: JsValue,
         label: Label,
     ) -> Result<Vec<String>, AsyncModuleSchedulerError> {
-        self.scheduler.fulfill_awaited_promise(promise, value, label)
+        self.scheduler
+            .fulfill_awaited_promise(promise, value, label)
     }
 
     pub fn reject_awaited_promise(
@@ -293,7 +294,8 @@ impl AsyncModuleRuntime {
         reason: JsValue,
         label: Label,
     ) -> Result<Vec<ModulePromiseUpdate>, AsyncModuleSchedulerError> {
-        self.scheduler.reject_awaited_promise(promise, reason, label)
+        self.scheduler
+            .reject_awaited_promise(promise, reason, label)
     }
 
     pub fn evaluation_promise(&self, specifier: &str) -> Option<PromiseHandle> {
@@ -395,7 +397,10 @@ mod tests {
         ModuleGraphNode {
             specifier: name.to_string(),
             has_top_level_await: tla,
-            dependencies: dependencies.iter().map(|value| (*value).to_string()).collect(),
+            dependencies: dependencies
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
         }
     }
 
@@ -451,8 +456,7 @@ mod tests {
 
     #[test]
     fn await_handoff_preserves_value_label_and_live_lease() {
-        let mut runtime =
-            AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
+        let mut runtime = AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
         let start = runtime.next_task().unwrap().unwrap();
         assert_eq!(runtime.resume_input(&start).unwrap(), None);
         let promise = runtime.create_pending_promise();
@@ -486,8 +490,7 @@ mod tests {
 
     #[test]
     fn repeated_awaits_select_the_latest_suspension() {
-        let mut runtime =
-            AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
+        let mut runtime = AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
         let mut task = runtime.next_task().unwrap().unwrap();
         for (value, label) in [
             (JsValue::Int(7), Label::Secret),
@@ -502,7 +505,11 @@ mod tests {
             assert!(runtime.resume_input(&task).is_err());
             assert_eq!(
                 runtime.resume_input(&next).unwrap(),
-                Some(ModuleAwaitInput { promise, value, label })
+                Some(ModuleAwaitInput {
+                    promise,
+                    value,
+                    label
+                })
             );
             task = next;
         }
@@ -513,11 +520,9 @@ mod tests {
 
     #[test]
     fn shared_promise_handoff_is_not_consumed_by_the_first_waiter() {
-        let mut runtime = AsyncModuleRuntime::with_defaults(&[
-            node("a", true, &[]),
-            node("b", true, &[]),
-        ])
-        .unwrap();
+        let mut runtime =
+            AsyncModuleRuntime::with_defaults(&[node("a", true, &[]), node("b", true, &[])])
+                .unwrap();
         let promise = runtime.create_pending_promise();
         for _ in 0..2 {
             let task = runtime.next_task().unwrap().unwrap();
@@ -572,8 +577,7 @@ mod tests {
 
     #[test]
     fn forged_task_identity_cannot_read_a_continuation() {
-        let mut runtime =
-            AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
+        let mut runtime = AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
         let start = runtime.next_task().unwrap().unwrap();
         let promise = runtime.create_pending_promise();
         runtime.suspend_task(&start, promise).unwrap();
@@ -601,8 +605,7 @@ mod tests {
 
     #[test]
     fn rejection_payload_remains_available_without_a_resume_lease() {
-        let mut runtime =
-            AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
+        let mut runtime = AsyncModuleRuntime::with_defaults(&[node("app", true, &[])]).unwrap();
         let task = runtime.next_task().unwrap().unwrap();
         let promise = runtime.create_pending_promise();
         runtime.suspend_task(&task, promise).unwrap();
@@ -627,7 +630,10 @@ mod tests {
     ) -> Result<AsyncModuleRuntime, ModuleGraphError> {
         AsyncModuleRuntime::from_entrypoints(
             nodes,
-            &roots.iter().map(|root| (*root).to_string()).collect::<Vec<_>>(),
+            &roots
+                .iter()
+                .map(|root| (*root).to_string())
+                .collect::<Vec<_>>(),
             &ModuleGraphLimits::default(),
             AsyncModuleSchedulerConfig::default(),
         )
@@ -655,7 +661,10 @@ mod tests {
             config,
         )
         .unwrap();
-        assert_eq!(runtime.metadata().graph_plan.registration_order, vec!["dep", "app"]);
+        assert_eq!(
+            runtime.metadata().graph_plan.registration_order,
+            vec!["dep", "app"]
+        );
         assert_eq!(runtime.snapshot().registered_modules, 2);
         assert!(runtime.evaluation_promise("aaa-side-effect").is_none());
         let dep = runtime.next_task().unwrap().unwrap();
@@ -667,14 +676,26 @@ mod tests {
             .fulfill_awaited_promise(promise, JsValue::Int(42), Label::Secret)
             .unwrap();
         let resume = runtime.next_task().unwrap().unwrap();
-        assert_eq!(runtime.resume_input(&resume).unwrap().unwrap().value, JsValue::Int(42));
-        runtime.complete_task(&resume, JsValue::Undefined, Label::Secret).unwrap();
+        assert_eq!(
+            runtime.resume_input(&resume).unwrap().unwrap().value,
+            JsValue::Int(42)
+        );
+        runtime
+            .complete_task(&resume, JsValue::Undefined, Label::Secret)
+            .unwrap();
         let app = runtime.next_task().unwrap().unwrap();
         assert_eq!(app.module_specifier, "app");
         assert_eq!(runtime.resume_input(&app).unwrap(), None);
-        runtime.complete_task(&app, JsValue::Undefined, Label::Secret).unwrap();
+        runtime
+            .complete_task(&app, JsValue::Undefined, Label::Secret)
+            .unwrap();
         assert!(runtime.next_task().unwrap().is_none());
-        assert!(runtime.module_phases().values().all(|phase| *phase == AsyncModulePhase::Settled));
+        assert!(
+            runtime
+                .module_phases()
+                .values()
+                .all(|phase| *phase == AsyncModulePhase::Settled)
+        );
     }
 
     #[test]
@@ -692,7 +713,9 @@ mod tests {
             let mut executed = Vec::new();
             while let Some(task) = runtime.next_task().unwrap() {
                 executed.push(task.module_specifier.clone());
-                runtime.complete_task(&task, JsValue::Undefined, Label::Public).unwrap();
+                runtime
+                    .complete_task(&task, JsValue::Undefined, Label::Public)
+                    .unwrap();
             }
             assert_eq!(executed, expected);
             nodes.rotate_left(1);
@@ -727,7 +750,10 @@ mod tests {
     #[test]
     fn selected_cycles_self_edges_and_duplicate_imports_still_fail() {
         assert!(matches!(
-            from_roots(&[node("a", false, &["b"]), node("b", false, &["a"])], &["a"]),
+            from_roots(
+                &[node("a", false, &["b"]), node("b", false, &["a"])],
+                &["a"]
+            ),
             Err(ModuleGraphError::Cycle { .. })
         ));
         assert!(matches!(
@@ -735,7 +761,10 @@ mod tests {
             Err(ModuleGraphError::SelfDependency { .. })
         ));
         assert!(matches!(
-            from_roots(&[node("a", false, &["b", "b"]), node("b", false, &[])], &["a"]),
+            from_roots(
+                &[node("a", false, &["b", "b"]), node("b", false, &[])],
+                &["a"]
+            ),
             Err(ModuleGraphError::DuplicateDependency { .. })
         ));
     }
@@ -756,7 +785,11 @@ mod tests {
             max_specifier_bytes: 4,
         };
         assert!(matches!(
-            select_entrypoint_nodes(&[node("a", false, &[]), node("b", false, &[])], &[], &limits),
+            select_entrypoint_nodes(
+                &[node("a", false, &[]), node("b", false, &[])],
+                &[],
+                &limits
+            ),
             Err(ModuleGraphError::ModuleLimitExceeded { .. })
         ));
         assert!(matches!(
@@ -790,12 +823,9 @@ mod tests {
                 },
             })
             .collect();
-        let selected = select_entrypoint_nodes(
-            &nodes,
-            &["m0000".into()],
-            &ModuleGraphLimits::default(),
-        )
-        .unwrap();
+        let selected =
+            select_entrypoint_nodes(&nodes, &["m0000".into()], &ModuleGraphLimits::default())
+                .unwrap();
         assert_eq!(selected, nodes);
     }
 }

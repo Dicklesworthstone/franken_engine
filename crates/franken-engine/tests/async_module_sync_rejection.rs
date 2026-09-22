@@ -30,11 +30,7 @@ fn sync_throw_rejects_transitive_tla_promises_with_exact_payload() {
         .unwrap();
 
     let linkage = bridge
-        .reject_synchronous_module(
-            "root.mjs",
-            JsValue::Str("sync throw".into()),
-            Label::Secret,
-        )
+        .reject_synchronous_module("root.mjs", JsValue::Str("sync throw".into()), Label::Secret)
         .unwrap();
 
     assert!(linkage.transitive_closure.contains("child.mjs"));
@@ -61,11 +57,7 @@ fn late_tla_registration_after_sync_throw_is_immediately_rejected() {
     let mut bridge = AsyncModulePromiseBridge::with_defaults();
     bridge.register_module("root.mjs", false, &[]).unwrap();
     bridge
-        .reject_synchronous_module(
-            "root.mjs",
-            JsValue::Str("boom".into()),
-            Label::Confidential,
-        )
+        .reject_synchronous_module("root.mjs", JsValue::Str("boom".into()), Label::Confidential)
         .unwrap();
 
     let late = bridge
@@ -73,7 +65,10 @@ fn late_tla_registration_after_sync_throw_is_immediately_rejected() {
         .unwrap()
         .unwrap();
     let record = bridge.promise_store().get(late).unwrap();
-    assert_eq!(record.state, PromiseState::Rejected(JsValue::Str("boom".into())));
+    assert_eq!(
+        record.state,
+        PromiseState::Rejected(JsValue::Str("boom".into()))
+    );
     assert_eq!(record.label, Label::Confidential);
     assert_eq!(
         bridge.evaluator().states()["late.mjs"].phase,
@@ -89,11 +84,7 @@ fn settled_synchronous_module_cannot_be_rejected_retroactively() {
     bridge.register_module("done.mjs", false, &[]).unwrap();
     bridge.complete_synchronous_module("done.mjs").unwrap();
     let error = bridge
-        .reject_synchronous_module(
-            "done.mjs",
-            JsValue::Str("too late".into()),
-            Label::Public,
-        )
+        .reject_synchronous_module("done.mjs", JsValue::Str("too late".into()), Label::Public)
         .unwrap_err();
     assert!(error.to_string().contains("already settled"));
     assert_eq!(
@@ -110,13 +101,13 @@ fn synchronous_rejection_cannot_skip_pending_dependency() {
         .register_module("app.mjs", false, &["dep.mjs".into()])
         .unwrap();
     let error = bridge
-        .reject_synchronous_module(
-            "app.mjs",
-            JsValue::Str("premature".into()),
-            Label::Public,
-        )
+        .reject_synchronous_module("app.mjs", JsValue::Str("premature".into()), Label::Public)
         .unwrap_err();
-    assert!(error.to_string().contains("before async dependencies settle"));
+    assert!(
+        error
+            .to_string()
+            .contains("before async dependencies settle")
+    );
     assert_eq!(
         bridge.evaluator().states()["app.mjs"].phase,
         AsyncModulePhase::Synchronous

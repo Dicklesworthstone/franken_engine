@@ -492,8 +492,8 @@ mod tests {
     use crate::deterministic_serde::{CanonicalValue, SchemaHash};
     use crate::engine_object_id::ObjectDomain;
     use crate::signature_preimage::{
-        SignatureContext, SignaturePreimage, SigningKey, SIGNATURE_LEN, SIGNATURE_SENTINEL,
-        SIGNING_KEY_LEN,
+        SIGNATURE_LEN, SIGNATURE_SENTINEL, SIGNING_KEY_LEN, SignatureContext, SignaturePreimage,
+        SigningKey,
     };
 
     struct TestObj {
@@ -572,7 +572,11 @@ mod tests {
     #[test]
     fn from_unsorted_canonicalizes_input() {
         let object = object();
-        let entries = vec![signed_entry(3, &object), signed_entry(1, &object), signed_entry(2, &object)];
+        let entries = vec![
+            signed_entry(3, &object),
+            signed_entry(1, &object),
+            signed_entry(2, &object),
+        ];
         let array = SortedSignatureArray::from_unsorted(entries).expect("canonicalize");
         assert!(is_sorted(array.entries()).is_ok());
     }
@@ -701,13 +705,15 @@ mod tests {
             second_key.clone(),
             Signature::from_bytes([0xAA; SIGNATURE_LEN]),
         );
-        let array = SortedSignatureArray::from_unsorted(vec![first.clone(), invalid]).expect("array");
-        let result = array.verify_quorum(
-            2,
-            &[first.signer, second_key],
-            |key, signature| verify_real(key, signature, &preimage),
-        );
-        assert!(matches!(result, Err(MultiSigError::QuorumNotMet { valid: 1, .. })));
+        let array =
+            SortedSignatureArray::from_unsorted(vec![first.clone(), invalid]).expect("array");
+        let result = array.verify_quorum(2, &[first.signer, second_key], |key, signature| {
+            verify_real(key, signature, &preimage)
+        });
+        assert!(matches!(
+            result,
+            Err(MultiSigError::QuorumNotMet { valid: 1, .. })
+        ));
     }
 
     #[test]
@@ -783,7 +789,10 @@ mod tests {
         let mut entries = vec![signed_entry(1, &object), signed_entry(2, &object)];
         entries.sort();
         entries.reverse();
-        let authorized = entries.iter().map(|entry| entry.signer.clone()).collect::<Vec<_>>();
+        let authorized = entries
+            .iter()
+            .map(|entry| entry.signer.clone())
+            .collect::<Vec<_>>();
         let malformed = SortedSignatureArray { entries };
         assert!(matches!(
             malformed.verify_quorum(1, &authorized, |_, _| Ok(())),
@@ -806,9 +815,11 @@ mod tests {
         let object = object();
         let entry = signed_entry(1, &object);
         let mut context = MultiSigContext::new();
-        assert!(context
-            .create_sorted(vec![entry.clone(), entry], "duplicate")
-            .is_err());
+        assert!(
+            context
+                .create_sorted(vec![entry.clone(), entry], "duplicate")
+                .is_err()
+        );
         assert_eq!(context.event_counts().get("duplicate_signer"), Some(&1));
     }
 
@@ -839,15 +850,17 @@ mod tests {
         let second = signed_entry(2, &object);
         let array = SortedSignatureArray::new(vec![first.clone()]).expect("array");
         let mut context = MultiSigContext::new();
-        assert!(context
-            .verify_quorum(
-                &array,
-                2,
-                &[first.signer, second.signer],
-                |_, _| Ok(()),
-                "quorum-fail",
-            )
-            .is_err());
+        assert!(
+            context
+                .verify_quorum(
+                    &array,
+                    2,
+                    &[first.signer, second.signer],
+                    |_, _| Ok(()),
+                    "quorum-fail",
+                )
+                .is_err()
+        );
         assert_eq!(context.event_counts().get("quorum_failed"), Some(&1));
     }
 

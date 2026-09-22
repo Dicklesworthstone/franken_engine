@@ -12,12 +12,12 @@ pub use frankenengine_engine::module_live_binding;
 pub use frankenengine_engine::object_model;
 pub use frankenengine_engine::promise_model;
 
+#[path = "../async_module_graph.rs"]
+mod async_module_graph;
 #[path = "../async_module_promise_bridge.rs"]
 mod async_module_promise_bridge;
 #[path = "../async_module_scheduler.rs"]
 mod async_module_scheduler;
-#[path = "../async_module_graph.rs"]
-mod async_module_graph;
 
 use async_module_graph::{
     ModuleGraphLimits, ModuleGraphNode, ModuleGraphPlan, register_module_graph,
@@ -55,7 +55,9 @@ struct Scenario {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
-    Dispatch { save_as: String },
+    Dispatch {
+        save_as: String,
+    },
     Complete {
         task: String,
         #[serde(default = "undefined_value")]
@@ -63,7 +65,10 @@ enum Operation {
         #[serde(default = "public_label")]
         label: Label,
     },
-    Suspend { task: String, promise: String },
+    Suspend {
+        task: String,
+        promise: String,
+    },
     Reject {
         task: String,
         reason: JsValue,
@@ -167,7 +172,9 @@ fn run(scenario: Scenario) -> Result<Output, String> {
         if named_promises.contains_key(&alias) {
             return Err(format!("duplicate Promise alias: {alias}"));
         }
-        let promise = registered.evaluation_promises.get(&specifier)
+        let promise = registered
+            .evaluation_promises
+            .get(&specifier)
             .copied()
             .ok_or_else(|| format!("module has no evaluation Promise: {specifier}"))?;
         named_promises.insert(alias, promise);
@@ -214,7 +221,11 @@ fn run(scenario: Scenario) -> Result<Output, String> {
                     .reject_task(&task, reason, label)
                     .map_err(|error| error.to_string())?;
             }
-            Operation::Cancel { module, reason, label } => {
+            Operation::Cancel {
+                module,
+                reason,
+                label,
+            } => {
                 scheduler
                     .cancel_module(&module, reason, label)
                     .map_err(|error| error.to_string())?;
@@ -252,12 +263,18 @@ fn run(scenario: Scenario) -> Result<Output, String> {
     // from fulfilled imports and inspect the precise propagated failure.
     let mut named_promise_results = BTreeMap::new();
     for (alias, promise) in &named_promises {
-        let record = scheduler.bridge().promise_store().get(*promise)
+        let record = scheduler
+            .bridge()
+            .promise_store()
+            .get(*promise)
             .map_err(|error| error.to_string())?;
-        named_promise_results.insert(alias.clone(), PromiseResult {
-            state: record.state.clone(),
-            label: record.label.clone(),
-        });
+        named_promise_results.insert(
+            alias.clone(),
+            PromiseResult {
+                state: record.state.clone(),
+                label: record.label.clone(),
+            },
+        );
     }
     let module_phases = scheduler
         .bridge()
@@ -324,13 +341,17 @@ mod tests {
             "evaluation_promise_aliases": {"root_result": "root", "child_result": "child"},
             "operations": [{"kind": "cancel", "module": "root",
                 "reason": JsValue::Int(7), "label": Label::Secret}]
-        })).unwrap();
+        }))
+        .unwrap();
         let output = run(scenario).unwrap();
         assert!(output.dispatched.is_empty());
         assert_eq!(output.snapshot.ready_tasks, 0);
         assert_eq!(output.snapshot.in_flight_tasks, 0);
         for name in ["root_result", "child_result"] {
-            assert_eq!(output.named_promise_results[name].state, PromiseState::Rejected(JsValue::Int(7)));
+            assert_eq!(
+                output.named_promise_results[name].state,
+                PromiseState::Rejected(JsValue::Int(7))
+            );
             assert_eq!(output.named_promise_results[name].label, Label::Secret);
         }
     }
@@ -350,13 +371,17 @@ mod tests {
                 {"kind": "suspend", "task": "tb", "promise": "pa"},
                 {"kind": "cancel", "module": "a", "reason": JsValue::Int(8)}
             ]
-        })).unwrap();
+        }))
+        .unwrap();
         let output = run(scenario).unwrap();
         assert_eq!(output.dispatched.len(), 2);
         assert_eq!(output.snapshot.ready_tasks, 0);
         assert_eq!(output.snapshot.in_flight_tasks, 0);
         for name in ["pa", "pb"] {
-            assert_eq!(output.named_promise_results[name].state, PromiseState::Rejected(JsValue::Int(8)));
+            assert_eq!(
+                output.named_promise_results[name].state,
+                PromiseState::Rejected(JsValue::Int(8))
+            );
             assert_eq!(output.named_promise_results[name].label, Label::Public);
         }
     }
@@ -376,17 +401,28 @@ mod tests {
                 {"kind": "cancel_all", "reason": JsValue::Int(7), "label": Label::Secret},
                 {"kind": "cancel_all", "reason": JsValue::Int(99)}
             ]
-        })).unwrap();
+        }))
+        .unwrap();
         let output = run(scenario).unwrap();
         assert_eq!(output.snapshot.ready_tasks, 0);
         assert_eq!(output.snapshot.in_flight_tasks, 0);
         assert_eq!(output.dispatched.len(), 1);
-        assert_eq!(output.named_promise_results["done_result"].state,
-            PromiseState::Fulfilled(JsValue::Int(42)));
-        assert_eq!(output.named_promise_results["done_result"].label, Label::Public);
-        assert_eq!(output.named_promise_results["pending_result"].state,
-            PromiseState::Rejected(JsValue::Int(7)));
-        assert_eq!(output.named_promise_results["pending_result"].label, Label::Secret);
+        assert_eq!(
+            output.named_promise_results["done_result"].state,
+            PromiseState::Fulfilled(JsValue::Int(42))
+        );
+        assert_eq!(
+            output.named_promise_results["done_result"].label,
+            Label::Public
+        );
+        assert_eq!(
+            output.named_promise_results["pending_result"].state,
+            PromiseState::Rejected(JsValue::Int(7))
+        );
+        assert_eq!(
+            output.named_promise_results["pending_result"].label,
+            Label::Secret
+        );
     }
 
     #[test]
@@ -407,7 +443,10 @@ mod tests {
         )
         .expect("scenario");
         let output = run(scenario).expect("run");
-        assert_eq!(output.graph_plan.registration_order, vec!["dep.mjs", "app.mjs"]);
+        assert_eq!(
+            output.graph_plan.registration_order,
+            vec!["dep.mjs", "app.mjs"]
+        );
         assert_eq!(output.dispatched[0].module_specifier, "dep.mjs");
         assert_eq!(output.dispatched[1].module_specifier, "app.mjs");
         assert_eq!(output.module_phases["app.mjs"], AsyncModulePhase::Settled);
@@ -444,21 +483,42 @@ mod tests {
             ]
         })).unwrap();
         let output = run(scenario).unwrap();
-        assert_eq!(output.named_promises["imported"], output.evaluation_promises["b-provider"]);
-        assert_eq!(output.named_promises["same"], output.named_promises["imported"]);
-        assert_eq!(output.named_promise_results["imported"].state,
-            PromiseState::Fulfilled(JsValue::Int(42)));
-        assert_eq!(output.named_promise_results["imported"].label, Label::Secret);
+        assert_eq!(
+            output.named_promises["imported"],
+            output.evaluation_promises["b-provider"]
+        );
+        assert_eq!(
+            output.named_promises["same"],
+            output.named_promises["imported"]
+        );
+        assert_eq!(
+            output.named_promise_results["imported"].state,
+            PromiseState::Fulfilled(JsValue::Int(42))
+        );
+        assert_eq!(
+            output.named_promise_results["imported"].label,
+            Label::Secret
+        );
         assert_eq!(output.dispatched.len(), 3);
         assert_eq!(output.dispatched[2].module_specifier, "a-waiter");
-        assert_eq!(output.dispatched[2].kind, async_module_scheduler::ModuleTaskKind::Resume);
+        assert_eq!(
+            output.dispatched[2].kind,
+            async_module_scheduler::ModuleTaskKind::Resume
+        );
         assert_eq!(output.dispatched[2].generation, 2);
-        assert!(output.module_phases.values().all(|phase| *phase == AsyncModulePhase::Settled));
+        assert!(
+            output
+                .module_phases
+                .values()
+                .all(|phase| *phase == AsyncModulePhase::Settled)
+        );
         assert_eq!(output.snapshot.in_flight_tasks, 0);
         assert_eq!(output.snapshot.ready_tasks, 0);
         let json = serde_json::to_value(&output).unwrap();
-        assert_eq!(json["named_promise_results"]["imported"]["state"],
-            serde_json::to_value(PromiseState::Fulfilled(JsValue::Int(42))).unwrap());
+        assert_eq!(
+            json["named_promise_results"]["imported"]["state"],
+            serde_json::to_value(PromiseState::Fulfilled(JsValue::Int(42))).unwrap()
+        );
     }
 
     #[test]
@@ -485,11 +545,17 @@ mod tests {
             assert_eq!(output.module_phases[name], AsyncModulePhase::Rejected);
         }
         for alias in ["imported", "waiter-result"] {
-            assert_eq!(output.named_promise_results[alias].state, PromiseState::Rejected(JsValue::Int(7)));
+            assert_eq!(
+                output.named_promise_results[alias].state,
+                PromiseState::Rejected(JsValue::Int(7))
+            );
             assert_eq!(output.named_promise_results[alias].label, Label::Secret);
         }
         assert_eq!(output.dispatched[2].module_specifier, "z-unrelated");
-        assert_eq!(output.module_phases["z-unrelated"], AsyncModulePhase::Settled);
+        assert_eq!(
+            output.module_phases["z-unrelated"],
+            AsyncModulePhase::Settled
+        );
         assert_eq!(output.snapshot.in_flight_tasks, 0);
         assert_eq!(output.snapshot.ready_tasks, 0);
     }
@@ -506,14 +572,20 @@ mod tests {
                 "modules":[{"specifier":"async", "has_top_level_await":true}, {"specifier":"sync"}],
                 "evaluation_promise_aliases":aliases,
                 "pending_promises":pending
-            })).unwrap();
+            }))
+            .unwrap();
             assert!(run(scenario).is_err());
         }
         let scenario: Scenario = serde_json::from_value(serde_json::json!({
             "modules":[{"specifier":"async", "has_top_level_await":true}],
             "evaluation_promise_aliases":{"x":"async"},
             "operations":[{"kind":"fulfill_awaited", "promise":"x"}]
-        })).unwrap();
-        assert!(run(scenario).unwrap_err().contains("must be settled through the module-evaluation path"));
+        }))
+        .unwrap();
+        assert!(
+            run(scenario)
+                .unwrap_err()
+                .contains("must be settled through the module-evaluation path")
+        );
     }
 }

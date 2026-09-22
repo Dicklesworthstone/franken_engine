@@ -7,9 +7,7 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::HybridRouter;
-use frankenengine_engine::intrinsics_codegen::{
-    DispatchTarget, array_prototype, generate_glue,
-};
+use frankenengine_engine::intrinsics_codegen::{DispatchTarget, array_prototype, generate_glue};
 use frankenengine_engine::intrinsics_table::{
     GapStatus, IfcPropagation, ReceiverKind, ThisCoercion, validate_table,
 };
@@ -26,7 +24,8 @@ fn family_table_validates_and_generates_verified_glue() {
     validate_table(array_prototype::ROWS).expect("Array.prototype family table must validate");
     let glue = generate_glue(array_prototype::ROWS)
         .expect("Array.prototype family table must generate glue");
-    glue.verify().expect("Array.prototype generated glue must verify");
+    glue.verify()
+        .expect("Array.prototype generated glue must verify");
     assert_eq!(glue.registry.len(), 34);
     assert_eq!(glue.dispatch.len(), 34);
     assert_eq!(glue.gap_entries.len(), 34);
@@ -38,8 +37,16 @@ fn family_rows_are_uniform_and_authority_free() {
         assert!(row.name.starts_with("Array.prototype."), "{}", row.name);
         assert_eq!(row.receiver, ReceiverKind::Array, "{}", row.name);
         assert_eq!(row.this_coercion, ThisCoercion::Passthrough, "{}", row.name);
-        assert!(row.capability.is_none(), "{} must not gain ambient authority", row.name);
-        assert!(!row.conformance.is_empty(), "{} needs a conformance anchor", row.name);
+        assert!(
+            row.capability.is_none(),
+            "{} must not gain ambient authority",
+            row.name
+        );
+        assert!(
+            !row.conformance.is_empty(),
+            "{} needs a conformance anchor",
+            row.name
+        );
     }
 }
 
@@ -110,7 +117,10 @@ fn family_gap_ledger_matches_shipped_array_semantics() {
         .filter(|row| !matches!(&row.gap_status, GapStatus::Resolved))
         .map(|row| row.name)
         .collect();
-    assert!(unresolved.is_empty(), "unexpected Array semantic gaps: {unresolved:?}");
+    assert!(
+        unresolved.is_empty(),
+        "unexpected Array semantic gaps: {unresolved:?}"
+    );
 }
 
 #[test]
@@ -134,7 +144,11 @@ fn callback_methods_declare_callback_dependent_ifc() {
             .iter()
             .find(|row| row.name == canonical)
             .expect("callback row");
-        assert!(matches!(&row.ifc, IfcPropagation::Custom(_)), "{}", row.name);
+        assert!(
+            matches!(&row.ifc, IfcPropagation::Custom(_)),
+            "{}",
+            row.name
+        );
     }
 }
 
@@ -144,7 +158,10 @@ fn e2e_mutators_still_serve_receiver_aware_semantics() {
     assert_eq!(ev("let a=[1,2]; let x=a.pop(); x + ':' + a.length;"), "2:1");
     assert_eq!(ev("let a=[1,2]; let x=a.shift(); x + ':' + a[0];"), "1:2");
     assert_eq!(ev("let a=[2,3]; a.unshift(1); a.join(',');"), "1,2,3");
-    assert_eq!(ev("let a=[1,2,3,4]; let r=a.splice(1,2,9); r.join(',') + ':' + a.join(',');"), "2,3:1,9,4");
+    assert_eq!(
+        ev("let a=[1,2,3,4]; let r=a.splice(1,2,9); r.join(',') + ':' + a.join(',');"),
+        "2,3:1,9,4"
+    );
 }
 
 #[test]
@@ -172,15 +189,21 @@ fn e2e_callback_and_reduce_methods_still_serve() {
 #[test]
 fn e2e_array_iterator_methods_are_lazy_and_stateful() {
     assert_eq!(
-        ev("let a=[1,2]; let it=a.values(); a[0]=8; let x=it.next().value; a[1]=9; x + ':' + it.next().value + ':' + it.next().done;"),
+        ev(
+            "let a=[1,2]; let it=a.values(); a[0]=8; let x=it.next().value; a[1]=9; x + ':' + it.next().value + ':' + it.next().done;"
+        ),
         "8:9:true"
     );
     assert_eq!(
-        ev("let calls=0,a=[1]; Object.defineProperty(a,'0',{get(){calls+=1;throw 7;}}); let it=a.keys(); it.next().value + ':' + it.next().done + ':' + calls;"),
+        ev(
+            "let calls=0,a=[1]; Object.defineProperty(a,'0',{get(){calls+=1;throw 7;}}); let it=a.keys(); it.next().value + ':' + it.next().done + ':' + calls;"
+        ),
         "0:true:0"
     );
     assert_eq!(
-        ev("let a=[1,2]; let it=a.entries(); let first=it.next().value; a[1]=9; let second=it.next().value; first.join(':') + ':' + second.join(':') + ':' + (first===second);"),
+        ev(
+            "let a=[1,2]; let it=a.entries(); let first=it.next().value; a[1]=9; let second=it.next().value; first.join(':') + ':' + second.join(':') + ':' + (first===second);"
+        ),
         "0:1:1:9:false"
     );
 }
@@ -188,11 +211,15 @@ fn e2e_array_iterator_methods_are_lazy_and_stateful() {
 #[test]
 fn e2e_array_iterator_reads_live_length_and_stays_done_after_exhaustion() {
     assert_eq!(
-        ev("let a=[1]; let it=a.values(); let first=it.next().value; a.push(2); first + ':' + it.next().value + ':' + it.next().done;"),
+        ev(
+            "let a=[1]; let it=a.values(); let first=it.next().value; a.push(2); first + ':' + it.next().value + ':' + it.next().done;"
+        ),
         "1:2:true"
     );
     assert_eq!(
-        ev("let a=[]; let it=a.values(); let done=it.next().done; a.push(7); done + ':' + it.next().done;"),
+        ev(
+            "let a=[]; let it=a.values(); let done=it.next().done; a.push(7); done + ':' + it.next().done;"
+        ),
         "true:true"
     );
 }

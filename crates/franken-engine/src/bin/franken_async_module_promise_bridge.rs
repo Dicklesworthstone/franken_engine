@@ -74,8 +74,12 @@ enum Settlement {
         #[serde(default = "public_label")]
         label: Label,
     },
-    CompleteSynchronous { module: String },
-    Synchronize { module: String },
+    CompleteSynchronous {
+        module: String,
+    },
+    Synchronize {
+        module: String,
+    },
     SynchronizeAll,
 }
 
@@ -199,7 +203,10 @@ fn run_scenario(scenario: Scenario) -> Result<ScenarioOutput, String> {
                 updates.push(update);
             }
             Settlement::SynchronizeAll => {
-                for update in bridge.synchronize_all().map_err(|error| error.to_string())? {
+                for update in bridge
+                    .synchronize_all()
+                    .map_err(|error| error.to_string())?
+                {
                     dependency_ready.extend(update.dependency_ready.iter().cloned());
                     updates.push(update);
                 }

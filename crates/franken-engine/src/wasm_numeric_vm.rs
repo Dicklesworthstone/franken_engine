@@ -25,7 +25,9 @@ pub use activation::{WasmCall, WasmCallStep};
 mod control;
 #[path = "wasm_numeric_vm/state.rs"]
 mod state;
-pub use state::{WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericInstance, WasmStateError};
+pub use state::{
+    WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericInstance, WasmStateError,
+};
 
 pub const WASM_NUMERIC_VM_COMPONENT: &str = "wasm_numeric_vm";
 pub const WASM_NUMERIC_VM_SCHEMA_VERSION: &str = "franken-engine.wasm-numeric-vm.v1";
@@ -85,39 +87,110 @@ pub struct WasmNumericExecution {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WasmNumericVmError {
     State(WasmStateError),
-    ModuleTooLarge { actual: usize, max: usize },
-    InvalidModule { detail: String },
-    UnsupportedSection { section_id: u8 },
-    UnsupportedImportKind { kind: u8 },
-    UnsupportedValueType { byte: u8 },
-    UnknownExport { name: String },
-    ExportIsNotFunction { name: String, kind: u8 },
-    DuplicateExport { name: String },
-    TypeLimitExceeded { actual: usize, max: usize },
-    FunctionLimitExceeded { actual: usize, max: usize },
-    ExportLimitExceeded { actual: usize, max: usize },
-    LocalLimitExceeded { actual: usize, max: usize },
-    StackLimitExceeded { max: usize },
-    LiveValueLimitExceeded { actual: usize, max: usize },
-    ControlDepthExceeded { max: usize },
-    CallDepthExceeded { max: u32 },
-    InstructionBudgetExceeded { max: u64 },
-    ArityMismatch { function_index: u32, expected: usize, actual: usize },
+    ModuleTooLarge {
+        actual: usize,
+        max: usize,
+    },
+    InvalidModule {
+        detail: String,
+    },
+    UnsupportedSection {
+        section_id: u8,
+    },
+    UnsupportedImportKind {
+        kind: u8,
+    },
+    UnsupportedValueType {
+        byte: u8,
+    },
+    UnknownExport {
+        name: String,
+    },
+    ExportIsNotFunction {
+        name: String,
+        kind: u8,
+    },
+    DuplicateExport {
+        name: String,
+    },
+    TypeLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
+    FunctionLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
+    ExportLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
+    LocalLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
+    StackLimitExceeded {
+        max: usize,
+    },
+    LiveValueLimitExceeded {
+        actual: usize,
+        max: usize,
+    },
+    ControlDepthExceeded {
+        max: usize,
+    },
+    CallDepthExceeded {
+        max: u32,
+    },
+    InstructionBudgetExceeded {
+        max: u64,
+    },
+    ArityMismatch {
+        function_index: u32,
+        expected: usize,
+        actual: usize,
+    },
     TypeMismatch {
         function_index: u32,
         value_index: usize,
         expected: WasmValueType,
         actual: WasmValueType,
     },
-    UnknownFunction { function_index: u32 },
-    ImportedFunctionUnsupported { function_index: u32, module: String, name: String },
-    UnsupportedOpcode { function_index: u32, opcode: u8, offset: usize },
-    InvalidLocal { function_index: u32, local_index: u32 },
-    StackUnderflow { function_index: u32, opcode: u8 },
-    ResultStackMismatch { function_index: u32, expected: usize, actual: usize },
-    IntegerDivideByZero { function_index: u32 },
-    IntegerOverflow { function_index: u32 },
-    Unreachable { function_index: u32 },
+    UnknownFunction {
+        function_index: u32,
+    },
+    ImportedFunctionUnsupported {
+        function_index: u32,
+        module: String,
+        name: String,
+    },
+    UnsupportedOpcode {
+        function_index: u32,
+        opcode: u8,
+        offset: usize,
+    },
+    InvalidLocal {
+        function_index: u32,
+        local_index: u32,
+    },
+    StackUnderflow {
+        function_index: u32,
+        opcode: u8,
+    },
+    ResultStackMismatch {
+        function_index: u32,
+        expected: usize,
+        actual: usize,
+    },
+    IntegerDivideByZero {
+        function_index: u32,
+    },
+    IntegerOverflow {
+        function_index: u32,
+    },
+    Unreachable {
+        function_index: u32,
+    },
 }
 
 impl fmt::Display for WasmNumericVmError {
@@ -155,8 +228,12 @@ impl fmt::Display for WasmNumericVmError {
                 write!(f, "wasm local count {actual} exceeds limit {max}")
             }
             Self::StackLimitExceeded { max } => write!(f, "wasm value stack exceeds limit {max}"),
-            Self::LiveValueLimitExceeded { actual, max } => write!(f, "wasm live activation values {actual} exceed limit {max}"),
-            Self::ControlDepthExceeded { max } => write!(f, "wasm control depth exceeds limit {max}"),
+            Self::LiveValueLimitExceeded { actual, max } => {
+                write!(f, "wasm live activation values {actual} exceed limit {max}")
+            }
+            Self::ControlDepthExceeded { max } => {
+                write!(f, "wasm control depth exceeds limit {max}")
+            }
             Self::CallDepthExceeded { max } => write!(f, "wasm call depth exceeds limit {max}"),
             Self::InstructionBudgetExceeded { max } => {
                 write!(f, "wasm instruction budget {max} exhausted")
@@ -220,10 +297,16 @@ impl fmt::Display for WasmNumericVmError {
                 "wasm function {function_index} expected {expected} result value(s), stack has {actual}"
             ),
             Self::IntegerDivideByZero { function_index } => {
-                write!(f, "wasm function {function_index} trapped on integer divide by zero")
+                write!(
+                    f,
+                    "wasm function {function_index} trapped on integer divide by zero"
+                )
             }
             Self::IntegerOverflow { function_index } => {
-                write!(f, "wasm function {function_index} trapped on integer division overflow")
+                write!(
+                    f,
+                    "wasm function {function_index} trapped on integer division overflow"
+                )
             }
             Self::Unreachable { function_index } => {
                 write!(f, "wasm function {function_index} executed unreachable")
@@ -316,7 +399,10 @@ impl WasmNumericVm {
         state: &mut state::InstanceState,
     ) -> Result<WasmNumericExecution, WasmNumericVmError> {
         if let Some(kind) = self.state.export_kind(name) {
-            return Err(WasmNumericVmError::ExportIsNotFunction { name: name.into(), kind });
+            return Err(WasmNumericVmError::ExportIsNotFunction {
+                name: name.into(),
+                kind,
+            });
         }
         let export = self
             .exports
@@ -357,10 +443,7 @@ impl WasmNumericVm {
             })
     }
 
-    fn function_signature(
-        &self,
-        function_index: u32,
-    ) -> Result<&FunctionType, WasmNumericVmError> {
+    fn function_signature(&self, function_index: u32) -> Result<&FunctionType, WasmNumericVmError> {
         if function_index < self.imports.len() as u32 {
             return self.function_type(self.imports[function_index as usize].type_index);
         }
@@ -446,7 +529,9 @@ impl<'a> ModuleParser<'a> {
                 10 => self.parse_code(&mut reader)?,
                 // State sections must implement their instantiation semantics;
                 // unsupported sections are rejected, never silently skipped.
-                _ => self.state.parse_section(section_id, &mut reader, &self.limits)?,
+                _ => self
+                    .state
+                    .parse_section(section_id, &mut reader, &self.limits)?,
             }
             reader.ensure_finished()?;
         }
@@ -566,7 +651,12 @@ impl<'a> ModuleParser<'a> {
             }
             if kind == 0x00 {
                 self.function_type_index(index)?;
-                self.exports.insert(name, FunctionExport { function_index: index });
+                self.exports.insert(
+                    name,
+                    FunctionExport {
+                        function_index: index,
+                    },
+                );
             } else {
                 self.state.parse_export(name, kind, index)?;
             }
@@ -648,23 +738,22 @@ impl<'a> ModuleParser<'a> {
     }
 
     fn read_u8(&mut self) -> Result<u8, WasmNumericVmError> {
-        let byte = self
-            .bytes
-            .get(self.offset)
-            .copied()
-            .ok_or_else(|| WasmNumericVmError::InvalidModule {
+        let byte = self.bytes.get(self.offset).copied().ok_or_else(|| {
+            WasmNumericVmError::InvalidModule {
                 detail: "unexpected end of module".to_string(),
-            })?;
+            }
+        })?;
         self.offset += 1;
         Ok(byte)
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], WasmNumericVmError> {
-        let end = self.offset.checked_add(len).ok_or_else(|| {
-            WasmNumericVmError::InvalidModule {
-                detail: "module offset overflow".to_string(),
-            }
-        })?;
+        let end =
+            self.offset
+                .checked_add(len)
+                .ok_or_else(|| WasmNumericVmError::InvalidModule {
+                    detail: "module offset overflow".to_string(),
+                })?;
         if end > self.bytes.len() {
             return self.invalid("section exceeds module length");
         }
@@ -707,11 +796,12 @@ impl<'a> ByteReader<'a> {
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], WasmNumericVmError> {
-        let end = self.offset.checked_add(len).ok_or_else(|| {
-            WasmNumericVmError::InvalidModule {
-                detail: "wasm section offset overflow".to_string(),
-            }
-        })?;
+        let end =
+            self.offset
+                .checked_add(len)
+                .ok_or_else(|| WasmNumericVmError::InvalidModule {
+                    detail: "wasm section offset overflow".to_string(),
+                })?;
         if end > self.bytes.len() {
             return Err(WasmNumericVmError::InvalidModule {
                 detail: "wasm subsection exceeds section length".to_string(),
@@ -731,11 +821,11 @@ impl<'a> ByteReader<'a> {
     fn read_name(&mut self) -> Result<String, WasmNumericVmError> {
         let len = self.read_u32_leb()? as usize;
         let bytes = self.read_bytes(len)?;
-        std::str::from_utf8(bytes)
-            .map(str::to_string)
-            .map_err(|_| WasmNumericVmError::InvalidModule {
+        std::str::from_utf8(bytes).map(str::to_string).map_err(|_| {
+            WasmNumericVmError::InvalidModule {
                 detail: "wasm name is not utf-8".to_string(),
-            })
+            }
+        })
     }
 
     fn remaining(&self) -> &'a [u8] {
@@ -747,7 +837,10 @@ impl<'a> ByteReader<'a> {
             Ok(())
         } else {
             Err(WasmNumericVmError::InvalidModule {
-                detail: format!("section has {} trailing byte(s)", self.bytes.len() - self.offset),
+                detail: format!(
+                    "section has {} trailing byte(s)",
+                    self.bytes.len() - self.offset
+                ),
             })
         }
     }
@@ -813,16 +906,18 @@ impl<'a> CodeReader<'a> {
         &mut self,
         function_index: u32,
     ) -> Result<[u8; N], WasmNumericVmError> {
-        let end = self.offset.checked_add(N).ok_or_else(|| {
-            WasmNumericVmError::InvalidModule {
+        let end = self
+            .offset
+            .checked_add(N)
+            .ok_or_else(|| WasmNumericVmError::InvalidModule {
                 detail: format!("function {function_index} immediate offset overflow"),
-            }
-        })?;
-        let slice = self.bytes.get(self.offset..end).ok_or_else(|| {
-            WasmNumericVmError::InvalidModule {
-                detail: format!("function {function_index} has truncated immediate"),
-            }
-        })?;
+            })?;
+        let slice =
+            self.bytes
+                .get(self.offset..end)
+                .ok_or_else(|| WasmNumericVmError::InvalidModule {
+                    detail: format!("function {function_index} has truncated immediate"),
+                })?;
         self.offset = end;
         slice
             .try_into()
@@ -861,7 +956,9 @@ impl<'a> ExecutionMeter<'a> {
     }
 
     fn charge_work(&mut self, units: u64) -> Result<(), WasmNumericVmError> {
-        let next = self.instructions.checked_add(units)
+        let next = self
+            .instructions
+            .checked_add(units)
             .filter(|next| *next <= self.limits.max_instructions)
             .ok_or(WasmNumericVmError::InstructionBudgetExceeded {
                 max: self.limits.max_instructions,
@@ -892,13 +989,16 @@ impl<'a> ExecutionMeter<'a> {
                 max: self.limits.max_stack_values,
             });
         }
-        let actual = self.live_value_base.checked_add(len)
-            .ok_or(WasmNumericVmError::LiveValueLimitExceeded {
-                actual: usize::MAX, max: self.limits.max_live_values,
-            })?;
+        let actual = self.live_value_base.checked_add(len).ok_or(
+            WasmNumericVmError::LiveValueLimitExceeded {
+                actual: usize::MAX,
+                max: self.limits.max_live_values,
+            },
+        )?;
         if actual > self.limits.max_live_values {
             return Err(WasmNumericVmError::LiveValueLimitExceeded {
-                actual, max: self.limits.max_live_values,
+                actual,
+                max: self.limits.max_live_values,
             });
         }
         self.peak_stack_values = self.peak_stack_values.max(len);
@@ -971,12 +1071,18 @@ fn push_value(
     value: WasmBoundaryValue,
     meter: &mut ExecutionMeter<'_>,
 ) -> Result<(), WasmNumericVmError> {
-    let next = stack.len().checked_add(1)
-        .ok_or(WasmNumericVmError::StackLimitExceeded { max: meter.limits.max_stack_values })?;
+    let next = stack
+        .len()
+        .checked_add(1)
+        .ok_or(WasmNumericVmError::StackLimitExceeded {
+            max: meter.limits.max_stack_values,
+        })?;
     meter.observe_stack(next)?;
-    stack.try_reserve(1).map_err(|_| WasmStateError::AllocationFailed {
-        bytes: (next as u64).saturating_mul(std::mem::size_of::<WasmBoundaryValue>() as u64),
-    })?;
+    stack
+        .try_reserve(1)
+        .map_err(|_| WasmStateError::AllocationFailed {
+            bytes: (next as u64).saturating_mul(std::mem::size_of::<WasmBoundaryValue>() as u64),
+        })?;
     stack.push(value);
     Ok(())
 }
@@ -1061,11 +1167,7 @@ fn execute_select(
     function_index: u32,
     opcode: u8,
 ) -> Result<(), WasmNumericVmError> {
-    let condition = expect_i32(
-        pop_value(stack, function_index, opcode)?,
-        function_index,
-        2,
-    )?;
+    let condition = expect_i32(pop_value(stack, function_index, opcode)?, function_index, 2)?;
     let rhs = pop_value(stack, function_index, opcode)?;
     let lhs = pop_value(stack, function_index, opcode)?;
     ensure_same_type(function_index, 0, lhs.value_type(), rhs.value_type())?;
@@ -1079,28 +1181,12 @@ fn execute_integer_comparison(
     function_index: u32,
 ) -> Result<(), WasmNumericVmError> {
     let result = if opcode == 0x45 {
-        expect_i32(
-            pop_value(stack, function_index, opcode)?,
-            function_index,
-            0,
-        )? == 0
+        expect_i32(pop_value(stack, function_index, opcode)?, function_index, 0)? == 0
     } else if opcode == 0x50 {
-        expect_i64(
-            pop_value(stack, function_index, opcode)?,
-            function_index,
-            0,
-        )? == 0
+        expect_i64(pop_value(stack, function_index, opcode)?, function_index, 0)? == 0
     } else if (0x46..=0x4f).contains(&opcode) {
-        let b = expect_i32(
-            pop_value(stack, function_index, opcode)?,
-            function_index,
-            1,
-        )?;
-        let a = expect_i32(
-            pop_value(stack, function_index, opcode)?,
-            function_index,
-            0,
-        )?;
+        let b = expect_i32(pop_value(stack, function_index, opcode)?, function_index, 1)?;
+        let a = expect_i32(pop_value(stack, function_index, opcode)?, function_index, 0)?;
         match opcode {
             0x46 => a == b,
             0x47 => a != b,
@@ -1115,16 +1201,8 @@ fn execute_integer_comparison(
             _ => unreachable!(),
         }
     } else {
-        let b = expect_i64(
-            pop_value(stack, function_index, opcode)?,
-            function_index,
-            1,
-        )?;
-        let a = expect_i64(
-            pop_value(stack, function_index, opcode)?,
-            function_index,
-            0,
-        )?;
+        let b = expect_i64(pop_value(stack, function_index, opcode)?, function_index, 1)?;
+        let a = expect_i64(pop_value(stack, function_index, opcode)?, function_index, 0)?;
         match opcode {
             0x51 => a == b,
             0x52 => a != b,
@@ -1205,16 +1283,8 @@ fn execute_i32_numeric(
             offset: 0,
         });
     }
-    let b = expect_i32(
-        pop_value(stack, function_index, opcode)?,
-        function_index,
-        1,
-    )?;
-    let a = expect_i32(
-        pop_value(stack, function_index, opcode)?,
-        function_index,
-        0,
-    )?;
+    let b = expect_i32(pop_value(stack, function_index, opcode)?, function_index, 1)?;
+    let a = expect_i32(pop_value(stack, function_index, opcode)?, function_index, 0)?;
     let result = match opcode {
         0x6a => a.wrapping_add(b),
         0x6b => a.wrapping_sub(b),
@@ -1266,16 +1336,8 @@ fn execute_i64_numeric(
             offset: 0,
         });
     }
-    let b = expect_i64(
-        pop_value(stack, function_index, opcode)?,
-        function_index,
-        1,
-    )?;
-    let a = expect_i64(
-        pop_value(stack, function_index, opcode)?,
-        function_index,
-        0,
-    )?;
+    let b = expect_i64(pop_value(stack, function_index, opcode)?, function_index, 1)?;
+    let a = expect_i64(pop_value(stack, function_index, opcode)?, function_index, 0)?;
     let result = match opcode {
         0x7c => a.wrapping_add(b),
         0x7d => a.wrapping_sub(b),
@@ -1517,18 +1579,14 @@ mod tests {
     use super::*;
 
     const ADD_I32_MODULE: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
-        0x03, 0x02, 0x01, 0x00,
-        0x07, 0x07, 0x01, 0x03, b'a', b'd', b'd', 0x00, 0x00,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f,
+        0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, b'a', b'd', b'd', 0x00, 0x00,
         0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
     ];
 
     const DIV_I32_MODULE: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
-        0x03, 0x02, 0x01, 0x00,
-        0x07, 0x07, 0x01, 0x03, b'd', b'i', b'v', 0x00, 0x00,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f,
+        0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, b'd', b'i', b'v', 0x00, 0x00,
         0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6d, 0x0b,
     ];
 

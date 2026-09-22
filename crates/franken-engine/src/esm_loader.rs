@@ -386,9 +386,7 @@ impl ModuleGraph {
         let mut stack: Vec<String> = Vec::new();
         let mut cycles: Vec<CycleInfo> = Vec::new();
 
-        if let Err(error) =
-            self.link_module(&entry, &mut dfs_counter, &mut stack, &mut cycles, 0)
-        {
+        if let Err(error) = self.link_module(&entry, &mut dfs_counter, &mut stack, &mut cycles, 0) {
             // Only unfinished SCCs remain on this traversal's stack. Completed
             // dependency components stay linked and can be reused on a retry.
             // In particular, an abandoned Linking marker must not turn the

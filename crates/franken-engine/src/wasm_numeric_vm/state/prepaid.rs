@@ -61,7 +61,11 @@ impl WasmHostCaller<'_, '_> {
     {
         self.charge_work(units).map_err(E::from)?;
         let parent = self.prepaid_work.replace(units);
-        let mut scope = Scope { caller: self, parent, returned: false };
+        let mut scope = Scope {
+            caller: self,
+            parent,
+            returned: false,
+        };
         let outcome = operation(&mut *scope.caller);
         scope.returned = true;
         // Ignoring a failed charge/access inside the closure cannot launder

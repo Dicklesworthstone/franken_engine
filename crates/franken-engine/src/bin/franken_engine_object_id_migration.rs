@@ -7,17 +7,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use frankenengine_engine::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, EngineObjectId,
-    ObjectDomain, ObjectIdDerivationVersion, VersionedEngineObjectId, VersionedIdError,
-    VersionedSchemaId, OBJECT_ID_LEN,
+    EngineObjectId, OBJECT_ID_LEN, ObjectDomain, ObjectIdDerivationVersion,
+    VersionedEngineObjectId, VersionedIdError, VersionedSchemaId, derive_versioned_id,
+    derive_versioned_schema_id, verify_versioned_id,
 };
 use serde::{Deserialize, Serialize};
 
 const RESPONSE_SCHEMA: &str = "franken-engine.engine-object-id-migration-response.v1";
 const LEGACY_VERSION: &str = "legacy_v1";
 const V2_VERSION: &str = "sha256_v2";
-const USAGE: &str =
-    "usage: franken_engine_object_id_migration --input PATH|- [--output PATH]";
+const USAGE: &str = "usage: franken_engine_object_id_migration --input PATH|- [--output PATH]";
 
 type DerivationVersion = ObjectIdDerivationVersion;
 
@@ -162,7 +161,10 @@ impl std::fmt::Display for MigrationError {
             }
             Self::EmptyCanonicalBytes => formatter.write_str("canonical bytes must not be empty"),
             Self::LengthOverflow { field, length } => {
-                write!(formatter, "{field} length {length} exceeds u32 preimage encoding")
+                write!(
+                    formatter,
+                    "{field} length {length} exceeds u32 preimage encoding"
+                )
             }
         }
     }
@@ -202,9 +204,8 @@ fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<ParsedArgs,
         }
     }
     Ok(ParsedArgs::Run {
-        input: input.ok_or_else(|| {
-            MigrationError::InvalidArguments("--input is required".to_string())
-        })?,
+        input: input
+            .ok_or_else(|| MigrationError::InvalidArguments("--input is required".to_string()))?,
         output,
     })
 }
@@ -300,8 +301,8 @@ fn derive_parts(
     schema_definition: &[u8],
     canonical_bytes: &[u8],
 ) -> Result<(VersionedSchemaId, VersionedEngineObjectId), MigrationError> {
-    let schema = derive_versioned_schema_id(version, schema_definition)
-        .map_err(map_versioned_error)?;
+    let schema =
+        derive_versioned_schema_id(version, schema_definition).map_err(map_versioned_error)?;
     let object = derive_versioned_id(domain.into(), zone, &schema, canonical_bytes)
         .map_err(map_versioned_error)?;
     Ok((schema, object))
@@ -338,13 +339,7 @@ fn derive_record(
     schema_definition: &[u8],
     canonical_bytes: &[u8],
 ) -> Result<DerivationRecord, MigrationError> {
-    let (schema, object) = derive_parts(
-        version,
-        domain,
-        zone,
-        schema_definition,
-        canonical_bytes,
-    )?;
+    let (schema, object) = derive_parts(version, domain, zone, schema_definition, canonical_bytes)?;
     Ok(record_from_parts(version, &schema, &object))
 }
 
@@ -396,15 +391,9 @@ fn process(request: Request) -> Result<(Vec<u8>, bool), MigrationError> {
         } => {
             let schema_definition = decode_hex("schema_definition_hex", &schema_definition_hex)?;
             let canonical_bytes = decode_hex("canonical_bytes_hex", &canonical_bytes_hex)?;
-            let expected_bytes =
-                decode_id_hex("expected_object_id_hex", &expected_object_id_hex)?;
-            let (schema, computed_object) = derive_parts(
-                version,
-                domain,
-                &zone,
-                &schema_definition,
-                &canonical_bytes,
-            )?;
+            let expected_bytes = decode_id_hex("expected_object_id_hex", &expected_object_id_hex)?;
+            let (schema, computed_object) =
+                derive_parts(version, domain, &zone, &schema_definition, &canonical_bytes)?;
             let expected = VersionedEngineObjectId::new(version, EngineObjectId(expected_bytes));
             let verified = match verify_versioned_id(
                 &expected,
@@ -537,20 +526,19 @@ mod tests {
         };
         let (response, verified) = process(request).expect("verification response");
         assert!(!verified);
-        let value: serde_json::Value =
-            serde_json::from_slice(&response).expect("JSON response");
+        let value: serde_json::Value = serde_json::from_slice(&response).expect("JSON response");
         assert_eq!(value["status"], "mismatch");
         assert_eq!(value["version"], LEGACY_VERSION);
     }
 
     #[test]
     fn v2_length_prefixes_canonical_bytes() {
-        let schema = derive_versioned_schema_id(DerivationVersion::Sha256V2, b"schema")
-            .expect("schema");
-        let left = derive_versioned_id(ObjectDomain::PolicyObject, "ab", &schema, b"c")
-            .expect("left id");
-        let right = derive_versioned_id(ObjectDomain::PolicyObject, "a", &schema, b"bc")
-            .expect("right id");
+        let schema =
+            derive_versioned_schema_id(DerivationVersion::Sha256V2, b"schema").expect("schema");
+        let left =
+            derive_versioned_id(ObjectDomain::PolicyObject, "ab", &schema, b"c").expect("left id");
+        let right =
+            derive_versioned_id(ObjectDomain::PolicyObject, "a", &schema, b"bc").expect("right id");
         assert_ne!(left, right);
     }
 
@@ -584,8 +572,7 @@ mod tests {
         };
         let (response, success) = process(request).expect("derive response");
         assert!(success);
-        let value: serde_json::Value =
-            serde_json::from_slice(&response).expect("JSON response");
+        let value: serde_json::Value = serde_json::from_slice(&response).expect("JSON response");
         assert_eq!(value["status"], "ok");
         assert_eq!(value["legacy_v1"]["version"], LEGACY_VERSION);
         assert_eq!(value["sha256_v2"]["version"], V2_VERSION);

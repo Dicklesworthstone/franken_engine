@@ -427,7 +427,13 @@ fn awaited_thenable_uses_inherited_getter_once_with_original_receiver() {
         g.next().then(r => console.log('second', r.value, r.done, gets));
         console.log('sync');
         "#,
-        &["get 1 receiver", "sync", "call receiver", "first 7 false", "second 8 true 1"],
+        &[
+            "get 1 receiver",
+            "sync",
+            "call receiver",
+            "first 7 false",
+            "second 8 true 1",
+        ],
     );
 }
 
@@ -447,7 +453,13 @@ fn awaited_then_getter_throw_preserves_identity_and_enters_generator_catch() {
         g.next().then(r => console.log('second', r.value, r.done));
         console.log('sync');
         "#,
-        &["get", "sync", "caught true", "first 18 false", "second 19 true"],
+        &[
+            "get",
+            "sync",
+            "caught true",
+            "first 18 false",
+            "second 19 true",
+        ],
     );
 }
 
@@ -485,7 +497,14 @@ fn then_getter_reentry_queues_next_until_pending_await_really_resolves() {
         Promise.resolve().then(() => { console.log('release'); release(7); });
         console.log('sync');
         "#,
-        &["get", "sync", "then", "release", "first 7 false", "reentrant 9 true"],
+        &[
+            "get",
+            "sync",
+            "then",
+            "release",
+            "first 7 false",
+            "reentrant 9 true",
+        ],
     );
 }
 
@@ -505,7 +524,14 @@ fn completed_return_then_getter_cannot_drain_its_own_request_reentrantly() {
         Promise.resolve().then(() => { console.log('release'); release(42); });
         console.log('sync');
         "#,
-        &["get-return", "sync", "then", "release", "return 42 true", "next undefined true"],
+        &[
+            "get-return",
+            "sync",
+            "then",
+            "release",
+            "return 42 true",
+            "next undefined true",
+        ],
     );
 }
 
@@ -526,7 +552,14 @@ fn return_argument_getter_rejection_is_injected_at_the_suspended_yield() {
         g.next().then(r => console.log('last', r.value, r.done));
         console.log('sync');
         "#,
-        &["sync", "get-return", "first 1 false", "caught true", "return 2 false", "last 3 true"],
+        &[
+            "sync",
+            "get-return",
+            "first 1 false",
+            "caught true",
+            "return 2 false",
+            "last 3 true",
+        ],
     );
 }
 

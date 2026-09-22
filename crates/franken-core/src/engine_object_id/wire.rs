@@ -1,6 +1,6 @@
 use super::{
-    EngineObjectId, ObjectIdDerivationVersion, SchemaId, VersionedEngineObjectId,
-    VersionedSchemaId, OBJECT_ID_LEN,
+    EngineObjectId, OBJECT_ID_LEN, ObjectIdDerivationVersion, SchemaId, VersionedEngineObjectId,
+    VersionedSchemaId,
 };
 use serde::de::Error as DeserializeError;
 use serde::ser::Error as SerializeError;
@@ -167,11 +167,7 @@ impl PersistedSchemaId {
     }
 
     pub fn encode_binary(&self) -> Vec<u8> {
-        encode_binary_id(
-            self.derivation_version,
-            self.as_bytes(),
-            SCHEMA_ID_V2_MAGIC,
-        )
+        encode_binary_id(self.derivation_version, self.as_bytes(), SCHEMA_ID_V2_MAGIC)
     }
 
     pub fn decode_binary(bytes: &[u8]) -> Result<Self, VersionedIdWireError> {
@@ -258,17 +254,9 @@ enum SchemaIdJsonRepr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedIdWireError {
-    InvalidLength {
-        kind: &'static str,
-        actual: usize,
-    },
-    InvalidMagic {
-        kind: &'static str,
-    },
-    UnsupportedVersion {
-        kind: &'static str,
-        version: u8,
-    },
+    InvalidLength { kind: &'static str, actual: usize },
+    InvalidMagic { kind: &'static str },
+    UnsupportedVersion { kind: &'static str, version: u8 },
 }
 
 impl std::fmt::Display for VersionedIdWireError {
@@ -351,7 +339,10 @@ mod tests {
 
         let decoded: PersistedEngineObjectId =
             serde_json::from_slice(&old_json).expect("decode old JSON");
-        assert_eq!(decoded.derivation_version, ObjectIdDerivationVersion::LegacyV1);
+        assert_eq!(
+            decoded.derivation_version,
+            ObjectIdDerivationVersion::LegacyV1
+        );
         assert_eq!(decoded.object_id, raw);
     }
 
@@ -374,7 +365,10 @@ mod tests {
         let legacy = PersistedEngineObjectId::legacy(EngineObjectId([1; OBJECT_ID_LEN]));
         let legacy_bytes = legacy.encode_binary();
         assert_eq!(legacy_bytes.len(), OBJECT_ID_LEN);
-        assert_eq!(PersistedEngineObjectId::decode_binary(&legacy_bytes), Ok(legacy));
+        assert_eq!(
+            PersistedEngineObjectId::decode_binary(&legacy_bytes),
+            Ok(legacy)
+        );
 
         let v2 = PersistedEngineObjectId::from_versioned(VersionedEngineObjectId::new(
             ObjectIdDerivationVersion::Sha256V2,
@@ -411,7 +405,10 @@ mod tests {
         let raw = SchemaId::from_bytes([4; OBJECT_ID_LEN]);
         let old_json = serde_json::to_vec(&raw).expect("legacy schema JSON");
         let persisted = PersistedSchemaId::legacy(raw.clone());
-        assert_eq!(serde_json::to_vec(&persisted).expect("persisted schema JSON"), old_json);
+        assert_eq!(
+            serde_json::to_vec(&persisted).expect("persisted schema JSON"),
+            old_json
+        );
         assert_eq!(
             serde_json::from_slice::<PersistedSchemaId>(&old_json).expect("decode schema JSON"),
             persisted

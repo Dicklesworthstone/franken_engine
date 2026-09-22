@@ -919,7 +919,11 @@ fn cache_state_hash<'a>(
 }
 
 fn validate_cache_snapshot(snapshot: &CacheSnapshot) -> Result<(), &'static str> {
-    if snapshot.latest_versions.keys().any(|id| id.trim().is_empty()) {
+    if snapshot
+        .latest_versions
+        .keys()
+        .any(|id| id.trim().is_empty())
+    {
         return Err("snapshot contains an empty module identity");
     }
     if snapshot

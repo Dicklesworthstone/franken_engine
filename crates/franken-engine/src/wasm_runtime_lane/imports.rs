@@ -49,14 +49,25 @@ impl fmt::Display for WasmNativeLoadError {
             Self::Execution(error) => write!(f, "{error}"),
             Self::UnsupportedImportStyle => write!(f, "native wasm requires import, not require"),
             Self::UnsupportedSyntax { syntax } => {
-                write!(f, "cannot execute {} source as native wasm", syntax.as_str())
+                write!(
+                    f,
+                    "cannot execute {} source as native wasm",
+                    syntax.as_str()
+                )
             }
             Self::InvalidModuleContract => {
-                write!(f, "wasm module contract must require module_load and vm_dispatch")
+                write!(
+                    f,
+                    "wasm module contract must require module_load and vm_dispatch"
+                )
             }
-            Self::ContentHashMismatch => write!(f, "resolved wasm content hash does not match its record"),
+            Self::ContentHashMismatch => {
+                write!(f, "resolved wasm content hash does not match its record")
+            }
             Self::InvalidBinarySource => write!(f, "invalid canonical wasm binary source envelope"),
-            Self::AllocationFailed { bytes } => write!(f, "cannot allocate {bytes} bytes for wasm source"),
+            Self::AllocationFailed { bytes } => {
+                write!(f, "cannot allocate {bytes} bytes for wasm source")
+            }
         }
     }
 }
@@ -72,11 +83,15 @@ impl std::error::Error for WasmNativeLoadError {
 }
 
 impl From<Box<ResolutionError>> for WasmNativeLoadError {
-    fn from(error: Box<ResolutionError>) -> Self { Self::Resolution(error) }
+    fn from(error: Box<ResolutionError>) -> Self {
+        Self::Resolution(error)
+    }
 }
 
 impl From<WasmNumericVmError> for WasmNativeLoadError {
-    fn from(error: WasmNumericVmError) -> Self { Self::Execution(error) }
+    fn from(error: WasmNumericVmError) -> Self {
+        Self::Execution(error)
+    }
 }
 
 fn check_size(actual: usize, max: usize) -> Result<(), WasmNativeLoadError> {
@@ -95,11 +110,14 @@ impl ModuleDefinition {
         limits: &WasmNumericLimits,
     ) -> Result<Self, WasmNativeLoadError> {
         check_size(bytes.len(), limits.max_module_bytes)?;
-        let capacity = bytes.len().checked_mul(2)
+        let capacity = bytes
+            .len()
+            .checked_mul(2)
             .and_then(|length| length.checked_add(BINARY_SOURCE_PREFIX.len()))
             .ok_or(WasmNativeLoadError::AllocationFailed { bytes: usize::MAX })?;
         let mut source = String::new();
-        source.try_reserve_exact(capacity)
+        source
+            .try_reserve_exact(capacity)
             .map_err(|_| WasmNativeLoadError::AllocationFailed { bytes: capacity })?;
         source.push_str(BINARY_SOURCE_PREFIX);
         const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -134,7 +152,8 @@ fn source_bytes(source: &str, max: usize) -> Result<Cow<'_, [u8]>, WasmNativeLoa
         return Err(WasmNativeLoadError::InvalidBinarySource);
     }
     let mut bytes = Vec::new();
-    bytes.try_reserve_exact(length)
+    bytes
+        .try_reserve_exact(length)
         .map_err(|_| WasmNativeLoadError::AllocationFailed { bytes: length })?;
     for pair in hex.as_bytes().chunks_exact(2) {
         let high = nibble(pair[0]).ok_or(WasmNativeLoadError::InvalidBinarySource)?;
@@ -181,7 +200,9 @@ impl WasmNativeModule {
     ) -> Result<Self, WasmNativeLoadError> {
         let record = &resolution.module.record;
         if record.syntax != ModuleSyntax::Wasm {
-            return Err(WasmNativeLoadError::UnsupportedSyntax { syntax: record.syntax });
+            return Err(WasmNativeLoadError::UnsupportedSyntax {
+                syntax: record.syntax,
+            });
         }
         // Do not trust a deserialized registry to have passed registration's
         // mandatory capability augmentation, or an altered resolution record.
@@ -196,14 +217,22 @@ impl WasmNativeModule {
         }
         let vm = WasmNumericVm::parse(bytes.as_ref(), limits)?;
         drop(bytes);
-        Ok(Self { request, resolution, vm })
+        Ok(Self {
+            request,
+            resolution,
+            vm,
+        })
     }
 
     /// Resolution identity, provenance and the original resolution trace.
     /// No mutable access is exposed: changing a registry requires a fresh load.
-    pub fn resolution(&self) -> &ResolutionOutcome { &self.resolution }
+    pub fn resolution(&self) -> &ResolutionOutcome {
+        &self.resolution
+    }
 
-    pub fn export_names(&self) -> impl Iterator<Item = &str> { self.vm.export_names() }
+    pub fn export_names(&self) -> impl Iterator<Item = &str> {
+        self.vm.export_names()
+    }
 
     fn authorize(
         &self,
@@ -224,7 +253,10 @@ impl WasmNativeModule {
     ) -> Result<WasmNativeInstance<'_>, WasmNativeLoadError> {
         self.authorize(context, policy)?;
         let instance = self.vm.instantiate()?;
-        Ok(WasmNativeInstance { module: self, instance })
+        Ok(WasmNativeInstance {
+            module: self,
+            instance,
+        })
     }
 
     /// Link explicit host implementations without broadening module authority.
@@ -248,9 +280,14 @@ impl WasmNativeModule {
     ) -> Result<WasmNativeInstance<'_>, WasmNativeLoadError> {
         self.authorize(context, policy)?;
         imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
-        imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+        imports
+            .bind_module(self.resolution.module.content_hash)
+            .map_err(WasmNumericVmError::from)?;
         let instance = self.vm.instantiate_with_imports(imports)?;
-        Ok(WasmNativeInstance { module: self, instance })
+        Ok(WasmNativeInstance {
+            module: self,
+            instance,
+        })
     }
 }
 
@@ -283,28 +320,39 @@ impl WasmNativeInstance<'_> {
     }
 
     pub fn memory_export(
-        &self, name: &str, context: &ResolutionContext, policy: &CapabilityPolicyHook,
+        &self,
+        name: &str,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
     ) -> Result<Option<&[u8]>, WasmNativeLoadError> {
         self.module.authorize(context, policy)?;
         Ok(self.instance.memory_export(name))
     }
 
     pub fn table_export(
-        &self, name: &str, context: &ResolutionContext, policy: &CapabilityPolicyHook,
+        &self,
+        name: &str,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
     ) -> Result<Option<&[Option<u32>]>, WasmNativeLoadError> {
         self.module.authorize(context, policy)?;
         Ok(self.instance.table_export(name))
     }
 
     pub fn global_export(
-        &self, name: &str, context: &ResolutionContext, policy: &CapabilityPolicyHook,
+        &self,
+        name: &str,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
     ) -> Result<Option<&WasmBoundaryValue>, WasmNativeLoadError> {
         self.module.authorize(context, policy)?;
         Ok(self.instance.global_export(name))
     }
 
     pub fn start_execution(
-        &self, context: &ResolutionContext, policy: &CapabilityPolicyHook,
+        &self,
+        context: &ResolutionContext,
+        policy: &CapabilityPolicyHook,
     ) -> Result<Option<&WasmNumericExecution>, WasmNativeLoadError> {
         self.module.authorize(context, policy)?;
         Ok(self.instance.start_execution())
@@ -341,7 +389,10 @@ impl<'vm> WasmNativeInstance<'vm> {
     ) -> Result<WasmNativeCall<'call, 'vm>, WasmNativeLoadError> {
         self.module.authorize(context, policy)?;
         let call = self.instance.begin_call(name, arguments)?;
-        Ok(WasmNativeCall { module: self.module, call })
+        Ok(WasmNativeCall {
+            module: self.module,
+            call,
+        })
     }
 }
 
@@ -359,59 +410,67 @@ impl<'call, 'vm> WasmNativeCall<'call, 'vm> {
     ) -> Result<WasmNativeCallStep<'call, 'vm>, WasmNativeLoadError> {
         self.module.authorize(context, policy)?;
         match self.call.resume(work)? {
-            super::numeric::WasmCallStep::Pending(call) => {
-                Ok(WasmNativeCallStep::Pending(Self { module: self.module, call }))
-            }
+            super::numeric::WasmCallStep::Pending(call) => Ok(WasmNativeCallStep::Pending(Self {
+                module: self.module,
+                call,
+            })),
             super::numeric::WasmCallStep::Complete(execution) => {
                 Ok(WasmNativeCallStep::Complete(execution))
             }
         }
     }
 
-    pub fn instructions_executed(&self) -> u64 { self.call.instructions_executed() }
+    pub fn instructions_executed(&self) -> u64 {
+        self.call.instructions_executed()
+    }
 
-    pub fn peak_stack_values(&self) -> usize { self.call.peak_stack_values() }
+    pub fn peak_stack_values(&self) -> usize {
+        self.call.peak_stack_values()
+    }
 
-    pub fn max_call_depth(&self) -> u32 { self.call.max_call_depth() }
+    pub fn max_call_depth(&self) -> u32 {
+        self.call.max_call_depth()
+    }
 
     pub fn cancel(self) {}
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::numeric::WasmStateError;
     use super::*;
     use crate::capability::RuntimeCapability;
     use crate::module_resolver::ResolutionErrorCode;
-    use super::super::numeric::WasmStateError;
 
     // Binary fixtures are also executable by an independent Wasm engine.
     // STATE_MODULE starts g at 40, exports a stateful step, and exposes a
     // passive non-UTF-8 payload through memory.init/data.drop.
     const STATE_MODULE: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0f, 0x03, 0x60, 0x00, 0x00, 0x60, 0x01,
-        0x7f, 0x01, 0x7f, 0x60, 0x03, 0x7f, 0x7f, 0x7f, 0x00, 0x03, 0x05, 0x04, 0x00, 0x01, 0x02, 0x00,
-        0x05, 0x04, 0x01, 0x01, 0x01, 0x01, 0x06, 0x06, 0x01, 0x7f, 0x01, 0x41, 0x00, 0x0b, 0x07, 0x1e,
-        0x05, 0x04, 0x73, 0x74, 0x65, 0x70, 0x00, 0x01, 0x04, 0x69, 0x6e, 0x69, 0x74, 0x00, 0x02, 0x04,
-        0x64, 0x72, 0x6f, 0x70, 0x00, 0x03, 0x01, 0x67, 0x03, 0x00, 0x01, 0x6d, 0x02, 0x00, 0x08, 0x01,
-        0x00, 0x0c, 0x01, 0x01, 0x0a, 0x2e, 0x04, 0x06, 0x00, 0x41, 0x28, 0x24, 0x00, 0x0b, 0x12, 0x00,
-        0x23, 0x00, 0x20, 0x00, 0x6a, 0x24, 0x00, 0x41, 0x00, 0x23, 0x00, 0x36, 0x02, 0x00, 0x23, 0x00,
-        0x0b, 0x0c, 0x00, 0x20, 0x00, 0x20, 0x01, 0x20, 0x02, 0xfc, 0x08, 0x00, 0x00, 0x0b, 0x05, 0x00,
-        0xfc, 0x09, 0x00, 0x0b, 0x0b, 0x06, 0x01, 0x01, 0x03, 0xff, 0x80, 0xfe,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0f, 0x03, 0x60, 0x00, 0x00, 0x60,
+        0x01, 0x7f, 0x01, 0x7f, 0x60, 0x03, 0x7f, 0x7f, 0x7f, 0x00, 0x03, 0x05, 0x04, 0x00, 0x01,
+        0x02, 0x00, 0x05, 0x04, 0x01, 0x01, 0x01, 0x01, 0x06, 0x06, 0x01, 0x7f, 0x01, 0x41, 0x00,
+        0x0b, 0x07, 0x1e, 0x05, 0x04, 0x73, 0x74, 0x65, 0x70, 0x00, 0x01, 0x04, 0x69, 0x6e, 0x69,
+        0x74, 0x00, 0x02, 0x04, 0x64, 0x72, 0x6f, 0x70, 0x00, 0x03, 0x01, 0x67, 0x03, 0x00, 0x01,
+        0x6d, 0x02, 0x00, 0x08, 0x01, 0x00, 0x0c, 0x01, 0x01, 0x0a, 0x2e, 0x04, 0x06, 0x00, 0x41,
+        0x28, 0x24, 0x00, 0x0b, 0x12, 0x00, 0x23, 0x00, 0x20, 0x00, 0x6a, 0x24, 0x00, 0x41, 0x00,
+        0x23, 0x00, 0x36, 0x02, 0x00, 0x23, 0x00, 0x0b, 0x0c, 0x00, 0x20, 0x00, 0x20, 0x01, 0x20,
+        0x02, 0xfc, 0x08, 0x00, 0x00, 0x0b, 0x05, 0x00, 0xfc, 0x09, 0x00, 0x0b, 0x0b, 0x06, 0x01,
+        0x01, 0x03, 0xff, 0x80, 0xfe,
     ];
 
     const TRAP_MODULE: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
-        0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x06, 0x06, 0x01, 0x7f, 0x01, 0x41, 0x00,
-        0x0b, 0x07, 0x10, 0x03, 0x04, 0x73, 0x74, 0x65, 0x70, 0x00, 0x00, 0x01, 0x67, 0x03, 0x00, 0x01,
-        0x6d, 0x02, 0x00, 0x0a, 0x15, 0x01, 0x13, 0x00, 0x23, 0x00, 0x20, 0x00, 0x6a, 0x24, 0x00, 0x41,
-        0x00, 0x23, 0x00, 0x36, 0x02, 0x00, 0x23, 0x00, 0x00, 0x0b,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01,
+        0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x06, 0x06, 0x01, 0x7f, 0x01,
+        0x41, 0x00, 0x0b, 0x07, 0x10, 0x03, 0x04, 0x73, 0x74, 0x65, 0x70, 0x00, 0x00, 0x01, 0x67,
+        0x03, 0x00, 0x01, 0x6d, 0x02, 0x00, 0x0a, 0x15, 0x01, 0x13, 0x00, 0x23, 0x00, 0x20, 0x00,
+        0x6a, 0x24, 0x00, 0x41, 0x00, 0x23, 0x00, 0x36, 0x02, 0x00, 0x23, 0x00, 0x00, 0x0b,
     ];
 
     const HOST_MODULE: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, 0x02,
-        0x0c, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x04, 0x68, 0x6f, 0x73, 0x74, 0x00, 0x00, 0x03, 0x02, 0x01,
-        0x00, 0x07, 0x08, 0x01, 0x04, 0x63, 0x61, 0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x06, 0x01, 0x04, 0x00,
-        0x10, 0x00, 0x0b,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x02, 0x0c, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x04, 0x68, 0x6f, 0x73, 0x74, 0x00, 0x00, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x08, 0x01, 0x04, 0x63, 0x61, 0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x06,
+        0x01, 0x04, 0x00, 0x10, 0x00, 0x0b,
     ];
 
     fn context(policy_id: &str) -> ResolutionContext {
@@ -428,23 +487,37 @@ mod tests {
 
     fn registry_with_referrer() -> DeterministicModuleResolver {
         let mut resolver = DeterministicModuleResolver::new("/app");
-        resolver.register_workspace_module("/app/main.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './state.wasm';")).unwrap();
+        resolver
+            .register_workspace_module(
+                "/app/main.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './state.wasm';"),
+            )
+            .unwrap();
         resolver
     }
 
     fn resolver(bytes: &[u8]) -> DeterministicModuleResolver {
         let mut resolver = registry_with_referrer();
-        resolver.register_workspace_module(
-            "/app/state.wasm",
-            ModuleDefinition::wasm_binary(bytes, &WasmNumericLimits::default())
-                .unwrap().with_provenance("native-import-test"),
-        ).unwrap();
+        resolver
+            .register_workspace_module(
+                "/app/state.wasm",
+                ModuleDefinition::wasm_binary(bytes, &WasmNumericLimits::default())
+                    .unwrap()
+                    .with_provenance("native-import-test"),
+            )
+            .unwrap();
         resolver
     }
 
     fn load(resolver: &DeterministicModuleResolver) -> WasmNativeModule {
-        resolver.load_wasm(&request(), &context("allow"), &policy(), WasmNumericLimits::default()).unwrap()
+        resolver
+            .load_wasm(
+                &request(),
+                &context("allow"),
+                &policy(),
+                WasmNumericLimits::default(),
+            )
+            .unwrap()
     }
 
     fn denied<T: fmt::Debug>(result: Result<T, WasmNativeLoadError>) {
@@ -463,13 +536,25 @@ mod tests {
     #[test]
     fn binary_envelope_round_trips_all_bytes_and_preserves_raw_source_support() {
         let bytes: Vec<u8> = (0..=255).collect();
-        let definition = ModuleDefinition::wasm_binary(&bytes, &WasmNumericLimits::default()).unwrap();
-        assert_eq!(source_bytes(&definition.source, 256).unwrap().as_ref(), bytes.as_slice());
-        assert_eq!(definition.required_capabilities, wasm_module_required_capabilities());
+        let definition =
+            ModuleDefinition::wasm_binary(&bytes, &WasmNumericLimits::default()).unwrap();
+        assert_eq!(
+            source_bytes(&definition.source, 256).unwrap().as_ref(),
+            bytes.as_slice()
+        );
+        assert_eq!(
+            definition.required_capabilities,
+            wasm_module_required_capabilities()
+        );
         assert!(std::str::from_utf8(STATE_MODULE).is_err());
         let raw = "\0asm\x01\0\0\0";
         let mut registry = registry_with_referrer();
-        registry.register_workspace_module("/app/state.wasm", ModuleDefinition::new(ModuleSyntax::Wasm, raw)).unwrap();
+        registry
+            .register_workspace_module(
+                "/app/state.wasm",
+                ModuleDefinition::new(ModuleSyntax::Wasm, raw),
+            )
+            .unwrap();
         let module = load(&registry);
         assert!(module.export_names().next().is_none());
         module.instantiate(&context("allow"), &policy()).unwrap();
@@ -480,18 +565,38 @@ mod tests {
         let module = load(&resolver(STATE_MODULE));
         let ctx = context("allow");
         let grants = policy();
-        assert_eq!(module.resolution().module.canonical_specifier, "/app/state.wasm");
-        assert_eq!(module.export_names().collect::<Vec<_>>(), ["drop", "init", "step"]);
+        assert_eq!(
+            module.resolution().module.canonical_specifier,
+            "/app/state.wasm"
+        );
+        assert_eq!(
+            module.export_names().collect::<Vec<_>>(),
+            ["drop", "init", "step"]
+        );
         let mut a = module.instantiate(&ctx, &grants).unwrap();
         let b = module.instantiate(&ctx, &grants).unwrap();
-        assert_eq!(a.start_execution(&ctx, &grants).unwrap().unwrap().instructions_executed, 3);
+        assert_eq!(
+            a.start_execution(&ctx, &grants)
+                .unwrap()
+                .unwrap()
+                .instructions_executed,
+            3
+        );
         for (input, expected) in [(2, 42), (1, 43)] {
-            let execution = a.call_export("step", &[WasmBoundaryValue::I32(input)], &ctx, &grants).unwrap();
+            let execution = a
+                .call_export("step", &[WasmBoundaryValue::I32(input)], &ctx, &grants)
+                .unwrap();
             assert_eq!(execution.results, [WasmBoundaryValue::I32(expected)]);
             assert_eq!(execution.instructions_executed, 9);
-            assert_eq!(&a.memory_export("m", &ctx, &grants).unwrap().unwrap()[..4], &expected.to_le_bytes());
+            assert_eq!(
+                &a.memory_export("m", &ctx, &grants).unwrap().unwrap()[..4],
+                &expected.to_le_bytes()
+            );
         }
-        assert_eq!(b.global_export("g", &ctx, &grants).unwrap(), Some(&WasmBoundaryValue::I32(40)));
+        assert_eq!(
+            b.global_export("g", &ctx, &grants).unwrap(),
+            Some(&WasmBoundaryValue::I32(40))
+        );
         assert_eq!(a.global_export("hidden", &ctx, &grants).unwrap(), None);
         assert_eq!(a.table_export("m", &ctx, &grants).unwrap(), None);
     }
@@ -499,18 +604,35 @@ mod tests {
     #[test]
     fn missing_intrinsic_grants_fail_before_decoding_or_executing_source() {
         let mut registry = registry_with_referrer();
-        registry.register_workspace_module(
-            "/app/state.wasm", ModuleDefinition::new(ModuleSyntax::Wasm, "not wasm"),
-        ).unwrap();
+        registry
+            .register_workspace_module(
+                "/app/state.wasm",
+                ModuleDefinition::new(ModuleSyntax::Wasm, "not wasm"),
+            )
+            .unwrap();
         for caps in [
             std::collections::BTreeSet::new(),
             [RuntimeCapability::ModuleLoad].into_iter().collect(),
             [RuntimeCapability::VmDispatch].into_iter().collect(),
         ] {
-            denied(registry.load_wasm(&request(), &context("deny"), &CapabilityPolicyHook::new(caps), WasmNumericLimits::default()));
+            denied(registry.load_wasm(
+                &request(),
+                &context("deny"),
+                &CapabilityPolicyHook::new(caps),
+                WasmNumericLimits::default(),
+            ));
         }
-        assert!(matches!(registry.load_wasm(&request(), &context("allow"), &policy(), WasmNumericLimits::default()),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::InvalidModule { .. }))));
+        assert!(matches!(
+            registry.load_wasm(
+                &request(),
+                &context("allow"),
+                &policy(),
+                WasmNumericLimits::default()
+            ),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::InvalidModule { .. }
+            ))
+        ));
     }
 
     #[test]
@@ -518,7 +640,8 @@ mod tests {
         let module = load(&resolver(STATE_MODULE));
         let ctx = context("current-policy");
         let grants = policy();
-        let revoked = CapabilityPolicyHook::new([RuntimeCapability::ModuleLoad].into_iter().collect());
+        let revoked =
+            CapabilityPolicyHook::new([RuntimeCapability::ModuleLoad].into_iter().collect());
         denied(module.instantiate(&ctx, &revoked));
         let mut instance = module.instantiate(&ctx, &grants).unwrap();
         denied(instance.call_export("step", &[WasmBoundaryValue::I32(99)], &ctx, &revoked));
@@ -527,11 +650,21 @@ mod tests {
         denied(instance.global_export("g", &ctx, &revoked));
         denied(instance.table_export("any", &ctx, &revoked));
         denied(instance.start_execution(&ctx, &revoked));
-        assert_eq!(instance.call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants).unwrap().results,
-            [WasmBoundaryValue::I32(42)]);
+        assert_eq!(
+            instance
+                .call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants)
+                .unwrap()
+                .results,
+            [WasmBoundaryValue::I32(42)]
+        );
         // The denied drop must not have consumed the passive segment.
-        instance.call_export("init", &args([16, 0, 3]), &ctx, &grants).unwrap();
-        assert_eq!(&instance.memory_export("m", &ctx, &grants).unwrap().unwrap()[16..19], &[0xff, 0x80, 0xfe]);
+        instance
+            .call_export("init", &args([16, 0, 3]), &ctx, &grants)
+            .unwrap();
+        assert_eq!(
+            &instance.memory_export("m", &ctx, &grants).unwrap().unwrap()[16..19],
+            &[0xff, 0x80, 0xfe]
+        );
     }
 
     #[test]
@@ -541,26 +674,68 @@ mod tests {
         let mut instance = module.instantiate(&ctx, &policy()).unwrap();
         for specifier in ["./state.wasm", "/app/state.wasm"] {
             let denied_policy = policy().deny_specifier(specifier);
-            denied(instance.call_export("step", &[WasmBoundaryValue::I32(99)], &ctx, &denied_policy));
+            denied(instance.call_export(
+                "step",
+                &[WasmBoundaryValue::I32(99)],
+                &ctx,
+                &denied_policy,
+            ));
             denied(module.instantiate(&ctx, &denied_policy));
         }
-        assert_eq!(instance.global_export("g", &ctx, &policy()).unwrap(), Some(&WasmBoundaryValue::I32(40)));
+        assert_eq!(
+            instance.global_export("g", &ctx, &policy()).unwrap(),
+            Some(&WasmBoundaryValue::I32(40))
+        );
     }
 
     #[test]
     fn declared_additional_capabilities_are_not_lost_at_native_dispatch() {
         let mut registry = registry_with_referrer();
-        registry.register_workspace_module("/app/state.wasm",
-            ModuleDefinition::wasm_binary(STATE_MODULE, &WasmNumericLimits::default()).unwrap()
-                .require_capability(RuntimeCapability::FsRead)).unwrap();
-        denied(registry.load_wasm(&request(), &context("deny"), &policy(), WasmNumericLimits::default()));
+        registry
+            .register_workspace_module(
+                "/app/state.wasm",
+                ModuleDefinition::wasm_binary(STATE_MODULE, &WasmNumericLimits::default())
+                    .unwrap()
+                    .require_capability(RuntimeCapability::FsRead),
+            )
+            .unwrap();
+        denied(registry.load_wasm(
+            &request(),
+            &context("deny"),
+            &policy(),
+            WasmNumericLimits::default(),
+        ));
         let mut grants = policy();
-        grants.granted_capabilities.insert(RuntimeCapability::FsRead);
-        let module = registry.load_wasm(&request(), &context("allow"), &grants, WasmNumericLimits::default()).unwrap();
+        grants
+            .granted_capabilities
+            .insert(RuntimeCapability::FsRead);
+        let module = registry
+            .load_wasm(
+                &request(),
+                &context("allow"),
+                &grants,
+                WasmNumericLimits::default(),
+            )
+            .unwrap();
         let mut instance = module.instantiate(&context("allow"), &grants).unwrap();
-        denied(instance.call_export("step", &[WasmBoundaryValue::I32(1)], &context("revoked-fs"), &policy()));
-        assert_eq!(instance.call_export("step", &[WasmBoundaryValue::I32(2)], &context("allow"), &grants).unwrap().results,
-            [WasmBoundaryValue::I32(42)]);
+        denied(instance.call_export(
+            "step",
+            &[WasmBoundaryValue::I32(1)],
+            &context("revoked-fs"),
+            &policy(),
+        ));
+        assert_eq!(
+            instance
+                .call_export(
+                    "step",
+                    &[WasmBoundaryValue::I32(2)],
+                    &context("allow"),
+                    &grants
+                )
+                .unwrap()
+                .results,
+            [WasmBoundaryValue::I32(42)]
+        );
     }
 
     #[test]
@@ -570,14 +745,26 @@ mod tests {
         let grants = policy();
         let mut a = module.instantiate(&ctx, &grants).unwrap();
         let mut b = module.instantiate(&ctx, &grants).unwrap();
-        a.call_export("init", &args([16, 0, 3]), &ctx, &grants).unwrap();
+        a.call_export("init", &args([16, 0, 3]), &ctx, &grants)
+            .unwrap();
         a.call_export("drop", &[], &ctx, &grants).unwrap();
         a.call_export("drop", &[], &ctx, &grants).unwrap();
-        assert!(matches!(a.call_export("init", &args([20, 0, 1]), &ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::DataSourceOutOfBounds { data_bytes: 0, .. })))));
-        b.call_export("init", &args([20, 0, 3]), &ctx, &grants).unwrap();
-        assert_eq!(&a.memory_export("m", &ctx, &grants).unwrap().unwrap()[16..19], &[0xff, 0x80, 0xfe]);
-        assert_eq!(&b.memory_export("m", &ctx, &grants).unwrap().unwrap()[20..23], &[0xff, 0x80, 0xfe]);
+        assert!(matches!(
+            a.call_export("init", &args([20, 0, 1]), &ctx, &grants),
+            Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(
+                WasmStateError::DataSourceOutOfBounds { data_bytes: 0, .. }
+            )))
+        ));
+        b.call_export("init", &args([20, 0, 3]), &ctx, &grants)
+            .unwrap();
+        assert_eq!(
+            &a.memory_export("m", &ctx, &grants).unwrap().unwrap()[16..19],
+            &[0xff, 0x80, 0xfe]
+        );
+        assert_eq!(
+            &b.memory_export("m", &ctx, &grants).unwrap().unwrap()[20..23],
+            &[0xff, 0x80, 0xfe]
+        );
     }
 
     #[test]
@@ -586,13 +773,28 @@ mod tests {
         let ctx = context("allow");
         let grants = policy();
         let mut instance = module.instantiate(&ctx, &grants).unwrap();
-        assert!(matches!(instance.call_export("step", &[], &ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::ArityMismatch { .. }))));
-        assert!(matches!(instance.call_export("step", &[WasmBoundaryValue::I64(2)], &ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::TypeMismatch { .. }))));
-        assert!(matches!(instance.call_export("hidden", &[], &ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::UnknownExport { .. }))));
-        assert_eq!(instance.global_export("g", &ctx, &grants).unwrap(), Some(&WasmBoundaryValue::I32(40)));
+        assert!(matches!(
+            instance.call_export("step", &[], &ctx, &grants),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::ArityMismatch { .. }
+            ))
+        ));
+        assert!(matches!(
+            instance.call_export("step", &[WasmBoundaryValue::I64(2)], &ctx, &grants),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::TypeMismatch { .. }
+            ))
+        ));
+        assert!(matches!(
+            instance.call_export("hidden", &[], &ctx, &grants),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::UnknownExport { .. }
+            ))
+        ));
+        assert_eq!(
+            instance.global_export("g", &ctx, &grants).unwrap(),
+            Some(&WasmBoundaryValue::I32(40))
+        );
     }
 
     #[test]
@@ -600,21 +802,63 @@ mod tests {
         let registry = resolver(STATE_MODULE);
         let ctx = context("allow");
         let grants = policy();
-        let module = registry.load_wasm(&request(), &ctx, &grants,
-            WasmNumericLimits { max_memory_pages: 0, ..WasmNumericLimits::default() }).unwrap();
-        assert!(matches!(module.instantiate(&ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::LimitExceeded { .. })))));
-        let module = registry.load_wasm(&request(), &ctx, &grants,
-            WasmNumericLimits { max_instructions: 2, ..WasmNumericLimits::default() }).unwrap();
-        assert!(matches!(module.instantiate(&ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::InstructionBudgetExceeded { max: 2 }))));
-        let module = registry.load_wasm(&request(), &ctx, &grants,
-            WasmNumericLimits { max_instructions: 3, ..WasmNumericLimits::default() }).unwrap();
+        let module = registry
+            .load_wasm(
+                &request(),
+                &ctx,
+                &grants,
+                WasmNumericLimits {
+                    max_memory_pages: 0,
+                    ..WasmNumericLimits::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            module.instantiate(&ctx, &grants),
+            Err(WasmNativeLoadError::Execution(WasmNumericVmError::State(
+                WasmStateError::LimitExceeded { .. }
+            )))
+        ));
+        let module = registry
+            .load_wasm(
+                &request(),
+                &ctx,
+                &grants,
+                WasmNumericLimits {
+                    max_instructions: 2,
+                    ..WasmNumericLimits::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            module.instantiate(&ctx, &grants),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::InstructionBudgetExceeded { max: 2 }
+            ))
+        ));
+        let module = registry
+            .load_wasm(
+                &request(),
+                &ctx,
+                &grants,
+                WasmNumericLimits {
+                    max_instructions: 3,
+                    ..WasmNumericLimits::default()
+                },
+            )
+            .unwrap();
         let mut instance = module.instantiate(&ctx, &grants).unwrap();
         for _ in 0..2 {
-            assert!(matches!(instance.call_export("step", &[WasmBoundaryValue::I32(1)], &ctx, &grants),
-                Err(WasmNativeLoadError::Execution(WasmNumericVmError::InstructionBudgetExceeded { max: 3 }))));
-            assert_eq!(instance.global_export("g", &ctx, &grants).unwrap(), Some(&WasmBoundaryValue::I32(40)));
+            assert!(matches!(
+                instance.call_export("step", &[WasmBoundaryValue::I32(1)], &ctx, &grants),
+                Err(WasmNativeLoadError::Execution(
+                    WasmNumericVmError::InstructionBudgetExceeded { max: 3 }
+                ))
+            ));
+            assert_eq!(
+                instance.global_export("g", &ctx, &grants).unwrap(),
+                Some(&WasmBoundaryValue::I32(40))
+            );
         }
     }
 
@@ -624,12 +868,25 @@ mod tests {
         let ctx = context("allow");
         let grants = policy();
         let mut instance = module.instantiate(&ctx, &grants).unwrap();
-        assert!(matches!(instance.call_export("step", &[WasmBoundaryValue::I32(7)], &ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::Unreachable { .. }))));
-        assert_eq!(instance.global_export("g", &ctx, &grants).unwrap(), Some(&WasmBoundaryValue::I32(7)));
-        assert_eq!(&instance.memory_export("m", &ctx, &grants).unwrap().unwrap()[..4], &[7, 0, 0, 0]);
+        assert!(matches!(
+            instance.call_export("step", &[WasmBoundaryValue::I32(7)], &ctx, &grants),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::Unreachable { .. }
+            ))
+        ));
+        assert_eq!(
+            instance.global_export("g", &ctx, &grants).unwrap(),
+            Some(&WasmBoundaryValue::I32(7))
+        );
+        assert_eq!(
+            &instance.memory_export("m", &ctx, &grants).unwrap().unwrap()[..4],
+            &[7, 0, 0, 0]
+        );
         let other = module.instantiate(&ctx, &grants).unwrap();
-        assert_eq!(other.global_export("g", &ctx, &grants).unwrap(), Some(&WasmBoundaryValue::I32(0)));
+        assert_eq!(
+            other.global_export("g", &ctx, &grants).unwrap(),
+            Some(&WasmBoundaryValue::I32(0))
+        );
     }
 
     #[test]
@@ -647,30 +904,75 @@ mod tests {
     fn require_and_non_wasm_sources_cannot_enter_the_native_route() {
         let registry = resolver(STATE_MODULE);
         let req = ModuleRequest::new("/app/state.wasm", ImportStyle::Require);
-        assert!(matches!(registry.load_wasm(&req, &context("allow"), &policy(), WasmNumericLimits::default()),
-            Err(WasmNativeLoadError::UnsupportedImportStyle)));
+        assert!(matches!(
+            registry.load_wasm(
+                &req,
+                &context("allow"),
+                &policy(),
+                WasmNumericLimits::default()
+            ),
+            Err(WasmNativeLoadError::UnsupportedImportStyle)
+        ));
         let mut registry = DeterministicModuleResolver::new("/app");
-        registry.register_workspace_module("/app/main.mjs", ModuleDefinition::new(ModuleSyntax::EsModule, "export const n = 1;")).unwrap();
+        registry
+            .register_workspace_module(
+                "/app/main.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export const n = 1;"),
+            )
+            .unwrap();
         let req = ModuleRequest::new("/app/main.mjs", ImportStyle::Import);
-        assert!(matches!(registry.load_wasm(&req, &context("allow"), &policy(), WasmNumericLimits::default()),
-            Err(WasmNativeLoadError::UnsupportedSyntax { syntax: ModuleSyntax::EsModule })));
+        assert!(matches!(
+            registry.load_wasm(
+                &req,
+                &context("allow"),
+                &policy(),
+                WasmNumericLimits::default()
+            ),
+            Err(WasmNativeLoadError::UnsupportedSyntax {
+                syntax: ModuleSyntax::EsModule
+            })
+        ));
     }
 
     #[test]
     fn malformed_envelopes_and_size_limits_fail_before_compilation() {
         for payload in ["0", "gg", "FF", "00 0", "é"] {
             let mut registry = registry_with_referrer();
-            registry.register_workspace_module("/app/state.wasm", ModuleDefinition::new(
-                ModuleSyntax::Wasm, format!("{BINARY_SOURCE_PREFIX}{payload}"),
-            )).unwrap();
-            assert!(matches!(registry.load_wasm(&request(), &context("allow"), &policy(), WasmNumericLimits::default()),
-                Err(WasmNativeLoadError::InvalidBinarySource)));
+            registry
+                .register_workspace_module(
+                    "/app/state.wasm",
+                    ModuleDefinition::new(
+                        ModuleSyntax::Wasm,
+                        format!("{BINARY_SOURCE_PREFIX}{payload}"),
+                    ),
+                )
+                .unwrap();
+            assert!(matches!(
+                registry.load_wasm(
+                    &request(),
+                    &context("allow"),
+                    &policy(),
+                    WasmNumericLimits::default()
+                ),
+                Err(WasmNativeLoadError::InvalidBinarySource)
+            ));
         }
-        let limits = WasmNumericLimits { max_module_bytes: STATE_MODULE.len() - 1, ..WasmNumericLimits::default() };
-        assert!(matches!(ModuleDefinition::wasm_binary(STATE_MODULE, &limits),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::ModuleTooLarge { .. }))));
-        assert!(matches!(resolver(STATE_MODULE).load_wasm(&request(), &context("allow"), &policy(), limits),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::ModuleTooLarge { .. }))));
+        let limits = WasmNumericLimits {
+            max_module_bytes: STATE_MODULE.len() - 1,
+            ..WasmNumericLimits::default()
+        };
+        assert!(matches!(
+            ModuleDefinition::wasm_binary(STATE_MODULE, &limits),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::ModuleTooLarge { .. }
+            ))
+        ));
+        assert!(matches!(
+            resolver(STATE_MODULE).load_wasm(&request(), &context("allow"), &policy(), limits),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::ModuleTooLarge { .. }
+            ))
+        ));
     }
 
     #[test]
@@ -681,29 +983,67 @@ mod tests {
         let original = registry.resolve(&request(), &ctx, &grants).unwrap();
         let mut altered = original.clone();
         altered.module.record.source.push_str("00");
-        assert!(matches!(WasmNativeModule::compile(request(), altered, &ctx, &grants, WasmNumericLimits::default()),
-            Err(WasmNativeLoadError::ContentHashMismatch)));
+        assert!(matches!(
+            WasmNativeModule::compile(
+                request(),
+                altered,
+                &ctx,
+                &grants,
+                WasmNumericLimits::default()
+            ),
+            Err(WasmNativeLoadError::ContentHashMismatch)
+        ));
         let mut altered = original;
         altered.module.record.required_capabilities.clear();
         altered.module.content_hash = altered.module.record.canonical_hash();
-        assert!(matches!(WasmNativeModule::compile(request(), altered, &ctx, &grants, WasmNumericLimits::default()),
-            Err(WasmNativeLoadError::InvalidModuleContract)));
+        assert!(matches!(
+            WasmNativeModule::compile(
+                request(),
+                altered,
+                &ctx,
+                &grants,
+                WasmNumericLimits::default()
+            ),
+            Err(WasmNativeLoadError::InvalidModuleContract)
+        ));
     }
 
     #[test]
     fn loaded_identity_is_pinned_while_new_loads_observe_registry_updates() {
         let mut registry = resolver(STATE_MODULE);
         let old = load(&registry);
-        registry.register_workspace_module("/app/state.wasm",
-            ModuleDefinition::wasm_binary(TRAP_MODULE, &WasmNumericLimits::default()).unwrap()).unwrap();
+        registry
+            .register_workspace_module(
+                "/app/state.wasm",
+                ModuleDefinition::wasm_binary(TRAP_MODULE, &WasmNumericLimits::default()).unwrap(),
+            )
+            .unwrap();
         let new = load(&registry);
-        assert_ne!(old.resolution().module.content_hash, new.resolution().module.content_hash);
+        assert_ne!(
+            old.resolution().module.content_hash,
+            new.resolution().module.content_hash
+        );
         let ctx = context("allow");
         let grants = policy();
-        assert_eq!(old.instantiate(&ctx, &grants).unwrap().call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants).unwrap().results,
-            [WasmBoundaryValue::I32(42)]);
-        assert!(matches!(new.instantiate(&ctx, &grants).unwrap().call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants),
-            Err(WasmNativeLoadError::Execution(WasmNumericVmError::Unreachable { .. }))));
+        assert_eq!(
+            old.instantiate(&ctx, &grants)
+                .unwrap()
+                .call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants)
+                .unwrap()
+                .results,
+            [WasmBoundaryValue::I32(42)]
+        );
+        assert!(matches!(
+            new.instantiate(&ctx, &grants).unwrap().call_export(
+                "step",
+                &[WasmBoundaryValue::I32(2)],
+                &ctx,
+                &grants
+            ),
+            Err(WasmNativeLoadError::Execution(
+                WasmNumericVmError::Unreachable { .. }
+            ))
+        ));
     }
 
     #[test]
@@ -711,12 +1051,26 @@ mod tests {
         let registry = resolver(STATE_MODULE);
         let a = load(&registry);
         let b = load(&registry);
-        assert_eq!(a.resolution().trace_record().to_json_line().unwrap(), b.resolution().trace_record().to_json_line().unwrap());
-        assert_eq!(a.resolution().module.content_hash, b.resolution().module.content_hash);
+        assert_eq!(
+            a.resolution().trace_record().to_json_line().unwrap(),
+            b.resolution().trace_record().to_json_line().unwrap()
+        );
+        assert_eq!(
+            a.resolution().module.content_hash,
+            b.resolution().module.content_hash
+        );
         let ctx = context("allow");
         let grants = policy();
-        let first = a.instantiate(&ctx, &grants).unwrap().call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants).unwrap();
-        let second = b.instantiate(&ctx, &grants).unwrap().call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants).unwrap();
+        let first = a
+            .instantiate(&ctx, &grants)
+            .unwrap()
+            .call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants)
+            .unwrap();
+        let second = b
+            .instantiate(&ctx, &grants)
+            .unwrap()
+            .call_export("step", &[WasmBoundaryValue::I32(2)], &ctx, &grants)
+            .unwrap();
         assert_eq!(first, second);
     }
 }

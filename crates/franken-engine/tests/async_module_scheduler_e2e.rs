@@ -74,8 +74,12 @@ fn pending_promise_requeues_exactly_one_new_generation() {
         }"#,
     );
 
-    let first = json["dispatched"][0]["generation"].as_u64().expect("generation");
-    let second = json["dispatched"][1]["generation"].as_u64().expect("generation");
+    let first = json["dispatched"][0]["generation"]
+        .as_u64()
+        .expect("generation");
+    let second = json["dispatched"][1]["generation"]
+        .as_u64()
+        .expect("generation");
     assert!(second > first);
     assert_eq!(json["dispatched"][0]["kind"], "start");
     assert_eq!(json["dispatched"][1]["kind"], "resume");
@@ -120,7 +124,10 @@ fn dispatch_budget_exhaustion_is_fail_closed() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("dispatch budget 1 exhausted"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("dispatch budget 1 exhausted"),
+        "unexpected stderr: {stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 

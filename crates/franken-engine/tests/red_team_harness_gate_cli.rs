@@ -51,7 +51,10 @@ fn promoted_scenario_map() -> BTreeMap<&'static str, (&'static str, &'static str
     BTreeMap::from([
         (
             "environment_variable_exfiltration",
-            ("ambient_authority_via_globalthis", "ambient_authority_escape"),
+            (
+                "ambient_authority_via_globalthis",
+                "ambient_authority_escape",
+            ),
         ),
         (
             "process_privilege_surface_probe",
@@ -59,15 +62,24 @@ fn promoted_scenario_map() -> BTreeMap<&'static str, (&'static str, &'static str
         ),
         (
             "prototype_pollution_capability_escape",
-            ("reflect_apply_authority_smuggling", "ambient_authority_escape"),
+            (
+                "reflect_apply_authority_smuggling",
+                "ambient_authority_escape",
+            ),
         ),
         (
             "shell_command_injection_package_script",
-            ("typed_effect_laundering_downcast", "ambient_authority_escape"),
+            (
+                "typed_effect_laundering_downcast",
+                "ambient_authority_escape",
+            ),
         ),
         (
             "supply_chain_backdoor_execution",
-            ("smuggle_flow_via_unanalyzed_construct", "ambient_authority_escape"),
+            (
+                "smuggle_flow_via_unanalyzed_construct",
+                "ambient_authority_escape",
+            ),
         ),
     ])
 }
@@ -76,8 +88,7 @@ fn annotate_canonical_semantics(value: &mut Value) {
     value["corpus_id"] = Value::from(CORPUS_ID);
     value["scenario_set"] = Value::from(CORPUS_ID);
     value["denominator_semantics"] = Value::from("distinct_security_critical_scenarios");
-    value["repetition_role"] =
-        Value::from("stability_and_replay_not_independent_sampling");
+    value["repetition_role"] = Value::from("stability_and_replay_not_independent_sampling");
     value["confidence_interpretation"] =
         Value::from("receipt_completeness_and_stability_not_population_confidence");
     value["zero_cell_guard"] = Value::from("one_hypothetical_frankenengine_compromise");
@@ -255,22 +266,14 @@ fn typed_scenario_set_must_match_corpus_id() {
 fn aggregate_input_must_be_explicitly_ineligible_as_claim_verdict() {
     let mut value = ten_scenario_fixture();
     value["claim_verdict_eligible"] = Value::from(true);
-    assert_invalid(
-        &value,
-        "eligible-input",
-        "claim_verdict_eligible=false",
-    );
+    assert_invalid(&value, "eligible-input", "claim_verdict_eligible=false");
 }
 
 #[test]
 fn aggregate_input_must_name_the_sole_claim_producer() {
     let mut value = ten_scenario_fixture();
     value["claim_verdict_producer"] = Value::from("generic_aggregator");
-    assert_invalid(
-        &value,
-        "wrong-producer",
-        "claim_verdict_producer mismatch",
-    );
+    assert_invalid(&value, "wrong-producer", "claim_verdict_producer mismatch");
 }
 
 #[test]

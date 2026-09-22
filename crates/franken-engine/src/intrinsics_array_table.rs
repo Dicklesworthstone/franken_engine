@@ -14,8 +14,7 @@ use crate::intrinsics_table::{
 
 const MANUAL_SITE: &str =
     "baseline_interpreter.rs:array_prototype_method/dispatch_builtin_function";
-const MANUAL_REASON: &str =
-    "coexistence migration: production Array semantics still live in the legacy receiver-aware interpreter seam";
+const MANUAL_REASON: &str = "coexistence migration: production Array semantics still live in the legacy receiver-aware interpreter seam";
 
 macro_rules! array_row {
     ($name:literal, $arity:expr, $ifc:expr, $status:expr) => {
@@ -41,40 +40,210 @@ macro_rules! array_row {
 /// a migration source of truth for the *shipped* seam, not merely a spec-era
 /// checklist.
 pub const ROWS: &[IntrinsicRow] = &[
-    array_row!("at", Arity::Range { min: 0, max: 1 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("concat", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("copyWithin", Arity::Range { min: 2, max: 3 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("entries", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("every", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("fill", Arity::Range { min: 1, max: 3 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("filter", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("find", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("findIndex", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("flat", Arity::Range { min: 0, max: 1 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("flatMap", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("forEach", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("includes", Arity::Range { min: 1, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("indexOf", Arity::Range { min: 1, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("join", Arity::Range { min: 0, max: 1 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("keys", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("lastIndexOf", Arity::Range { min: 1, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("map", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("pop", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("push", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("reduce", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_reduce_ifc"), GapStatus::Resolved),
-    array_row!("reduceRight", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_reduce_right_ifc"), GapStatus::Resolved),
-    array_row!("reverse", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("shift", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("slice", Arity::Range { min: 0, max: 2 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("some", Arity::Range { min: 1, max: 2 }, IfcPropagation::Custom("array_callback_ifc"), GapStatus::Resolved),
-    array_row!("sort", Arity::Range { min: 0, max: 1 }, IfcPropagation::Custom("array_sort_ifc"), GapStatus::Resolved),
-    array_row!("splice", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("unshift", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("values", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("toReversed", Arity::Exact(0), IfcPropagation::PropagateReceiverLabel, GapStatus::Resolved),
-    array_row!("toSorted", Arity::Range { min: 0, max: 1 }, IfcPropagation::Custom("array_sort_ifc"), GapStatus::Resolved),
-    array_row!("toSpliced", Arity::Variadic { required: 0 }, IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
-    array_row!("with", Arity::Exact(2), IfcPropagation::JoinReceiverAndArgs, GapStatus::Resolved),
+    array_row!(
+        "at",
+        Arity::Range { min: 0, max: 1 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "concat",
+        Arity::Variadic { required: 0 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "copyWithin",
+        Arity::Range { min: 2, max: 3 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "entries",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "every",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "fill",
+        Arity::Range { min: 1, max: 3 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "filter",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "find",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "findIndex",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "flat",
+        Arity::Range { min: 0, max: 1 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "flatMap",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "forEach",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "includes",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "indexOf",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "join",
+        Arity::Range { min: 0, max: 1 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "keys",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "lastIndexOf",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "map",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "pop",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "push",
+        Arity::Variadic { required: 0 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "reduce",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_reduce_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "reduceRight",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_reduce_right_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "reverse",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "shift",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "slice",
+        Arity::Range { min: 0, max: 2 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "some",
+        Arity::Range { min: 1, max: 2 },
+        IfcPropagation::Custom("array_callback_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "sort",
+        Arity::Range { min: 0, max: 1 },
+        IfcPropagation::Custom("array_sort_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "splice",
+        Arity::Variadic { required: 0 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "unshift",
+        Arity::Variadic { required: 0 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "values",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "toReversed",
+        Arity::Exact(0),
+        IfcPropagation::PropagateReceiverLabel,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "toSorted",
+        Arity::Range { min: 0, max: 1 },
+        IfcPropagation::Custom("array_sort_ifc"),
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "toSpliced",
+        Arity::Variadic { required: 0 },
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
+    array_row!(
+        "with",
+        Arity::Exact(2),
+        IfcPropagation::JoinReceiverAndArgs,
+        GapStatus::Resolved
+    ),
 ];
 
 /// Canonical property names in deterministic table order.
@@ -107,7 +276,11 @@ mod tests {
             assert_eq!(row.this_coercion, ThisCoercion::Passthrough, "{}", row.name);
             assert!(row.capability.is_none(), "{}", row.name);
             assert!(!row.conformance.is_empty(), "{}", row.name);
-            assert!(row.is_escape_hatch(), "{} remains coexist/manual until semantic extraction", row.name);
+            assert!(
+                row.is_escape_hatch(),
+                "{} remains coexist/manual until semantic extraction",
+                row.name
+            );
         }
     }
 
@@ -118,20 +291,37 @@ mod tests {
             .filter(|row| !matches!(&row.gap_status, GapStatus::Resolved))
             .map(|row| row.name)
             .collect();
-        assert!(unresolved.is_empty(), "unexpected Array semantic gap rows: {unresolved:?}");
+        assert!(
+            unresolved.is_empty(),
+            "unexpected Array semantic gap rows: {unresolved:?}"
+        );
     }
 
     #[test]
     fn callback_methods_never_claim_simple_ifc_propagation() {
         for name in [
-            "every", "filter", "find", "findIndex", "flatMap", "forEach", "map", "reduce",
-            "reduceRight", "some", "sort", "toSorted",
+            "every",
+            "filter",
+            "find",
+            "findIndex",
+            "flatMap",
+            "forEach",
+            "map",
+            "reduce",
+            "reduceRight",
+            "some",
+            "sort",
+            "toSorted",
         ] {
             let row = ROWS
                 .iter()
                 .find(|row| row.name == format!("Array.prototype.{name}"))
                 .expect("callback method row");
-            assert!(matches!(&row.ifc, IfcPropagation::Custom(_)), "{}", row.name);
+            assert!(
+                matches!(&row.ifc, IfcPropagation::Custom(_)),
+                "{}",
+                row.name
+            );
         }
     }
 }

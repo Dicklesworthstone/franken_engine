@@ -6,19 +6,21 @@ use serde::{Deserialize, Serialize};
 use crate::capability::RuntimeCapability;
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, EngineObjectId,
-    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId,
-    VersionedIdError,
+    EngineObjectId, ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId,
+    PersistedSchemaId, VersionedIdError, derive_versioned_id, derive_versioned_schema_id,
+    verify_versioned_id,
 };
 use crate::hash_tiers::ContentHash;
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::security_epoch::{EpochMetadata, EpochTracker, EpochValidationError, SecurityEpoch};
 use crate::signature_preimage::{
-    sign_preimage, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+    verify_signature,
 };
 
-use super::compat::{CapabilityToken, CheckpointRef, PrincipalId, RevocationFreshnessRef, TokenVersion};
+use super::compat::{
+    CapabilityToken, CheckpointRef, PrincipalId, RevocationFreshnessRef, TokenVersion,
+};
 
 const TOKEN_SCHEMA_V2: &[u8] = b"FrankenEngine.CapabilityToken.sha256.v2";
 
@@ -399,7 +401,10 @@ pub fn verify_versioned_token(
             expiry: token.expiry.0,
         });
     }
-    if let Err(errors) = context.epoch_tracker.validate_artifact(&token.epoch_metadata()) {
+    if let Err(errors) = context
+        .epoch_tracker
+        .validate_artifact(&token.epoch_metadata())
+    {
         return Err(VersionedTokenError::EpochValidationFailed { errors });
     }
 
@@ -410,7 +415,10 @@ pub fn verify_versioned_token(
                 verifier_seq: context.verifier_checkpoint_seq,
             });
         }
-        if !context.accepted_checkpoint_ids.contains(&binding.checkpoint_id) {
+        if !context
+            .accepted_checkpoint_ids
+            .contains(&binding.checkpoint_id)
+        {
             return Err(VersionedTokenError::CheckpointIdentityMismatch {
                 checkpoint_id: binding.checkpoint_id.clone(),
             });
@@ -439,9 +447,16 @@ pub fn verify_versioned_token(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VersionedTokenEventType {
-    TokenIssued { jti: VersionedTokenId },
-    TokenVerified { jti: VersionedTokenId },
-    TokenRejected { jti: VersionedTokenId, reason: String },
+    TokenIssued {
+        jti: VersionedTokenId,
+    },
+    TokenVerified {
+        jti: VersionedTokenId,
+    },
+    TokenRejected {
+        jti: VersionedTokenId,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -494,12 +509,7 @@ fn build_versioned_token(
         &zone,
         legacy_provenance.as_ref(),
     );
-    let jti = derive_versioned_id(
-        ObjectDomain::CapabilityToken,
-        &zone,
-        &schema,
-        &material,
-    )?;
+    let jti = derive_versioned_id(ObjectDomain::CapabilityToken, &zone, &schema, &material)?;
 
     let mut token = VersionedCapabilityToken {
         persistence_schema: CAPABILITY_TOKEN_PERSISTENCE_SCHEMA_V2.to_string(),
@@ -589,10 +599,14 @@ fn validate_legacy_mapping(token: &VersionedCapabilityToken) -> Result<(), Versi
         return Err(VersionedTokenError::LegacyMappingMismatch("epoch"));
     }
     if token.valid_from_epoch != legacy.valid_from_epoch {
-        return Err(VersionedTokenError::LegacyMappingMismatch("valid_from_epoch"));
+        return Err(VersionedTokenError::LegacyMappingMismatch(
+            "valid_from_epoch",
+        ));
     }
     if token.valid_until_epoch != legacy.valid_until_epoch {
-        return Err(VersionedTokenError::LegacyMappingMismatch("valid_until_epoch"));
+        return Err(VersionedTokenError::LegacyMappingMismatch(
+            "valid_until_epoch",
+        ));
     }
     let expected_checkpoint = legacy
         .checkpoint_binding
@@ -912,7 +926,10 @@ fn legacy_unsigned_view(token: &CapabilityToken) -> CanonicalValue {
             map.insert("checkpoint_binding".to_string(), CanonicalValue::Null);
         }
     }
-    map.insert("epoch".to_string(), CanonicalValue::U64(token.epoch.as_u64()));
+    map.insert(
+        "epoch".to_string(),
+        CanonicalValue::U64(token.epoch.as_u64()),
+    );
     map.insert(
         "valid_from_epoch".to_string(),
         CanonicalValue::U64(token.valid_from_epoch.as_u64()),
@@ -1034,10 +1051,11 @@ impl std::fmt::Display for VersionedTokenError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SignatureInvalid(detail) => write!(formatter, "signature invalid: {detail}"),
-            Self::LegacyVerification(detail) => write!(formatter, "legacy verification failed: {detail}"),
-            Self::LegacyIdentityMismatch => {
-                formatter.write_str("legacy token jti is not the historical content-derived identity")
+            Self::LegacyVerification(detail) => {
+                write!(formatter, "legacy verification failed: {detail}")
             }
+            Self::LegacyIdentityMismatch => formatter
+                .write_str("legacy token jti is not the historical content-derived identity"),
             Self::LegacyMappingMismatch(field) => {
                 write!(formatter, "legacy token migration mismatch at {field}")
             }
@@ -1048,7 +1066,10 @@ impl std::fmt::Display for VersionedTokenError {
             Self::EmptyCapabilities => formatter.write_str("token capabilities must not be empty"),
             Self::EmptyZone => formatter.write_str("token zone must not be empty"),
             Self::InvertedTemporalWindow { not_before, expiry } => {
-                write!(formatter, "inverted temporal window: {not_before} > {expiry}")
+                write!(
+                    formatter,
+                    "inverted temporal window: {not_before} > {expiry}"
+                )
             }
             Self::InvertedEpochWindow {
                 valid_from,
@@ -1149,9 +1170,7 @@ mod tests {
     use super::*;
     use crate::capability::RuntimeCapability;
     use crate::engine_object_id::{derive_versioned_id, derive_versioned_schema_id};
-    use crate::policy_checkpoint::{
-        PolicyCheckpointV2Builder, PolicyHead, PolicyType,
-    };
+    use crate::policy_checkpoint::{PolicyCheckpointV2Builder, PolicyHead, PolicyType};
 
     fn key(seed: u8) -> SigningKey {
         SigningKey::from_bytes([seed; 32]).expect("valid key")
@@ -1174,10 +1193,7 @@ mod tests {
             &seq.to_be_bytes(),
         )
         .expect("checkpoint id");
-        VersionedCheckpointRef::new(
-            seq,
-            PersistedEngineObjectId::from_versioned(checkpoint_id),
-        )
+        VersionedCheckpointRef::new(seq, PersistedEngineObjectId::from_versioned(checkpoint_id))
     }
 
     fn revocation_ref(seq: u64) -> RevocationFreshnessRef {
@@ -1209,7 +1225,10 @@ mod tests {
     fn fresh_token_is_sha256_v2_and_signature_verifies() {
         let issuer = key(1);
         let token = basic_token(&issuer);
-        assert_eq!(token.jti.derivation_version, ObjectIdDerivationVersion::Sha256V2);
+        assert_eq!(
+            token.jti.derivation_version,
+            ObjectIdDerivationVersion::Sha256V2
+        );
         assert_eq!(
             token.schema_version.derivation_version,
             ObjectIdDerivationVersion::Sha256V2
@@ -1247,7 +1266,10 @@ mod tests {
         let issuer = key(1);
         let token = basic_token(&issuer);
         let value = serde_json::to_value(&token).expect("serialize");
-        assert_eq!(value["persistence_schema"], CAPABILITY_TOKEN_PERSISTENCE_SCHEMA_V2);
+        assert_eq!(
+            value["persistence_schema"],
+            CAPABILITY_TOKEN_PERSISTENCE_SCHEMA_V2
+        );
         assert_eq!(value["jti"]["derivation_version"], "sha256_v2");
         assert_eq!(value["schema_version"]["derivation_version"], "sha256_v2");
     }
@@ -1257,7 +1279,8 @@ mod tests {
         let issuer = key(1);
         let token = basic_token(&issuer);
         let encoded = serde_json::to_vec(&token).expect("serialize");
-        let decoded: VersionedCapabilityToken = serde_json::from_slice(&encoded).expect("deserialize");
+        let decoded: VersionedCapabilityToken =
+            serde_json::from_slice(&encoded).expect("deserialize");
         assert_eq!(decoded, token);
         decoded.validate_identity().expect("identity");
     }
@@ -1287,7 +1310,10 @@ mod tests {
         )
         .add_audience(principal(1))
         .build();
-        assert!(matches!(result, Err(VersionedTokenError::EmptyCapabilities)));
+        assert!(matches!(
+            result,
+            Err(VersionedTokenError::EmptyCapabilities)
+        ));
     }
 
     #[test]
@@ -1371,9 +1397,10 @@ mod tests {
         .bind_checkpoint(binding.clone())
         .build()
         .expect("token");
-        let wrong_algorithm = PersistedEngineObjectId::legacy(binding.checkpoint_id.object_id.clone());
-        let context = VersionedVerificationContext::new(500, 10, 0)
-            .with_checkpoint_id(wrong_algorithm);
+        let wrong_algorithm =
+            PersistedEngineObjectId::legacy(binding.checkpoint_id.object_id.clone());
+        let context =
+            VersionedVerificationContext::new(500, 10, 0).with_checkpoint_id(wrong_algorithm);
         assert!(matches!(
             verify_versioned_token(&token, &principal(10), &context),
             Err(VersionedTokenError::CheckpointIdentityMismatch { .. })
@@ -1396,8 +1423,7 @@ mod tests {
         .bind_checkpoint(binding.clone())
         .build()
         .expect("token");
-        let context = VersionedVerificationContext::new(500, 10, 0)
-            .with_checkpoint_ref(&binding);
+        let context = VersionedVerificationContext::new(500, 10, 0).with_checkpoint_ref(&binding);
         verify_versioned_token(&token, &principal(10), &context).expect("verify");
     }
 
@@ -1417,8 +1443,7 @@ mod tests {
         .bind_checkpoint(binding.clone())
         .build()
         .expect("token");
-        let context = VersionedVerificationContext::new(500, 4, 0)
-            .with_checkpoint_ref(&binding);
+        let context = VersionedVerificationContext::new(500, 4, 0).with_checkpoint_ref(&binding);
         assert!(matches!(
             verify_versioned_token(&token, &principal(10), &context),
             Err(VersionedTokenError::CheckpointBindingFailed { .. })
@@ -1464,8 +1489,8 @@ mod tests {
         .bind_revocation_freshness(freshness.clone())
         .build()
         .expect("token");
-        let context = VersionedVerificationContext::new(500, 0, 10)
-            .with_revocation_freshness(&freshness);
+        let context =
+            VersionedVerificationContext::new(500, 0, 10).with_revocation_freshness(&freshness);
         verify_versioned_token(&token, &principal(10), &context).expect("verify");
     }
 
@@ -1483,8 +1508,8 @@ mod tests {
         .add_capability(RuntimeCapability::VmDispatch)
         .build()
         .expect("legacy token");
-        let migrated = VersionedCapabilityToken::migrate_verified_legacy(&legacy, &issuer)
-            .expect("migrate");
+        let migrated =
+            VersionedCapabilityToken::migrate_verified_legacy(&legacy, &issuer).expect("migrate");
         assert!(migrated.legacy_provenance.is_some());
         assert_eq!(migrated.issuer, legacy.issuer);
         migrated.verify_signature().expect("new signature");
@@ -1513,8 +1538,8 @@ mod tests {
         .bind_checkpoint(checkpoint)
         .build()
         .expect("legacy token");
-        let migrated = VersionedCapabilityToken::migrate_verified_legacy(&legacy, &issuer)
-            .expect("migrate");
+        let migrated =
+            VersionedCapabilityToken::migrate_verified_legacy(&legacy, &issuer).expect("migrate");
         assert_eq!(
             migrated
                 .checkpoint_binding
@@ -1562,8 +1587,8 @@ mod tests {
         .add_capability(RuntimeCapability::VmDispatch)
         .build()
         .expect("legacy token");
-        let mut migrated = VersionedCapabilityToken::migrate_verified_legacy(&legacy, &issuer)
-            .expect("migrate");
+        let mut migrated =
+            VersionedCapabilityToken::migrate_verified_legacy(&legacy, &issuer).expect("migrate");
         migrated.capabilities.insert(RuntimeCapability::PolicyWrite);
         assert!(matches!(
             migrated.validate_identity(),
@@ -1600,8 +1625,7 @@ mod tests {
         .bind_checkpoint(binding.clone())
         .build()
         .expect("token");
-        let context = VersionedVerificationContext::new(500, 0, 0)
-            .with_checkpoint_ref(&binding);
+        let context = VersionedVerificationContext::new(500, 0, 0).with_checkpoint_ref(&binding);
         verify_versioned_token(&token, &principal(10), &context).expect("verify");
     }
 

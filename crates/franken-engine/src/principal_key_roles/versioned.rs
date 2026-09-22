@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::capability_token::PrincipalId;
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{
-    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id, ObjectDomain,
-    ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId, VersionedIdError,
+    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, PersistedSchemaId,
+    VersionedIdError, derive_versioned_id, derive_versioned_schema_id, verify_versioned_id,
 };
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    sign_preimage, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+    verify_signature,
 };
 
 use super::compat::{EncryptionPublicKey, OwnerKeyBundle};
@@ -219,12 +219,7 @@ fn build_bundle_v2(
         sequence,
         legacy_provenance.as_ref(),
     );
-    let id = derive_versioned_id(
-        ObjectDomain::KeyBundle,
-        "global",
-        &schema,
-        &material,
-    )?;
+    let id = derive_versioned_id(ObjectDomain::KeyBundle, "global", &schema, &material)?;
     let mut bundle = OwnerKeyBundleV2 {
         persistence_schema: OWNER_KEY_BUNDLE_PERSISTENCE_SCHEMA_V2.to_string(),
         schema_version: PersistedSchemaId::from_versioned(schema),
@@ -496,10 +491,17 @@ impl std::fmt::Display for OwnerKeyBundleV2Error {
                 actual.to_hex()
             ),
             Self::SignatureInvalid(detail) => write!(formatter, "signature invalid: {detail}"),
-            Self::LegacyVerification(detail) => write!(formatter, "legacy verification failed: {detail}"),
-            Self::LegacyIdentityMismatch => formatter.write_str("legacy owner bundle id is not content-derived"),
+            Self::LegacyVerification(detail) => {
+                write!(formatter, "legacy verification failed: {detail}")
+            }
+            Self::LegacyIdentityMismatch => {
+                formatter.write_str("legacy owner bundle id is not content-derived")
+            }
             Self::LegacyMappingMismatch(field) => {
-                write!(formatter, "legacy owner bundle migration mismatch at {field}")
+                write!(
+                    formatter,
+                    "legacy owner bundle migration mismatch at {field}"
+                )
             }
             Self::Identity(error) => write!(formatter, "owner bundle identity error: {error}"),
         }

@@ -1903,6 +1903,34 @@ impl From<i64> for Float64 {
     }
 }
 
+/// Minimum safe integer in JavaScript: -(2^53 - 1)
+pub const MIN_SAFE_INTEGER: i64 = -9_007_199_254_740_991;
+/// Maximum safe integer in JavaScript: 2^53 - 1
+pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+/// Convert an f64 result to a JavaScript Number Value.
+/// Preserves negative zero, handles NaN/Infinity, and represents whole numbers
+/// within the safe integer range [-2^53+1, 2^53-1] as Value::Int.
+#[inline(always)]
+pub fn js_number_to_value(value: f64) -> Value {
+    if value.is_nan() || value.is_infinite() {
+        Value::Float(Float64::new(value))
+    } else if value == 0.0 {
+        if value.is_sign_negative() {
+            Value::Float(Float64::new(-0.0))
+        } else {
+            Value::Int(0)
+        }
+    } else if value.fract() == 0.0
+        && value >= MIN_SAFE_INTEGER as f64
+        && value <= MAX_SAFE_INTEGER as f64
+    {
+        Value::Int(value as i64)
+    } else {
+        Value::Float(Float64::new(value))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Value — JS runtime value representation
 // ---------------------------------------------------------------------------
@@ -45525,14 +45553,17 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Add => {
+                let mut compact_handled = false;
                 if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
-                    self.write_reg_with_label(
-                        dst,
-                        Value::Int(left.wrapping_add(right)),
-                        Label::Public,
-                    )?;
-                    self.record_tier_i_specialization();
-                } else {
+                    if let Some(sum) = left.checked_add(right) {
+                        if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
+                            self.write_reg_with_label(dst, Value::Int(sum), Label::Public)?;
+                            self.record_tier_i_specialization();
+                            compact_handled = true;
+                        }
+                    }
+                }
+                if !compact_handled {
                     let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_add(lhs, rhs)?;
@@ -45541,14 +45572,17 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Sub => {
+                let mut compact_handled = false;
                 if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
-                    self.write_reg_with_label(
-                        dst,
-                        Value::Int(left.wrapping_sub(right)),
-                        Label::Public,
-                    )?;
-                    self.record_tier_i_specialization();
-                } else {
+                    if let Some(diff) = left.checked_sub(right) {
+                        if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
+                            self.write_reg_with_label(dst, Value::Int(diff), Label::Public)?;
+                            self.record_tier_i_specialization();
+                            compact_handled = true;
+                        }
+                    }
+                }
+                if !compact_handled {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_arith(lhs, rhs, "sub")?;
                     self.write_reg_with_label(dst, result, result_label)?;
@@ -45556,14 +45590,19 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Mul => {
+                let mut compact_handled = false;
                 if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
-                    self.write_reg_with_label(
-                        dst,
-                        Value::Int(left.wrapping_mul(right)),
-                        Label::Public,
-                    )?;
-                    self.record_tier_i_specialization();
-                } else {
+                    if !((left == 0 && right < 0) || (right == 0 && left < 0)) {
+                        if let Some(prod) = left.checked_mul(right) {
+                            if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
+                                self.write_reg_with_label(dst, Value::Int(prod), Label::Public)?;
+                                self.record_tier_i_specialization();
+                                compact_handled = true;
+                            }
+                        }
+                    }
+                }
+                if !compact_handled {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_arith(lhs, rhs, "mul")?;
                     self.write_reg_with_label(dst, result, result_label)?;
@@ -115348,8 +115387,7 @@ mod tests {
         assert_eq!(compact_error, baseline_error);
         assert_eq!(compact_error, InterpreterError::Cancelled);
         assert_eq!(
-            compact_core.instructions_executed,
-            baseline_core.instructions_executed,
+            compact_core.instructions_executed, baseline_core.instructions_executed,
             "scope-inert Tier-I and Tier-R must retain the same terminal instruction boundary"
         );
         assert!(compact_core.instructions_executed >= checkpoint_density);

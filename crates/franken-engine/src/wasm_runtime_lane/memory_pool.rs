@@ -14,8 +14,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::checkpoint::CancellationToken;
 use super::numeric::WasmHostError;
+use crate::checkpoint::CancellationToken;
 
 /// Maximum number of partition edges below a root. Bounds both ancestor
 /// observation at guest checkpoints and destruction of nested reservations.
@@ -69,7 +69,9 @@ impl WasmMemoryPool {
     pub fn partition(&self, capacity_pages: u64) -> Result<Self, WasmHostError> {
         self.check_active()?;
         if self.0.depth >= WASM_MEMORY_POOL_MAX_DEPTH {
-            return Err(WasmHostError::MemoryPoolDepthExceeded { max: WASM_MEMORY_POOL_MAX_DEPTH });
+            return Err(WasmHostError::MemoryPoolDepthExceeded {
+                max: WASM_MEMORY_POOL_MAX_DEPTH,
+            });
         }
         let parent = self.reserve(capacity_pages)?;
         let child = Self(Arc::new(Pool {
@@ -95,14 +97,18 @@ impl WasmMemoryPool {
     /// Live memory stays charged until destruction; this never refunds pages,
     /// resets a pool, or widens its authority. Create a new authorized scope to
     /// restart work. A replay transcript cannot revoke a live pool on its own.
-    pub fn revoke(&self) { self.0.cancellation.cancel(); }
+    pub fn revoke(&self) {
+        self.0.cancellation.cancel();
+    }
 
     /// Observe permanent revocation of this pool or any ancestor. This is not
     /// an execution lease: a concurrent request may follow an active snapshot.
     pub fn is_revoked(&self) -> bool {
         let mut current = self;
         loop {
-            if current.0.cancellation.is_cancelled() { return true; }
+            if current.0.cancellation.is_cancelled() {
+                return true;
+            }
             match &current.0.parent {
                 Some(parent) => current = &parent.pool,
                 None => return false,
@@ -111,14 +117,22 @@ impl WasmMemoryPool {
     }
 
     pub(crate) fn check_active(&self) -> Result<(), WasmHostError> {
-        if self.is_revoked() { Err(WasmHostError::MemoryPoolRevoked) } else { Ok(()) }
+        if self.is_revoked() {
+            Err(WasmHostError::MemoryPoolRevoked)
+        } else {
+            Ok(())
+        }
     }
 
-    pub fn capacity_pages(&self) -> u64 { self.0.capacity }
+    pub fn capacity_pages(&self) -> u64 {
+        self.0.capacity
+    }
 
     /// Whether this pool holds an allotment from another pool. This exposes no
     /// parent handle with which a tenant could bypass its assigned ceiling.
-    pub fn is_partition(&self) -> bool { self.0.parent.is_some() }
+    pub fn is_partition(&self) -> bool {
+        self.0.parent.is_some()
+    }
 
     /// One instantaneous accounting observation, including future growth held
     /// for live instances. Another thread may admit/release immediately after it.
@@ -134,15 +148,24 @@ impl WasmMemoryPool {
         let mut available = self.0.available.load(Ordering::Acquire);
         loop {
             self.check_active()?;
-            let remaining = available.checked_sub(pages)
-                .ok_or(WasmHostError::MemoryPoolExhausted {
-                    requested_pages: pages, available_pages: available,
-                })?;
+            let remaining =
+                available
+                    .checked_sub(pages)
+                    .ok_or(WasmHostError::MemoryPoolExhausted {
+                        requested_pages: pages,
+                        available_pages: available,
+                    })?;
             match self.0.available.compare_exchange_weak(
-                available, remaining, Ordering::AcqRel, Ordering::Acquire,
+                available,
+                remaining,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    let reservation = MemoryReservation { pool: self.clone(), pages };
+                    let reservation = MemoryReservation {
+                        pool: self.clone(),
+                        pages,
+                    };
                     // A request racing the reservation cannot leak the charge.
                     // A later request is still observed by execution checkpoints.
                     self.check_active()?;
@@ -164,13 +187,18 @@ pub(crate) struct MemoryReservation {
 }
 
 impl MemoryReservation {
-    pub(crate) fn pages(&self) -> u64 { self.pages }
+    pub(crate) fn pages(&self) -> u64 {
+        self.pages
+    }
 }
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
         // Every reservation subtracted these pages once; no other API can add
         // capacity. Releasing cannot exceed the fixed ceiling or wrap u64.
-        self.pool.0.available.fetch_add(self.pages, Ordering::Release);
+        self.pool
+            .0
+            .available
+            .fetch_add(self.pages, Ordering::Release);
     }
 }

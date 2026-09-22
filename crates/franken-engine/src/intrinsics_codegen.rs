@@ -217,7 +217,10 @@ impl std::fmt::Display for CodegenError {
             CodegenError::DuplicatePrototypeProperty {
                 constructor,
                 property,
-            } => write!(f, "duplicate prototype installation target {constructor}.prototype.{property}"),
+            } => write!(
+                f,
+                "duplicate prototype installation target {constructor}.prototype.{property}"
+            ),
             CodegenError::GlueCountMismatch {
                 rows,
                 dispatch,
@@ -446,17 +449,23 @@ mod tests {
         assert!(push.writable);
         assert!(!push.enumerable);
         assert!(push.configurable);
-        assert!(matches!(&push.dispatch_target, DispatchTarget::Manual { .. }));
+        assert!(matches!(
+            &push.dispatch_target,
+            DispatchTarget::Manual { .. }
+        ));
     }
 
     #[test]
     fn string_family_can_generate_prototype_installations_too() {
-        let installations = generate_prototype_installations(
-            crate::intrinsics_table::string_prototype::ROWS,
-        )
-        .expect("String table must generate prototype installations");
+        let installations =
+            generate_prototype_installations(crate::intrinsics_table::string_prototype::ROWS)
+                .expect("String table must generate prototype installations");
         assert_eq!(installations.len(), 26);
-        assert!(installations.iter().all(|entry| entry.constructor == "String"));
+        assert!(
+            installations
+                .iter()
+                .all(|entry| entry.constructor == "String")
+        );
         assert!(installations.iter().all(|entry| entry.writable));
         assert!(installations.iter().all(|entry| !entry.enumerable));
         assert!(installations.iter().all(|entry| entry.configurable));
@@ -471,7 +480,9 @@ mod tests {
         .expect("String + Array installation index");
         assert_eq!(index.len(), 60);
         assert_eq!(
-            index.get("String", "trim").map(|entry| entry.canonical_name),
+            index
+                .get("String", "trim")
+                .map(|entry| entry.canonical_name),
             Some("String.prototype.trim")
         );
         assert_eq!(
@@ -483,10 +494,7 @@ mod tests {
     #[test]
     fn duplicate_family_installation_is_refused() {
         assert!(matches!(
-            build_prototype_installation_index(&[
-                array_prototype::ROWS,
-                array_prototype::ROWS,
-            ]),
+            build_prototype_installation_index(&[array_prototype::ROWS, array_prototype::ROWS,]),
             Err(CodegenError::DuplicatePrototypeProperty {
                 constructor: "Array",
                 ..

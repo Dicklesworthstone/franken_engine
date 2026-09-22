@@ -207,7 +207,11 @@ impl CancellationToken {
     pub fn linked_with(&self, other: &Self) -> Self {
         let mut parents = self.parents.to_vec();
         parents.push(Arc::clone(&self.cancelled));
-        for signal in other.parents.iter().chain(std::iter::once(&other.cancelled)) {
+        for signal in other
+            .parents
+            .iter()
+            .chain(std::iter::once(&other.cancelled))
+        {
             if !parents.iter().any(|parent| Arc::ptr_eq(parent, signal)) {
                 parents.push(Arc::clone(signal));
             }
@@ -2164,7 +2168,10 @@ mod linked_cancellation_tests {
         assert!(child.is_cancelled());
         assert!(leaf.is_cancelled());
         root.reset();
-        assert!(!leaf.is_cancelled(), "existing parent reuse remains explicit");
+        assert!(
+            !leaf.is_cancelled(),
+            "existing parent reuse remains explicit"
+        );
     }
 
     #[test]

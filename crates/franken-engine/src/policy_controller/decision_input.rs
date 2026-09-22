@@ -86,17 +86,14 @@ impl Posterior {
             // exceeds i64. Each quotient is bounded by one million.
             let numerator = i128::from(weight) * PROBABILITY_SCALE;
             let units = numerator / total;
-            let probability = i64::try_from(units).map_err(|_| {
-                DecisionInputError::InvalidPosterior {
+            let probability =
+                i64::try_from(units).map_err(|_| DecisionInputError::InvalidPosterior {
                     reason: "normalized weight exceeds probability range".to_string(),
-                }
-            })?;
+                })?;
             allocated += units;
             shares.push((state, probability, numerator % total));
         }
-        shares.sort_by(|left, right| {
-            right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0))
-        });
+        shares.sort_by(|left, right| right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0)));
         let remaining = usize::try_from(PROBABILITY_SCALE - allocated).map_err(|_| {
             DecisionInputError::InvalidPosterior {
                 reason: "normalization remainder exceeds allocation range".to_string(),
@@ -157,12 +154,13 @@ pub(super) fn expected_loss(
         if probability == 0 {
             continue;
         }
-        let loss = matrix.get(state, action).ok_or_else(|| {
-            DecisionInputError::MissingLossEntry {
-                state: state.clone(),
-                action: action.to_string(),
-            }
-        })?;
+        let loss =
+            matrix
+                .get(state, action)
+                .ok_or_else(|| DecisionInputError::MissingLossEntry {
+                    state: state.clone(),
+                    action: action.to_string(),
+                })?;
         // Validation bounds total probability mass to 1M. Even at either i64
         // loss endpoint, the entire numerator fits in i128. Round only once:
         // rounding each state's contribution can change the winning action.
@@ -332,7 +330,11 @@ mod tests {
         matrix.set("a", "allow", i64::MIN);
         matrix.set("b", "allow", i64::MAX);
         assert_eq!(
-            expected_loss(&matrix, "allow", &posterior(&[("a", 500_000), ("b", 500_000)])),
+            expected_loss(
+                &matrix,
+                "allow",
+                &posterior(&[("a", 500_000), ("b", 500_000)])
+            ),
             Ok(0)
         );
     }
@@ -348,9 +350,7 @@ mod tests {
                 state: "s".into(),
                 action: "a".into(),
             },
-            DecisionInputError::ExpectedLossOutOfRange {
-                action: "a".into(),
-            },
+            DecisionInputError::ExpectedLossOutOfRange { action: "a".into() },
         ] {
             let json = serde_json::to_string(&error).expect("serialize input error");
             assert_eq!(
@@ -401,8 +401,8 @@ mod tests {
 
     #[test]
     fn large_weights_and_totals_do_not_overflow() {
-        let normalized = from_weights(&[("a", i64::MAX), ("b", i64::MAX), ("c", i64::MAX)])
-            .unwrap();
+        let normalized =
+            from_weights(&[("a", i64::MAX), ("b", i64::MAX), ("c", i64::MAX)]).unwrap();
         assert_eq!(
             normalized,
             posterior(&[("a", 333_334), ("b", 333_333), ("c", 333_333)])

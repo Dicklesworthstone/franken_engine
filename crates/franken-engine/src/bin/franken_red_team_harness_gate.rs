@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use frankenengine_engine::disruptive_floor_metric_gate::{
-    DEFAULT_MAX_FRESHNESS_DAYS, DEFAULT_MIN_CONFIDENCE_MILLIONTHS,
-    DisruptiveMetricId, MetricArtifact,
+    DEFAULT_MAX_FRESHNESS_DAYS, DEFAULT_MIN_CONFIDENCE_MILLIONTHS, DisruptiveMetricId,
+    MetricArtifact,
 };
 use frankenengine_engine::red_team_compromise_rate_metric_gate::{
     RATE_SCALE_MILLIONTHS, RedTeamCompromiseRateDecision, RedTeamHarnessMeasurementSummary,
@@ -194,7 +194,10 @@ impl ScenarioCorpusMetricReport {
                 "Stability repetitions per runtime/scenario",
                 self.trials_per_runtime_scenario,
             ),
-            ("Node compromised scenarios", self.node_compromised_scenarios),
+            (
+                "Node compromised scenarios",
+                self.node_compromised_scenarios,
+            ),
             ("Bun compromised scenarios", self.bun_compromised_scenarios),
             (
                 "FrankenEngine compromised scenarios",
@@ -289,7 +292,8 @@ fn read_input(input: &str) -> Result<Vec<u8>, String> {
             .map_err(|error| format!("failed to read harness JSON from stdin: {error}"))?;
         Ok(bytes)
     } else {
-        fs::read(input).map_err(|error| format!("failed to read harness JSON from {input}: {error}"))
+        fs::read(input)
+            .map_err(|error| format!("failed to read harness JSON from {input}: {error}"))
     }
 }
 
@@ -343,10 +347,7 @@ fn validate_semantic_annotations(value: &Value, contract: &CorpusContract) -> Re
             contract.confidence_interpretation.as_str(),
         ),
         ("zero_cell_guard", contract.zero_cell_guard.as_str()),
-        (
-            "verdict_scope",
-            contract.aggregate_verdict_scope.as_str(),
-        ),
+        ("verdict_scope", contract.aggregate_verdict_scope.as_str()),
         (
             "claim_verdict_producer",
             contract.claim_verdict_producer.as_str(),
@@ -468,8 +469,12 @@ fn validate_semantic_annotations(value: &Value, contract: &CorpusContract) -> Re
     if runtime_pairs != expected_pairs {
         return Err(format!(
             "harness runtime matrix mismatch: missing={:?}, extra={:?}",
-            expected_pairs.difference(&runtime_pairs).collect::<Vec<_>>(),
-            runtime_pairs.difference(&expected_pairs).collect::<Vec<_>>()
+            expected_pairs
+                .difference(&runtime_pairs)
+                .collect::<Vec<_>>(),
+            runtime_pairs
+                .difference(&expected_pairs)
+                .collect::<Vec<_>>()
         ));
     }
     Ok(())
@@ -508,8 +513,7 @@ fn validate_metadata(
             contract.corpus_id, harness.scenario_set
         ));
     }
-    if harness.min_trials_per_runtime
-        < contract.required_stability_repetitions_per_runtime_scenario
+    if harness.min_trials_per_runtime < contract.required_stability_repetitions_per_runtime_scenario
     {
         return Err(format!(
             "declared stability repetitions {} are below contract floor {}",
@@ -573,11 +577,7 @@ fn matrix_facts(
     for (scenario_id, rows) in grouped {
         let node = result_for(&rows, scenario_id, RedTeamHarnessRuntime::Node)?;
         let bun = result_for(&rows, scenario_id, RedTeamHarnessRuntime::Bun)?;
-        let frankenengine = result_for(
-            &rows,
-            scenario_id,
-            RedTeamHarnessRuntime::FrankenEngine,
-        )?;
+        let frankenengine = result_for(&rows, scenario_id, RedTeamHarnessRuntime::FrankenEngine)?;
         let expected_attack_class = expected_scenarios[scenario_id];
         for result in [node, bun, frankenengine] {
             if result.attack_class.as_str() != expected_attack_class {
@@ -626,8 +626,8 @@ fn matrix_facts(
             frankenengine_compromised: frankenengine.attempts_successful > 0,
         });
     }
-    let trials_per_runtime_scenario =
-        common_trials.ok_or_else(|| "harness contains no security-critical scenarios".to_string())?;
+    let trials_per_runtime_scenario = common_trials
+        .ok_or_else(|| "harness contains no security-critical scenarios".to_string())?;
     if trials_per_runtime_scenario < harness.min_trials_per_runtime {
         return Err(format!(
             "repetition denominator {trials_per_runtime_scenario} is below declared minimum {}",
@@ -674,16 +674,13 @@ fn evaluate(
         .count() as u64;
     let baseline_reference_compromised_scenarios =
         node_compromised_scenarios.min(bun_compromised_scenarios);
-    let guarded_frankenengine_compromised_scenarios = frankenengine_compromised_scenarios
-        .max(contract.zero_cell_guard_count);
-    let baseline_rate = rate_millionths(
-        baseline_reference_compromised_scenarios,
-        scenario_count,
-    );
+    let guarded_frankenengine_compromised_scenarios =
+        frankenengine_compromised_scenarios.max(contract.zero_cell_guard_count);
+    let baseline_rate = rate_millionths(baseline_reference_compromised_scenarios, scenario_count);
     let candidate_rate = rate_millionths(frankenengine_compromised_scenarios, scenario_count);
     let raw_reduction_factor_x = reduction_factor_x(baseline_rate, candidate_rate);
-    let conservative_reduction_floor_x = baseline_reference_compromised_scenarios
-        / guarded_frankenengine_compromised_scenarios;
+    let conservative_reduction_floor_x =
+        baseline_reference_compromised_scenarios / guarded_frankenengine_compromised_scenarios;
     let stability_coverage_millionths = rate_millionths(facts.stable_pairs, facts.total_pairs);
     let threshold = DisruptiveMetricId::RedTeamCompromiseRateReduction.threshold();
 
@@ -714,9 +711,7 @@ fn evaluate(
         candidate: "franken_engine".to_string(),
         denominator_id: format!(
             "{}:distinct_scenarios:{scenario_count}:stability_repetitions_per_pair:{}:zero_cell_guard:{}",
-            contract.corpus_id,
-            facts.trials_per_runtime_scenario,
-            contract.zero_cell_guard_count
+            contract.corpus_id, facts.trials_per_runtime_scenario, contract.zero_cell_guard_count
         ),
         scenario_set: contract.corpus_id.clone(),
         artifact_path: harness.artifact_path.clone(),

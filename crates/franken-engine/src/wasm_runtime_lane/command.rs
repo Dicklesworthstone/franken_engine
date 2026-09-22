@@ -9,8 +9,8 @@ use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
-use crate::module_resolver::{CapabilityPolicyHook, ResolutionContext};
 use super::WasmNativeLoadError;
+use crate::module_resolver::{CapabilityPolicyHook, ResolutionContext};
 
 /// Terminal status and total charged work, including binary startup, `_start`,
 /// host dispatch, replay hashing and bulk/setup work. Normal return means zero.
@@ -22,8 +22,13 @@ pub struct WasmCommandExecution {
 }
 
 type Driver<'vm> = dyn FnMut(
-    NonZeroU64, &ResolutionContext, &CapabilityPolicyHook,
-) -> Result<(u64, Option<u32>), WasmNativeLoadError> + Send + Sync + 'vm;
+        NonZeroU64,
+        &ResolutionContext,
+        &CapabilityPolicyHook,
+    ) -> Result<(u64, Option<u32>), WasmNativeLoadError>
+    + Send
+    + Sync
+    + 'vm;
 
 /// Created only by `WasmNativeModule::prepare_command`. Consuming each resume
 /// prevents reuse after success, failure or provider panic. Dropping/cancelling
@@ -52,10 +57,19 @@ pub enum WasmCommandStep<'vm> {
 impl<'vm> WasmCommandTask<'vm> {
     pub(crate) fn new<F>(driver: F) -> Self
     where
-        F: FnMut(NonZeroU64, &ResolutionContext, &CapabilityPolicyHook)
-            -> Result<(u64, Option<u32>), WasmNativeLoadError> + Send + Sync + 'vm,
+        F: FnMut(
+                NonZeroU64,
+                &ResolutionContext,
+                &CapabilityPolicyHook,
+            ) -> Result<(u64, Option<u32>), WasmNativeLoadError>
+            + Send
+            + Sync
+            + 'vm,
     {
-        Self { driver: Box::new(driver), instructions: 0 }
+        Self {
+            driver: Box::new(driver),
+            instructions: 0,
+        }
     }
 
     /// Advance at most one lifecycle phase with a soft work quantum. A mandatory
@@ -78,13 +92,16 @@ impl<'vm> WasmCommandTask<'vm> {
         self.instructions = instructions;
         match status {
             Some(exit_code) => Ok(WasmCommandStep::Complete(WasmCommandExecution {
-                exit_code, instructions_executed: instructions,
+                exit_code,
+                instructions_executed: instructions,
             })),
             None => Ok(WasmCommandStep::Pending(self)),
         }
     }
 
-    pub fn instructions_executed(&self) -> u64 { self.instructions }
+    pub fn instructions_executed(&self) -> u64 {
+        self.instructions
+    }
 
     pub fn cancel(self) {}
 }

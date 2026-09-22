@@ -47,7 +47,12 @@ impl TablePlan {
         self.records
     }
 
-    fn admit(&mut self, count: usize, other: usize, limits: &WasmNumericLimits) -> Result<(), WasmNumericVmError> {
+    fn admit(
+        &mut self,
+        count: usize,
+        other: usize,
+        limits: &WasmNumericLimits,
+    ) -> Result<(), WasmNumericVmError> {
         let next = self.records.checked_add(count);
         let actual = next.and_then(|next| next.checked_add(other));
         if actual.is_none_or(|actual| actual > limits.max_state_entries) {
@@ -55,13 +60,19 @@ impl TablePlan {
                 resource: "instance state records".into(),
                 actual: actual.map_or(u64::MAX, |actual| actual as u64),
                 max: limits.max_state_entries as u64,
-            }.into());
+            }
+            .into());
         }
         self.records = next.expect("checked table record sum");
         Ok(())
     }
 
-    pub(super) fn parse_tables(&mut self, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits, other: usize) -> Result<(), WasmNumericVmError> {
+    pub(super) fn parse_tables(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+        limits: &WasmNumericLimits,
+        other: usize,
+    ) -> Result<(), WasmNumericVmError> {
         let count = reader.read_u32_leb()? as usize;
         self.admit(count, other, limits)?;
         for _ in 0..count {
@@ -73,12 +84,18 @@ impl TablePlan {
                 return Err(invalid("only unshared table32 limits are supported"));
             }
             let minimum = reader.read_u32_leb()?;
-            let maximum = if flags == 1 { reader.read_u32_leb()? } else { u32::MAX };
+            let maximum = if flags == 1 {
+                reader.read_u32_leb()?
+            } else {
+                u32::MAX
+            };
             if minimum > maximum {
                 return Err(invalid("table minimum exceeds maximum"));
             }
             self.admit(minimum as usize, other, limits)?;
-            self.types.try_reserve(1).map_err(|_| allocation::<TableType>(count))?;
+            self.types
+                .try_reserve(1)
+                .map_err(|_| allocation::<TableType>(count))?;
             self.types.push(TableType { minimum, maximum });
         }
         Ok(())
@@ -89,11 +106,17 @@ impl TablePlan {
     }
 
     fn table(&self, index: u32) -> Result<&TableType, WasmNumericVmError> {
-        self.types.get(index as usize)
+        self.types
+            .get(index as usize)
             .ok_or_else(|| WasmStateError::UnknownTable { table_index: index }.into())
     }
 
-    pub(super) fn parse_elements(&mut self, reader: &mut ByteReader<'_>, limits: &WasmNumericLimits, other: usize) -> Result<(), WasmNumericVmError> {
+    pub(super) fn parse_elements(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+        limits: &WasmNumericLimits,
+        other: usize,
+    ) -> Result<(), WasmNumericVmError> {
         let count = reader.read_u32_leb()? as usize;
         self.admit(count, other, limits)?;
         for _ in 0..count {
@@ -102,12 +125,19 @@ impl TablePlan {
                 return Err(invalid("unsupported element segment mode"));
             }
             let segment_mode = if mode & 1 == 0 {
-                let table = if mode & 2 != 0 { reader.read_u32_leb()? } else { 0 };
+                let table = if mode & 2 != 0 {
+                    reader.read_u32_leb()?
+                } else {
+                    0
+                };
                 self.validate_table(table)?;
                 let WasmBoundaryValue::I32(offset) = numeric_constant(reader)? else {
                     return Err(invalid("element offset must be i32.const"));
                 };
-                ElementMode::Active { table, offset: offset as u32 }
+                ElementMode::Active {
+                    table,
+                    offset: offset as u32,
+                }
             } else if mode & 2 == 0 {
                 ElementMode::Passive
             } else {
@@ -130,7 +160,9 @@ impl TablePlan {
                 return Err(invalid("truncated element vector"));
             }
             let mut entries = Vec::new();
-            entries.try_reserve_exact(length).map_err(|_| allocation::<Option<u32>>(length))?;
+            entries
+                .try_reserve_exact(length)
+                .map_err(|_| allocation::<Option<u32>>(length))?;
             for _ in 0..length {
                 let entry = if mode & 4 == 0 {
                     Some(reader.read_u32_leb()?)
@@ -141,7 +173,9 @@ impl TablePlan {
                             let (heap_type, length) = read_signed_leb(reader.remaining(), 33, 5)?;
                             reader.offset += length;
                             if heap_type != -16 {
-                                return Err(invalid("ref.null initializer must have func heap type"));
+                                return Err(invalid(
+                                    "ref.null initializer must have func heap type",
+                                ));
                             }
                             None
                         }
@@ -154,8 +188,13 @@ impl TablePlan {
                 };
                 entries.push(entry);
             }
-            self.elements.try_reserve(1).map_err(|_| allocation::<ElementSegment>(count))?;
-            self.elements.push(ElementSegment { mode: segment_mode, entries: Arc::new(entries) });
+            self.elements
+                .try_reserve(1)
+                .map_err(|_| allocation::<ElementSegment>(count))?;
+            self.elements.push(ElementSegment {
+                mode: segment_mode,
+                entries: Arc::new(entries),
+            });
         }
         Ok(())
     }
@@ -180,28 +219,39 @@ impl TablePlan {
 
     pub(super) fn instantiate(&self) -> Result<InstanceTables, WasmNumericVmError> {
         for (segment, element) in self.elements.iter().enumerate() {
-            let ElementMode::Active { table, offset } = element.mode else { continue; };
+            let ElementMode::Active { table, offset } = element.mode else {
+                continue;
+            };
             let size = self.table(table)?.minimum;
             if u64::from(offset) + element.entries.len() as u64 > u64::from(size) {
                 return Err(WasmStateError::ElementSegmentOutOfBounds {
-                    segment, table_index: table, offset,
-                    length: element.entries.len(), table_size: size,
-                }.into());
+                    segment,
+                    table_index: table,
+                    offset,
+                    length: element.entries.len(),
+                    table_size: size,
+                }
+                .into());
             }
         }
         let mut tables = Vec::new();
-        tables.try_reserve_exact(self.types.len()).map_err(|_| allocation::<Vec<Option<u32>>>(self.types.len()))?;
+        tables
+            .try_reserve_exact(self.types.len())
+            .map_err(|_| allocation::<Vec<Option<u32>>>(self.types.len()))?;
         for ty in &self.types {
             debug_assert!(ty.minimum <= ty.maximum);
             let mut entries = Vec::new();
-            entries.try_reserve_exact(ty.minimum as usize).map_err(|_| allocation::<Option<u32>>(ty.minimum as usize))?;
+            entries
+                .try_reserve_exact(ty.minimum as usize)
+                .map_err(|_| allocation::<Option<u32>>(ty.minimum as usize))?;
             entries.resize(ty.minimum as usize, None);
             tables.push(entries);
         }
         // Source order matters: later segments replace overlapping entries,
         // including explicit nulls. No guest code runs during initialization.
         let mut elements = Vec::new();
-        elements.try_reserve_exact(self.elements.len())
+        elements
+            .try_reserve_exact(self.elements.len())
             .map_err(|_| allocation::<Option<ElementEntries>>(self.elements.len()))?;
         for element in &self.elements {
             if let ElementMode::Active { table, offset } = element.mode {
@@ -239,26 +289,41 @@ impl InstanceTables {
     }
 
     pub(super) fn size(&self, table_index: u32) -> Result<u32, WasmNumericVmError> {
-        self.tables.get(table_index as usize).map(|table| table.len() as u32)
+        self.tables
+            .get(table_index as usize)
+            .map(|table| table.len() as u32)
             .ok_or_else(|| WasmStateError::UnknownTable { table_index }.into())
     }
 
-    fn range(&self, table_index: u32, offset: u32, length: u32) -> Result<std::ops::Range<usize>, WasmNumericVmError> {
+    fn range(
+        &self,
+        table_index: u32,
+        offset: u32,
+        length: u32,
+    ) -> Result<std::ops::Range<usize>, WasmNumericVmError> {
         let size = self.size(table_index)?;
         let end = u64::from(offset) + u64::from(length);
         if end > u64::from(size) {
             // Report the first invalid element, including a zero-length range
             // starting beyond the end. The addition must never wrap at 2^32.
             return Err(WasmStateError::TableElementOutOfBounds {
-                table_index, element_index: offset.max(size), table_size: size,
-            }.into());
+                table_index,
+                element_index: offset.max(size),
+                table_size: size,
+            }
+            .into());
         }
         Ok(offset as usize..end as usize)
     }
 
     pub(super) fn copy(
-        &mut self, destination_table: u32, source_table: u32,
-        destination: u32, source: u32, length: u32, meter: &mut ExecutionMeter<'_>,
+        &mut self,
+        destination_table: u32,
+        source_table: u32,
+        destination: u32,
+        source: u32,
+        length: u32,
+        meter: &mut ExecutionMeter<'_>,
     ) -> Result<(), WasmNumericVmError> {
         let destination_range = self.range(destination_table, destination, length)?;
         let source_range = self.range(source_table, source, length)?;
@@ -267,25 +332,36 @@ impl InstanceTables {
         // No temporary vector or new callable authority is introduced.
         meter.charge_work(u64::from(length))?;
         if destination_table == source_table {
-            self.tables[destination_table as usize].copy_within(source_range, destination_range.start);
+            self.tables[destination_table as usize]
+                .copy_within(source_range, destination_range.start);
         } else if destination_table < source_table {
             let (before, after) = self.tables.split_at_mut(source_table as usize);
-            before[destination_table as usize][destination_range].copy_from_slice(&after[0][source_range]);
+            before[destination_table as usize][destination_range]
+                .copy_from_slice(&after[0][source_range]);
         } else {
             let (before, after) = self.tables.split_at_mut(destination_table as usize);
-            after[0][destination_range].copy_from_slice(&before[source_table as usize][source_range]);
+            after[0][destination_range]
+                .copy_from_slice(&before[source_table as usize][source_range]);
         }
         Ok(())
     }
 
     pub(super) fn init(
-        &mut self, table: u32, element: u32, destination: u32,
-        source: u32, length: u32, meter: &mut ExecutionMeter<'_>,
+        &mut self,
+        table: u32,
+        element: u32,
+        destination: u32,
+        source: u32,
+        length: u32,
+        meter: &mut ExecutionMeter<'_>,
     ) -> Result<(), WasmNumericVmError> {
         let destination_range = self.range(table, destination, length)?;
-        let entries = self.elements.get(element as usize)
+        let entries = self
+            .elements
+            .get(element as usize)
             .ok_or_else(|| invalid(format!("unknown validated element segment {element}")))?
-            .as_ref().map_or(&[][..], |entries| entries.as_slice());
+            .as_ref()
+            .map_or(&[][..], |entries| entries.as_slice());
         let end = u64::from(source) + u64::from(length);
         if end > entries.len() as u64 {
             // This is the source segment's extent, NOT the destination table
@@ -293,8 +369,10 @@ impl InstanceTables {
             // in the existing structured state-limit error channel.
             return Err(WasmStateError::LimitExceeded {
                 resource: format!("element segment {element} source range"),
-                actual: end, max: entries.len() as u64,
-            }.into());
+                actual: end,
+                max: entries.len() as u64,
+            }
+            .into());
         }
         meter.charge_work(u64::from(length))?;
         self.tables[table as usize][destination_range]
@@ -303,7 +381,9 @@ impl InstanceTables {
     }
 
     pub(super) fn drop_element(&mut self, element: u32) -> Result<(), WasmNumericVmError> {
-        let slot = self.elements.get_mut(element as usize)
+        let slot = self
+            .elements
+            .get_mut(element as usize)
             .ok_or_else(|| invalid(format!("unknown validated element segment {element}")))?;
         // Idempotent and local to this instance. The module's immutable plan
         // and other instances retain their own references. No per-entry walk.
@@ -311,22 +391,43 @@ impl InstanceTables {
         Ok(())
     }
 
-    pub(super) fn resolve(&self, vm: &WasmNumericVm, type_index: u32, table_index: u32, element_index: u32, meter: &mut ExecutionMeter<'_>) -> Result<u32, WasmNumericVmError> {
+    pub(super) fn resolve(
+        &self,
+        vm: &WasmNumericVm,
+        type_index: u32,
+        table_index: u32,
+        element_index: u32,
+        meter: &mut ExecutionMeter<'_>,
+    ) -> Result<u32, WasmNumericVmError> {
         let expected = vm.function_type(type_index)?;
-        let table = self.tables.get(table_index as usize)
+        let table = self
+            .tables
+            .get(table_index as usize)
             .ok_or(WasmStateError::UnknownTable { table_index })?;
-        let callee = table.get(element_index as usize)
+        let callee = table
+            .get(element_index as usize)
             .ok_or(WasmStateError::TableElementOutOfBounds {
-                table_index, element_index, table_size: table.len() as u32,
+                table_index,
+                element_index,
+                table_size: table.len() as u32,
             })?
-            .ok_or(WasmStateError::UninitializedTableElement { table_index, element_index })?;
+            .ok_or(WasmStateError::UninitializedTableElement {
+                table_index,
+                element_index,
+            })?;
         let actual = vm.function_signature(callee)?;
         // Signature equality is structural, not type-index identity. Duplicate
         // type declarations are legal. Charge comparison work before entering
         // any guest callee, using the same meter as direct and recursive calls.
-        meter.charge_work((expected.params.len().saturating_add(expected.results.len()) as u64).div_ceil(64))?;
+        meter.charge_work(
+            (expected.params.len().saturating_add(expected.results.len()) as u64).div_ceil(64),
+        )?;
         if expected.params != actual.params || expected.results != actual.results {
-            return Err(WasmStateError::IndirectCallTypeMismatch { function_index: callee, type_index }.into());
+            return Err(WasmStateError::IndirectCallTypeMismatch {
+                function_index: callee,
+                type_index,
+            }
+            .into());
         }
         Ok(callee)
     }

@@ -27,7 +27,11 @@ pub struct WasmWorkPoolExhausted {
 
 impl fmt::Display for WasmWorkPoolExhausted {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "wasm shared work charge needs {} units, only {} remain", self.requested, self.remaining)
+        write!(
+            f,
+            "wasm shared work charge needs {} units, only {} remain",
+            self.requested, self.remaining
+        )
     }
 }
 
@@ -49,20 +53,38 @@ pub struct WasmWorkPool {
 
 impl WasmWorkPool {
     pub fn new(limit: u64) -> Self {
-        Self { balance: Arc::new(Balance { limit, remaining: AtomicU64::new(limit) }) }
+        Self {
+            balance: Arc::new(Balance {
+                limit,
+                remaining: AtomicU64::new(limit),
+            }),
+        }
     }
 
-    pub fn limit(&self) -> u64 { self.balance.limit }
+    pub fn limit(&self) -> u64 {
+        self.balance.limit
+    }
 
     /// A concurrent observation, not a reservation. Execution must still use
     /// the meter's checked atomic charge before performing its effects.
-    pub fn remaining(&self) -> u64 { self.balance.remaining.load(Ordering::Acquire) }
+    pub fn remaining(&self) -> u64 {
+        self.balance.remaining.load(Ordering::Acquire)
+    }
 
     pub(crate) fn charge(&self, units: u64) -> Result<(), WasmWorkPoolExhausted> {
-        if units == 0 { return Ok(()); }
-        self.balance.remaining.fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-            remaining.checked_sub(units)
-        }).map(|_| ()).map_err(|remaining| WasmWorkPoolExhausted { requested: units, remaining })
+        if units == 0 {
+            return Ok(());
+        }
+        self.balance
+            .remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(units)
+            })
+            .map(|_| ())
+            .map_err(|remaining| WasmWorkPoolExhausted {
+                requested: units,
+                remaining,
+            })
     }
 }
 

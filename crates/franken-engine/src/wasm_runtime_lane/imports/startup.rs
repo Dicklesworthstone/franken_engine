@@ -28,8 +28,12 @@ impl WasmNativeModule {
     ) -> Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError> {
         self.authorize(context, policy)?;
         imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
-        imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
-        Ok(super::super::wasi_preview1::run_command_with_outcome(&self.vm, imports)?)
+        imports
+            .bind_module(self.resolution.module.content_hash)
+            .map_err(WasmNumericVmError::from)?;
+        Ok(super::super::wasi_preview1::run_command_with_outcome(
+            &self.vm, imports,
+        )?)
     }
 
     /// Create a lazy, executor-driven instantiation with no host services.
@@ -56,9 +60,14 @@ impl WasmNativeModule {
     ) -> impl Future<Output = Result<WasmNativeInstance<'vm>, WasmNativeLoadError>> + Send + 'vm
     where
         P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError>
-            + Send + 'vm,
+            + Send
+            + 'vm,
     {
-        guarded_startup(self, move || Ok(self.vm.instantiate_cooperatively(work)), current_policy)
+        guarded_startup(
+            self,
+            move || Ok(self.vm.instantiate_cooperatively(work)),
+            current_policy,
+        )
     }
 
     /// Cooperative startup with explicit providers, narrowed to the pinned
@@ -80,18 +89,30 @@ impl WasmNativeModule {
     ) -> impl Future<Output = Result<WasmNativeInstance<'vm>, WasmNativeLoadError>> + Send + 'vm
     where
         P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError>
-            + Send + 'vm,
+            + Send
+            + 'vm,
     {
-        guarded_startup(self, move || {
-            let mut imports = imports;
-            imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
-            imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
-            Ok(self.vm.instantiate_cooperatively_with_imports(imports, work))
-        }, current_policy)
+        guarded_startup(
+            self,
+            move || {
+                let mut imports = imports;
+                imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
+                imports
+                    .bind_module(self.resolution.module.content_hash)
+                    .map_err(WasmNumericVmError::from)?;
+                Ok(self
+                    .vm
+                    .instantiate_cooperatively_with_imports(imports, work))
+            },
+            current_policy,
+        )
     }
 }
 
-fn authorize_current<P>(module: &WasmNativeModule, reader: &mut P) -> Result<(), WasmNativeLoadError>
+fn authorize_current<P>(
+    module: &WasmNativeModule,
+    reader: &mut P,
+) -> Result<(), WasmNativeLoadError>
 where
     P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError>,
 {
@@ -107,13 +128,18 @@ fn guarded_startup<'vm, F, C, P>(
 where
     F: Future<Output = Result<WasmNumericInstance<'vm>, WasmNumericVmError>> + Unpin + Send + 'vm,
     C: FnOnce() -> Result<F, WasmNativeLoadError> + Send + 'vm,
-    P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError> + Send + 'vm,
+    P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError>
+        + Send
+        + 'vm,
 {
     let mut create = Some(create);
     let mut active: Option<F> = None;
     let mut finished = false;
     poll_fn(move |cx| {
-        assert!(!finished, "resolved startup polled after completion or panic");
+        assert!(
+            !finished,
+            "resolved startup polled after completion or panic"
+        );
         // A panic in a policy reader, provider or waker cannot make a partially
         // consumed host callback resumable after catch_unwind and another poll.
         finished = true;
@@ -182,15 +208,27 @@ impl WasmNativeModule {
         super::super::scheduler::WasmStartupTask::new(move |work, context, policy| {
             self.authorize(context, policy)?;
             if driver.is_none() {
-                let mut imports = pending_imports.take().expect("unstarted scheduled initialization");
+                let mut imports = pending_imports
+                    .take()
+                    .expect("unstarted scheduled initialization");
                 if let Some(imports) = imports.as_mut() {
-                    imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
-                    imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+                    imports.restrict_capabilities(
+                        &self.resolution.module.record.required_capabilities,
+                    );
+                    imports
+                        .bind_module(self.resolution.module.content_hash)
+                        .map_err(WasmNumericVmError::from)?;
                 }
                 driver = Some(self.vm.cooperative_startup_driver(imports));
             }
             let (instructions, instance) = driver.as_mut().expect("prepared startup driver")(work)?;
-            Ok((instructions, instance.map(|instance| WasmNativeInstance { module: self, instance })))
+            Ok((
+                instructions,
+                instance.map(|instance| WasmNativeInstance {
+                    module: self,
+                    instance,
+                }),
+            ))
         })
     }
 }
@@ -218,10 +256,14 @@ impl WasmNativeModule {
         imports: WasmHostImports,
         work: NonZeroU64,
         mut current_policy: P,
-    ) -> impl Future<Output = Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError>> + Send + 'vm
+    ) -> impl Future<
+        Output = Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError>,
+    > + Send
+    + 'vm
     where
         P: FnMut() -> Result<(ResolutionContext, CapabilityPolicyHook), WasmNativeLoadError>
-            + Send + 'vm,
+            + Send
+            + 'vm,
     {
         use super::super::wasi_preview1::{WasiCommandOutcome, WasiCommandPhase};
         let command = async move {
@@ -229,21 +271,31 @@ impl WasmNativeModule {
             self.validate_command_entry()?;
             let mut imports = imports;
             imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
-            imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+            imports
+                .bind_module(self.resolution.module.content_hash)
+                .map_err(WasmNumericVmError::from)?;
             let startup = {
-                let mut future = self.vm.instantiate_cooperatively_with_imports(imports, work);
+                let mut future = self
+                    .vm
+                    .instantiate_cooperatively_with_imports(imports, work);
                 poll_fn(|cx| {
                     if let Err(error) = authorize_current(self, &mut current_policy) {
                         return Poll::Ready(Err(error));
                     }
                     match Pin::new(&mut future).poll(cx) {
                         Poll::Pending => Poll::Pending,
-                        Poll::Ready(result) => Poll::Ready(result.map_err(WasmNativeLoadError::from)),
+                        Poll::Ready(result) => {
+                            Poll::Ready(result.map_err(WasmNativeLoadError::from))
+                        }
                     }
-                }).await
+                })
+                .await
             };
             let mut instance = match startup {
-                Ok(instance) => WasmNativeInstance { module: self, instance },
+                Ok(instance) => WasmNativeInstance {
+                    module: self,
+                    instance,
+                },
                 Err(error) => {
                     // Ordinary failures keep precedence. Only a genuine exit
                     // reaches the final fresh-policy publication check.
@@ -256,11 +308,14 @@ impl WasmNativeModule {
             let startup_metrics = instance.instance.start_execution().cloned();
             let mut yielded = false;
             poll_fn(|cx| {
-                if yielded { return Poll::Ready(()); }
+                if yielded {
+                    return Poll::Ready(());
+                }
                 yielded = true;
                 cx.waker().wake_by_ref();
                 Poll::Pending
-            }).await;
+            })
+            .await;
 
             let outcome = {
                 let (context, policy) = current_policy()?;
@@ -268,7 +323,10 @@ impl WasmNativeModule {
                 poll_fn(|cx| {
                     let (context, policy) = match current_policy() {
                         Ok(snapshot) => snapshot,
-                        Err(error) => { pending = None; return Poll::Ready(Err(error)); }
+                        Err(error) => {
+                            pending = None;
+                            return Poll::Ready(Err(error));
+                        }
                     };
                     let call = pending.take().expect("unfinished command entry");
                     match call.resume(work, &context, &policy) {
@@ -280,10 +338,14 @@ impl WasmNativeModule {
                         Ok(WasmNativeCallStep::Complete(execution)) => Poll::Ready(Ok(execution)),
                         Err(error) => Poll::Ready(Err(error)),
                     }
-                }).await
+                })
+                .await
             };
             let outcome = match outcome {
-                Ok(execution) => WasiCommandOutcome::Returned { startup: startup_metrics, execution },
+                Ok(execution) => WasiCommandOutcome::Returned {
+                    startup: startup_metrics,
+                    execution,
+                },
                 Err(error) => command_exit(error, WasiCommandPhase::Command)?,
             };
             // In particular, a final provider may revoke policy and then exit.
@@ -297,8 +359,16 @@ impl WasmNativeModule {
             assert!(!finished, "command future polled after completion or panic");
             // Also covers a panicking policy reader, callback or executor waker.
             finished = true;
-            match active.as_mut().expect("unfinished command").as_mut().poll(cx) {
-                Poll::Pending => { finished = false; Poll::Pending }
+            match active
+                .as_mut()
+                .expect("unfinished command")
+                .as_mut()
+                .poll(cx)
+            {
+                Poll::Pending => {
+                    finished = false;
+                    Poll::Pending
+                }
                 Poll::Ready(result) => {
                     active = None; // Release private instance/providers now.
                     Poll::Ready(result)
@@ -312,7 +382,8 @@ impl WasmNativeModule {
         if !signature.params.is_empty() || !signature.results.is_empty() {
             return Err(WasmNumericVmError::InvalidModule {
                 detail: "WASI command _start must have no parameters or results".into(),
-            }.into());
+            }
+            .into());
         }
         Ok(())
     }
@@ -324,9 +395,9 @@ fn command_exit(
 ) -> Result<super::super::wasi_preview1::WasiCommandOutcome, WasmNativeLoadError> {
     use super::super::numeric::{WasmHostError, WasmStateError};
     match error {
-        WasmNativeLoadError::Execution(WasmNumericVmError::State(
-            WasmStateError::Host(WasmHostError::ProcessExit { code }),
-        )) => Ok(super::super::wasi_preview1::WasiCommandOutcome::Exited { code, phase }),
+        WasmNativeLoadError::Execution(WasmNumericVmError::State(WasmStateError::Host(
+            WasmHostError::ProcessExit { code },
+        ))) => Ok(super::super::wasi_preview1::WasiCommandOutcome::Exited { code, phase }),
         error => Err(error),
     }
 }
@@ -349,7 +420,9 @@ impl WasmNativeModule {
             if driver.is_none() {
                 let mut imports = pending_imports.take().expect("unstarted command");
                 imports.restrict_capabilities(&self.resolution.module.record.required_capabilities);
-                imports.bind_module(self.resolution.module.content_hash).map_err(WasmNumericVmError::from)?;
+                imports
+                    .bind_module(self.resolution.module.content_hash)
+                    .map_err(WasmNumericVmError::from)?;
                 driver = Some(self.vm.cooperative_command_driver(imports));
             }
             Ok(driver.as_mut().expect("prepared command driver")(work)?)

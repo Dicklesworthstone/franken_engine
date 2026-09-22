@@ -102,9 +102,8 @@ fn explicit_v2_verification_succeeds() {
     let test_dir = TestDir::new("verify-v2");
     let mut request = policy_request("verify");
     request["version"] = Value::from("sha256_v2");
-    request["expected_object_id_hex"] = Value::from(
-        "cdc31ac7ad5b4d68d7cbdae29179b3230608bd13afdfc641f2e1a4273913b545",
-    );
+    request["expected_object_id_hex"] =
+        Value::from("cdc31ac7ad5b4d68d7cbdae29179b3230608bd13afdfc641f2e1a4273913b545");
     let output = run_request(&test_dir, &request);
     assert!(output.status.success());
     let response: Value = serde_json::from_slice(&output.stdout).expect("parse response");
@@ -118,9 +117,8 @@ fn verification_never_falls_back_to_another_version() {
     let test_dir = TestDir::new("no-fallback");
     let mut request = policy_request("verify");
     request["version"] = Value::from("legacy_v1");
-    request["expected_object_id_hex"] = Value::from(
-        "cdc31ac7ad5b4d68d7cbdae29179b3230608bd13afdfc641f2e1a4273913b545",
-    );
+    request["expected_object_id_hex"] =
+        Value::from("cdc31ac7ad5b4d68d7cbdae29179b3230608bd13afdfc641f2e1a4273913b545");
     let output = run_request(&test_dir, &request);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());
@@ -166,8 +164,8 @@ fn output_file_is_complete_json_and_stdout_remains_empty() {
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
-    let response: Value = serde_json::from_slice(&fs::read(output_path).expect("read result"))
-        .expect("parse result");
+    let response: Value =
+        serde_json::from_slice(&fs::read(output_path).expect("read result")).expect("parse result");
     assert_eq!(response["status"], "ok");
 }
 

@@ -3378,9 +3378,11 @@ impl ExecutionOrchestrator {
 
         let mut quickjs_config =
             InterpreterConfig::deterministic_from_config(&self.runtime_config.execution);
-        quickjs_config.instruction_budget = quickjs_config.instruction_budget.min(instruction_budget);
-        quickjs_config.max_total_memory_bytes =
-            quickjs_config.max_total_memory_bytes.min(memory_budget_bytes);
+        quickjs_config.instruction_budget =
+            quickjs_config.instruction_budget.min(instruction_budget);
+        quickjs_config.max_total_memory_bytes = quickjs_config
+            .max_total_memory_bytes
+            .min(memory_budget_bytes);
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
@@ -3392,7 +3394,8 @@ impl ExecutionOrchestrator {
         let mut v8_config =
             InterpreterConfig::throughput_from_config(&self.runtime_config.execution);
         v8_config.instruction_budget = v8_config.instruction_budget.min(instruction_budget);
-        v8_config.max_total_memory_bytes = v8_config.max_total_memory_bytes.min(memory_budget_bytes);
+        v8_config.max_total_memory_bytes =
+            v8_config.max_total_memory_bytes.min(memory_budget_bytes);
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
@@ -5495,13 +5498,14 @@ mod tests {
                 LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
                 LaneChoice::V8 => InterpreterConfig::v8_defaults(),
             };
-            let router = ExecutionOrchestrator::with_defaults().lane_router_for_execution(
-                &package,
-                Some(&cancellation),
-                defaults.instruction_budget,
-                defaults.max_total_memory_bytes,
-            )
-            .expect("lane router should build for the cancel-loop package");
+            let router = ExecutionOrchestrator::with_defaults()
+                .lane_router_for_execution(
+                    &package,
+                    Some(&cancellation),
+                    defaults.instruction_budget,
+                    defaults.max_total_memory_bytes,
+                )
+                .expect("lane router should build for the cancel-loop package");
             let error = router
                 .execute(&module, "bd-61y6z-trace", Some(lane))
                 .expect_err("the cancelled jump loop must drain");
@@ -5518,13 +5522,9 @@ mod tests {
         module.instructions.push(Ir3Instruction::Jump { target: 0 });
 
         for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-            let router = ExecutionOrchestrator::with_defaults().lane_router_for_execution(
-                &package,
-                None,
-                3,
-                64 * 1024 * 1024,
-            )
-            .expect("authority-limited lane router should build");
+            let router = ExecutionOrchestrator::with_defaults()
+                .lane_router_for_execution(&package, None, 3, 64 * 1024 * 1024)
+                .expect("authority-limited lane router should build");
             let instruction_limited = router
                 .execute(&module, "cell-budget-trace", Some(lane))
                 .expect_err("three-instruction authority limit must stop the loop");
@@ -5537,14 +5537,11 @@ mod tests {
                 "lane {lane} must enforce the authority-provided instruction limit"
             );
 
-            let memory_limited =
-                ExecutionOrchestrator::with_defaults()
-                    .lane_router_for_execution(&package, None, 10_000, 1)
-                    .expect("memory-limited lane router should build")
-                    .execute(&module, "cell-memory-trace", Some(lane))
-                    .expect_err(
-                        "one-byte authority limit must refuse interpreter memory admission",
-                    );
+            let memory_limited = ExecutionOrchestrator::with_defaults()
+                .lane_router_for_execution(&package, None, 10_000, 1)
+                .expect("memory-limited lane router should build")
+                .execute(&module, "cell-memory-trace", Some(lane))
+                .expect_err("one-byte authority limit must refuse interpreter memory admission");
             assert!(
                 matches!(
                     memory_limited,

@@ -3,13 +3,11 @@
 use frankenengine_engine::capability_token::PrincipalId;
 use frankenengine_engine::engine_object_id::ObjectIdDerivationVersion;
 use frankenengine_engine::principal_key_roles::{
-    verify_legacy_owner_key_bundle_strict, EncryptionPublicKey, OwnerKeyBundle, OwnerKeyBundleV2,
-    OwnerKeyBundleV2Error,
+    EncryptionPublicKey, OwnerKeyBundle, OwnerKeyBundleV2, OwnerKeyBundleV2Error,
+    verify_legacy_owner_key_bundle_strict,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{
-    sign_preimage, SignaturePreimage, SigningKey,
-};
+use frankenengine_engine::signature_preimage::{SignaturePreimage, SigningKey, sign_preimage};
 
 fn key(seed: u8) -> SigningKey {
     SigningKey::from_bytes([seed; 32]).expect("valid deterministic test key")

@@ -389,6 +389,8 @@ class Comparator:
                 "unauthorized flow detected",
                 "capability denied:",
                 "ambient authority denied",
+                "ambient authority violation",
+                "ambient authority",
             )
             if result.exit_code != 0 and any(marker in combined for marker in denial_markers):
                 disposition = Disposition(False, "frankenengine.explicit_policy_denial")

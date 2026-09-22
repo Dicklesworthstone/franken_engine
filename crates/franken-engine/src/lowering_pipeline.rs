@@ -28690,11 +28690,126 @@ fn simulate_ir2_flow_labels(
     Ok((inferred_labels, bindings_changed, catch_entry_store_indexes))
 }
 
+/// Sound upper bound on every IFC label a value, thrown exception, binding,
+/// or catch parameter can carry while this lowering unit executes
+/// (bd-9vouw.1).
+///
+/// The flow simulation fails high (`TopSecret`) wherever it cannot summarize
+/// provenance: unsummarized callees, unaudited method calls, guest-throwable
+/// operations. That is sound but made ordinary programs with no sensitive
+/// source at all unrunnable (`console.log(Math.max(1, 2))`, closure calls,
+/// recursion). Fail-high only has to cover information that could actually
+/// exist, and every label above the simulator's engine floors enters a
+/// program through one of the operations enumerated here:
+///
+/// - literals, via [`infer_data_label_for_op`] (including its sensitive-keyword
+///   heuristic);
+/// - HostCall results, via the shared result contract registry;
+/// - HostCall exceptions that can carry host-originated data (provider-backed
+///   authorities under unauthenticated provenance, native crypto failures);
+/// - code this IR does not contain (`ImportModule`, `module:require`,
+///   `module:import`), which may perform its own effects.
+///
+/// Every other operation computes from its operands or from engine-owned
+/// state at or below `Internal`. Function bodies are embedded as `body_ops`
+/// and are walked recursively. Runtime-compiled `Function` source is lowered
+/// again under the same deny-all ambient-authority policy (eval, env, and
+/// ambient require stay denied), which is the same trust assumption the
+/// simulation already makes when it summarizes `FunctionConstructor` results.
+///
+/// Clamping every annotation to this bound therefore cannot admit a flow of
+/// information that the program is able to hold. Programs that do touch a
+/// sensitive source keep today's per-operation precision below the bound.
+fn ir2_flow_label_ceiling(
+    ops: &[Ir2Op],
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> Label {
+    let mut ceiling = Label::Internal;
+    for op in ops {
+        accumulate_ir1_flow_label_ceiling(&op.inner, host_io_exception_provenance, &mut ceiling);
+    }
+    ceiling
+}
+
+fn accumulate_ir1_flow_label_ceiling(
+    op: &Ir1Op,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    ceiling: &mut Label,
+) {
+    if *ceiling == Label::TopSecret {
+        return;
+    }
+    let contribution = match op {
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            for inner in body_ops {
+                accumulate_ir1_flow_label_ceiling(inner, host_io_exception_provenance, ceiling);
+            }
+            return;
+        }
+        Ir1Op::LoadLiteral { .. } => {
+            infer_data_label_for_op(op, &BTreeMap::new(), Label::Public)
+        }
+        Ir1Op::ImportModule { .. } => Label::TopSecret,
+        Ir1Op::HostCall { capability, .. } => {
+            hostcall_flow_label_ceiling(capability, host_io_exception_provenance)
+        }
+        _ => return,
+    };
+    *ceiling = ceiling.join(&contribution);
+}
+
+/// Highest label one HostCall can introduce: its result contract applied to
+/// public operands, joined with whatever its exceptional completion can carry
+/// from outside the program.
+fn hostcall_flow_label_ceiling(
+    capability: &str,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> Label {
+    use crate::capability::{RuntimeCapability, hostcall_registry_row};
+
+    // Loading a module executes code this IR does not contain.
+    if matches!(
+        capability,
+        "module:require" | "module:import" | "module.import" | "module_load"
+    ) {
+        return Label::TopSecret;
+    }
+    let Some(row) = hostcall_registry_row(capability) else {
+        return Label::TopSecret;
+    };
+    let result_label = row.result_contract.result_label(&Label::Public, None);
+    // Native crypto failures are rethrown with a fail-high label at runtime.
+    if capability.starts_with("builtin:Crypto") {
+        return Label::TopSecret;
+    }
+    let exception_label = match row.authority {
+        None
+        | Some(
+            RuntimeCapability::Console
+            | RuntimeCapability::Timer
+            | RuntimeCapability::Builtin
+            | RuntimeCapability::VmDispatch
+            | RuntimeCapability::GcInvoke
+            | RuntimeCapability::IrLowering
+            | RuntimeCapability::HeapAllocate
+            | RuntimeCapability::EvidenceEmit
+            | RuntimeCapability::DecisionInvoke
+            | RuntimeCapability::IdempotencyDerive,
+        ) => Label::Internal,
+        Some(_) => match host_io_exception_provenance {
+            HostIoExceptionProvenance::ProviderInternal => Label::Internal,
+            HostIoExceptionProvenance::Unknown => Label::TopSecret,
+        },
+    };
+    result_label.join(&exception_label)
+}
+
 fn infer_ir2_flow_annotations(
     ir2: &mut Ir2Module,
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<FlowInferenceMetrics, LoweringPipelineError> {
     const MAX_FLOW_INFERENCE_PASSES: usize = 16;
+    let flow_label_ceiling = ir2_flow_label_ceiling(&ir2.ops, host_io_exception_provenance);
 
     let mut binding_labels = BTreeMap::<BindingId, Label>::new();
     let catch_region_events = ir2_catch_region_events(&ir2.ops)?;
@@ -28744,8 +28859,13 @@ fn infer_ir2_flow_annotations(
     let (catch_region_starts, catch_region_ends, _) = &catch_region_events;
     let mut active_catch_regions = Vec::<u32>::new();
 
-    for (op_index, (op, inferred_data_label)) in ir2.ops.iter_mut().zip(inferred_labels).enumerate()
+    for (op_index, (op, simulated_data_label)) in
+        ir2.ops.iter_mut().zip(inferred_labels).enumerate()
     {
+        // No operation can hold information above what the program is able
+        // to introduce (see `ir2_flow_label_ceiling`); fail-high defaults stop
+        // at that bound instead of at `TopSecret`.
+        let inferred_data_label = simulated_data_label.meet(&flow_label_ceiling);
         if let Some(ending) = catch_region_ends.get(&op_index) {
             for catch_label in ending {
                 if active_catch_regions.pop().as_ref() != Some(catch_label) {

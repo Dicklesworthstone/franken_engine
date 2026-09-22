@@ -207,11 +207,9 @@ fn test_net_connect_effect() {
     };
 
     assert_eq!(Effect::effect_name(&effect), "net:connect");
-    assert!(
-        Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::NetworkEgress)
-    );
+    assert!(Effect::required_capabilities(&effect)
+        .runtime_caps
+        .contains(&RuntimeCapability::NetworkEgress));
 
     let params = Effect::parameters(&effect);
     let (host, port, timeout) = params.downcast_ref::<(String, u16, Option<u64>)>().unwrap();
@@ -242,11 +240,9 @@ fn test_proc_spawn_effect() {
     };
 
     assert_eq!(Effect::effect_name(&effect), "proc:spawn");
-    assert!(
-        Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::ProcessSpawn)
-    );
+    assert!(Effect::required_capabilities(&effect)
+        .runtime_caps
+        .contains(&RuntimeCapability::ProcessSpawn));
 
     let params = Effect::parameters(&effect);
     let request = params.downcast_ref::<ProcessSpawnRequest>().unwrap();
@@ -279,11 +275,9 @@ fn test_policy_request_effect() {
     };
 
     assert_eq!(Effect::effect_name(&effect), "policy:request");
-    assert!(
-        Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::PolicyRead)
-    );
+    assert!(Effect::required_capabilities(&effect)
+        .runtime_caps
+        .contains(&RuntimeCapability::PolicyRead));
 
     let params = Effect::parameters(&effect);
     let (query, ctx) = params
@@ -336,11 +330,9 @@ fn test_builtin_effect() {
     };
 
     assert_eq!(Effect::effect_name(&effect), "builtin:call");
-    assert!(
-        Effect::required_capabilities(&effect)
-            .runtime_caps
-            .contains(&RuntimeCapability::VmDispatch)
-    );
+    assert!(Effect::required_capabilities(&effect)
+        .runtime_caps
+        .contains(&RuntimeCapability::VmDispatch));
 
     let params = Effect::parameters(&effect);
     let (name, args) = params
@@ -500,11 +492,9 @@ fn test_capability_requirements() {
         timeout_ms: None,
     };
     let net_caps = Effect::required_capabilities(&net_effect);
-    assert!(
-        net_caps
-            .runtime_caps
-            .contains(&RuntimeCapability::NetworkEgress)
-    );
+    assert!(net_caps
+        .runtime_caps
+        .contains(&RuntimeCapability::NetworkEgress));
 
     // Policy effects require PolicyRead capability
     let policy_effect = PolicyRequestEffect {
@@ -512,11 +502,9 @@ fn test_capability_requirements() {
         context: BTreeMap::new(),
     };
     let policy_caps = Effect::required_capabilities(&policy_effect);
-    assert!(
-        policy_caps
-            .runtime_caps
-            .contains(&RuntimeCapability::PolicyRead)
-    );
+    assert!(policy_caps
+        .runtime_caps
+        .contains(&RuntimeCapability::PolicyRead));
 
     // Builtin effects require VmDispatch capability
     let builtin_effect = BuiltinEffect {
@@ -524,11 +512,9 @@ fn test_capability_requirements() {
         args: vec![],
     };
     let builtin_caps = Effect::required_capabilities(&builtin_effect);
-    assert!(
-        builtin_caps
-            .runtime_caps
-            .contains(&RuntimeCapability::VmDispatch)
-    );
+    assert!(builtin_caps
+        .runtime_caps
+        .contains(&RuntimeCapability::VmDispatch));
 }
 
 /// Test migration adapter round-trip for console operations.
@@ -644,8 +630,7 @@ fn test_effect_set_operations() {
 /// Test circular dependency detection.
 #[test]
 fn test_circular_dependency_detection() {
-    let mut stack =
-        HandlerStack::with_dependency_path(vec!["console:log".to_string()]);
+    let mut stack = HandlerStack::with_dependency_path(vec!["console:log".to_string()]);
 
     // Create an effect that matches an entry in the dependency path
     let effect = ConsoleEffect {

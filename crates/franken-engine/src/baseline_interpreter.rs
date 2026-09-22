@@ -41857,7 +41857,12 @@ impl InterpreterCore {
 
             match instr.expect("Tier-R dispatch owns the cloned source instruction") {
                 Ir3Instruction::LoadInt { dst, value } => {
-                    self.write_reg(dst, Value::Int(value))?;
+                    let val = if value >= MIN_SAFE_INTEGER && value <= MAX_SAFE_INTEGER {
+                        Value::Int(value)
+                    } else {
+                        Value::Float(Float64::new(value as f64))
+                    };
+                    self.write_reg(dst, val)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadBigInt { dst, value } => {
@@ -45524,7 +45529,13 @@ impl InterpreterCore {
         match instruction.opcode {
             Op::Baseline => unreachable!("baseline cells never enter compact dispatch"),
             Op::LoadInt => {
-                self.write_reg(dst, Value::Int(instruction.payload as i64))?;
+                let value = instruction.payload as i64;
+                let val = if value >= MIN_SAFE_INTEGER && value <= MAX_SAFE_INTEGER {
+                    Value::Int(value)
+                } else {
+                    Value::Float(Float64::new(value as f64))
+                };
+                self.write_reg(dst, val)?;
                 self.ip += 1;
             }
             Op::LoadFloat => {

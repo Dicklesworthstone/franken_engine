@@ -7,5 +7,11 @@ target-*/
 .cargo-target-*/
 .codex-target*/
 hierarchical-delta-review/
+artifacts/
+proofs/
+legacy_v8/
+legacy_quickjs/
+.doctor/
+.claude/
 .git/refs/remotes/
 .git/refs/remotes/**

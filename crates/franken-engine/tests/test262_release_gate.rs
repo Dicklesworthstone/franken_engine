@@ -121,6 +121,23 @@ fn load_waivers() -> Test262WaiverSet {
     waivers
 }
 
+/// The checked-in waiver file carries no waivers the release policy accepts
+/// for these vectors (bd-9vouw.4 removed its not_yet_implemented and expired
+/// entries), so tests of waived-failure handling declare a policy-legal
+/// host-inapplicability waiver of their own.
+fn load_waivers_with_host_hook_waiver(test_id: &str, es2020_clause: &str) -> Test262WaiverSet {
+    let mut waivers = load_waivers();
+    waivers.waivers.push(Test262Waiver {
+        test_id: test_id.to_string(),
+        reason_code: Test262WaiverReason::HostHookMissing,
+        es2020_clause: es2020_clause.to_string(),
+        tracking_bead: "bd-9vouw.4".to_string(),
+        expiry_date: "2030-12-31".to_string(),
+        reviewer: "runtime-conformance".to_string(),
+    });
+    waivers
+}
+
 #[test]
 fn fixture_files_parse_and_validate() {
     let _ = load_profile();
@@ -203,18 +220,10 @@ fn zero_silent_failures_block_unwaived_test() {
 fn active_waiver_allows_failures_without_blocking() {
     let profile = load_profile();
     let pins = load_pins();
-    // bd-9vouw.4: the checked-in waiver file no longer carries a
-    // not_yet_implemented waiver (forbidden by the release policy), so this
-    // test declares its own host-inapplicability waiver.
-    let mut waivers = load_waivers();
-    waivers.waivers.push(Test262Waiver {
-        test_id: "language/expressions/optional-chaining/short-circuiting.js".to_string(),
-        reason_code: Test262WaiverReason::HostHookMissing,
-        es2020_clause: "13.3.1".to_string(),
-        tracking_bead: "bd-9vouw.4".to_string(),
-        expiry_date: "2030-12-31".to_string(),
-        reviewer: "runtime-conformance".to_string(),
-    });
+    let waivers = load_waivers_with_host_hook_waiver(
+        "language/expressions/optional-chaining/short-circuiting.js",
+        "13.3.1",
+    );
 
     let run = runner("2026-02-22", false)
         .run(
@@ -745,10 +754,15 @@ fn compatibility_artifact_validates_checked_in_observed_results() {
     )
     .expect("compatibility artifact");
 
+    // bd-9vouw.4: the short-circuiting vector used to be absorbed by a
+    // not_yet_implemented waiver, which the release policy no longer accepts,
+    // so it now counts as a blocking failure.
+    assert!(run.blocked);
     assert_eq!(artifact.denominator, 3);
     assert_eq!(artifact.passed, 2);
-    assert_eq!(artifact.waived, 1);
-    assert_eq!(artifact.failed, 0);
+    assert_eq!(artifact.waived, 0);
+    assert_eq!(artifact.failed, 1);
+    assert_eq!(artifact.blocked_failures, 1);
     assert_eq!(artifact.pass_rate_millionths, 666_666);
     assert!(!artifact.full_suite_claim_allowed);
     assert_eq!(
@@ -1568,7 +1582,10 @@ fn waived_crash_does_not_block() {
 fn waived_failure_log_has_waived_error_code() {
     let profile = load_profile();
     let pins = load_pins();
-    let waivers = load_waivers();
+    let waivers = load_waivers_with_host_hook_waiver(
+        "language/expressions/optional-chaining/short-circuiting.js",
+        "13.3.1",
+    );
 
     let run = runner("2026-02-22", false)
         .run(

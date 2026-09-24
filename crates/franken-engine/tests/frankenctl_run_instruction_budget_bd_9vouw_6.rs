@@ -98,6 +98,33 @@ fn run_with_instruction_budget_executes_loop_and_replays_strictly_bd_9vouw_6() {
         "strict replay of a budgeted run failed: {}",
         stderr_of(&replay)
     );
+
+    // NEGATIVE: replaying under a different budget than the one recorded must
+    // not reproduce the run silently.
+    let mut tampered_json = report_json.clone();
+    tampered_json["replay_input"]["instruction_budget"] = serde_json::json!(1000);
+    let tampered = dir.join("loop.tampered.json");
+    fs::write(
+        &tampered,
+        serde_json::to_vec_pretty(&tampered_json).expect("serialize tampered report"),
+    )
+    .expect("write tampered report");
+    let tampered_replay = frankenctl(&[
+        "replay",
+        "run",
+        "--trace",
+        utf8(&tampered),
+        "--mode",
+        "strict",
+        "--out",
+        utf8(&dir.join("loop.tampered.replay.json")),
+    ]);
+    assert!(
+        !tampered_replay.status.success(),
+        "strict replay under a different budget must be reported, stdout: {} stderr: {}",
+        String::from_utf8_lossy(&tampered_replay.stdout),
+        stderr_of(&tampered_replay)
+    );
 }
 
 #[test]

@@ -39,8 +39,11 @@ fi
 
 # Run the example and capture output
 echo "🔍 Running guardplane decision analysis..."
-example_output="$("$target_dir/release/examples/live_guardplane_decision_example" 2>&1 || true)"
-example_exit_code=$?
+# Capture the example's real exit status (bd-9vouw.9): `$(... || true)` followed
+# by `$?` always read 0, so a crashing example passed on string matches alone.
+example_exit_code=0
+example_output="$("$target_dir/release/examples/live_guardplane_decision_example" 2>&1)" \
+    || example_exit_code=$?
 
 echo "📊 Example output:"
 echo "$example_output"

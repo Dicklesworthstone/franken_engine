@@ -1534,7 +1534,7 @@ If you only learn these seven, you can produce a complete signed artifact bundle
 | `frankenctl version` | Print CLI schema and binary version. |
 | `frankenctl help [COMMAND]` | Top-level help navigation, including nested subcommand help. |
 | `frankenctl compile --input <path> --out <path> [--goal script\|module] [--trace-id …] [--decision-id …] [--policy-id …] [--generated-unix-ns …]` | Parse and lower source into a versioned compile artifact. |
-| `frankenctl run --input <path> --extension-id <id> [--goal …] [--out <path>]` | Execute source through the orchestrator and emit an execution report. |
+| `frankenctl run --input <path> --extension-id <id> [--goal …] [--instruction-budget <n>] [--out <path>]` | Execute source through the orchestrator and emit an execution report. The default instruction budget is the 100,000-instruction containment default; `--instruction-budget` (1 to 10,000,000,000) raises it for ordinary programs, is recorded in the report's `replay_input`, and is reused by `replay run`. |
 | `frankenctl check <file> [--goal script\|module] [--format human\|json] [--out <dir>]` | Static authority footprint for one file: minimal required capabilities + ambient-authority/IFC findings (`FE-CAP-0001/0002/0003`). |
 | `frankenctl onboard <pkg-dir\|entry> [--root <dir>] [--goal module\|script] [--format human\|json] [--out <dir>]` | Package-level capability/IFC intake: manifest, least-authority capability profile, denied-ambient list, IFC inventory, per-compatibility-mode resolution. |
 | `frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir …] [--workload-id …] [--package-name …] [--target-platform …] [--signals …] [--advisories …] [--redact-key …] …` | Analyze runtime diagnostics input and emit operator artifacts. |

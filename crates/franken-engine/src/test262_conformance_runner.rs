@@ -12,6 +12,18 @@
 //!
 //! The differential harness executes through the native eval path and compares
 //! captured console output against reference-engine golden fixtures.
+//!
+//! # Not the conformance authority (bd-9vouw.4)
+//!
+//! This runner measures *execution coverage* for the coverage frontier and the
+//! ES2020 coverage-summary bundle (`coverage_frontier`, `coverage_summary`,
+//! FE-CLAIM-026). Its [`TestResult::Pass`] means "evaluated without an engine
+//! error" for positive fixtures and "raised any error" for negative fixtures:
+//! assertions are not checked, harness includes are not preloaded, and the
+//! negative phase and error constructor are not compared. Its counts must never
+//! be reported as a Test262 conformance pass rate. The single conformance
+//! authority is `franken_test262_runner` feeding `test262_release_gate`, and
+//! exact outcome classification is owned by BRIDGE-12.3.
 
 use std::collections::BTreeMap;
 use std::fmt;

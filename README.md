@@ -98,7 +98,7 @@ FRANKENCTL_BIN=./target/release/frankenctl ./scripts/e2e/readme_cli_workflow_smo
 
 Artifacts land under `artifacts/readme_cli_workflow_smoke/<timestamp>/` with a signed manifest, structured events, command transcript, and the emitted compile/run/replay payloads.
 
-The workspace exposes five library crates and six release binaries:
+The workspace exposes ten member crates; the operator-facing ones and their binaries:
 
 | Cargo crate | Binary targets |
 |---|---|
@@ -107,6 +107,9 @@ The workspace exposes five library crates and six release binaries:
 | `frankenengine-test-support` | — (library only; mock control-plane adapters, latency/failure injection) |
 | `frankenengine-control-plane-integration-tests` | — (library only; holds integration tests gated on `frankenengine-test-support`) |
 | `frankenengine-metamorphic` | `run_metamorphic_suite`, `run_parser_metamorphic` (library + binaries; metamorphic-relation runner) |
+| `frankenengine-core` | — (library only; extracted runtime core) |
+| `dp` | — (library only; QQ-track secure-aggregation primitive, `bd-cixqu.43.2`) |
+| `franken-engine-deterministic-derive` / `franken-engine-deterministic-trait` / `franken-engine-fixed-layout-derive` | — (proc-macro / trait support crates) |
 
 The `franken-core` extraction crate sits under `crates/franken-core/` and is now included in the root workspace as a first-class member while its standalone manifest remains compileable. The old missing-module/reference-only state was superseded by the `bd-zsais`, `bd-dymfz`, and `bd-nwhcp` series, and `bd-cixqu.10.8` forbids reintroducing a `workspace.exclude` entry for `crates/franken-core`.
 
@@ -242,16 +245,16 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 ### Code Surface At A Glance
 
-| Surface | Count / size (tracked HEAD, verified 2026-08-24) |
+| Surface | Count / size (tracked HEAD, verified 2026-09-22) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 616 top-level `.rs` files / 619 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.3 MB / 132,181 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
-| Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
-| Integration tests in `crates/franken-engine/tests/` | 1,654 top-level files (41 are RGC gate tests) |
-| Operator gate scripts in `scripts/run_*.sh` | 292 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
+| Source modules in `crates/franken-engine/src/` | 628 top-level `.rs` files / 619 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.7 MB / 136,293 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
+| Internal operator binaries in `crates/franken-engine/src/bin/` | 73 `.rs` files in total (6 of them are the release binaries listed above; 67 are internal operator tools) |
+| Integration tests in `crates/franken-engine/tests/` | 1,719 top-level `.rs` files (41 are RGC gate tests) |
+| Operator gate scripts in `scripts/run_*.sh` | 295 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
-| Architecture / contract docs in `docs/` | 725 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
+| Architecture / contract docs in `docs/` | 737 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | ≈4,530 records (open + closed); closed-bead history with reasons is the durable journal (historical session journals are not checked in) |
+| Tracked beads in `.beads/issues.jsonl` | ≈4,554 records (open + closed); closed-bead history with reasons is the durable journal (historical session journals are not checked in) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -259,23 +262,25 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 ```
 franken_engine/
-├── Cargo.toml                       # Workspace; franken-core is included as a member
+├── Cargo.toml                       # Workspace; ten members, incl. franken-core and dp
 ├── AGENTS.md                        # Hard rules for AI coding agents
 ├── CHANGELOG.md                     # Synthesized 4-month history
 ├── crates/
-│   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 616 modules
-│   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 61 internal operator binaries)
-│   │   ├── src/baseline_interpreter.rs   # Core VM (132,181 LoC)
+│   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 628 top-level modules
+│   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 67 internal operator binaries)
+│   │   ├── src/baseline_interpreter.rs   # Core VM (136,293 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
-│   │   └── tests/                   # 1,654 integration tests (41 RGC gate tests)
+│   │   └── tests/                   # 1,719 integration tests (41 RGC gate tests)
 │   ├── franken-extension-host/      # Ed25519-signed extension manifests + capability model
 │   ├── franken-engine-test-support/ # Mock control-plane adapters + injection helpers
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)
-│   └── franken-core/                # Extracted runtime; included in workspace and standalone compileable
-├── docs/                            # Charters, contracts, audits, gate specs (725 top-level files + subdirs including docs/planning/)
+│   ├── franken-core/                # Extracted runtime; included in workspace and standalone compileable
+│   ├── dp/                          # QQ-track secure-aggregation primitive (bd-cixqu.43.2)
+│   └── franken-engine-{deterministic-derive,deterministic-trait,fixed-layout-derive}/ # Derive/trait support crates
+├── docs/                            # Charters, contracts, audits, gate specs (737 top-level files + subdirs including docs/planning/)
 ├── examples/                        # 13 impossible-by-default capabilities across 24 numbered demo dirs (01..26, gaps at 08/10) + live runtime examples
-├── scripts/                         # 292 run_*.sh gate runners + e2e/*_replay.sh wrappers
+├── scripts/                         # 295 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
 ├── fuzz/                            # cargo-fuzz harnesses (parser, ts_module_resolution, shadow_panel)
 ├── benchmarks/                      # Benchmark inputs and goldens

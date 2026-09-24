@@ -63,18 +63,29 @@ success** — one line, revert, next lever, no retraction narrative.
 
 ---
 
-## Toolchain: Rust & Cargo
+### Toolchain: Rust & Cargo
 
 Use Cargo only.
 
 - Edition: Rust 2024
 - Unsafe code: forbidden in repository code (`#![forbid(unsafe_code)]`)
 - Configuration source of truth: `Cargo.toml`
+- Toolchain: pinned by `rust-toolchain.toml` (currently `nightly-2026-09-21`). Gate verdicts (`cargo fmt --check`, `cargo clippy -- -D warnings`) are only reproducible under the pinned toolchain; bump the pin only with a fresh full-gate run (check, clippy, fmt, test) recorded in the commit message.
 
 ### Workspace Structure
 
+All ten members of the root workspace:
+
+- `crates/dp` (`dp`): QQ-track secure-aggregation primitive (Bonawitz et al. 2017) and protocol layer (`bd-cixqu.43.2`)
+- `crates/franken-core` (`frankenengine-core`): extracted runtime core — parser, lowering, baseline interpreter substrate
 - `crates/franken-engine` (`frankenengine-engine`): core runtime engine substrate
+- `crates/franken-engine-control-plane-integration-tests` (`frankenengine-control-plane-integration-tests`): control-plane integration tests that require `frankenengine-test-support`
+- `crates/franken-engine-deterministic-derive` (`franken-engine-deterministic-derive`): derive macro for the `Deterministic` marker trait
+- `crates/franken-engine-deterministic-trait` (`franken-engine-deterministic-trait`): `Deterministic` marker trait definition
+- `crates/franken-engine-fixed-layout-derive` (`franken-engine-fixed-layout-derive`): derive macro for the `FixedLayout` trait
+- `crates/franken-engine-test-support` (`frankenengine-test-support`): mock control-plane adapters + latency/failure injection helpers
 - `crates/franken-extension-host` (`frankenengine-extension-host`): extension-host core and policy/runtime-defense surfaces
+- `crates/franken-metamorphic` (`frankenengine-metamorphic`): metamorphic-relation runner (whitespace, roundtrip, equivalence)
 
 ### Repository Split Contract (Critical)
 

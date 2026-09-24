@@ -242,7 +242,7 @@ commands).
 |---|---|---|
 | `cargo check --all-targets` | PASS | remote rch lane, clean (pipefail-enforced) |
 | `cargo clippy --all-targets -- -D warnings` | **FAIL** | 2 errors in `crates/franken-core`: unused imports (`capability/trust_zone/persistence.rs:8`), deprecated `AtomicU64::fetch_update` → `try_update` (`execution_work_budget.rs:84`, new-nightly deprecation). CI's scoped `clippy -p frankenengine-engine` does not lint `franken-core`, so CI stays green while the AGENTS.md workspace-wide command is red. |
-| `cargo fmt --check` | **FAIL** | 2,955 files with diffs under `nightly-2026-08-31`; 2,944 under `1.10.0-nightly (2026-09-21)` — not a one-day toolchain delta. Not style-edition-attributable (fails under `style_edition=2021` and `2024` alike). No `rustfmt.toml` in-tree. Distribution: `franken-engine/tests` 1,550, `franken-engine/src` 1,346, `franken-core` 59. `scripts/reproduce.sh` step 3 would log FAIL. |
+| `cargo fmt --check` | **FAIL** (pre-fix) → **PASS** (post-fix) | 2,955 diff hunks across 141 distinct files under `nightly-2026-08-31`; 2,944 hunks under `1.10.0-nightly (2026-09-21)` — not a one-day toolchain delta. Not style-edition-attributable. No `rustfmt.toml` in-tree. Remedied in-session by the `nightly-2026-09-21` `cargo fmt --all` sweep (136 files; landed as `0631aa647`); post-sweep `cargo fmt --all -- --check` passes with 0 diffs. `scripts/reproduce.sh` step 3 green again. |
 | `cargo build --release -p frankenengine-engine --bin frankenctl` | PASS (local, 15m11s) | required two environment workarounds: (1) rch refusal above; (2) upstream crates `visibility-0.1.1` (pins toolchain `1.56.0` via shipped `rust-toolchain`) and `sharded-slab-0.1.7` (ships `rust-toolchain.toml`) hijack proxy-`rustc` resolution — bare `cargo-rch-real` invocations without the toolchain bin dir PATH-prepended fail with `Unrecognized option: 'check-cfg'` (rustc 1.56) plus a rustup `rust-std-i686-unknown-linux-musl` auto-install conflict. |
 | `run_claim_to_proof_matrix_gate.sh ci` | PASS | `artifacts/claim_to_proof_matrix_gate/20260922T173912Z/` — verdict `pass`, 28 claims, 0 failures; freshness `observed_total=13 fresh=10 stale=3` |
 | README CLI workflow smoke | PASS | `artifacts/readme_cli_workflow_smoke/20260922T190925Z/` — 8 steps (version/compile/verify/run/replay-strict) all exit-code-true against freshly built `frankenctl 0.2.0` |
@@ -265,21 +265,26 @@ commands).
   `docs/ARCHITECTURE_INVENTORY.md` (622/613/67) is stale against the tree
   by the same counting and needs regeneration (`franken-architecture-inventory`).
 
-### Tracker Integrity Defect (new this pass)
+### Tracker Integrity Defect (found and repaired this pass)
 
-- The live `.beads/beads.db` is corrupt: `sqlite` reports a malformed page
-  (`page 27 is referenced multiple times`), DB/JSONL divergence
-  (db=4,538 vs jsonl=4,537; id-set mismatch with
-  `bd-franken-parser-top-level-await-script…` DB-only), and
-  `br doctor --json`'s migration attempt fails with
-  `NotNullViolation { column: "issues_rebuild_tmp.title" }` mid-migration.
-- `br list --format json` reports `SCHEMA_MISMATCH` (DB schema 17 vs br
-  0.6.0 expecting 19); the documented `br list --format json --status ready`
-  operator surface is non-functional until an explicit migration runs.
-- Note: `br doctor` applied partial migration repairs to this untracked
-  derived cache before failing (backup at `/data/tmp/.tmpZdYQa4/
-  beads.db.pre-migration-bak`); tracked `.beads/issues.jsonl` was untouched
-  (worktree verified clean after).
+- At pass start the live `.beads/beads.db` reported corrupt: `sqlite`
+  malformed-page diagnostics, DB/JSONL divergence (db=4,538 vs jsonl=4,537
+  line-count), a pending sync-merge of unknown state, and schema 17 vs br
+  0.6.0 expecting 19; `br list --format json` returned `SCHEMA_MISMATCH`.
+- `br doctor --json` applied in-place migration repairs (pre-repair backup
+  at `/data/tmp/.tmpZdYQa4/beads.db.pre-migration-bak`); its schema rebuild
+  step initially failed with
+  `NotNullViolation { column: "issues_rebuild_tmp.title" }`, but the
+  resulting database verifies clean: `PRAGMA integrity_check` = ok,
+  `user_version` = 19, 4,554 distinct issue rows, id-set **identical** to
+  `.beads/issues.jsonl` (the earlier count deltas were a missing trailing
+  newline in the JSONL plus the applied sync-merge).
+- Post-repair `br list --format json`, `br ready` (101 unblocked issues),
+  `br create` all function. Two residue beads created:
+  `bd-rch-hz3-restore-8arcf`, `bd-stale-receipt-refresh-9xth0`.
+- Note: `br ready`/`br list --status ready`: `ready` is a computed
+  subcommand in br 0.6.0, not a listable status; `--status ready` is
+  rejected with `VALIDATION_FAILED`.
 
 ### Status Ledger (high-value surfaces)
 

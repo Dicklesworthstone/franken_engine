@@ -34,20 +34,34 @@ use frankenengine_engine::ir_contract::Ir3Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser_api_stability::parse_script;
 
-/// A property-access-heavy program. Each `obj.key` member read drives the
-/// interpreter through `GetProperty -> proxy_aware_get_property ->
-/// prototype_chain_get`, which captures a `PropertyResolution` nondeterminism
-/// event (found / not-found) — giving us a non-empty trace from real source.
+/// A program that reads the clock (`performance.now()`, captured as a
+/// `TimerRead` event against the deterministic instruction-tick clock) and
+/// also resolves properties. Clock reads are genuine nondeterminism and are
+/// recorded event by event; property resolutions are a pure function of the
+/// program, so since bd-9vouw.18 they are folded into the trace's
+/// `deterministic_witness` instead of being appended as events.
 const PROPERTY_HEAVY_SOURCE: &str = r#"
 var config = { mode: 1, level: 2, name: 3 };
 var nested = { inner: config };
+var t0 = performance.now();
 var a = config.mode;
 var b = config.level;
+var t1 = performance.now();
 var c = config.name;
 var missing = config.unknown;
 var deep = nested.inner;
+var t2 = performance.now();
 a;
 "#;
+
+/// A loop whose only work is property access, parameterised by iteration
+/// count, for the constant-memory check.
+fn property_loop_source(iterations: u32) -> String {
+    format!(
+        "var o = {{ x: 1, y: 2 }}; var s = 0; \
+         for (var i = 0; i < {iterations}; i++) {{ o.x = (o.x + o.y + i) % 1000003; s = s + o.x; }} s;"
+    )
+}
 
 /// Parse + lower a real source string to an executable IR3 module.
 fn compile(source: &str) -> Ir3Module {
@@ -110,18 +124,79 @@ fn real_execution_exposes_a_non_empty_finalised_trace() {
         );
     }
 
-    // The reads in PROPERTY_HEAVY_SOURCE are prototype-chain resolutions.
-    assert!(
-        trace
-            .events
-            .iter()
-            .any(|e| e.source == NondeterminismSource::PropertyResolution),
-        "property access should capture PropertyResolution events; sources seen: {:?}",
+    // Each performance.now() call is one recorded TimerRead event.
+    let timer_reads = trace
+        .events
+        .iter()
+        .filter(|e| e.source == NondeterminismSource::TimerRead)
+        .count();
+    assert_eq!(
+        timer_reads,
+        3,
+        "each of the three performance.now() calls must be recorded; sources seen: {:?}",
         trace
             .events
             .iter()
             .map(|e| e.source.as_str())
             .collect::<Vec<_>>()
+    );
+
+    // bd-9vouw.18: property resolutions are witnessed, never recorded as events.
+    assert!(
+        !trace
+            .events
+            .iter()
+            .any(|e| e.source == NondeterminismSource::PropertyResolution),
+        "property resolution must be folded into the deterministic witness, not recorded"
+    );
+    assert!(
+        trace.deterministic_witness.event_count >= 5,
+        "the five property reads must be folded into the witness; got {}",
+        trace.deterministic_witness.event_count
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 1b. bd-9vouw.18: recorded events do not grow with property-access work, the
+//     witness does, and a different resolution path changes the witness.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn property_access_work_does_not_grow_recorded_events() {
+    let small = execute(&property_loop_source(10), "ndt-loop-small");
+    let large = execute(&property_loop_source(1_000), "ndt-loop-large");
+
+    assert_eq!(
+        small.nondeterminism_trace.events.len(),
+        large.nondeterminism_trace.events.len(),
+        "a 100x longer property loop must not record more events"
+    );
+    assert!(
+        large.nondeterminism_trace.deterministic_witness.event_count
+            >= 100 * small.nondeterminism_trace.deterministic_witness.event_count / 2,
+        "the witness must still count every folded resolution: small {} large {}",
+        small.nondeterminism_trace.deterministic_witness.event_count,
+        large.nondeterminism_trace.deterministic_witness.event_count
+    );
+    assert_ne!(
+        small.nondeterminism_trace.deterministic_witness.digest,
+        large.nondeterminism_trace.deterministic_witness.digest,
+        "different resolution histories must produce different digests"
+    );
+}
+
+#[test]
+fn witness_distinguishes_resolution_paths_with_identical_results() {
+    // Same completion value (1), different property resolved: own vs inherited.
+    let own = execute("var o = { k: 1 }; o.k;", "ndt-own");
+    let inherited = execute(
+        "function P() {} P.prototype.k = 1; var o = new P(); o.k;",
+        "ndt-inherited",
+    );
+    assert_ne!(
+        own.nondeterminism_trace.deterministic_witness,
+        inherited.nondeterminism_trace.deterministic_witness,
+        "own-property and prototype-chain resolution must witness differently"
     );
 }
 
@@ -146,6 +221,11 @@ fn re_execution_captures_a_byte_identical_trace() {
         first.nondeterminism_trace.events, second.nondeterminism_trace.events,
         "two runs of the same source must capture byte-identical, identically \
          ordered trace events"
+    );
+    assert_eq!(
+        first.nondeterminism_trace.deterministic_witness,
+        second.nondeterminism_trace.deterministic_witness,
+        "two runs of the same source must fold an identical deterministic witness"
     );
 }
 

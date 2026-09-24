@@ -154,6 +154,61 @@ impl TraceEvent {
     }
 }
 
+/// Constant-size witness over high-frequency decisions that are a pure
+/// function of the program and engine configuration (property resolution,
+/// array length-cache hits).
+///
+/// bd-9vouw.18: these used to be appended to `events` one by one — three
+/// events per iteration of an ordinary property loop, ~9 KB of retained memory
+/// per iteration and a 262 MB run report per 100k iterations. Replay
+/// re-executes the program, so the individual values carry nothing that
+/// re-execution does not reproduce; folding them into an ordered digest keeps
+/// the one property that matters (a replay that takes a different resolution
+/// path produces a different witness and fails the transcript comparison) at
+/// O(1) memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeterministicEventWitness {
+    /// Number of folded events.
+    pub event_count: u64,
+    /// FNV-1a-64 over the length-prefixed `(source, value)` of every folded
+    /// event, in fold order.
+    pub digest: u64,
+}
+
+impl Default for DeterministicEventWitness {
+    fn default() -> Self {
+        Self {
+            event_count: 0,
+            digest: Self::FNV_OFFSET_BASIS,
+        }
+    }
+}
+
+impl DeterministicEventWitness {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn absorb(&mut self, bytes: &[u8]) {
+        let mut digest = self.digest;
+        for byte in bytes {
+            digest ^= u64::from(*byte);
+            digest = digest.wrapping_mul(Self::FNV_PRIME);
+        }
+        self.digest = digest;
+    }
+
+    /// Fold one event. Both fields are length-prefixed so distinct
+    /// `(source, value)` pairs cannot concatenate to the same byte stream.
+    pub fn fold(&mut self, source: NondeterminismSource, value: &[u8]) {
+        let source = source.as_str().as_bytes();
+        self.absorb(&(source.len() as u64).to_be_bytes());
+        self.absorb(source);
+        self.absorb(&(value.len() as u64).to_be_bytes());
+        self.absorb(value);
+        self.event_count = self.event_count.saturating_add(1);
+    }
+}
+
 /// Nondeterminism trace: a complete record of all nondeterministic decisions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NondeterminismTrace {
@@ -162,6 +217,10 @@ pub struct NondeterminismTrace {
     pub next_sequence: u64,
     pub capture_started_vts: u64,
     pub capture_ended_vts: Option<u64>,
+    /// Deterministic engine-internal decisions, folded (bd-9vouw.18). Absent
+    /// in reports written before the witness existed.
+    #[serde(default)]
+    pub deterministic_witness: DeterministicEventWitness,
 }
 
 impl NondeterminismTrace {
@@ -172,7 +231,17 @@ impl NondeterminismTrace {
             next_sequence: 0,
             capture_started_vts: 0,
             capture_ended_vts: None,
+            deterministic_witness: DeterministicEventWitness::default(),
         }
+    }
+
+    /// Fold a decision that is a pure function of the program and engine
+    /// configuration into [`DeterministicEventWitness`] instead of recording
+    /// it as an event. Use [`Self::capture`] for genuinely nondeterministic
+    /// inputs (clocks, randomness, host I/O) and for rare events worth keeping
+    /// individually for forensics.
+    pub fn witness_deterministic(&mut self, source: NondeterminismSource, value: &[u8]) {
+        self.deterministic_witness.fold(source, value);
     }
 
     /// Record a nondeterminism event.
@@ -296,6 +365,13 @@ impl NondeterminismTrace {
         buf.extend_from_slice(&(self.events.len() as u64).to_be_bytes());
         for event in &self.events {
             push_len_prefixed(&mut buf, &event.canonical_bytes());
+        }
+        // bd-9vouw.18: bind folded decisions. Omitted when nothing was folded,
+        // so traces without folded decisions keep their pre-witness ids.
+        if self.deterministic_witness.event_count > 0 {
+            push_len_prefixed(&mut buf, b"deterministic_witness");
+            buf.extend_from_slice(&self.deterministic_witness.event_count.to_be_bytes());
+            buf.extend_from_slice(&self.deterministic_witness.digest.to_be_bytes());
         }
         buf
     }
@@ -443,6 +519,12 @@ pub enum ReplayError {
         capture_started_vts: u64,
         capture_ended_vts: u64,
     },
+    /// bd-9vouw.18: the live run folded a different sequence of deterministic
+    /// engine decisions (e.g. resolved a property along a different path).
+    DeterministicWitnessMismatch {
+        expected_count: u64,
+        actual_count: u64,
+    },
 }
 
 impl std::fmt::Display for ReplayError {
@@ -507,6 +589,13 @@ impl std::fmt::Display for ReplayError {
             } => write!(
                 f,
                 "invalid finalisation bounds: capture ended at {capture_ended_vts} before it started at {capture_started_vts}"
+            ),
+            Self::DeterministicWitnessMismatch {
+                expected_count,
+                actual_count,
+            } => write!(
+                f,
+                "deterministic witness mismatch: recorded {expected_count} folded decisions, live run folded {actual_count} with a different digest"
             ),
         }
     }
@@ -587,6 +676,40 @@ impl ReplayEngine {
         match self.mode {
             ReplayMode::Strict | ReplayMode::BestEffort => Ok(traced_value),
             ReplayMode::Validate => Ok(live_value.to_vec()),
+        }
+    }
+
+    /// bd-9vouw.18: compare the live run's folded deterministic decisions with
+    /// the recorded witness. Call once, after replaying every live event. A
+    /// mismatch is always critical (it means the re-execution resolved
+    /// properties or array lengths along a different path); Strict mode
+    /// returns an error, the other modes record the divergence.
+    pub fn verify_deterministic_witness(
+        &mut self,
+        live: &DeterministicEventWitness,
+    ) -> Result<(), ReplayError> {
+        let recorded = self.trace.deterministic_witness;
+        if *live == recorded {
+            return Ok(());
+        }
+        let mut expected_value = recorded.event_count.to_be_bytes().to_vec();
+        expected_value.extend_from_slice(&recorded.digest.to_be_bytes());
+        let mut actual_value = live.event_count.to_be_bytes().to_vec();
+        actual_value.extend_from_slice(&live.digest.to_be_bytes());
+        self.divergences.push(ReplayDivergence {
+            sequence: self.trace.next_sequence,
+            source: NondeterminismSource::PropertyResolution,
+            expected_value,
+            actual_value,
+            virtual_ts: self.virtual_ts,
+            severity: DivergenceSeverity::Critical,
+        });
+        match self.mode {
+            ReplayMode::Strict => Err(ReplayError::DeterministicWitnessMismatch {
+                expected_count: recorded.event_count,
+                actual_count: live.event_count,
+            }),
+            ReplayMode::BestEffort | ReplayMode::Validate => Ok(()),
         }
     }
 

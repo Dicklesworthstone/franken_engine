@@ -43765,12 +43765,10 @@ impl InterpreterCore {
                             .map(|obj| {
                                 // Fast path: use cached dense length if available
                                 if let Some(cached_len) = obj.cached_dense_length {
-                                    // Capture cache hit decision for deterministic replay
-                                    self.nondeterminism_trace.capture(
+                                    // Deterministic decision: fold, don't record (bd-9vouw.18).
+                                    self.nondeterminism_trace.witness_deterministic(
                                         NondeterminismSource::ArrayCacheInvalidation,
-                                        format!("cache_hit:{}", cached_len).into_bytes(),
-                                        self.instructions_executed,
-                                        "baseline_interpreter",
+                                        format!("cache_hit:{}", cached_len).as_bytes(),
                                     );
                                     cached_len
                                 } else {
@@ -43787,12 +43785,10 @@ impl InterpreterCore {
                                                 .filter(|&n| n != u32::MAX)
                                                 .map_or(current, |n| current.max(n + 1))
                                         });
-                                    // Capture cache miss decision for deterministic replay
-                                    self.nondeterminism_trace.capture(
+                                    // Deterministic decision: fold, don't record (bd-9vouw.18).
+                                    self.nondeterminism_trace.witness_deterministic(
                                         NondeterminismSource::ArrayCacheInvalidation,
-                                        format!("cache_miss:{}", sparse_len).into_bytes(),
-                                        self.instructions_executed,
-                                        "baseline_interpreter",
+                                        format!("cache_miss:{}", sparse_len).as_bytes(),
                                     );
                                     sparse_len
                                 }
@@ -48570,17 +48566,15 @@ impl InterpreterCore {
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
-                // Capture property resolution decision for deterministic replay
-                self.nondeterminism_trace.capture(
+                // Deterministic decision: fold, don't record (bd-9vouw.18).
+                self.nondeterminism_trace.witness_deterministic(
                     NondeterminismSource::PropertyResolution,
                     format!(
                         "chain_limit_reached:key={},depth={}",
                         key.diagnostic(),
                         depth
                     )
-                    .into_bytes(),
-                    self.instructions_executed,
-                    "baseline_interpreter",
+                    .as_bytes(),
                 );
                 return Ok(Value::Undefined);
             }
@@ -48632,16 +48626,14 @@ impl InterpreterCore {
             }
         }
         let Some(key_text) = key.as_str() else {
-            self.nondeterminism_trace.capture(
+            self.nondeterminism_trace.witness_deterministic(
                 NondeterminismSource::PropertyResolution,
                 format!(
                     "property_not_found:key={},final_depth={}",
                     key.diagnostic(),
                     depth
                 )
-                .into_bytes(),
-                self.instructions_executed,
-                "baseline_interpreter",
+                .as_bytes(),
             );
             return Ok(Value::Undefined);
         };
@@ -48723,17 +48715,15 @@ impl InterpreterCore {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
-        // Capture property resolution failure for deterministic replay
-        self.nondeterminism_trace.capture(
+        // Deterministic decision: fold, don't record (bd-9vouw.18).
+        self.nondeterminism_trace.witness_deterministic(
             NondeterminismSource::PropertyResolution,
             format!(
                 "property_not_found:key={},final_depth={}",
                 key.diagnostic(),
                 depth
             )
-            .into_bytes(),
-            self.instructions_executed,
-            "baseline_interpreter",
+            .as_bytes(),
         );
         Ok(Value::Undefined)
     }
@@ -48792,11 +48782,10 @@ impl InterpreterCore {
         object_id: ObjectId,
         depth: u32,
     ) {
-        self.nondeterminism_trace.capture(
+        // Deterministic decision: fold, don't record (bd-9vouw.18).
+        self.nondeterminism_trace.witness_deterministic(
             NondeterminismSource::PropertyResolution,
-            property_resolution_found_payload(key, object_id, depth),
-            self.instructions_executed,
-            "baseline_interpreter",
+            &property_resolution_found_payload(key, object_id, depth),
         );
     }
 
@@ -49591,17 +49580,15 @@ impl InterpreterCore {
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
-                // Capture descriptor resolution decision for deterministic replay
-                self.nondeterminism_trace.capture(
+                // Deterministic decision: fold, don't record (bd-9vouw.18).
+                self.nondeterminism_trace.witness_deterministic(
                     NondeterminismSource::PropertyResolution,
                     format!(
                         "descriptor_chain_limit_reached:key={},depth={}",
                         key.diagnostic(),
                         depth
                     )
-                    .into_bytes(),
-                    self.instructions_executed,
-                    "baseline_interpreter",
+                    .as_bytes(),
                 );
                 return Ok(Value::Undefined);
             }
@@ -49648,8 +49635,8 @@ impl InterpreterCore {
                     Value::Bool(!is_frozen), // Frozen objects have non-configurable properties
                 )?;
 
-                // Capture successful descriptor resolution
-                self.nondeterminism_trace.capture(
+                // Deterministic decision: fold, don't record (bd-9vouw.18).
+                self.nondeterminism_trace.witness_deterministic(
                     NondeterminismSource::PropertyResolution,
                     format!(
                         "descriptor_found:key={},object_id={},depth={}",
@@ -49657,9 +49644,7 @@ impl InterpreterCore {
                         id.0,
                         depth
                     )
-                    .into_bytes(),
-                    self.instructions_executed,
-                    "baseline_interpreter",
+                    .as_bytes(),
                 );
 
                 return Ok(Value::Object(descriptor_id));
@@ -49669,17 +49654,15 @@ impl InterpreterCore {
             depth += 1;
         }
 
-        // Property not found in the entire prototype chain
-        self.nondeterminism_trace.capture(
+        // Deterministic decision: fold, don't record (bd-9vouw.18).
+        self.nondeterminism_trace.witness_deterministic(
             NondeterminismSource::PropertyResolution,
             format!(
                 "descriptor_not_found:key={},final_depth={}",
                 key.diagnostic(),
                 depth
             )
-            .into_bytes(),
-            self.instructions_executed,
-            "baseline_interpreter",
+            .as_bytes(),
         );
         Ok(Value::Undefined)
     }

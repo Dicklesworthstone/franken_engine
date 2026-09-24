@@ -7688,7 +7688,9 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
     };
 
     let digits = digits.strip_suffix('n')?;
-    if digits.is_empty() || digits.contains('.') || digits.contains('e') || digits.contains('E') {
+    // `e`/`E` are hex digits (`0xFEn`); exponents are rejected by the decimal
+    // branch below, which accepts only digits (bd-6vl81).
+    if digits.is_empty() || digits.contains('.') {
         return None;
     }
 
@@ -7707,7 +7709,7 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
         if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
-        u128::from_str_radix(hex, 16).ok()?.to_string()
+        radix_digits_to_decimal(hex, 16)?
     } else if let Some(oct) = digits_ref
         .strip_prefix("0o")
         .or_else(|| digits_ref.strip_prefix("0O"))
@@ -7715,7 +7717,7 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
         if oct.is_empty() || !oct.chars().all(|c| matches!(c, '0'..='7')) {
             return None;
         }
-        u128::from_str_radix(oct, 8).ok()?.to_string()
+        radix_digits_to_decimal(oct, 8)?
     } else if let Some(bin) = digits_ref
         .strip_prefix("0b")
         .or_else(|| digits_ref.strip_prefix("0B"))
@@ -7723,7 +7725,7 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
         if bin.is_empty() || !bin.chars().all(|c| c == '0' || c == '1') {
             return None;
         }
-        u128::from_str_radix(bin, 2).ok()?.to_string()
+        radix_digits_to_decimal(bin, 2)?
     } else if digits_ref.chars().all(|c| c.is_ascii_digit()) {
         let trimmed = digits_ref.trim_start_matches('0');
         if trimmed.is_empty() {
@@ -7740,6 +7742,36 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
     } else {
         Some(unsigned)
     }
+}
+
+/// Exact decimal spelling of an unsigned integer written in `radix`, for
+/// BigInt literals of any length (they previously failed past `u128` and fell
+/// through to `Expression::Raw`, bd-6vl81). Leading zeros are dropped.
+fn radix_digits_to_decimal(digits: &str, radix: u32) -> Option<String> {
+    const LIMB_BASE: u64 = 1_000_000_000;
+    if digits.is_empty() {
+        return None;
+    }
+    // Little-endian base-10^9 limbs; limb * radix + carry stays far below u64::MAX.
+    let mut limbs: Vec<u64> = vec![0];
+    for ch in digits.chars() {
+        let mut carry = u64::from(ch.to_digit(radix)?);
+        for limb in &mut limbs {
+            let value = *limb * u64::from(radix) + carry;
+            *limb = value % LIMB_BASE;
+            carry = value / LIMB_BASE;
+        }
+        while carry > 0 {
+            limbs.push(carry % LIMB_BASE);
+            carry /= LIMB_BASE;
+        }
+    }
+    let mut limbs = limbs.iter().rev();
+    let mut decimal = limbs.next()?.to_string();
+    for limb in limbs {
+        decimal.push_str(&format!("{limb:09}"));
+    }
+    Some(decimal)
 }
 
 /// Parse a floating-point numeric literal: decimal (1.5), leading dot (.5),
@@ -10667,11 +10699,17 @@ fn parse_class_body(
             )
         })?;
         let goal = ParseGoal::Script;
-        let (params, body_stmts) = with_function_strict_mode(body_src, true, context, |context| {
+        // Class methods, accessors and constructors have a [[HomeObject]], so
+        // `super.x` / `super.m()` are valid in their bodies.
+        let saved_super_property_allowed = context.super_property_allowed;
+        context.super_property_allowed = true;
+        let parsed = with_function_strict_mode(body_src, true, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
             let body = parse_body_statements(body_src, goal, span, context)?;
             Ok((params, body))
-        })?;
+        });
+        context.super_property_allowed = saved_super_property_allowed;
+        let (params, body_stmts) = parsed?;
 
         methods.push(MethodDefinition {
             key,
@@ -14919,6 +14957,39 @@ mod tests {
             !format!("{:?}", tree.canonical_value()).contains("\"raw\""),
             "a large integer literal must not become Expression::Raw"
         );
+    }
+
+    #[test]
+    fn bigint_radix_literals_parse_exactly_bd_6vl81() {
+        // `e`/`E` are hex digits: this used to be rejected as an exponent.
+        assert_eq!(
+            parse_bigint_numeric_literal("0xFEDCBA9876543210n").as_deref(),
+            Some("18364758544493064720")
+        );
+        assert_eq!(parse_bigint_numeric_literal("0xen").as_deref(), Some("14"));
+        assert_eq!(
+            parse_bigint_numeric_literal("-0xFFn").as_deref(),
+            Some("-255")
+        );
+        // Past u128 the conversion stays exact (expected values from Python
+        // arbitrary-precision integers).
+        assert_eq!(
+            parse_bigint_numeric_literal(&format!("0x{}n", "FEDCBA9876543210".repeat(3)))
+                .as_deref(),
+            Some("6249203505451628849692820439375744481966954417427815084560")
+        );
+        assert_eq!(
+            parse_bigint_numeric_literal(&format!("0o{}n", "7".repeat(50))).as_deref(),
+            Some("1427247692705959881058285969449495136382746623")
+        );
+        assert_eq!(
+            parse_bigint_numeric_literal(&format!("0b{}n", "1".repeat(130))).as_deref(),
+            Some("1361129467683753853853498429727072845823")
+        );
+        // Decimal exponents and fractions are still not BigInt literals.
+        assert!(parse_bigint_numeric_literal("1e5n").is_none());
+        assert!(parse_bigint_numeric_literal("1.5n").is_none());
+        assert!(parse_bigint_numeric_literal("0xGn").is_none());
     }
 
     #[test]

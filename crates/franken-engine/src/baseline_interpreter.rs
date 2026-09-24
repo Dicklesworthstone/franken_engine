@@ -43860,21 +43860,18 @@ impl InterpreterCore {
                                 set_val,
                             )?;
                         }
-                        // bd-9vouw.17: functions are objects; other own
-                        // properties (`F.x = 1`, `Test262Error.thrower = ...`)
-                        // live on the function's backing object.
-                        ref function @ (Value::Function(_)
+                        // bd-9vouw.17: a function's own `name` and `length`
+                        // are non-writable, so a sloppy-mode assignment is a
+                        // silent no-op (ES2020 9.2.4 / 9.2.8).
+                        Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
                         | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if matches!(property_key.as_str(), Some("name" | "length")) =>
-                        {
-                            // A function's own `name` and `length` are
-                            // non-writable: a sloppy-mode assignment is a
-                            // silent no-op (ES2020 9.2.4 / 9.2.8).
-                            let _ = function;
-                        }
+                        | Value::AsyncGeneratorFunction(_)
+                            if matches!(property_key.as_str(), Some("name" | "length")) => {}
+                        // Other own properties (`F.x = 1`,
+                        // `Test262Error.thrower = ...`) live on the function's
+                        // backing object.
                         ref function @ (Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)

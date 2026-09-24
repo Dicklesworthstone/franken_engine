@@ -100,3 +100,148 @@ jobs:
           name: json-validation-${{ matrix.mode }}
           path: json-validation/
           retention-days: 7
+  array-from-integration:
+    if: contains(github.event.head_commit.message, '[array-from-integration]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Apply exact patch sequence and retain both increments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p array-from-validation
+          git rev-parse HEAD > array-from-validation/revision.txt
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          root = pathlib.Path('array-from-validation')
+          paths = [
+              'crates/franken-engine/src/baseline_interpreter.rs',
+              'crates/franken-engine/src/baseline_interpreter/array_from.rs',
+              'crates/franken-engine/tests/array_from_execution.rs',
+          ]
+          parent = pathlib.Path(paths[0])
+          (root / 'original-baseline.rs').write_bytes(parent.read_bytes())
+          chunks = [
+              '1f46195db2788173a49109f147aef4f3d2fe6506',
+              '5f68aa8d321ab3ae6cae2532b0e6bccc4bf6ff3f',
+              '6da615e9678342f60410054214d3ae9e6e779142',
+              'f136adeea40434f2c128cc41f2d23081003e9aea',
+              '9ef0882fde21d6bfe10263c0f1ad3298df2378f5',
+          ]
+          payload = bytearray()
+          for sha in chunks:
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs/{sha}',
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  data = base64.b64decode(json.load(response)['content'])
+              actual = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+              assert actual == sha, (actual, sha)
+              payload.extend(data)
+          assert hashlib.sha1(f'blob {len(payload)}\0'.encode() + payload).hexdigest() == 'acb2684db41e53a5d026bf46b79e737513f60429'
+          patches = json.loads(gzip.decompress(payload))
+          for stage, name in enumerate(sorted(patches), 1):
+              patch = root / name
+              patch.write_text(patches[name])
+              touched = [line.split(' b/', 1)[1] for line in patches[name].splitlines() if line.startswith('diff --git ')]
+              assert set(touched) <= set(paths), touched
+              subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+              subprocess.run(['git', 'apply', str(patch)], check=True)
+              for path in paths:
+                  dest = root / f'stage{stage}' / path
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  dest.write_bytes(pathlib.Path(path).read_bytes())
+              print(f'Stage {stage} applies cleanly', flush=True)
+          (root / 'paths.json').write_text(json.dumps(paths))
+          PY
+      - name: Install pinned Rust
+        run: |
+          toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt --component clippy
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+      - name: Format and publish source blobs without changing any ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          root = pathlib.Path('array-from-validation')
+          paths = json.loads((root / 'paths.json').read_text())
+          output = {'base': (root / 'revision.txt').read_text().strip(), 'stages': {}}
+          for stage in (1, 2):
+              subprocess.run(['rustfmt', '--edition', '2024', '--config', 'skip_children=true',
+                              *(str(root / f'stage{stage}' / p) for p in paths[1:])], check=True)
+              entries = {}
+              for path in paths:
+                  data = (root / f'stage{stage}' / path).read_bytes()
+                  expected = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+                  request = urllib.request.Request(
+                      f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs',
+                      data=json.dumps({'content': base64.b64encode(data).decode(), 'encoding': 'base64'}).encode(),
+                      headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                               'Content-Type': 'application/json',
+                               'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'}, method='POST')
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      actual = json.load(response)['sha']
+                  assert actual == expected, (path, actual, expected)
+                  entries[path] = actual
+              output['stages'][str(stage)] = entries
+          (root / 'source-blobs.json').write_text(json.dumps(output, indent=2))
+          print(json.dumps(output, indent=2), flush=True)
+          PY
+      - name: Select existing native runtime dependency closure
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, textwrap
+          text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
+          step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
+          subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
+          PY
+      - name: Validate first implementation increment
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('array-from-validation')
+          for path in json.loads((root / 'paths.json').read_text()):
+              pathlib.Path(path).write_bytes((root / 'stage1' / path).read_bytes())
+          PY
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-default-features --test array_from_execution -- --nocapture 2>&1 | tee array-from-validation/stage1-tests.log
+      - name: Validate iterator implementation increment
+        if: always()
+        run: |
+          test -f array-from-validation/source-blobs.json
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('array-from-validation')
+          for path in json.loads((root / 'paths.json').read_text()):
+              pathlib.Path(path).write_bytes((root / 'stage2' / path).read_bytes())
+          PY
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-default-features --test array_from_execution -- --nocapture 2>&1 | tee array-from-validation/stage2-tests.log
+      - name: Check Array.from source formatting and strict lint
+        if: always()
+        run: |
+          test -f array-from-validation/source-blobs.json
+          rustfmt --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/array_from.rs crates/franken-engine/tests/array_from_execution.rs
+          set -o pipefail
+          cargo clippy --locked -p frankenengine-engine --no-default-features --test array_from_execution -- -D warnings 2>&1 | tee array-from-validation/clippy.log
+      - name: Retain complete Array.from integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: array-from-integration
+          path: array-from-validation/
+          retention-days: 7

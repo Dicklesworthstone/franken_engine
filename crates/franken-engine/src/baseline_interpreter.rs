@@ -4846,6 +4846,10 @@ const GLOBAL_FUNCTION_VALUES: [&str; 4] = crate::lowering_pipeline::GLOBAL_FUNCT
 /// Name of a first-class static builtin, or `None` if `tag` is not one the
 /// shared lowering tables can produce. `None` is also the dispatch guard: a
 /// `StaticHostcall` value whose tag does not resolve here is never executed.
+/// Seed-tracked slot (in `builtin_prototypes`) of the top-level `this` object
+/// (bd-9vouw.47). Not a builtin name, so no prototype lookup ever matches it.
+const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
+
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
 /// FrankenEngine is hermetic: local time is UTC, so each local accessor
 /// equals its `UTC` twin and `getTimezoneOffset()` is 0.
@@ -45474,12 +45478,7 @@ impl InterpreterCore {
                             Some(error) => return Err(error),
                         }
                     }
-                    let (this_val, this_label) = self
-                        .call_stack
-                        .last()
-                        .map_or((Value::Undefined, Label::Public), |frame| {
-                            (frame.this_value.clone(), frame.this_label.clone())
-                        });
+                    let (this_val, this_label) = self.current_this_binding()?;
                     self.write_reg_with_label(dst, this_val, this_label)?;
                     self.ip += 1;
                 }
@@ -45745,6 +45744,9 @@ impl InterpreterCore {
                         AllocKind::Closure,
                         capture_count as usize,
                     )?;
+                    // Resolved before the accounting snapshot: a first
+                    // top-level read allocates the top-level `this` object.
+                    let lexical_this = self.current_this_binding()?;
                     let previous_estimated_memory_bytes = self.estimated_memory_bytes;
                     let previous_closure_bytes = self.closures_memory_bytes();
                     let lexical_super_metadata =
@@ -45753,11 +45755,6 @@ impl InterpreterCore {
                         .as_ref()
                         .map(Self::estimate_closure_lexical_super_metadata_entry_bytes)
                         .unwrap_or(0);
-                    let lexical_this = self
-                        .call_stack
-                        .last()
-                        .map(|frame| (frame.this_value.clone(), frame.this_label.clone()))
-                        .unwrap_or((Value::Undefined, Label::Public));
                     let lexical_this_temporary_bytes =
                         Self::estimate_arrow_lexical_this_entry_bytes(&lexical_this);
                     let captured_env = self.snapshot_scope_chain_with_temporary_budget(
@@ -45900,6 +45897,9 @@ impl InterpreterCore {
                         AllocKind::Closure,
                         capture_count as usize,
                     )?;
+                    // Resolved before the accounting snapshot: a first
+                    // top-level read allocates the top-level `this` object.
+                    let lexical_this = self.current_this_binding()?;
                     let previous_estimated_memory_bytes = self.estimated_memory_bytes;
                     let lexical_super_metadata =
                         self.capture_current_lexical_super_metadata(module, function_index)?;
@@ -45907,11 +45907,6 @@ impl InterpreterCore {
                         .as_ref()
                         .map(Self::estimate_closure_lexical_super_metadata_entry_bytes)
                         .unwrap_or(0);
-                    let lexical_this = self
-                        .call_stack
-                        .last()
-                        .map(|frame| (frame.this_value.clone(), frame.this_label.clone()))
-                        .unwrap_or((Value::Undefined, Label::Public));
                     let lexical_this_temporary_bytes =
                         Self::estimate_arrow_lexical_this_entry_bytes(&lexical_this);
                     let captured_env = self.snapshot_scope_chain_with_temporary_budget(
@@ -82026,6 +82021,27 @@ impl InterpreterCore {
             this_value: frame.this_value.clone(),
             this_label: frame.this_label.clone(),
         }))
+    }
+
+    /// The running code's `this`: the current frame's, or at top level
+    /// (bd-9vouw.47) the active CommonJS module's `exports`, else one
+    /// per-realm ordinary object. Node runs a script file as a CommonJS
+    /// module, whose top-level `this` is `module.exports`.
+    fn current_this_binding(&mut self) -> Result<(Value, Label), InterpreterError> {
+        if let Some(frame) = self.call_stack.last() {
+            return Ok((frame.this_value.clone(), frame.this_label.clone()));
+        }
+        if let Some(context) = &self.active_cjs_context {
+            return Ok((Value::Object(context.exports_object), Label::Public));
+        }
+        if let Some(object) = self.builtin_prototypes.get(TOP_LEVEL_THIS_KEY) {
+            return Ok((Value::Object(*object), Label::Public));
+        }
+        let object = self.alloc_object_with_prototype(None)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(TOP_LEVEL_THIS_KEY.to_string(), object);
+        });
+        Ok((Value::Object(object), Label::Public))
     }
 
     fn clone_closure_lexical_this_binding(

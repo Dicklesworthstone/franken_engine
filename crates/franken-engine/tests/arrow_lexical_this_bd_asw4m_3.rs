@@ -76,12 +76,16 @@ fn ordinary_function_still_binds_the_receiver() {
     assert_eq!(eval_console(src), "R\nS");
 }
 
-/// A top-level arrow captures the module frame's `this` (undefined), and
-/// method invocation must not rebind it.
+/// A top-level arrow captures the script's top-level `this`, and method
+/// invocation must not rebind it to the carrier. (Top-level `this` is an
+/// object, as for Node's CommonJS `module.exports`, since bd-9vouw.47; this
+/// test previously pinned the old `undefined` value, which Node never
+/// printed for a script.)
 #[test]
-fn top_level_arrow_this_stays_undefined_under_method_invocation() {
+fn top_level_arrow_this_is_not_rebound_under_method_invocation() {
     let src = r#"
-        const probe = () => String(this === undefined);
+        const top = this;
+        const probe = () => String(this === top && this !== carrier);
         const carrier = { tag: 'C', m: probe };
         console.log(carrier.m());
     "#;

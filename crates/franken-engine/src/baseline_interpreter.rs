@@ -64,7 +64,7 @@ use ghash::universal_hash::UniversalHash as _;
 use ghash::{GHash, universal_hash};
 use hmac::{Hmac, Mac};
 use md5::Md5;
-use regex::{NoExpand, Regex, RegexBuilder};
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
@@ -3129,6 +3129,9 @@ pub enum BuiltinFunctionKind {
     /// `Number.prototype.toPrecision` / `toExponential`. Append only.
     NumberToPrecision,
     NumberToExponential,
+    /// A `Date.prototype` getter/setter/formatter; the method name travels in
+    /// `module_specifier` (one of [`DATE_PROTOTYPE_METHODS`]). Append only.
+    DatePrototypeMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4784,6 +4787,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeConcat => "concat",
             BuiltinFunctionKind::NumberToPrecision => "toPrecision",
             BuiltinFunctionKind::NumberToExponential => "toExponential",
+            BuiltinFunctionKind::DatePrototypeMethod => DATE_PROTOTYPE_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("date"),
             BuiltinFunctionKind::StandardConstructor => {
                 canonical_builtin_prototype_name(&self.module_specifier).unwrap_or("Function")
             }
@@ -4838,6 +4846,178 @@ const GLOBAL_FUNCTION_VALUES: [&str; 4] = crate::lowering_pipeline::GLOBAL_FUNCT
 /// Name of a first-class static builtin, or `None` if `tag` is not one the
 /// shared lowering tables can produce. `None` is also the dispatch guard: a
 /// `StaticHostcall` value whose tag does not resolve here is never executed.
+/// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
+/// FrankenEngine is hermetic: local time is UTC, so each local accessor
+/// equals its `UTC` twin and `getTimezoneOffset()` is 0.
+const DATE_PROTOTYPE_METHODS: [&str; 37] = [
+    "valueOf",
+    "getFullYear",
+    "getUTCFullYear",
+    "getMonth",
+    "getUTCMonth",
+    "getDate",
+    "getUTCDate",
+    "getDay",
+    "getUTCDay",
+    "getHours",
+    "getUTCHours",
+    "getMinutes",
+    "getUTCMinutes",
+    "getSeconds",
+    "getUTCSeconds",
+    "getMilliseconds",
+    "getUTCMilliseconds",
+    "getTimezoneOffset",
+    "toISOString",
+    "toJSON",
+    "setTime",
+    "setMilliseconds",
+    "setUTCMilliseconds",
+    "setSeconds",
+    "setUTCSeconds",
+    "setMinutes",
+    "setUTCMinutes",
+    "setHours",
+    "setUTCHours",
+    "setDate",
+    "setUTCDate",
+    "setMonth",
+    "setUTCMonth",
+    "setFullYear",
+    "setUTCFullYear",
+    "toUTCString",
+    "toGMTString",
+];
+
+/// ES2020 20.4.1 time-value arithmetic on milliseconds since the epoch (UTC).
+mod date_math {
+    pub(super) const MS_PER_DAY: f64 = 86_400_000.0;
+
+    pub(super) fn day(t: f64) -> f64 {
+        (t / MS_PER_DAY).floor()
+    }
+
+    fn days_in_year(y: f64) -> f64 {
+        if y % 4.0 != 0.0 {
+            365.0
+        } else if y % 100.0 != 0.0 {
+            366.0
+        } else if y % 400.0 != 0.0 {
+            365.0
+        } else {
+            366.0
+        }
+    }
+
+    fn day_from_year(y: f64) -> f64 {
+        365.0 * (y - 1970.0) + ((y - 1969.0) / 4.0).floor() - ((y - 1901.0) / 100.0).floor()
+            + ((y - 1601.0) / 400.0).floor()
+    }
+
+    fn time_from_year(y: f64) -> f64 {
+        MS_PER_DAY * day_from_year(y)
+    }
+
+    pub(super) fn year_from_time(t: f64) -> f64 {
+        let mut y = (t / (365.2425 * MS_PER_DAY)).floor() + 1970.0;
+        while time_from_year(y) > t {
+            y -= 1.0;
+        }
+        while time_from_year(y + 1.0) <= t {
+            y += 1.0;
+        }
+        y
+    }
+
+    fn cumulative_days(month: usize, leap: bool) -> f64 {
+        const DAYS: [f64; 12] = [
+            0.0, 31.0, 59.0, 90.0, 120.0, 151.0, 181.0, 212.0, 243.0, 273.0, 304.0, 334.0,
+        ];
+        DAYS[month] + if leap && month >= 2 { 1.0 } else { 0.0 }
+    }
+
+    pub(super) fn month_from_time(t: f64) -> f64 {
+        let year = year_from_time(t);
+        let leap = days_in_year(year) == 366.0;
+        let within = day(t) - day_from_year(year);
+        (1..12)
+            .rev()
+            .find(|month| within >= cumulative_days(*month, leap))
+            .unwrap_or(0) as f64
+    }
+
+    pub(super) fn date_from_time(t: f64) -> f64 {
+        let year = year_from_time(t);
+        let leap = days_in_year(year) == 366.0;
+        let within = day(t) - day_from_year(year);
+        within - cumulative_days(month_from_time(t) as usize, leap) + 1.0
+    }
+
+    pub(super) fn week_day(t: f64) -> f64 {
+        (day(t) + 4.0).rem_euclid(7.0)
+    }
+
+    pub(super) fn hour(t: f64) -> f64 {
+        (t / 3_600_000.0).floor().rem_euclid(24.0)
+    }
+
+    pub(super) fn minute(t: f64) -> f64 {
+        (t / 60_000.0).floor().rem_euclid(60.0)
+    }
+
+    pub(super) fn second(t: f64) -> f64 {
+        (t / 1000.0).floor().rem_euclid(60.0)
+    }
+
+    pub(super) fn millisecond(t: f64) -> f64 {
+        t.rem_euclid(1000.0)
+    }
+
+    fn to_integer(value: f64) -> f64 {
+        if value.is_nan() { 0.0 } else { value.trunc() }
+    }
+
+    /// MakeTime (20.4.1.11).
+    pub(super) fn make_time(hour: f64, min: f64, sec: f64, ms: f64) -> f64 {
+        if ![hour, min, sec, ms].iter().all(|part| part.is_finite()) {
+            return f64::NAN;
+        }
+        to_integer(hour) * 3_600_000.0
+            + to_integer(min) * 60_000.0
+            + to_integer(sec) * 1000.0
+            + to_integer(ms)
+    }
+
+    /// MakeDay (20.4.1.12).
+    pub(super) fn make_day(year: f64, month: f64, date: f64) -> f64 {
+        if ![year, month, date].iter().all(|part| part.is_finite()) {
+            return f64::NAN;
+        }
+        let (y, m, dt) = (to_integer(year), to_integer(month), to_integer(date));
+        let ym = y + (m / 12.0).floor();
+        let mn = m.rem_euclid(12.0) as usize;
+        let leap = days_in_year(ym) == 366.0;
+        day_from_year(ym) + cumulative_days(mn, leap) + dt - 1.0
+    }
+
+    /// MakeDate (20.4.1.13).
+    pub(super) fn make_date(day: f64, time: f64) -> f64 {
+        if !day.is_finite() || !time.is_finite() {
+            return f64::NAN;
+        }
+        day * MS_PER_DAY + time
+    }
+
+    /// TimeClip (20.4.1.14).
+    pub(super) fn time_clip(time: f64) -> f64 {
+        if !time.is_finite() || time.abs() > 8.64e15 {
+            f64::NAN
+        } else {
+            time.trunc() + 0.0
+        }
+    }
+}
+
 fn static_hostcall_name(tag: &str) -> Option<&'static str> {
     slot0_static_member_name(tag).or_else(|| {
         GLOBAL_FUNCTION_VALUES
@@ -34479,9 +34659,18 @@ impl InterpreterCore {
                 }
                 Ok(Value::str(text))
             }
+            BuiltinFunctionKind::DatePrototypeMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.date_prototype_method(&method, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::NumberToPrecision | BuiltinFunctionKind::NumberToExponential => {
                 let exponential = builtin.kind == BuiltinFunctionKind::NumberToExponential;
-                let number = Self::number_receiver_to_f64(&receiver.unwrap_or(Value::Undefined));
+                let number = self.this_number_value(&receiver.unwrap_or(Value::Undefined))?;
                 let argument = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 // toPrecision(undefined) is ToString(x); toExponential(undefined)
                 // uses as many digits as needed to represent x uniquely.
@@ -34644,7 +34833,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringReplaceAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_replace_all_impl(&value, args)
+                self.string_replace_all_method(module, &value, args)
             }
             BuiltinFunctionKind::StringCodePointAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -34709,7 +34898,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_replace_impl(&value, args)
+                self.string_replace_method(module, &value, args)
             }
             BuiltinFunctionKind::StringMatch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -34743,7 +34932,7 @@ impl InterpreterCore {
                 // `(1).toFixed(101)` produced a 100-digit string and
                 // `(1).toFixed(-1)` returned "1". (bd-i08nh, bd-cxmtb)
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let num = Self::number_receiver_to_f64(&receiver);
+                let num = self.this_number_value(&receiver)?;
                 let digits = match self.builtin_arg(args, 0)? {
                     Some(arg) => Self::value_as_integer(&arg),
                     None => 0,
@@ -37491,9 +37680,14 @@ impl InterpreterCore {
                 if let Value::Object(object_id) = &receiver {
                     self.join_pending_hostcall_stream_label(*object_id)?;
                 }
-                Ok(Value::Bool(
-                    self.object_own_property_contains(&receiver, &property),
-                ))
+                // A function's other own properties live on its backing object.
+                let own = self.object_own_property_contains(&receiver, &property)
+                    || self
+                        .function_own_property_object(module, &receiver)?
+                        .is_some_and(|backing| {
+                            self.object_own_property_contains(&Value::Object(backing), &property)
+                        });
+                Ok(Value::Bool(own))
             }
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -37503,9 +37697,16 @@ impl InterpreterCore {
                 if let Value::Object(object_id) = &receiver {
                     self.join_pending_hostcall_stream_label(*object_id)?;
                 }
-                Ok(Value::Bool(
-                    self.object_own_property_is_enumerable(&receiver, &property),
-                ))
+                let enumerable = self.object_own_property_is_enumerable(&receiver, &property)
+                    || self
+                        .function_own_property_object(module, &receiver)?
+                        .is_some_and(|backing| {
+                            self.object_own_property_is_enumerable(
+                                &Value::Object(backing),
+                                &property,
+                            )
+                        });
+                Ok(Value::Bool(enumerable))
             }
             BuiltinFunctionKind::ObjectPrototypeValueOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -48375,26 +48576,54 @@ impl InterpreterCore {
         Ok(Value::str(this_str.trim_end()))
     }
 
+    /// Intrinsic-table binding (fixed signature, no module); see
+    /// [`Self::string_replace_all_method`].
     fn string_replace_all_impl(
         &mut self,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        // ES2021 21.1.3.18: replace EVERY occurrence of a string search
-        // value. (Rust's `str::replace` replaces all occurrences.)
-        // Regex search values are not handled here (string patterns only,
-        // the common case); see bd-9hw6q follow-up.
-        let search = match self.builtin_arg(args, 0)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        let replacement = match self.builtin_arg(args, 1)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        Ok(Value::str(
-            this_str.replace(search.as_str(), replacement.as_str()),
-        ))
+        self.string_replace_all_with_module(None, this_str, args)
+    }
+
+    fn string_replace_all_method(
+        &mut self,
+        module: &Ir3Module,
+        this_str: &JsString,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        self.string_replace_all_with_module(Some(module), this_str, args)
+    }
+
+    /// ES2021 22.1.3.19 String.prototype.replaceAll: every occurrence of a
+    /// string or global RegExp search value; a non-global RegExp is a
+    /// TypeError.
+    fn string_replace_all_with_module(
+        &mut self,
+        module: Option<&Ir3Module>,
+        this_str: &JsString,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let replacement = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        if self
+            .regexp_source_flags_from_value(&search)
+            .is_some_and(|(_, flags)| !flags.contains('g'))
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "global RegExp for String.prototype.replaceAll".to_string(),
+                got: "non-global RegExp".to_string(),
+            });
+        }
+        let label = self.join_arg_range_label(args)?;
+        self.string_replace_js(
+            module,
+            this_str.as_ref(),
+            &search,
+            &replacement,
+            true,
+            label,
+        )
     }
 
     fn string_code_point_at_impl(
@@ -48451,6 +48680,58 @@ impl InterpreterCore {
         Ok(Value::str(normalized))
     }
 
+    /// ToUint32 of a split `limit`; `undefined` means no limit.
+    fn split_limit(limit: Value) -> usize {
+        match limit {
+            Value::Undefined => usize::MAX,
+            other => {
+                let number = Self::coerce_to_float(&other).unwrap_or(f64::NAN);
+                if number.is_finite() {
+                    usize::try_from(number.trunc().rem_euclid(4_294_967_296.0) as u64)
+                        .unwrap_or(usize::MAX)
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// ES2020 21.2.5.13 RegExp.prototype[@@split]: the pieces between matches,
+    /// with each match's capture groups spliced in. An empty match never
+    /// splits at either end of the input or directly after a previous match.
+    fn regexp_split_pieces(
+        input: &str,
+        source: &str,
+        flags: &str,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let regex = Self::compile_regexp_pattern(source, flags)?;
+        let mut pieces = Vec::new();
+        if input.is_empty() {
+            if !regex.is_match("") {
+                pieces.push(Value::str(""));
+            }
+            return Ok(pieces);
+        }
+        let mut last = 0usize;
+        for captures in regex.captures_iter(input) {
+            let Some(whole) = captures.get(0) else {
+                continue;
+            };
+            if whole.start() == whole.end()
+                && (whole.start() == 0 || whole.start() >= input.len() || whole.start() == last)
+            {
+                continue;
+            }
+            pieces.push(Value::str(&input[last..whole.start()]));
+            for group in captures.iter().skip(1) {
+                pieces.push(group.map_or(Value::Undefined, |group| Value::str(group.as_str())));
+            }
+            last = whole.end();
+        }
+        pieces.push(Value::str(&input[last..]));
+        Ok(pieces)
+    }
+
     fn string_split_impl(
         &mut self,
         this_str: &JsString,
@@ -48462,11 +48743,22 @@ impl InterpreterCore {
         // split into their halves, matching donor runtimes); a non-empty
         // separator matches exact code units, so lone-surrogate content in
         // either operand survives losslessly (bd-3kvat; previously
-        // per-scalar over the lossy projection). (limit arg not yet
-        // honored — see bd-9a8cz follow-up.)
-        let pieces: Vec<JsString> = match self.builtin_arg(args, 0)? {
-            None | Some(Value::Undefined) => vec![this_str.clone()],
-            Some(separator_value) => {
+        // per-scalar over the lossy projection). A RegExp separator splits
+        // on its matches with capture groups spliced in, and `limit` caps
+        // the element count (bd-9vouw.40).
+        let limit = Self::split_limit(self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined));
+        let separator_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if limit == 0 {
+            return Ok(Value::Object(self.alloc_array_from_values(&[])?));
+        }
+        if let Some((source, flags)) = self.regexp_source_flags_from_value(&separator_value) {
+            let mut pieces = Self::regexp_split_pieces(this_str.as_ref(), &source, &flags)?;
+            pieces.truncate(limit);
+            return Ok(Value::Object(self.alloc_array_from_values(&pieces)?));
+        }
+        let pieces: Vec<JsString> = match separator_value {
+            Value::Undefined => vec![this_str.clone()],
+            separator_value => {
                 let separator = match separator_value {
                     Value::Str(s) => s,
                     other => JsString::from(self.value_to_string(&other)),
@@ -48497,6 +48789,7 @@ impl InterpreterCore {
                 }
             }
         };
+        let pieces = &pieces[..pieces.len().min(limit)];
         let result = self.alloc_array_with_prototype(None)?;
         for (index, piece) in pieces.iter().enumerate() {
             self.set_object_property(result, index.to_string(), Value::Str(piece.clone()))?;
@@ -48711,17 +49004,43 @@ impl InterpreterCore {
         )))
     }
 
+    /// Intrinsic-table binding (fixed signature, no module): a callable
+    /// replacer needs a module and is only reachable through
+    /// [`Self::string_replace_method`].
     fn string_replace_impl(
         &mut self,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        self.string_replace_with_module(None, this_str, args)
+    }
+
+    fn string_replace_method(
+        &mut self,
+        module: &Ir3Module,
+        this_str: &JsString,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        self.string_replace_with_module(Some(module), this_str, args)
+    }
+
+    fn string_replace_with_module(
+        &mut self,
+        module: Option<&Ir3Module>,
+        this_str: &JsString,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let replacement = match self.builtin_arg(args, 1)? {
-            Some(arg) => self.value_to_string(&arg),
-            None => "undefined".to_string(),
-        };
-        self.string_replace_value(this_str, &search, &replacement)
+        let replacement = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let label = self.join_arg_range_label(args)?;
+        self.string_replace_js(
+            module,
+            this_str.as_ref(),
+            &search,
+            &replacement,
+            false,
+            label,
+        )
     }
 
     fn string_match_impl(
@@ -48995,24 +49314,155 @@ impl InterpreterCore {
         ))
     }
 
-    fn string_replace_value(
-        &self,
+    /// ES2020 21.1.3.17 String.prototype.replace and replaceAll over a string
+    /// or RegExp search value. A callable replacer receives (match, ...groups,
+    /// offset, string) with the UTF-16 offset; otherwise the replacement is a
+    /// GetSubstitution template.
+    fn string_replace_js(
+        &mut self,
+        module: Option<&Ir3Module>,
         input: &str,
         search: &Value,
-        replacement: &str,
+        replace: &Value,
+        all: bool,
+        label: Label,
     ) -> Result<Value, InterpreterError> {
+        let mut matches: Vec<(usize, usize, Vec<Option<String>>)> = Vec::new();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
             let regex = Self::compile_regexp_pattern(&source, &flags)?;
-            let replaced = if flags.contains('g') {
-                regex.replace_all(input, NoExpand(replacement)).into_owned()
+            let global = all || flags.contains('g');
+            for captures in regex.captures_iter(input) {
+                let Some(whole) = captures.get(0) else {
+                    continue;
+                };
+                let groups = captures
+                    .iter()
+                    .skip(1)
+                    .map(|group| group.map(|group| group.as_str().to_string()))
+                    .collect();
+                matches.push((whole.start(), whole.end(), groups));
+                if !global {
+                    break;
+                }
+            }
+        } else {
+            let needle = self.value_to_string(search);
+            if !all {
+                if let Some(index) = input.find(needle.as_str()) {
+                    matches.push((index, index + needle.len(), Vec::new()));
+                }
+            } else if needle.is_empty() {
+                for (index, _) in input.char_indices() {
+                    matches.push((index, index, Vec::new()));
+                }
+                matches.push((input.len(), input.len(), Vec::new()));
             } else {
-                regex.replace(input, NoExpand(replacement)).into_owned()
-            };
-            return Ok(Value::str(replaced));
+                let mut position = 0;
+                while let Some(offset) = input[position..].find(needle.as_str()) {
+                    let start = position + offset;
+                    matches.push((start, start + needle.len(), Vec::new()));
+                    position = start + needle.len();
+                }
+            }
         }
+        let callable = replace.is_callable();
+        let template = if callable {
+            String::new()
+        } else {
+            self.value_to_string(replace)
+        };
+        let mut output = String::with_capacity(input.len());
+        let mut last = 0usize;
+        for (start, end, groups) in matches {
+            output.push_str(&input[last..start]);
+            let matched = &input[start..end];
+            let replacement = if callable {
+                let mut arguments = Vec::with_capacity(groups.len() + 3);
+                arguments.push(Value::str(matched));
+                arguments.extend(
+                    groups
+                        .iter()
+                        .map(|group| group.clone().map_or(Value::Undefined, Value::str)),
+                );
+                let offset = input[..start].encode_utf16().count();
+                arguments.push(Value::Int(i64::try_from(offset).unwrap_or(i64::MAX)));
+                arguments.push(Value::str(input));
+                self.preflight_inline_method_call_with_argument_label(
+                    module,
+                    replace,
+                    arguments.len(),
+                    Some(&label),
+                )?;
+                let (result, _) = self.invoke_inline_method_call_with_argument_label_preflighted(
+                    module,
+                    replace.clone(),
+                    Value::Undefined,
+                    arguments,
+                    Some(label.clone()),
+                )?;
+                self.value_to_string(&result)
+            } else {
+                Self::get_substitution(matched, input, start, end, &groups, &template)
+            };
+            output.push_str(&replacement);
+            self.check_string_limit(output.len())?;
+            last = end;
+        }
+        output.push_str(&input[last..]);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(Value::str(output))
+    }
 
-        let needle = self.value_to_string(search);
-        Ok(Value::str(input.replacen(needle.as_str(), replacement, 1)))
+    /// ES2020 21.1.3.17.1 GetSubstitution: `$$`, `$&`, `` $` ``, `$'`, `$n` and
+    /// `$nn` (named `$<name>` stays literal).
+    fn get_substitution(
+        matched: &str,
+        input: &str,
+        start: usize,
+        end: usize,
+        groups: &[Option<String>],
+        template: &str,
+    ) -> String {
+        let bytes = template.as_bytes();
+        let group = |index: usize| {
+            (1..=groups.len())
+                .contains(&index)
+                .then(|| groups[index - 1].clone().unwrap_or_default())
+        };
+        let mut output = String::with_capacity(template.len());
+        let mut index = 0usize;
+        while index < template.len() {
+            if bytes[index] == b'$' && index + 1 < template.len() {
+                let next = bytes[index + 1];
+                let expansion = match next {
+                    b'$' => Some(("$".to_string(), 2)),
+                    b'&' => Some((matched.to_string(), 2)),
+                    b'`' => Some((input[..start].to_string(), 2)),
+                    b'\'' => Some((input[end..].to_string(), 2)),
+                    b'0'..=b'9' => {
+                        let first = usize::from(next - b'0');
+                        let two_digit = bytes
+                            .get(index + 2)
+                            .filter(|digit| digit.is_ascii_digit())
+                            .and_then(|digit| group(first * 10 + usize::from(*digit - b'0')));
+                        match two_digit {
+                            Some(text) => Some((text, 3)),
+                            None => group(first).map(|text| (text, 2)),
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((text, width)) = expansion {
+                    output.push_str(&text);
+                    index += width;
+                    continue;
+                }
+            }
+            let ch = template[index..].chars().next().unwrap_or('\u{fffd}');
+            output.push(ch);
+            index += ch.len_utf8().max(1);
+        }
+        output
     }
 
     fn alloc_match_result_array(
@@ -49739,6 +50189,12 @@ impl InterpreterCore {
             }
             ("Set", "entries") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::SetEntries)),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
+            ("Date", method) if DATE_PROTOTYPE_METHODS.contains(&method) => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::DatePrototypeMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             ("URLSearchParams", "get") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::UrlSearchParamsGet,
             )),
@@ -50074,14 +50530,18 @@ impl InterpreterCore {
         }
         if let Some(key) = property_key.as_str() {
             match receiver {
-                Value::Function(_) => return matches!(key, "name" | "prototype"),
+                Value::Function(_) => return matches!(key, "name" | "length" | "prototype"),
                 Value::Closure(closure_id) => {
                     return if self.closure_method_metadata.contains_key(closure_id) {
-                        key == "name"
+                        matches!(key, "name" | "length")
                     } else {
-                        matches!(key, "name" | "prototype")
+                        matches!(key, "name" | "length" | "prototype")
                     };
                 }
+                Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_) => {
+                    return matches!(key, "name" | "length" | "prototype");
+                }
+                Value::AsyncFunction(_) => return matches!(key, "name" | "length"),
                 _ => {}
             }
         }
@@ -58522,6 +58982,210 @@ impl InterpreterCore {
             self.replace_pending_hostcall_result_label(Some(collection_label))?;
         }
         self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+    }
+
+    /// ES2020 20.1.3 thisNumberValue: a Number or a Number wrapper object.
+    fn this_number_value(&self, receiver: &Value) -> Result<f64, InterpreterError> {
+        match receiver {
+            Value::Int(value) => Ok(*value as f64),
+            Value::Float(value) => Ok(value.inner()),
+            Value::Object(id) => {
+                let wrapped = self.heap.get(id.0 as usize).and_then(|object| {
+                    matches!(object.properties.get("__type"),
+                        Some(Value::Str(tag)) if tag.as_ref() == "Number")
+                    .then(|| object.properties.get("__value").cloned())
+                    .flatten()
+                });
+                match wrapped {
+                    Some(Value::Int(value)) => Ok(value as f64),
+                    Some(Value::Float(value)) => Ok(value.inner()),
+                    _ => Err(InterpreterError::TypeError {
+                        expected: "Number receiver".to_string(),
+                        got: "object".to_string(),
+                    }),
+                }
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "Number receiver".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// Date.prototype getters, setters and formatters (ES2020 20.4.4) over the
+    /// receiver's `__timestamp`. Local time is UTC in this hermetic engine.
+    fn date_prototype_method(
+        &mut self,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        use date_math::*;
+        let date_id = match &receiver {
+            Value::Object(id)
+                if matches!(
+                    self.heap.get(id.0 as usize).and_then(|object| object.properties.get("__type")),
+                    Some(Value::Str(tag)) if tag.as_ref() == "Date"
+                ) =>
+            {
+                *id
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("Date receiver for Date.prototype.{method}"),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let t = match self
+            .heap
+            .get(date_id.0 as usize)
+            .and_then(|object| object.properties.get("__timestamp"))
+        {
+            Some(Value::Int(value)) => *value as f64,
+            Some(Value::Float(value)) => value.inner(),
+            _ => f64::NAN,
+        };
+        let number = js_number_to_value;
+        let getter = |part: fn(f64) -> f64| {
+            if t.is_nan() { f64::NAN } else { part(t) }
+        };
+        let result = match method {
+            "valueOf" => return Ok(number(t)),
+            "getFullYear" | "getUTCFullYear" => return Ok(number(getter(year_from_time))),
+            "getMonth" | "getUTCMonth" => return Ok(number(getter(month_from_time))),
+            "getDate" | "getUTCDate" => return Ok(number(getter(date_from_time))),
+            "getDay" | "getUTCDay" => return Ok(number(getter(week_day))),
+            "getHours" | "getUTCHours" => return Ok(number(getter(hour))),
+            "getMinutes" | "getUTCMinutes" => return Ok(number(getter(minute))),
+            "getSeconds" | "getUTCSeconds" => return Ok(number(getter(second))),
+            "getMilliseconds" | "getUTCMilliseconds" => {
+                return Ok(number(getter(millisecond)));
+            }
+            "getTimezoneOffset" => return Ok(number(if t.is_nan() { f64::NAN } else { 0.0 })),
+            "toISOString" | "toJSON" => {
+                if !t.is_finite() {
+                    if method == "toJSON" {
+                        return Ok(Value::Null);
+                    }
+                    return Err(InterpreterError::RangeError {
+                        message: "Invalid time value".to_string(),
+                    });
+                }
+                let year = year_from_time(t);
+                let year_text = if (0.0..=9999.0).contains(&year) {
+                    format!("{:04}", year as i64)
+                } else {
+                    format!(
+                        "{}{:06}",
+                        if year < 0.0 { '-' } else { '+' },
+                        year.abs() as i64
+                    )
+                };
+                return Ok(Value::str(format!(
+                    "{year_text}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                    month_from_time(t) as i64 + 1,
+                    date_from_time(t) as i64,
+                    hour(t) as i64,
+                    minute(t) as i64,
+                    second(t) as i64,
+                    millisecond(t) as i64
+                )));
+            }
+            "toUTCString" | "toGMTString" => {
+                if !t.is_finite() {
+                    return Ok(Value::str("Invalid Date"));
+                }
+                const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                const MONTHS: [&str; 12] = [
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                    "Dec",
+                ];
+                let year = year_from_time(t) as i64;
+                let year_text = if year < 0 {
+                    format!("-{:04}", -year)
+                } else {
+                    format!("{year:04}")
+                };
+                return Ok(Value::str(format!(
+                    "{}, {:02} {} {year_text} {:02}:{:02}:{:02} GMT",
+                    DAYS[week_day(t) as usize],
+                    date_from_time(t) as i64,
+                    MONTHS[month_from_time(t) as usize],
+                    hour(t) as i64,
+                    minute(t) as i64,
+                    second(t) as i64
+                )));
+            }
+            _ => {
+                let mut values = Vec::with_capacity(args.count as usize);
+                for index in 0..args.count {
+                    let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    values.push(Self::coerce_to_float(&value).unwrap_or(f64::NAN));
+                }
+                let arg =
+                    |index: usize, fallback: f64| values.get(index).copied().unwrap_or(fallback);
+                let first = arg(0, f64::NAN);
+                let time_part = |t: f64| t.rem_euclid(MS_PER_DAY);
+                match method {
+                    "setTime" => time_clip(first),
+                    "setMilliseconds" | "setUTCMilliseconds" => time_clip(make_date(
+                        day(t),
+                        make_time(hour(t), minute(t), second(t), first),
+                    )),
+                    "setSeconds" | "setUTCSeconds" => time_clip(make_date(
+                        day(t),
+                        make_time(hour(t), minute(t), first, arg(1, millisecond(t))),
+                    )),
+                    "setMinutes" | "setUTCMinutes" => time_clip(make_date(
+                        day(t),
+                        make_time(hour(t), first, arg(1, second(t)), arg(2, millisecond(t))),
+                    )),
+                    "setHours" | "setUTCHours" => time_clip(make_date(
+                        day(t),
+                        make_time(
+                            first,
+                            arg(1, minute(t)),
+                            arg(2, second(t)),
+                            arg(3, millisecond(t)),
+                        ),
+                    )),
+                    "setDate" | "setUTCDate" => time_clip(make_date(
+                        make_day(year_from_time(t), month_from_time(t), first),
+                        time_part(t),
+                    )),
+                    "setMonth" | "setUTCMonth" => time_clip(make_date(
+                        make_day(year_from_time(t), first, arg(1, date_from_time(t))),
+                        time_part(t),
+                    )),
+                    "setFullYear" | "setUTCFullYear" => {
+                        // A NaN date starts from +0 (20.4.4.21 step 1).
+                        let base = if t.is_nan() { 0.0 } else { t };
+                        time_clip(make_date(
+                            make_day(
+                                first,
+                                arg(1, month_from_time(base)),
+                                arg(2, date_from_time(base)),
+                            ),
+                            time_part(base),
+                        ))
+                    }
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "Date.prototype method".to_string(),
+                            got: method.to_string(),
+                        });
+                    }
+                }
+            }
+        };
+        let stored = if result.is_nan() {
+            Value::Float(Float64::new(f64::NAN))
+        } else {
+            js_number_to_value(result)
+        };
+        self.set_object_property(date_id, "__timestamp".to_string(), stored.clone())?;
+        Ok(stored)
     }
 
     /// Number.prototype.toPrecision (ES2020 20.1.3.5) and toExponential
@@ -70795,7 +71459,9 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(result)))
             }
             "builtin:StringPrototypeReplace" => {
-                let this_val = self.read_reg(args.start)?;
+                // String.prototype.replace(searchValue, replaceValue), ES2020
+                // 21.1.3.17: a callable replacer or a GetSubstitution template.
+                let this_val = self.arg_or_undefined(args, 0)?;
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Null => "null".to_string(),
@@ -70806,29 +71472,10 @@ impl InterpreterCore {
                     Value::Object(_) => "[object Object]".to_string(),
                     _ => "[object Object]".to_string(),
                 };
-
-                if args.count < 2 {
-                    return Ok(Value::str(str_text)); // No search string provided
-                }
-
-                let search_val = self.read_reg(args.start + 1)?;
-                let replace_str = if args.count >= 3 {
-                    let replace_val = self.read_reg(args.start + 2)?;
-                    match replace_val {
-                        Value::Str(s) => s.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::Object(_) => "[object Object]".to_string(),
-                        _ => "[object Object]".to_string(),
-                    }
-                } else {
-                    "undefined".to_string()
-                };
-
-                self.string_replace_value(&str_text, &search_val, &replace_str)
+                let search_val = self.arg_or_undefined(args, 1)?;
+                let replace_val = self.arg_or_undefined(args, 2)?;
+                let label = self.join_arg_range_label(args)?;
+                self.string_replace_js(module, &str_text, &search_val, &replace_val, false, label)
             }
             "builtin:MathLog" => {
                 // Math.log(x) implementation - returns natural logarithm of x
@@ -72511,26 +73158,34 @@ impl InterpreterCore {
             }
 
             "builtin:RegExp" => {
-                // RegExp constructor implementation
-                let pattern = if args.count >= 1 {
-                    match self.read_reg(args.start)? {
-                        Value::Str(s) => s.to_string(),
-                        Value::Undefined => String::new(),
-                        Value::Null => "null".to_string(),
-                        _ => String::new(),
-                    }
-                } else {
-                    String::new()
+                // RegExp constructor / literal (ES2020 21.2.3.1). A RegExp
+                // pattern copies its source, and its flags when no flags are
+                // given; any other pattern value is converted with ToString.
+                let pattern_value = self.arg_or_undefined(args, 0)?;
+                let flags_value = self.arg_or_undefined(args, 1)?;
+                let regexp_source = match &pattern_value {
+                    Value::Object(id) => self.heap.get(id.0 as usize).and_then(|object| {
+                        matches!(object.properties.get("__type"),
+                            Some(Value::Str(tag)) if tag.as_ref() == "RegExp")
+                        .then(|| {
+                            let text = |key: &str| match object.properties.get(key) {
+                                Some(Value::Str(text)) => text.to_string(),
+                                _ => String::new(),
+                            };
+                            (text("source"), text("flags"))
+                        })
+                    }),
+                    _ => None,
                 };
-
-                let flags = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Str(s) => s.to_string(),
-                        Value::Undefined => String::new(),
-                        _ => String::new(),
-                    }
-                } else {
-                    String::new()
+                let pattern = match (&regexp_source, &pattern_value) {
+                    (Some((source, _)), _) => source.clone(),
+                    (None, Value::Undefined) => String::new(),
+                    (None, other) => self.value_to_string(other),
+                };
+                let flags = match (&regexp_source, &flags_value) {
+                    (Some((_, flags)), Value::Undefined) => flags.clone(),
+                    (_, Value::Undefined) => String::new(),
+                    (_, other) => self.value_to_string(other),
                 };
 
                 // Create RegExp object
@@ -73559,47 +74214,32 @@ impl InterpreterCore {
 
             // Removed duplicate PromiseResolve - implementation at line ~9255 is identical
             "builtin:StringPrototypeReplaceAll" => {
-                // String.prototype.replaceAll(searchValue, replaceValue) implementation
-                if args.count < 3 {
-                    return Ok(Value::str(""));
-                }
-
-                let this_val = self.read_reg(args.start)?;
+                // String.prototype.replaceAll (ES2021 22.1.3.19): every
+                // occurrence; a non-global RegExp search is a TypeError.
+                let this_val = self.arg_or_undefined(args, 0)?;
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s.to_string(),
+                    Value::Bool(b) => b.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
                     _ => "[object Object]".to_string(),
                 };
-
-                let replace_val = self.read_reg(args.start + 2)?;
-                let replace_str = match replace_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Replace all occurrences
-                let result = str_text.replace(&search_str, &replace_str);
-                Ok(Value::str(result))
+                let search_val = self.arg_or_undefined(args, 1)?;
+                let replace_val = self.arg_or_undefined(args, 2)?;
+                let label = self.join_arg_range_label(args)?;
+                if self
+                    .regexp_source_flags_from_value(&search_val)
+                    .is_some_and(|(_, flags)| !flags.contains('g'))
+                {
+                    return Err(InterpreterError::TypeError {
+                        expected: "global RegExp for String.prototype.replaceAll".to_string(),
+                        got: "non-global RegExp".to_string(),
+                    });
+                }
+                self.string_replace_js(module, &str_text, &search_val, &replace_val, true, label)
             }
 
             "builtin:MathClz32" => {
@@ -75054,7 +75694,10 @@ impl InterpreterCore {
 
             // Removed duplicate ObjectGetOwnPropertyNames - implementation at line ~10883 has correct argument handling
             "builtin:StringPrototypeSplit" => {
-                // String.prototype.split() implementation - splits string into array
+                // String.prototype.split(separator, limit), ES2020 21.1.3.19
+                // and 21.2.5.13: string and RegExp separators (RegExp capture
+                // groups are spliced into the result), and `limit` caps the
+                // number of elements (bd-9vouw.40).
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
@@ -75066,76 +75709,29 @@ impl InterpreterCore {
                     Value::Object(_) => "[object Object]".to_string(),
                     _ => "[object Object]".to_string(),
                 };
-
-                let result_array_id = self.alloc_array_with_prototype(None)?;
-
-                if args.count < 2 {
-                    // No separator provided - return array with original string
-                    self.set_object_property(
-                        result_array_id,
-                        "0".to_string(),
-                        Value::str(str_text),
-                    )?;
-                    self.set_object_property(result_array_id, "length".to_string(), Value::Int(1))?;
+                let separator = self.arg_or_undefined(args, 1)?;
+                let limit = Self::split_limit(self.arg_or_undefined(args, 2)?);
+                let regexp_separator = self.regexp_source_flags_from_value(&separator);
+                let mut pieces: Vec<Value> = Vec::new();
+                if limit == 0 {
+                    // `split(sep, 0)` is always empty.
+                } else if let Some((source, flags)) = regexp_separator {
+                    pieces = Self::regexp_split_pieces(&str_text, &source, &flags)?;
+                } else if matches!(separator, Value::Undefined) {
+                    pieces.push(Value::str(str_text));
                 } else {
-                    let separator_val = self.read_reg(args.start + 1)?;
-                    match separator_val {
-                        Value::Str(sep) => {
-                            let parts: Vec<&str> = if sep.is_empty() {
-                                // Empty separator splits each character
-                                vec![] // We'll handle this case below
-                            } else {
-                                str_text.split(sep.as_ref()).collect()
-                            };
-
-                            if sep.is_empty() {
-                                // Split each character
-                                let chars: Vec<String> =
-                                    str_text.chars().map(|c| c.to_string()).collect();
-                                for (index, char_str) in chars.iter().enumerate() {
-                                    self.set_object_property(
-                                        result_array_id,
-                                        index.to_string(),
-                                        Value::str(char_str.as_str()),
-                                    )?;
-                                }
-                                self.set_object_property(
-                                    result_array_id,
-                                    "length".to_string(),
-                                    Value::Int(chars.len() as i64),
-                                )?;
-                            } else {
-                                // Normal split
-                                for (index, part) in parts.iter().enumerate() {
-                                    self.set_object_property(
-                                        result_array_id,
-                                        index.to_string(),
-                                        Value::str(*part),
-                                    )?;
-                                }
-                                self.set_object_property(
-                                    result_array_id,
-                                    "length".to_string(),
-                                    Value::Int(parts.len() as i64),
-                                )?;
-                            }
-                        }
-                        _ => {
-                            // Non-string separator - return array with original string
-                            self.set_object_property(
-                                result_array_id,
-                                "0".to_string(),
-                                Value::str(str_text),
-                            )?;
-                            self.set_object_property(
-                                result_array_id,
-                                "length".to_string(),
-                                Value::Int(1),
-                            )?;
-                        }
+                    let separator_text = match &separator {
+                        Value::Str(text) => text.to_string(),
+                        other => self.value_to_string(other),
+                    };
+                    if separator_text.is_empty() {
+                        pieces.extend(str_text.chars().map(|ch| Value::str(ch.to_string())));
+                    } else {
+                        pieces.extend(str_text.split(separator_text.as_str()).map(Value::str));
                     }
                 }
-
+                pieces.truncate(limit);
+                let result_array_id = self.alloc_array_from_values(&pieces)?;
                 Ok(Value::Object(result_array_id))
             }
 
@@ -82064,6 +82660,11 @@ impl InterpreterCore {
             "call" => BuiltinFunctionKind::FunctionPrototypeCall,
             "apply" => BuiltinFunctionKind::FunctionPrototypeApply,
             "bind" => BuiltinFunctionKind::FunctionPrototypeBind,
+            // Function.prototype inherits Object.prototype's own-property
+            // queries (`fn.hasOwnProperty('x')`).
+            "hasOwnProperty" | "propertyIsEnumerable" => {
+                return Self::object_prototype_method(key).map(Value::BuiltinFunction);
+            }
             _ => return None,
         };
         Some(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)))

@@ -14976,6 +14976,38 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            if let Some(capability) = uri_global_call_capability(callee, binding_lookup) {
+                // `encodeURIComponent(x)` & co.: the URI codec handlers use the
+                // receiver-placeholder convention (argument at slot 1), so an
+                // `undefined` placeholder precedes the arguments.
+                let arg_count = arguments.len().saturating_add(1);
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = global_function_call_capability(callee, binding_lookup) {
                 // Bare global function builtins (`parseInt`/`parseFloat`/`isNaN`/
                 // `isFinite`) have no eval-scope binding; dispatch them as host
@@ -17553,6 +17585,9 @@ fn error_constructor_capability(
         "SyntaxError" => Some("builtin:SyntaxError"),
         "EvalError" => Some("builtin:EvalError"),
         "URIError" => Some("builtin:URIError"),
+        // `new RegExp(pattern, flags)`: the same lowering-only constructor
+        // hostcall that RegExp literals use.
+        "RegExp" => Some("builtin:RegExp"),
         _ => None,
     }
 }
@@ -25319,6 +25354,27 @@ fn timer_builtin_call_capability(
             let method = well_formed_static_name(property)?;
             timers_module_export_global(method).and_then(timer_global_capability)
         }
+        _ => None,
+    }
+}
+
+/// Capability for a bare URI codec call (`encodeURIComponent(x)`,
+/// `decodeURIComponent(x)`, `encodeURI(x)`, `decodeURI(x)`), unless shadowed.
+fn uri_global_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if is_lexically_shadowed(binding_lookup, name) {
+        return None;
+    }
+    match name.as_str() {
+        "encodeURIComponent" => Some("builtin:EncodeURIComponent"),
+        "decodeURIComponent" => Some("builtin:DecodeURIComponent"),
+        "encodeURI" => Some("builtin:EncodeURI"),
+        "decodeURI" => Some("builtin:DecodeURI"),
         _ => None,
     }
 }

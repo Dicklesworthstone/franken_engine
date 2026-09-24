@@ -4412,64 +4412,13 @@ fn parse_variable_declaration(
 }
 
 fn split_var_declarator_segments(source: &str) -> Vec<&str> {
-    let mut out = Vec::with_capacity(4);
-    let mut segment_start = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
-
-    for (index, ch) in source.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
-            continue;
-        }
-
-        match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth = bracket_depth.saturating_add(1),
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            ',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                push_var_declarator_segment(&mut out, source, segment_start, index);
-                segment_start = index.saturating_add(ch.len_utf8());
-            }
-            _ => {}
-        }
-    }
-    push_var_declarator_segment(&mut out, source, segment_start, source.len());
-    out
-}
-
-fn push_var_declarator_segment<'a>(
-    out: &mut Vec<&'a str>,
-    source: &'a str,
-    start: usize,
-    end: usize,
-) {
-    if end < start {
-        return;
-    }
-    let raw = &source[start..end];
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    out.push(trimmed);
+    // Shares the top-level comma splitter, so string and regex literals
+    // (`var r = /,/, n = 2;`) never split a declarator.
+    split_top_level_commas(source)
+        .into_iter()
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect()
 }
 
 fn split_var_declarator_assignment(segment: &str) -> (&str, Option<&str>) {
@@ -7619,6 +7568,12 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     let mut depth_brace: i64 = 0;
     let mut in_quote: Option<u8> = None;
     let mut escaped = false;
+    // A regex literal (`/,/`) may contain commas and brackets; it is skipped
+    // with the same regex-vs-division rule the line merger uses.
+    let mut in_regex = false;
+    let mut regex_class = false;
+    let mut last_significant: Option<char> = None;
+    let mut trailing_identifier = String::new();
     let mut parts = Vec::with_capacity(4);
     let mut start = 0;
 
@@ -7634,6 +7589,27 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
             }
             if b == q {
                 in_quote = None;
+                last_significant = Some(')');
+                trailing_identifier.clear();
+            }
+            continue;
+        }
+        if in_regex {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match b {
+                b'\\' => escaped = true,
+                b'[' => regex_class = true,
+                b']' => regex_class = false,
+                b'/' if !regex_class => {
+                    in_regex = false;
+                    // The literal is an operand: a following `/` divides.
+                    last_significant = Some(')');
+                    trailing_identifier.clear();
+                }
+                _ => {}
             }
             continue;
         }
@@ -7642,31 +7618,41 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
                 in_quote = Some(b);
                 continue;
             }
-            b'(' => {
-                depth_paren += 1;
-                continue;
+            b'/' => {
+                let next = bytes.get(i + 1).map(|next| *next as char);
+                if !matches!(next, Some('/' | '*'))
+                    && merge_logical_lines_slash_starts_regex(
+                        last_significant,
+                        trailing_identifier.as_str(),
+                        next,
+                    )
+                {
+                    in_regex = true;
+                    regex_class = false;
+                    continue;
+                }
             }
-            b')' => {
-                depth_paren -= 1;
-                continue;
-            }
-            b'[' => {
-                depth_bracket += 1;
-                continue;
-            }
-            b']' => {
-                depth_bracket -= 1;
-                continue;
-            }
-            b'{' => {
-                depth_brace += 1;
-                continue;
-            }
-            b'}' => {
-                depth_brace -= 1;
-                continue;
-            }
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
             _ => {}
+        }
+        if !b.is_ascii_whitespace() {
+            let ch = b as char;
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' {
+                if !last_significant
+                    .is_some_and(|last| last.is_ascii_alphanumeric() || last == '_' || last == '$')
+                {
+                    trailing_identifier.clear();
+                }
+                trailing_identifier.push(ch);
+            } else {
+                trailing_identifier.clear();
+            }
+            last_significant = Some(ch);
         }
         if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && b == b',' {
             parts.push(&s[start..i]);

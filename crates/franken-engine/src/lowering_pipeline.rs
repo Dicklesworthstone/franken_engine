@@ -6719,6 +6719,27 @@ fn lower_statement_to_ir1_with_flow(
                         key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
+                // A computed key `[expr]` is evaluated here, in class-element
+                // order, and defines under its ToPropertyKey (bd-9vouw.35).
+                let property_key = if method.computed {
+                    lower_expression_to_ir1(
+                        &method.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ToPropertyKey".to_string(),
+                        arg_count: 1,
+                    });
+                    Ir1PropertyKey::Dynamic
+                } else {
+                    Ir1PropertyKey::Static(method_key)
+                };
 
                 // Push the method function value.
                 let (mut method_free_vars, mut method_free_var_ids) = collect_free_vars(
@@ -6766,13 +6787,12 @@ fn lower_statement_to_ir1_with_flow(
                     runtime_global_loads: method_runtime_global_loads,
                     child_captured_locals: m_child_captured_locals,
                     local_lexical_bindings: m_local_lexical_bindings,
-                    is_generator: false,
-                    is_async: false,
+                    is_generator: method.is_generator,
+                    is_async: method.is_async,
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
 
-                let property_key = Ir1PropertyKey::Static(method_key);
                 match method.kind {
                     MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
@@ -6794,6 +6814,7 @@ fn lower_statement_to_ir1_with_flow(
                 // without clobbering the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
+            push_class_members_non_enumerable(ops, &cls.body, bid);
         }
         Statement::Import(_) | Statement::Export(_) => {
             // Handled at top level only.
@@ -17145,6 +17166,27 @@ fn lower_expression_to_ir1_inner(
                         key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
+                // A computed key `[expr]` is evaluated here, in class-element
+                // order, and defines under its ToPropertyKey (bd-9vouw.35).
+                let property_key = if method.computed {
+                    lower_expression_to_ir1(
+                        &method.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ToPropertyKey".to_string(),
+                        arg_count: 1,
+                    });
+                    Ir1PropertyKey::Dynamic
+                } else {
+                    Ir1PropertyKey::Static(method_key)
+                };
                 let (mut method_free_vars, mut method_free_var_ids) = collect_free_vars(
                     &m_lookup,
                     &method_pre_lower_names,
@@ -17212,12 +17254,11 @@ fn lower_expression_to_ir1_inner(
                     runtime_global_loads: method_runtime_global_loads,
                     child_captured_locals: m_child_captured_locals,
                     local_lexical_bindings: m_local_lexical_bindings,
-                    is_generator: false,
-                    is_async: false,
+                    is_generator: method.is_generator,
+                    is_async: method.is_async,
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
-                let property_key = Ir1PropertyKey::Static(method_key);
                 match method.kind {
                     MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
@@ -17235,11 +17276,48 @@ fn lower_expression_to_ir1_inner(
                 // without clobbering the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
+            push_class_members_non_enumerable(ops, body, bid);
 
             ops.push(Ir1Op::LoadBinding { binding_id: bid });
         }
     }
     Ok(())
+}
+
+/// Internal intrinsic that clears `enumerable` on a class's own members.
+pub(crate) const CLASS_MEMBERS_NON_ENUMERABLE_CAPABILITY: &str =
+    "builtin:ClassMembersNonEnumerable";
+
+/// ES2020 14.6.13 ClassDefinitionEvaluation defines class methods and
+/// accessors with `enumerable: false`. They are installed by the same
+/// DefineMethod/DefineAccessor ops as object-literal members (which are
+/// enumerable), so once the members exist the class clears the flag on the
+/// own properties of its prototype and constructor in one step.
+fn push_class_members_non_enumerable(
+    ops: &mut Vec<Ir1Op>,
+    body: &[crate::ast::MethodDefinition],
+    class_binding: BindingId,
+) {
+    if body
+        .iter()
+        .all(|method| method.kind == MethodKind::Constructor)
+    {
+        return;
+    }
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: class_binding,
+    });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: class_binding,
+    });
+    ops.push(Ir1Op::GetProperty {
+        key: Ir1PropertyKey::Static("prototype".into()),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: CLASS_MEMBERS_NON_ENUMERABLE_CAPABILITY.to_string(),
+        arg_count: 2,
+    });
+    ops.push(Ir1Op::Discard);
 }
 
 /// Return a UTF-8-exact static name without projecting an unpaired UTF-16
@@ -17337,7 +17415,7 @@ fn builtin_prototype_capability(
     if let Expression::Identifier(name) = expression
         && matches!(
             name.as_str(),
-            "BigInt" | "Number" | "String" | "Boolean" | "Symbol"
+            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function"
         )
         && !is_lexically_shadowed(binding_lookup, name)
     {
@@ -25374,6 +25452,7 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
         ("Object", "getOwnPropertySymbols") => Some("builtin:ObjectGetOwnPropertySymbols"),
         ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
+        ("Object", "getOwnPropertyDescriptors") => Some("builtin:ObjectGetOwnPropertyDescriptors"),
         ("Object", "fromEntries") => Some("builtin:ObjectFromEntries"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
@@ -25441,6 +25520,8 @@ fn object_receiver_static_call_capability(
         "is" => Some("builtin:ObjectIs"),
         "isExtensible" => Some("builtin:ObjectIsExtensible"),
         "preventExtensions" => Some("builtin:ObjectPreventExtensions"),
+        "seal" => Some("builtin:ObjectSeal"),
+        "isSealed" => Some("builtin:ObjectIsSealed"),
         _ => None,
     }
 }
@@ -40941,6 +41022,8 @@ mod tests {
                     is_static: false,
                     computed: false,
                     span: span(),
+                    is_async: false,
+                    is_generator: false,
                 },
                 MethodDefinition {
                     key: Expression::Identifier("render".to_string()),
@@ -40956,6 +41039,8 @@ mod tests {
                     is_static: false,
                     computed: false,
                     span: span(),
+                    is_async: false,
+                    is_generator: false,
                 },
             ],
         });
@@ -41016,6 +41101,8 @@ mod tests {
                 is_static: false,
                 computed: false,
                 span: span(),
+                is_async: false,
+                is_generator: false,
             }],
         });
 

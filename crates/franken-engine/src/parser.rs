@@ -4784,15 +4784,20 @@ fn parse_primary_expression(
             .trim_start_matches([' ', '\t'])
             .strip_prefix("function")
             .filter(|r| r.starts_with(['(', '*', ' ', '\t']))
+        && function_expression_is_whole(rest)
     {
         return parse_async_function_expression(rest, span, context, recursion_depth);
     }
 
     // Function expression: `function(a, b) { ... }`, `function name(a, b) { ... }`,
-    // or a generator `function* (...) { ... }`.
+    // or a generator `function* (...) { ... }`. When text follows the body
+    // (`function (x) { ... }(5)`, `function () {}.call(this)`), the function
+    // is the callee/object of that suffix and the generic call and member
+    // parsing below takes it, so the suffix is not silently dropped.
     if let Some(rest) = expression
         .strip_prefix("function")
         .filter(|r| r.starts_with(['(', '*', ' ', '\t']))
+        && function_expression_is_whole(rest)
     {
         return parse_function_expression(rest, span, context, recursion_depth);
     }
@@ -10498,6 +10503,24 @@ fn parse_object_method_function_expression(
     parse_function_expression_with_super(rest, span, context, recursion_depth, true, false)
 }
 
+/// Whether the function expression `[*][name](params){body}` that starts
+/// `rest` (the text after `function`) extends to the end of `rest`. A
+/// malformed head also counts as whole, so its specific parse error is kept.
+fn function_expression_is_whole(rest: &str) -> bool {
+    let head = rest.trim_start();
+    let head = head.strip_prefix('*').map_or(head, str::trim_start);
+    let Some(paren) = head.find('(') else {
+        return true;
+    };
+    let Some((_, after_params)) = extract_balanced(&head[paren..], '(', ')') else {
+        return true;
+    };
+    match extract_balanced(after_params.trim_start(), '{', '}') {
+        Some((_, after_body)) => after_body.trim().is_empty(),
+        None => true,
+    }
+}
+
 fn parse_function_expression_with_super(
     rest: &str,
     span: &SourceSpan,
@@ -10717,8 +10740,26 @@ fn parse_class_body(
             segment
         };
 
+        // Method modifiers (ES2020 14.4-14.7): `async m(){}`, `*m(){}`,
+        // `async *m(){}`. `async(){}` names a method `async`.
+        let (is_async, rest) = match rest.strip_prefix("async") {
+            Some(after)
+                if after.starts_with([' ', '\t']) && !after.trim_start().starts_with('(') =>
+            {
+                (true, after.trim_start())
+            }
+            _ => (false, rest),
+        };
+        let (is_generator, rest) = match rest.strip_prefix('*') {
+            Some(after) => (true, after.trim_start()),
+            None => (false, rest),
+        };
+
         let kind;
-        let rest = if starts_with_keyword(rest, "get") {
+        let rest = if is_async || is_generator {
+            kind = MethodKind::Method;
+            rest
+        } else if starts_with_keyword(rest, "get") {
             kind = MethodKind::Get;
             rest.strip_prefix("get").unwrap_or(rest).trim_start()
         } else if starts_with_keyword(rest, "set") {
@@ -10729,15 +10770,24 @@ fn parse_class_body(
             rest
         };
 
-        // Extract method name (up to `(`).
-        let paren_idx = rest.find('(').ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                format!("class method requires parameter list: {}", segment),
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        // Extract method name (up to `(`). A computed key `[expr]` may itself
+        // contain parentheses, so the search starts after its closing `]`.
+        let key_end = if rest.starts_with('[') {
+            extract_balanced(rest, '[', ']').map_or(0, |(_, after)| rest.len() - after.len())
+        } else {
+            0
+        };
+        let paren_idx = rest[key_end..]
+            .find('(')
+            .map(|index| index + key_end)
+            .ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("class method requires parameter list: {}", segment),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
         let method_name = rest[..paren_idx].trim();
         let actual_kind = if method_name == "constructor" {
             MethodKind::Constructor
@@ -10792,10 +10842,12 @@ fn parse_class_body(
         // `super.x` / `super.m()` are valid in their bodies.
         let saved_super_property_allowed = context.super_property_allowed;
         context.super_property_allowed = true;
-        let parsed = with_function_strict_mode(body_src, true, context, |context| {
-            let params = parse_arrow_params(params_src, span, context)?;
-            let body = parse_body_statements(body_src, goal, span, context)?;
-            Ok((params, body))
+        let parsed = with_await_context(is_async, context, |context| {
+            with_function_strict_mode(body_src, true, context, |context| {
+                let params = parse_arrow_params(params_src, span, context)?;
+                let body = parse_body_statements(body_src, goal, span, context)?;
+                Ok((params, body))
+            })
         });
         context.super_property_allowed = saved_super_property_allowed;
         let (params, body_stmts) = parsed?;
@@ -10811,6 +10863,8 @@ fn parse_class_body(
             is_static,
             computed,
             span: span.clone(),
+            is_async,
+            is_generator,
         });
     }
 

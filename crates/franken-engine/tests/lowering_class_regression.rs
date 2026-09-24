@@ -36,6 +36,8 @@ fn static_method(name: &str) -> MethodDefinition {
         is_static: true,
         computed: false,
         span: span(),
+        is_async: false,
+        is_generator: false,
     }
 }
 
@@ -48,6 +50,8 @@ fn constructor(body: Vec<Statement>) -> MethodDefinition {
         is_static: false,
         computed: false,
         span: span(),
+        is_async: false,
+        is_generator: false,
     }
 }
 

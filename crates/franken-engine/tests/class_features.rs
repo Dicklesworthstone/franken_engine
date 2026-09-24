@@ -38,6 +38,8 @@ fn method(name: &str, is_static: bool, body: Vec<Statement>) -> MethodDefinition
         is_static,
         computed: false,
         span: span(),
+        is_async: false,
+        is_generator: false,
     }
 }
 
@@ -53,6 +55,8 @@ fn constructor_with_param(param: &str, body: Vec<Statement>) -> MethodDefinition
         is_static: false,
         computed: false,
         span: span(),
+        is_async: false,
+        is_generator: false,
     }
 }
 
@@ -153,10 +157,24 @@ fn class_declaration_lowers_constructor_static_and_prototype_methods() {
             )
         })
         .count();
+    // One lookup attaches the instance method (the static method goes on the
+    // constructor directly); the other feeds the intrinsic that makes class
+    // members non-enumerable (ES2020 14.6.13, bd-9vouw.44).
     assert_eq!(
-        prototype_gets, 1,
-        "only the instance method should be attached through prototype lookup"
+        prototype_gets, 2,
+        "only the instance method and the non-enumerable intrinsic use a prototype lookup"
     );
+    let non_enumerable_intrinsics = ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                Ir1Op::HostCall { capability, arg_count: 2 }
+                    if capability == "builtin:ClassMembersNonEnumerable"
+            )
+        })
+        .count();
+    assert_eq!(non_enumerable_intrinsics, 1);
 }
 
 #[test]

@@ -219,7 +219,10 @@ fn internal_builtin_meta_tag(tag: &str) -> bool {
     else {
         return false;
     };
-    if matches!(name, "BigInt" | "Number" | "String" | "Boolean" | "Symbol") {
+    if matches!(
+        name,
+        "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function"
+    ) {
         return kind == "proto";
     }
     matches!(kind, "proto" | "instanceof")
@@ -273,7 +276,8 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
         tag if internal_builtin_meta_tag(tag)
             || matches!(tag, "builtin:RequireObjectCoercible" | "builtin:ObjectRest" | "builtin:ToPropertyKey"
                 | "builtin:DestructureIteratorInit" | "builtin:DestructureIteratorNext"
-                | "builtin:DestructureIteratorElide" | "builtin:DestructureIteratorDone") =>
+                | "builtin:DestructureIteratorElide" | "builtin:DestructureIteratorDone"
+                | "builtin:ClassMembersNonEnumerable") =>
         (
             None,
             HostcallResultContract::JoinInputs,

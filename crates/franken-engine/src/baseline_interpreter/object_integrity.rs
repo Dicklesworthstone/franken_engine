@@ -65,6 +65,38 @@ impl InterpreterCore {
             // The internal operation retains its required validation order.
             self.json_observe_reachable_value(&target)?;
             self.json_observe_reachable_value(&proposed)?;
+            // A function value without ordinary property storage: its
+            // [[Prototype]] lives on its own-property backing object.
+            if target.is_callable()
+                && self
+                    .iterator_carrier_backing_id(&target, "object target")?
+                    .is_none()
+            {
+                return match operation {
+                    ObjectIntegrityOperation::GetPrototype => {
+                        self.function_value_prototype(module, &target)
+                    }
+                    ObjectIntegrityOperation::SetPrototype => {
+                        let accepted =
+                            self.set_function_value_prototype(module, &target, &proposed)?;
+                        if reflect {
+                            Ok(Value::Bool(accepted))
+                        } else if accepted {
+                            Ok(target.clone())
+                        } else {
+                            Err(Self::integrity_type_error(
+                                "permitted prototype change",
+                                "rejected prototype",
+                            ))
+                        }
+                    }
+                    ObjectIntegrityOperation::IsExtensible => Ok(Value::Bool(true)),
+                    ObjectIntegrityOperation::PreventExtensions => Err(Self::integrity_type_error(
+                        "function with property storage",
+                        "function without property storage",
+                    )),
+                };
+            }
             let target_id = match &target {
                 value if value.is_object_like() => Some(self.reflection_target_object(value)?),
                 value if reflect => {
@@ -183,6 +215,92 @@ impl InterpreterCore {
             .saturating_add(saved_bytes);
         self.json_release_temporary(scratch);
         outcome
+    }
+
+    /// [[GetPrototypeOf]] of a function value: a derived class's parent, the
+    /// link recorded by `Object.setPrototypeOf`, else `Function.prototype`.
+    fn function_value_prototype(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(module) = module {
+            let is_constructor_candidate = match function {
+                Value::Function(_) => true,
+                Value::Closure(id) => !self.closure_method_metadata.contains_key(id),
+                _ => false,
+            };
+            if is_constructor_candidate
+                && let Ok((true, _, parent, _)) =
+                    self.derived_constructor_metadata(module, function)
+            {
+                return Ok(parent);
+            }
+            if let Some(backing) = self.function_own_property_object(module, function)?
+                && let Some(prototype) = self
+                    .heap
+                    .get(backing.0 as usize)
+                    .and_then(|object| object.prototype)
+            {
+                return Ok(self
+                    .function_value_for_backing(module, prototype)
+                    .unwrap_or(Value::Object(prototype)));
+            }
+        }
+        Ok(Value::Object(self.ensure_builtin_prototype("Function")?))
+    }
+
+    /// [[SetPrototypeOf]] of a user function value (`Object.setPrototypeOf(D,
+    /// B)` in compiled `extends`). The link lives on the backing objects, so
+    /// `D`'s own-property lookups inherit `B`'s statics. A builtin parent
+    /// (`Error`) has no backing object to link to; the change is accepted but
+    /// only `Function.prototype` remains observable, a documented gap.
+    fn set_function_value_prototype(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+        proposed: &Value,
+    ) -> Result<bool, InterpreterError> {
+        let Some(module) = module else {
+            return Ok(false);
+        };
+        let Some(backing) = self.ensure_function_own_property_object(module, function)? else {
+            return Ok(false);
+        };
+        let prototype = match proposed {
+            Value::Null => None,
+            Value::Object(id) => Some(*id),
+            callable if callable.is_callable() => {
+                match self.ensure_function_own_property_object(module, callable)? {
+                    Some(parent_backing) => Some(parent_backing),
+                    None => return Ok(true),
+                }
+            }
+            other => {
+                return Err(Self::integrity_type_error(
+                    "object or null prototype",
+                    other.type_name(),
+                ));
+            }
+        };
+        let mut current = prototype;
+        let mut depth = 0u32;
+        while let Some(candidate) = current {
+            if candidate == backing {
+                return Ok(false);
+            }
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return Ok(false);
+            }
+            current = self
+                .heap
+                .get(candidate.0 as usize)
+                .and_then(|object| object.prototype);
+            depth += 1;
+        }
+        self.mutate_heap(|heap| heap[backing.0 as usize].prototype = prototype);
+        self.gc_write_barrier(backing);
+        Ok(true)
     }
 
     fn integrity_type_error(expected: &str, got: &str) -> InterpreterError {

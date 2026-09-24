@@ -151,6 +151,12 @@ fn builtin_prototypes_expose_their_methods() {
     );
     check("String.prototype.slice.call('hello', 1, 3);", "el");
     check("Number.prototype.toFixed.call(2.5, 0);", "3");
+    // Map's iterator methods (`entries`/`keys`/`values`) are bd-9vouw.33.
+    check(
+        "typeof Map.prototype.get + ',' + typeof Set.prototype.has;",
+        "function,function",
+    );
+    check("Map.prototype.get.call(new Map([[1, 'a']]), 1);", "a");
     check(
         "const o = Object.create(Array.prototype); typeof o.push;",
         "function",

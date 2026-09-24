@@ -779,6 +779,7 @@ pub(crate) fn builtin_instanceof_capability_name(tag: &str) -> Option<&'static s
 fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
     match name {
         "Object" => Some("Object"),
+        "Function" => Some("Function"),
         "Array" => Some("Array"),
         "Map" => Some("Map"),
         "Set" => Some("Set"),
@@ -3105,6 +3106,13 @@ pub enum BuiltinFunctionKind {
     /// `Error.prototype.toString`, reached through the error prototypes'
     /// chain (bd-9vouw.17). Append only.
     ErrorPrototypeToString,
+    /// `Function.prototype.bind` (ES2020 19.2.3.2). Append only.
+    FunctionPrototypeBind,
+    /// A bound function (ES2020 9.4.1) created by `bind`. Its `bound_object`
+    /// is a private state object holding the target, the bound `this` and
+    /// the bound arguments; it is never exposed as property storage.
+    /// Append only.
+    BoundFunction,
 }
 
 impl BuiltinFunctionKind {
@@ -4751,6 +4759,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::EventEmitterConstructor => "EventEmitter",
             BuiltinFunctionKind::FunctionPrototypeCall => "call",
             BuiltinFunctionKind::FunctionPrototypeApply => "apply",
+            BuiltinFunctionKind::FunctionPrototypeBind => "bind",
+            BuiltinFunctionKind::BoundFunction => "bound",
             BuiltinFunctionKind::StandardConstructor => {
                 canonical_builtin_prototype_name(&self.module_specifier).unwrap_or("Function")
             }
@@ -5378,6 +5388,11 @@ pub struct HeapObject {
     /// Without this, a `Secret` value written to a property of a lower-labeled
     /// object would launder back out as the object's label on later reads.
     property_labels: OrderedStringMap<Label>,
+    /// Own-property attributes that differ from the ordinary-assignment
+    /// default `{writable, enumerable, configurable: true}` (ES2020 6.1.7.1).
+    /// Sparse like `property_labels`: a missing entry is the default, so
+    /// objects built by plain assignment carry no entries.
+    property_attributes: BTreeMap<RuntimePropertyKey, PropertyAttributes>,
     /// Prototype link used by membership operators and constructor instances.
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
@@ -5406,6 +5421,67 @@ pub struct HeapObject {
     is_non_extensible: bool,
     /// Whether this object is the engine-owned `import.meta` contract object.
     pub is_import_meta: bool,
+}
+
+/// The boolean attributes of an own property (ES2020 6.1.7.1). `writable` is
+/// meaningless for accessor properties and is ignored there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PropertyAttributes {
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+}
+
+impl PropertyAttributes {
+    /// Attributes of a property created by ordinary assignment.
+    const DEFAULT: Self = Self {
+        writable: true,
+        enumerable: true,
+        configurable: true,
+    };
+}
+
+impl Default for PropertyAttributes {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// A property descriptor as read by ES2020 6.2.5.5 ToPropertyDescriptor.
+/// `None` marks an absent field; a present `get`/`set` holds a callable or
+/// `undefined`.
+#[derive(Debug, Clone, Default)]
+struct PropertyDescriptorFields {
+    value: Option<Value>,
+    writable: Option<bool>,
+    get: Option<Value>,
+    set: Option<Value>,
+    enumerable: Option<bool>,
+    configurable: Option<bool>,
+}
+
+impl PropertyDescriptorFields {
+    fn is_accessor(&self) -> bool {
+        self.get.is_some() || self.set.is_some()
+    }
+
+    fn is_data(&self) -> bool {
+        self.value.is_some() || self.writable.is_some()
+    }
+}
+
+/// Serialized form of one non-default attribute entry. Exactly one of `key`
+/// (String-keyed) and `symbol_id` (Symbol-keyed) is present.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PropertyAttributesWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<JsString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    symbol_id: Option<u32>,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
 }
 
 struct HeapSymbolPropertyRef<'a> {
@@ -5458,6 +5534,7 @@ impl Serialize for HeapObject {
             10 + usize::from(self.is_non_extensible)
                 + usize::from(!symbol_properties.is_empty())
                 + usize::from(!self.property_labels.is_empty())
+                + usize::from(!self.property_attributes.is_empty())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -5490,6 +5567,26 @@ impl Serialize for HeapObject {
         }
         if !self.property_labels.is_empty() {
             object.serialize_field("property_labels", &self.property_labels)?;
+        }
+        if !self.property_attributes.is_empty() {
+            let attributes = self
+                .property_attributes
+                .iter()
+                .map(|(key, attributes)| {
+                    let (key, symbol_id) = match key {
+                        RuntimePropertyKey::String(key) => (Some(key.clone()), None),
+                        RuntimePropertyKey::Symbol(symbol) => (None, Some(symbol.0)),
+                    };
+                    PropertyAttributesWire {
+                        key,
+                        symbol_id,
+                        writable: attributes.writable,
+                        enumerable: attributes.enumerable,
+                        configurable: attributes.configurable,
+                    }
+                })
+                .collect::<Vec<_>>();
+            object.serialize_field("property_attributes", &attributes)?;
         }
         if !symbol_properties.is_empty() {
             object.serialize_field("symbol_properties", &symbol_properties)?;
@@ -5528,6 +5625,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             property_labels: OrderedStringMap<Label>,
             #[serde(default)]
+            property_attributes: Vec<PropertyAttributesWire>,
+            #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
         }
 
@@ -5562,9 +5661,36 @@ impl<'de> Deserialize<'de> for HeapObject {
                 "default derived constructor flag requires derived constructor metadata",
             ));
         }
+        let mut property_attributes = BTreeMap::new();
+        for record in wire.property_attributes {
+            let key = match (record.key, record.symbol_id) {
+                (Some(key), None) => RuntimePropertyKey::String(key),
+                (None, Some(symbol_id)) if symbol_id != 0 => {
+                    RuntimePropertyKey::Symbol(SymbolId(symbol_id))
+                }
+                _ => {
+                    return Err(D::Error::custom(
+                        "property attributes need exactly one String key or nonzero Symbol id",
+                    ));
+                }
+            };
+            let attributes = PropertyAttributes {
+                writable: record.writable,
+                enumerable: record.enumerable,
+                configurable: record.configurable,
+            };
+            if attributes == PropertyAttributes::DEFAULT
+                || property_attributes.insert(key, attributes).is_some()
+            {
+                return Err(D::Error::custom(
+                    "property attributes must be sparse and unique per key",
+                ));
+            }
+        }
         let mut object = Self {
             properties: wire.properties,
             property_labels: wire.property_labels,
+            property_attributes,
             prototype: wire.prototype,
             constructor_function: wire.constructor_function,
             is_array: wire.is_array,
@@ -5629,6 +5755,15 @@ impl<'de> Deserialize<'de> for HeapObject {
             {
                 return Err(D::Error::custom("duplicate Symbol property id"));
             }
+        }
+        if object
+            .property_attributes
+            .keys()
+            .any(|key| !object.contains_own_runtime_property(key))
+        {
+            return Err(D::Error::custom(
+                "property attributes must name an own property",
+            ));
         }
         Ok(object)
     }
@@ -5738,6 +5873,21 @@ fn validate_heap_symbol_references(
 impl HeapObject {
     fn extensible(&self) -> bool {
         !self.is_non_extensible && !self.is_frozen
+    }
+
+    /// Effective attributes of the own property `key` (assumed present). A
+    /// frozen object's properties are all non-configurable and non-writable.
+    fn own_property_attributes(&self, key: &RuntimePropertyKey) -> PropertyAttributes {
+        let mut attributes = self
+            .property_attributes
+            .get(key)
+            .copied()
+            .unwrap_or_default();
+        if self.is_frozen {
+            attributes.writable = false;
+            attributes.configurable = false;
+        }
+        attributes
     }
 
     pub fn new() -> Self {
@@ -20940,6 +21090,10 @@ impl InterpreterCore {
         self.heap.get(object_id.0 as usize).is_some_and(|object| {
             object.properties.contains_exact_key(key)
                 && !(object.is_array && key.as_str() == Some("length"))
+                && object
+                    .property_attributes
+                    .get(&RuntimePropertyKey::String(key.clone()))
+                    .is_none_or(|attributes| attributes.enumerable)
                 && self.writable_own_runtime_property_visible(object_id, key)
         })
     }
@@ -34259,6 +34413,12 @@ impl InterpreterCore {
                 args,
                 builtin.kind == BuiltinFunctionKind::FunctionPrototypeApply,
             ),
+            BuiltinFunctionKind::FunctionPrototypeBind => self.function_prototype_bind(
+                receiver.unwrap_or(Value::Undefined),
+                receiver_register,
+                args,
+            ),
+            BuiltinFunctionKind::BoundFunction => self.invoke_bound_function(module, builtin, args),
             BuiltinFunctionKind::Require => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                 let args_label = self.join_arg_range_label(args)?;
@@ -50146,33 +50306,13 @@ impl InterpreterCore {
                 (
                     visible
                         .then(|| object.own_runtime_property_value(key))
-                        .flatten()
-                        .map(|value| (value, object.is_frozen)),
+                        .flatten(),
                     object.prototype,
                 )
             };
 
-            if let Some((value, is_frozen)) = descriptor_source {
-                // Found the property - create and return a property descriptor
-                let descriptor_id = self.alloc_object_with_prototype(None)?;
-
-                // Set descriptor properties
-                self.set_object_property(descriptor_id, "value".to_string(), value)?;
-                self.set_object_property(
-                    descriptor_id,
-                    "writable".to_string(),
-                    Value::Bool(!is_frozen), // Frozen objects have non-writable properties
-                )?;
-                self.set_object_property(
-                    descriptor_id,
-                    "enumerable".to_string(),
-                    Value::Bool(true), // Default enumerable for now
-                )?;
-                self.set_object_property(
-                    descriptor_id,
-                    "configurable".to_string(),
-                    Value::Bool(!is_frozen), // Frozen objects have non-configurable properties
-                )?;
+            if descriptor_source.is_some() {
+                let descriptor = self.own_property_descriptor_value(id, key)?;
 
                 // Deterministic decision: fold, don't record (bd-9vouw.18).
                 self.nondeterminism_trace.witness_deterministic(
@@ -50186,7 +50326,7 @@ impl InterpreterCore {
                     .as_bytes(),
                 );
 
-                return Ok(Value::Object(descriptor_id));
+                return Ok(descriptor);
             }
 
             current = next_prototype;
@@ -50244,48 +50384,60 @@ impl InterpreterCore {
         Ok(false)
     }
 
-    fn apply_object_create_properties(
+    /// ES2020 19.1.2.3.1 ObjectDefineProperties, shared by
+    /// `Object.defineProperties` and `Object.create`: every enumerable own
+    /// descriptor is read and validated before any property is defined.
+    fn object_define_properties(
         &mut self,
+        module: Option<&Ir3Module>,
         target_id: ObjectId,
         properties_arg: Value,
+        caller: &str,
     ) -> Result<(), InterpreterError> {
         let properties_id = match properties_arg {
-            Value::Object(id) => id,
+            Value::Object(properties_id) => properties_id,
+            Value::Undefined | Value::Null => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("object-coercible {caller} properties"),
+                    got: properties_arg.type_name().to_string(),
+                });
+            }
+            // A primitive has no own enumerable data keys to define.
             _ => return Ok(()),
         };
-
-        let descriptors = {
-            let properties_object = self.heap.get(properties_id.0 as usize).ok_or(
-                InterpreterError::ObjectNotFound {
-                    id: properties_id.0,
-                },
+        let keys = self
+            .heap
+            .get(properties_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound {
+                id: properties_id.0,
+            })?
+            .properties
+            .exact_keys()
+            .into_iter()
+            .filter(|key| self.ordinary_own_string_key_is_enumerable(properties_id, key))
+            .collect::<Vec<_>>();
+        let mut definitions = Vec::with_capacity(keys.len());
+        for key in keys {
+            let key_text = key.to_string();
+            let descriptor_val = self.proxy_aware_get_property(
+                module,
+                properties_id,
+                &key_text,
+                Value::Object(properties_id),
+                0,
             )?;
-            properties_object
-                .properties
-                .exact_entries()
-                .into_iter()
-                .map(|(key, descriptor)| (key, descriptor.clone()))
-                .collect::<Vec<_>>()
-        };
-
-        for (key, descriptor) in descriptors {
-            let effective_value = match descriptor {
-                Value::Object(descriptor_id) => self
-                    .heap
-                    .get(descriptor_id.0 as usize)
-                    .and_then(|descriptor_object| {
-                        descriptor_object.properties.get("value").cloned()
-                    })
-                    .unwrap_or(Value::Undefined),
-                _ => Value::Undefined,
-            };
-            self.set_object_runtime_property(
-                target_id,
-                RuntimePropertyKey::String(key),
-                effective_value,
-            )?;
+            let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+            definitions.push((key, descriptor));
         }
-
+        for (key, descriptor) in definitions {
+            let prop_name = self.executable_property_key_from_value(&Value::Str(key));
+            if !self.define_own_property_from_descriptor(target_id, prop_name, descriptor)? {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("definable property for {caller}"),
+                    got: "non-configurable, non-writable or non-extensible target".to_string(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -50628,7 +50780,9 @@ impl InterpreterCore {
                     if matches!(&property, Value::Accessor { .. }) {
                         return self.resolve_accessor_set(module, property, receiver, value);
                     }
-                    if object.is_frozen {
+                    // ES2020 9.1.9.2 OrdinarySetWithOwnDescriptor: an own or
+                    // inherited non-writable data property rejects the write.
+                    if !object.own_property_attributes(key).writable {
                         return Ok(false);
                     }
                     break;
@@ -50651,6 +50805,8 @@ impl InterpreterCore {
             if receiver_object.is_frozen
                 || (!receiver_object.extensible()
                     && !receiver_object.contains_own_runtime_property(key))
+                || (receiver_object.contains_own_runtime_property(key)
+                    && !receiver_object.own_property_attributes(key).writable)
                 || matches!(
                     receiver_object.own_runtime_property_value(key),
                     Some(Value::Accessor { .. })
@@ -50801,6 +50957,11 @@ impl InterpreterCore {
             // an inherited property with the same name remains observable.
             if !object.contains_own_runtime_property(key) {
                 return Ok(true);
+            }
+            // ES2020 9.1.10.1 OrdinaryDelete: a non-configurable own property
+            // is not deleted.
+            if !object.own_property_attributes(key).configurable {
+                return Ok(false);
             }
             if self.active_inline_callback_context_label.is_some() {
                 self.observe_scoped_callback_result()?;
@@ -58103,6 +58264,122 @@ impl InterpreterCore {
 
     /// One invocation path for property-resolved and intrinsic call/apply.
     /// `args` starts at thisArg; the target itself is never an argument.
+    /// ES2020 19.2.3.2 Function.prototype.bind. The bound function's private
+    /// state object holds the target, the bound `this` and the bound
+    /// arguments; its mutation label carries every input's label, and every
+    /// call through the bound function joins that label into its arguments.
+    fn function_prototype_bind(
+        &mut self,
+        target: Value,
+        target_register: Option<u32>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if !target.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable Function.prototype.bind receiver".to_string(),
+                got: target.type_name().to_string(),
+            });
+        }
+        let bound_this = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let mut bound_arguments = Vec::with_capacity(args.count.saturating_sub(1) as usize);
+        for index in 1..args.count {
+            bound_arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let mut label = self.join_arg_range_label(args)?;
+        if let Some(register) = target_register {
+            label = label.join(self.get_register_label(register)?);
+        }
+        let arguments_id = self.alloc_array_from_values(&bound_arguments)?;
+        let state = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(state, "target".to_string(), target)?;
+        self.set_object_property(state, "this".to_string(), bound_this)?;
+        self.set_object_property(state, "arguments".to_string(), Value::Object(arguments_id))?;
+        self.join_object_mutation_label(state, &label)?;
+        self.join_object_mutation_label(arguments_id, &label)?;
+        let mut bound = BuiltinFunction::new_kind(BuiltinFunctionKind::BoundFunction);
+        bound.bound_object = Some(state.0);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(Value::BuiltinFunction(bound))
+    }
+
+    /// ES2020 9.4.1.1 [[Call]] of a bound function: call the target with the
+    /// bound `this` and the bound arguments followed by the call's own.
+    fn invoke_bound_function(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let state =
+            builtin
+                .bound_object
+                .map(ObjectId)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "bound function state".to_string(),
+                    got: "bound function without state".to_string(),
+                })?;
+        let object = self
+            .heap
+            .get(state.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: state.0 })?;
+        let field = |name: &str| {
+            object
+                .properties
+                .get(name)
+                .cloned()
+                .unwrap_or(Value::Undefined)
+        };
+        let target = field("target");
+        let bound_this = field("this");
+        let Value::Object(arguments_id) = field("arguments") else {
+            return Err(InterpreterError::TypeError {
+                expected: "bound function arguments".to_string(),
+                got: "missing bound arguments".to_string(),
+            });
+        };
+        let arguments_object = self
+            .heap
+            .get(arguments_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: arguments_id.0 })?;
+        let bound_count = match arguments_object.properties.get("length") {
+            Some(Value::Int(length)) => usize::try_from(*length).unwrap_or(0),
+            _ => 0,
+        };
+        let mut arguments = Vec::with_capacity(bound_count.saturating_add(args.count as usize));
+        for index in 0..bound_count {
+            arguments.push(
+                arguments_object
+                    .properties
+                    .get(&index.to_string())
+                    .cloned()
+                    .unwrap_or(Value::Undefined),
+            );
+        }
+        for index in 0..args.count {
+            arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let mut label = self.join_arg_range_label(args)?;
+        if let Some(state_label) = self.object_mutation_labels.get(&state) {
+            label = label.join(state_label);
+        }
+        self.preflight_inline_method_call_with_argument_label(
+            Some(module),
+            &target,
+            arguments.len(),
+            Some(&label),
+        )?;
+        let (result, result_label) = self
+            .invoke_inline_method_call_with_argument_label_preflighted(
+                Some(module),
+                target,
+                bound_this,
+                arguments,
+                Some(label),
+            )?;
+        self.replace_pending_hostcall_result_label(Some(result_label))?;
+        Ok(result)
+    }
+
     fn forward_function_invocation(
         &mut self,
         module: Option<&Ir3Module>,
@@ -61005,60 +61282,329 @@ impl InterpreterCore {
         }
     }
 
-    /// ES2020 6.2.5.5 ToPropertyDescriptor, narrowed to this heap's property
-    /// model (plain values and `Value::Accessor`; attributes are not modeled).
-    fn property_value_from_descriptor(
-        &mut self,
-        descriptor_val: &Value,
-    ) -> Result<Value, InterpreterError> {
-        let effective_value = match descriptor_val.clone() {
-            Value::Object(desc_id) => {
-                let descriptor = self
-                    .heap
-                    .get(desc_id.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: desc_id.0 })?;
-                let has_get = descriptor.properties.contains_key("get");
-                let has_set = descriptor.properties.contains_key("set");
-                let has_value = descriptor.properties.contains_key("value");
-                let get = descriptor.properties.get("get").cloned();
-                let set = descriptor.properties.get("set").cloned();
-                let value = descriptor.properties.get("value").cloned();
-                if has_get || has_set {
-                    if has_value {
-                        return Err(InterpreterError::TypeError {
-                            expected: "either data or accessor property descriptor".to_string(),
-                            got: "descriptor mixes value with get/set".to_string(),
-                        });
-                    }
-                    let endpoint =
-                        |name: &str,
-                         value: Option<Value>|
-                         -> Result<Option<Arc<Value>>, InterpreterError> {
-                            match value.unwrap_or(Value::Undefined) {
-                                Value::Undefined => Ok(None),
-                                callable if callable.is_callable() => Ok(Some(Arc::new(callable))),
-                                other => Err(InterpreterError::TypeError {
-                                    expected: format!("callable or undefined descriptor.{name}"),
-                                    got: other.type_name().to_string(),
-                                }),
-                            }
-                        };
-                    Value::Accessor {
-                        get: endpoint("get", get)?,
-                        set: endpoint("set", set)?,
-                    }
-                } else {
-                    value.unwrap_or(Value::Undefined)
-                }
+    /// ES2020 7.2.10 SameValue.
+    fn same_value(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Float(a), Value::Float(b)) => {
+                let (a, b) = (a.inner(), b.inner());
+                (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits() || (a == b && a != 0.0)
             }
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "object property descriptor".to_string(),
-                    got: other.type_name().to_string(),
-                });
+            (Value::Int(a), Value::Float(b)) | (Value::Float(b), Value::Int(a)) => {
+                (*a as f64) == b.inner() && !(*a == 0 && b.inner().is_sign_negative())
+            }
+            _ => Self::strict_eq_values(a, b),
+        }
+    }
+
+    /// `Get(descriptor, name)` when `HasProperty(descriptor, name)`, so
+    /// inherited fields and getter-backed fields count (ES2020 6.2.5.5).
+    fn descriptor_field(
+        &mut self,
+        module: Option<&Ir3Module>,
+        descriptor_id: ObjectId,
+        name: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if !self.prototype_chain_has_runtime_key(descriptor_id, &key)? {
+            return Ok(None);
+        }
+        self.proxy_aware_get_property(module, descriptor_id, name, Value::Object(descriptor_id), 0)
+            .map(Some)
+    }
+
+    /// ES2020 6.2.5.5 ToPropertyDescriptor.
+    fn read_property_descriptor(
+        &mut self,
+        module: Option<&Ir3Module>,
+        descriptor_val: &Value,
+    ) -> Result<PropertyDescriptorFields, InterpreterError> {
+        let Value::Object(descriptor_id) = *descriptor_val else {
+            return Err(InterpreterError::TypeError {
+                expected: "object property descriptor".to_string(),
+                got: descriptor_val.type_name().to_string(),
+            });
+        };
+        let enumerable = self
+            .descriptor_field(module, descriptor_id, "enumerable")?
+            .map(|value| value.is_truthy());
+        let configurable = self
+            .descriptor_field(module, descriptor_id, "configurable")?
+            .map(|value| value.is_truthy());
+        let value = self.descriptor_field(module, descriptor_id, "value")?;
+        let writable = self
+            .descriptor_field(module, descriptor_id, "writable")?
+            .map(|value| value.is_truthy());
+        let mut endpoint = |name: &str| -> Result<Option<Value>, InterpreterError> {
+            match self.descriptor_field(module, descriptor_id, name)? {
+                Some(value) if !value.is_callable() && !matches!(value, Value::Undefined) => {
+                    Err(InterpreterError::TypeError {
+                        expected: format!("callable or undefined descriptor.{name}"),
+                        got: value.type_name().to_string(),
+                    })
+                }
+                field => Ok(field),
             }
         };
-        Ok(effective_value)
+        let get = endpoint("get")?;
+        let set = endpoint("set")?;
+        let descriptor = PropertyDescriptorFields {
+            value,
+            writable,
+            get,
+            set,
+            enumerable,
+            configurable,
+        };
+        if descriptor.is_accessor() && descriptor.is_data() {
+            return Err(InterpreterError::TypeError {
+                expected: "either data or accessor property descriptor".to_string(),
+                got: "descriptor mixes value/writable with get/set".to_string(),
+            });
+        }
+        Ok(descriptor)
+    }
+
+    /// The heap value of an accessor property with the given endpoints.
+    fn accessor_property_value(get: Option<Value>, set: Option<Value>) -> Value {
+        let endpoint = |value: Option<Value>| match value {
+            None | Some(Value::Undefined) => None,
+            Some(value) => Some(Arc::new(value)),
+        };
+        Value::Accessor {
+            get: endpoint(get),
+            set: endpoint(set),
+        }
+    }
+
+    /// ES2020 9.1.6.3 ValidateAndApplyPropertyDescriptor for an ordinary
+    /// object. `Ok(false)` means the definition was rejected; the caller
+    /// decides between a TypeError (`Object.defineProperty`) and `false`.
+    fn define_own_property_from_descriptor(
+        &mut self,
+        obj_id: ObjectId,
+        key: RuntimePropertyKey,
+        descriptor: PropertyDescriptorFields,
+    ) -> Result<bool, InterpreterError> {
+        let object = self
+            .heap
+            .get(obj_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
+        let Some(current) = object.own_runtime_property_descriptor(&key) else {
+            if !object.extensible() {
+                return Ok(false);
+            }
+            let is_accessor = descriptor.is_accessor();
+            let (value, writable) = if is_accessor {
+                (
+                    Self::accessor_property_value(descriptor.get, descriptor.set),
+                    true,
+                )
+            } else {
+                (
+                    descriptor.value.unwrap_or(Value::Undefined),
+                    descriptor.writable.unwrap_or(false),
+                )
+            };
+            let attributes = PropertyAttributes {
+                writable,
+                enumerable: descriptor.enumerable.unwrap_or(false),
+                configurable: descriptor.configurable.unwrap_or(false),
+            };
+            self.define_own_property_value(obj_id, key.clone(), value)?;
+            self.set_own_property_attributes(obj_id, &key, attributes)?;
+            return Ok(true);
+        };
+        let current_attributes = object.own_property_attributes(&key);
+        let is_frozen = object.is_frozen;
+        if !current_attributes.configurable
+            && (descriptor.configurable == Some(true)
+                || descriptor
+                    .enumerable
+                    .is_some_and(|enumerable| enumerable != current_attributes.enumerable))
+        {
+            return Ok(false);
+        }
+        let mut attributes = current_attributes;
+        let mut new_value = None;
+        match current {
+            // A generic descriptor changes only enumerable/configurable.
+            _ if !descriptor.is_accessor() && !descriptor.is_data() => {}
+            BaselineSymbolProperty::Data(current_value) if descriptor.is_data() => {
+                if !current_attributes.configurable && !current_attributes.writable {
+                    if descriptor.writable == Some(true)
+                        || descriptor
+                            .value
+                            .as_ref()
+                            .is_some_and(|value| !Self::same_value(value, &current_value))
+                    {
+                        return Ok(false);
+                    }
+                    return Ok(true);
+                }
+                new_value = descriptor.value.clone();
+                if let Some(writable) = descriptor.writable {
+                    attributes.writable = writable;
+                }
+            }
+            BaselineSymbolProperty::Accessor { get, set } if descriptor.is_accessor() => {
+                let changes = |field: &Option<Value>, current: &Option<Value>| {
+                    field.as_ref().is_some_and(|field| {
+                        !Self::same_value(field, current.as_ref().unwrap_or(&Value::Undefined))
+                    })
+                };
+                if !current_attributes.configurable {
+                    if changes(&descriptor.get, &get) || changes(&descriptor.set, &set) {
+                        return Ok(false);
+                    }
+                    return Ok(true);
+                }
+                new_value = Some(Self::accessor_property_value(
+                    descriptor.get.clone().or(get),
+                    descriptor.set.clone().or(set),
+                ));
+            }
+            // Converting between data and accessor kinds keeps enumerable and
+            // configurable and resets the other attributes to defaults.
+            _ => {
+                if !current_attributes.configurable {
+                    return Ok(false);
+                }
+                if descriptor.is_accessor() {
+                    new_value = Some(Self::accessor_property_value(
+                        descriptor.get.clone(),
+                        descriptor.set.clone(),
+                    ));
+                    attributes.writable = true;
+                } else {
+                    new_value = Some(descriptor.value.clone().unwrap_or(Value::Undefined));
+                    attributes.writable = descriptor.writable.unwrap_or(false);
+                }
+            }
+        }
+        if let Some(enumerable) = descriptor.enumerable {
+            attributes.enumerable = enumerable;
+        }
+        if let Some(configurable) = descriptor.configurable {
+            attributes.configurable = configurable;
+        }
+        // Every definition a frozen object accepts is a no-op.
+        if is_frozen {
+            return Ok(true);
+        }
+        if let Some(value) = new_value {
+            self.define_own_property_value(obj_id, key.clone(), value)?;
+        }
+        self.set_own_property_attributes(obj_id, &key, attributes)?;
+        Ok(true)
+    }
+
+    /// ES2020 7.3.14 SetIntegrityLevel(O, sealed).
+    fn seal_object(&mut self, object_id: ObjectId) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Ok(());
+        }
+        let keys = object.own_runtime_property_keys();
+        self.mutate_heap(|heap| heap[heap_index].is_non_extensible = true);
+        for key in keys {
+            let mut attributes = self.heap[heap_index].own_property_attributes(&key);
+            attributes.configurable = false;
+            self.set_own_property_attributes(object_id, &key, attributes)?;
+        }
+        Ok(())
+    }
+
+    /// ES2020 7.3.15 TestIntegrityLevel: sealed (`frozen == false`) or frozen.
+    fn object_has_integrity_level(
+        &self,
+        object_id: ObjectId,
+        frozen: bool,
+    ) -> Result<bool, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.extensible() {
+            return Ok(false);
+        }
+        Ok(object.own_runtime_property_keys().iter().all(|key| {
+            if let RuntimePropertyKey::String(name) = key
+                && !self.writable_own_runtime_property_visible(object_id, name)
+            {
+                return true;
+            }
+            let attributes = object.own_property_attributes(key);
+            let is_accessor = matches!(
+                object.own_runtime_property_value(key),
+                Some(Value::Accessor { .. })
+            );
+            !attributes.configurable && (!frozen || is_accessor || !attributes.writable)
+        }))
+    }
+
+    /// ES2020 6.2.5.4 FromPropertyDescriptor for the own property `key` of
+    /// `object_id`, or `undefined` when there is no such property.
+    fn own_property_descriptor_value(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let visible = match key {
+            RuntimePropertyKey::String(key) => {
+                self.writable_own_runtime_property_visible(object_id, key)
+            }
+            RuntimePropertyKey::Symbol(_) => true,
+        };
+        let source = visible
+            .then(|| {
+                self.heap.get(object_id.0 as usize).and_then(|object| {
+                    object
+                        .own_runtime_property_descriptor(key)
+                        .map(|property| (property, object.own_property_attributes(key)))
+                })
+            })
+            .flatten();
+        let Some((property, attributes)) = source else {
+            return Ok(Value::Undefined);
+        };
+        let descriptor_id = self.alloc_object_with_prototype(None)?;
+        match property {
+            BaselineSymbolProperty::Data(value) => {
+                self.set_object_property(descriptor_id, "value".to_string(), value)?;
+                self.set_object_property(
+                    descriptor_id,
+                    "writable".to_string(),
+                    Value::Bool(attributes.writable),
+                )?;
+            }
+            BaselineSymbolProperty::Accessor { get, set } => {
+                self.set_object_property(
+                    descriptor_id,
+                    "get".to_string(),
+                    get.unwrap_or(Value::Undefined),
+                )?;
+                self.set_object_property(
+                    descriptor_id,
+                    "set".to_string(),
+                    set.unwrap_or(Value::Undefined),
+                )?;
+            }
+        }
+        self.set_object_property(
+            descriptor_id,
+            "enumerable".to_string(),
+            Value::Bool(attributes.enumerable),
+        )?;
+        self.set_object_property(
+            descriptor_id,
+            "configurable".to_string(),
+            Value::Bool(attributes.configurable),
+        )?;
+        Ok(Value::Object(descriptor_id))
     }
 
     /// Install an own property from a validated descriptor value, keeping
@@ -61127,9 +61673,7 @@ impl InterpreterCore {
         };
         let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
         self.apply_memory_component_delta(0, metadata_bytes)?;
-        if let Err(error) =
-            self.set_object_runtime_property(object_id, key, Value::Closure(closure_id))
-        {
+        if let Err(error) = self.set_object_runtime_property(object_id, key, function) {
             self.estimated_memory_bytes =
                 self.estimated_memory_bytes.saturating_sub(metadata_bytes);
             return Err(error);
@@ -67628,6 +68172,40 @@ impl InterpreterCore {
                 }
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::PropertyKey)
             }
+            "builtin:ClassMembersNonEnumerable" => {
+                // ES2020 14.6.13: class methods and accessors are
+                // non-enumerable. args = (constructor, constructor.prototype).
+                let constructor = self.arg_or_undefined(args, 0)?;
+                let prototype = self.arg_or_undefined(args, 1)?;
+                let mut targets = Vec::with_capacity(2);
+                if let Value::Object(prototype_id) = prototype {
+                    targets.push(prototype_id);
+                }
+                if let Some(module) = module
+                    && let Some(backing) =
+                        self.ensure_function_own_property_object(module, &constructor)?
+                {
+                    targets.push(backing);
+                }
+                for target in targets {
+                    let keys = self
+                        .heap
+                        .get(target.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: target.0 })?
+                        .own_runtime_property_keys();
+                    for key in keys {
+                        let object = &self.heap[target.0 as usize];
+                        let mut attributes = object
+                            .property_attributes
+                            .get(&key)
+                            .copied()
+                            .unwrap_or_default();
+                        attributes.enumerable = false;
+                        self.set_own_property_attributes(target, &key, attributes)?;
+                    }
+                }
+                Ok(Value::Undefined)
+            }
             "builtin:RequireObjectCoercible" => {
                 if args.count != 1 {
                     return Err(InterpreterError::TypeError {
@@ -68730,15 +69308,7 @@ impl InterpreterCore {
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        let is_frozen = self
-                            .heap
-                            .get(obj_id.0 as usize)
-                            .map(|obj| obj.is_frozen)
-                            .ok_or_else(|| InterpreterError::TypeError {
-                            expected: "valid object".to_string(),
-                            got: "object not found".to_string(),
-                        })?;
-                        Ok(Value::Bool(is_frozen))
+                        Ok(Value::Bool(self.object_has_integrity_level(obj_id, true)?))
                     }
                     _ => {
                         // Non-object values are considered frozen
@@ -68755,14 +69325,19 @@ impl InterpreterCore {
                     match prototype_arg {
                         Value::Null => None,
                         Value::Object(proto_id) => Some(proto_id),
-                        _ => return Ok(Value::Undefined),
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object or null prototype for Object.create".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
                     }
                 };
 
                 let obj_id = self.alloc_object_with_prototype(prototype)?;
-                if args.count >= 2 {
-                    let properties_arg = self.read_reg(args.start + 1)?;
-                    self.apply_object_create_properties(obj_id, properties_arg)?;
+                let properties_arg = self.arg_or_undefined(args, 1)?;
+                if !matches!(properties_arg, Value::Undefined) {
+                    self.object_define_properties(module, obj_id, properties_arg, "Object.create")?;
                 }
 
                 Ok(Value::Object(obj_id))
@@ -70779,17 +71354,20 @@ impl InterpreterCore {
                 let prop_val = self.arg_or_undefined(args, 1)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 let descriptor_val = self.arg_or_undefined(args, 2)?;
-                let effective_value = self.property_value_from_descriptor(&descriptor_val)?;
-                self.define_own_property_value(obj_id, prop_name, effective_value)?;
+                let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+                if !self.define_own_property_from_descriptor(obj_id, prop_name, descriptor)? {
+                    return Err(InterpreterError::TypeError {
+                        expected: "definable property for Object.defineProperty".to_string(),
+                        got: "non-configurable, non-writable or non-extensible target".to_string(),
+                    });
+                }
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(obj_id, &mutation_label)?;
 
                 Ok(obj_val) // Return the original object
             }
             "builtin:ObjectDefineProperties" => {
-                // Object.defineProperties(O, Properties), ES2020 19.1.2.3.1
-                // ObjectDefineProperties: every descriptor is read and validated
-                // before any property is defined.
+                // Object.defineProperties(O, Properties), ES2020 19.1.2.3.
                 let obj_val = self.arg_or_undefined(args, 0)?;
                 let Value::Object(obj_id) = obj_val else {
                     return Err(InterpreterError::TypeError {
@@ -70798,44 +71376,12 @@ impl InterpreterCore {
                     });
                 };
                 let props_val = self.arg_or_undefined(args, 1)?;
-                let props_id = match props_val {
-                    Value::Object(props_id) => props_id,
-                    Value::Undefined | Value::Null => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "object-coercible Object.defineProperties properties"
-                                .to_string(),
-                            got: props_val.type_name().to_string(),
-                        });
-                    }
-                    // A primitive has no own enumerable data keys to define.
-                    _ => return Ok(obj_val),
-                };
-                let keys = self
-                    .heap
-                    .get(props_id.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: props_id.0 })?
-                    .properties
-                    .exact_keys()
-                    .into_iter()
-                    .filter(|key| self.ordinary_own_string_key_is_enumerable(props_id, key))
-                    .collect::<Vec<_>>();
-                let mut definitions = Vec::with_capacity(keys.len());
-                for key in keys {
-                    let key_text = key.to_string();
-                    let descriptor_val = self.proxy_aware_get_property(
-                        module,
-                        props_id,
-                        &key_text,
-                        Value::Object(props_id),
-                        0,
-                    )?;
-                    let effective_value = self.property_value_from_descriptor(&descriptor_val)?;
-                    definitions.push((key, effective_value));
-                }
-                for (key, effective_value) in definitions {
-                    let prop_name = self.executable_property_key_from_value(&Value::Str(key));
-                    self.define_own_property_value(obj_id, prop_name, effective_value)?;
-                }
+                self.object_define_properties(
+                    module,
+                    obj_id,
+                    props_val,
+                    "Object.defineProperties",
+                )?;
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(obj_id, &mutation_label)?;
                 Ok(obj_val)
@@ -72188,77 +72734,33 @@ impl InterpreterCore {
 
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
+                self.join_pending_hostcall_stream_label(obj_id)?;
+                self.own_property_descriptor_value(obj_id, &prop_name)
+            }
 
-                // Snapshot the property value under an immutable borrow,
-                // then allocate + populate the descriptor under a fresh
-                // &mut self context.
-                let is_frozen = self
+            "builtin:ObjectGetOwnPropertyDescriptors" => {
+                // Object.getOwnPropertyDescriptors(O), ES2020 19.1.2.9.
+                let obj_val = self.arg_or_undefined(args, 0)?;
+                let Value::Object(obj_id) = obj_val else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object for Object.getOwnPropertyDescriptors".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    });
+                };
+                self.join_pending_hostcall_stream_label(obj_id)?;
+                let keys = self
                     .heap
                     .get(obj_id.0 as usize)
-                    .map(|obj| obj.is_frozen)
-                    .unwrap_or(false);
-                let visible = match &prop_name {
-                    RuntimePropertyKey::String(key) => {
-                        self.writable_own_runtime_property_visible(obj_id, key)
+                    .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                    .own_runtime_property_keys();
+                let result_id = self.alloc_object_with_prototype(None)?;
+                for key in keys {
+                    let descriptor = self.own_property_descriptor_value(obj_id, &key)?;
+                    if !matches!(descriptor, Value::Undefined) {
+                        self.set_object_runtime_property(result_id, key, descriptor)?;
                     }
-                    RuntimePropertyKey::Symbol(_) => true,
-                };
-                let descriptor_source = visible
-                    .then(|| {
-                        self.heap
-                            .get(obj_id.0 as usize)
-                            .and_then(|obj| obj.own_runtime_property_descriptor(&prop_name))
-                    })
-                    .flatten()
-                    .map(|property| (property, is_frozen));
-                self.join_pending_hostcall_stream_label(obj_id)?;
-                if let Some((property, is_frozen)) = descriptor_source {
-                    {
-                        // Create property descriptor object
-                        let descriptor_id = self.alloc_object_with_prototype(None)?;
-
-                        match property {
-                            BaselineSymbolProperty::Data(value) => {
-                                self.set_object_property(
-                                    descriptor_id,
-                                    "value".to_string(),
-                                    value,
-                                )?;
-                                self.set_object_property(
-                                    descriptor_id,
-                                    "writable".to_string(),
-                                    Value::Bool(!is_frozen),
-                                )?;
-                            }
-                            BaselineSymbolProperty::Accessor { get, set } => {
-                                self.set_object_property(
-                                    descriptor_id,
-                                    "get".to_string(),
-                                    get.unwrap_or(Value::Undefined),
-                                )?;
-                                self.set_object_property(
-                                    descriptor_id,
-                                    "set".to_string(),
-                                    set.unwrap_or(Value::Undefined),
-                                )?;
-                            }
-                        }
-                        self.set_object_property(
-                            descriptor_id,
-                            "enumerable".to_string(),
-                            Value::Bool(true),
-                        )?;
-                        self.set_object_property(
-                            descriptor_id,
-                            "configurable".to_string(),
-                            Value::Bool(!is_frozen),
-                        )?;
-
-                        Ok(Value::Object(descriptor_id))
-                    }
-                } else {
-                    Ok(Value::Undefined)
                 }
+                Ok(Value::Object(result_id))
             }
 
             "builtin:ObjectGetPropertyDescriptor" => {
@@ -73054,32 +73556,7 @@ impl InterpreterCore {
                 let val1 = self.read_reg(args.start + 1)?;
                 let val2 = self.read_reg(args.start + 2)?;
 
-                // Object.is uses SameValue comparison (stricter than ===)
-                let result = match (&val1, &val2) {
-                    (Value::Undefined, Value::Undefined) => true,
-                    (Value::Null, Value::Null) => true,
-                    (Value::Bool(a), Value::Bool(b)) => a == b,
-                    (Value::Int(a), Value::Int(b)) => a == b,
-                    (Value::Float(a), Value::Float(b)) => {
-                        let a_val = a.inner();
-                        let b_val = b.inner();
-                        // Handle NaN and signed zeros properly
-                        if a_val.is_nan() && b_val.is_nan() {
-                            true
-                        } else if a_val == 0.0 && b_val == 0.0 {
-                            // Check for +0 vs -0
-                            a_val.to_bits() == b_val.to_bits()
-                        } else {
-                            a_val == b_val
-                        }
-                    }
-                    (Value::Int(a), Value::Float(b)) | (Value::Float(b), Value::Int(a)) => {
-                        (*a as f64) == b.inner() && !(*a == 0 && b.inner().is_sign_negative())
-                    }
-                    _ => Self::strict_eq_values(&val1, &val2),
-                };
-
-                Ok(Value::Bool(result))
+                Ok(Value::Bool(Self::same_value(&val1, &val2)))
             }
 
             "builtin:StringPrototypeIsWellFormed" => {
@@ -73731,33 +74208,13 @@ impl InterpreterCore {
             }
 
             "builtin:ObjectSeal" => {
-                // Object.seal(obj) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
+                // Object.seal(O), ES2020 19.1.2.20 / 7.3.14 SetIntegrityLevel
+                // "sealed": non-extensible, every own property non-configurable.
+                let obj_val = self.arg_or_undefined(args, 1)?;
+                if let Value::Object(obj_id) = obj_val {
+                    self.seal_object(obj_id)?;
                 }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        // Simplified implementation: mark object as sealed
-                        // In a real implementation, this would prevent property deletion
-                        // and make existing properties non-configurable
-                        let heap_index = obj_id.0 as usize;
-                        self.mutate_heap(|heap| {
-                            if let Some(obj) = heap.get_mut(heap_index) {
-                                obj.properties
-                                    .insert("__sealed__".to_string(), Value::Bool(true));
-                                obj.properties
-                                    .insert("__extensible__".to_string(), Value::Bool(false));
-                            }
-                        });
-                        Ok(obj_val) // Return the object
-                    }
-                    _ => {
-                        // Primitives can't be sealed, just return them
-                        Ok(obj_val)
-                    }
-                }
+                Ok(obj_val)
             }
 
             // Removed duplicate StringPrototypeSubstr - implementation at line ~11150 is identical
@@ -73949,29 +74406,13 @@ impl InterpreterCore {
 
             // Removed duplicate ArrayPrototypeValues - implementation at line ~11973 uses proper iterator semantics
             "builtin:ObjectIsSealed" => {
-                // Object.isSealed(obj) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Bool(true)); // Default to true for missing argument
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
+                // Object.isSealed(O), ES2020 19.1.2.15 / 7.3.15 TestIntegrityLevel.
+                let obj_val = self.arg_or_undefined(args, 1)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        // Simplified implementation: check if object has sealed marker
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(Value::Bool(sealed)) = obj.properties.get("__sealed__") {
-                                Ok(Value::Bool(*sealed))
-                            } else {
-                                Ok(Value::Bool(false)) // Not sealed by default
-                            }
-                        } else {
-                            Ok(Value::Bool(false))
-                        }
+                        Ok(Value::Bool(self.object_has_integrity_level(obj_id, false)?))
                     }
-                    _ => {
-                        // Primitives are considered sealed
-                        Ok(Value::Bool(true))
-                    }
+                    _ => Ok(Value::Bool(true)),
                 }
             }
 
@@ -78018,10 +78459,24 @@ impl InterpreterCore {
             .saturating_add(frame.scope_inert_virtual_scope_bytes)
     }
 
+    /// Footprint of one sparse non-default property-attribute entry.
+    fn estimate_property_attributes_entry_bytes(key: &RuntimePropertyKey) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(match key {
+            RuntimePropertyKey::String(key) => Self::estimate_js_string_bytes(key),
+            RuntimePropertyKey::Symbol(_) => 0,
+        })
+    }
+
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = Self::estimate_ordered_property_map_bytes(&object.properties);
         let property_labels =
             Self::estimate_execution_seed_ordered_label_map_bytes(&object.property_labels);
+        let property_attributes = Self::saturating_sum(
+            object
+                .property_attributes
+                .keys()
+                .map(Self::estimate_property_attributes_entry_bytes),
+        );
         let array_buffer_bytes = object
             .array_buffer
             .as_ref()
@@ -78043,6 +78498,7 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(property_labels)
+            .saturating_add(property_attributes)
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
             .saturating_add(data_view_bytes)
@@ -79665,8 +80121,14 @@ impl InterpreterCore {
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
                 for key in object.properties.exact_keys() {
+                    // A non-enumerable own key is not visited but still
+                    // shadows a same-named key further up the chain.
                     if self.writable_own_runtime_property_visible(id, &key)
                         && seen.insert(key.clone())
+                        && object
+                            .property_attributes
+                            .get(&RuntimePropertyKey::String(key.clone()))
+                            .is_none_or(|attributes| attributes.enumerable)
                     {
                         keys.push(key);
                     }
@@ -79726,6 +80188,46 @@ impl InterpreterCore {
                 state.deleted_keys.insert(key.clone());
             }
         }
+    }
+
+    /// Record the attributes of the own property `key`. Default attributes
+    /// drop the sparse entry; the entry's footprint is charged or released.
+    fn set_own_property_attributes(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        attributes: PropertyAttributes,
+    ) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let entry_bytes = Self::estimate_property_attributes_entry_bytes(key);
+        let previous_bytes = if object.property_attributes.contains_key(key) {
+            entry_bytes
+        } else {
+            0
+        };
+        let next_bytes = if attributes == PropertyAttributes::DEFAULT {
+            0
+        } else {
+            entry_bytes
+        };
+        if previous_bytes == 0 && next_bytes == 0 {
+            return Ok(());
+        }
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let key = key.clone();
+        self.mutate_heap(|heap| {
+            let attributes_map = &mut heap[heap_index].property_attributes;
+            if attributes == PropertyAttributes::DEFAULT {
+                attributes_map.remove(&key);
+            } else {
+                attributes_map.insert(key, attributes);
+            }
+        });
+        Ok(())
     }
 
     /// Record the IFC label of one own property under the same total-memory
@@ -80086,11 +80588,9 @@ impl InterpreterCore {
         });
         for deleted_key in &deleted_index_keys {
             self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
-            self.set_own_runtime_property_label(
-                object_id,
-                &RuntimePropertyKey::String(JsString::from(deleted_key.as_str())),
-                &Label::Public,
-            )?;
+            let deleted_key = RuntimePropertyKey::String(JsString::from(deleted_key.as_str()));
+            self.set_own_runtime_property_label(object_id, &deleted_key, &Label::Public)?;
+            self.set_own_property_attributes(object_id, &deleted_key, PropertyAttributes::DEFAULT)?;
         }
         self.gc_write_barrier(object_id);
         Ok(())
@@ -80195,11 +80695,9 @@ impl InterpreterCore {
         self.estimated_memory_bytes = requested_bytes;
         for deleted_key in &deleted_index_keys {
             self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
-            self.set_own_runtime_property_label(
-                object_id,
-                &RuntimePropertyKey::String(JsString::from(deleted_key.as_str())),
-                &Label::Public,
-            )?;
+            let deleted_key = RuntimePropertyKey::String(JsString::from(deleted_key.as_str()));
+            self.set_own_runtime_property_label(object_id, &deleted_key, &Label::Public)?;
+            self.set_own_property_attributes(object_id, &deleted_key, PropertyAttributes::DEFAULT)?;
         }
 
         // Trigger write barrier for GC correctness when setting object properties
@@ -80254,11 +80752,9 @@ impl InterpreterCore {
         });
         if removed.is_some() {
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
-            self.set_own_runtime_property_label(
-                object_id,
-                &RuntimePropertyKey::String(JsString::from(key)),
-                &Label::Public,
-            )?;
+            let removed_key = RuntimePropertyKey::String(JsString::from(key));
+            self.set_own_runtime_property_label(object_id, &removed_key, &Label::Public)?;
+            self.set_own_property_attributes(object_id, &removed_key, PropertyAttributes::DEFAULT)?;
         }
         Ok(removed.is_some())
     }
@@ -80322,11 +80818,9 @@ impl InterpreterCore {
         let next_property_bytes =
             Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
         self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
-        self.set_own_runtime_property_label(
-            object_id,
-            &RuntimePropertyKey::Symbol(symbol),
-            &Label::Public,
-        )?;
+        let removed_key = RuntimePropertyKey::Symbol(symbol);
+        self.set_own_runtime_property_label(object_id, &removed_key, &Label::Public)?;
+        self.set_own_property_attributes(object_id, &removed_key, PropertyAttributes::DEFAULT)?;
         Ok(true)
     }
 
@@ -80365,11 +80859,9 @@ impl InterpreterCore {
         let next_property_bytes =
             Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
         self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
-        self.set_own_runtime_property_label(
-            object_id,
-            &RuntimePropertyKey::String(key.clone()),
-            &Label::Public,
-        )?;
+        let removed_key = RuntimePropertyKey::String(key.clone());
+        self.set_own_runtime_property_label(object_id, &removed_key, &Label::Public)?;
+        self.set_own_property_attributes(object_id, &removed_key, PropertyAttributes::DEFAULT)?;
         Ok(true)
     }
 
@@ -80851,7 +81343,7 @@ impl InterpreterCore {
         }
 
         let parent = match canonical {
-            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" => {
+            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function" => {
                 Some(self.ensure_builtin_prototype("Object")?)
             }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
@@ -81150,6 +81642,7 @@ impl InterpreterCore {
         let kind = match key {
             "call" => BuiltinFunctionKind::FunctionPrototypeCall,
             "apply" => BuiltinFunctionKind::FunctionPrototypeApply,
+            "bind" => BuiltinFunctionKind::FunctionPrototypeBind,
             _ => return None,
         };
         Some(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)))
@@ -81210,18 +81703,53 @@ impl InterpreterCore {
             }
             _ => return Ok(None),
         };
-        let mut digest = Sha256::new();
-        digest.update(b"FrankenEngine.FunctionOwnPropertyObject.v1");
-        digest.update([kind]);
-        digest.update(base_owner.as_bytes());
         Ok(Some((
-            ContentHash::from_bytes(digest.finalize().into()),
+            Self::function_own_property_owner(kind, &base_owner),
             id,
         )))
     }
 
+    /// Owner id of the backing objects of one function kind (0 = IR3
+    /// function, 1 = closure, 2 = generator, 3 = async, 4 = async generator).
+    pub(super) fn function_own_property_owner(kind: u8, base_owner: &ContentHash) -> ContentHash {
+        let mut digest = Sha256::new();
+        digest.update(b"FrankenEngine.FunctionOwnPropertyObject.v1");
+        digest.update([kind]);
+        digest.update(base_owner.as_bytes());
+        ContentHash::from_bytes(digest.finalize().into())
+    }
+
+    /// The user function (defined by `module`) whose own-property backing
+    /// object is `backing`, if any. Inverse of `function_own_property_key`.
+    pub(super) fn function_value_for_backing(
+        &self,
+        module: &Ir3Module,
+        backing: ObjectId,
+    ) -> Option<Value> {
+        let ((owner, id), _) = self
+            .function_prototypes
+            .iter()
+            .find(|(_, object)| **object == backing)?;
+        let function_base = Self::function_prototype_owner_id(module);
+        let closure_base = Self::closure_prototype_owner_id(module);
+        (0u8..=4).find_map(|kind| {
+            let base = if kind == 0 {
+                &function_base
+            } else {
+                &closure_base
+            };
+            (Self::function_own_property_owner(kind, base) == *owner).then_some(match kind {
+                0 => Value::Function(*id),
+                1 => Value::Closure(*id),
+                2 => Value::GeneratorFunction(*id),
+                3 => Value::AsyncFunction(*id),
+                _ => Value::AsyncGeneratorFunction(*id),
+            })
+        })
+    }
+
     /// Existing own-property backing object for a user function, if any.
-    fn function_own_property_object(
+    pub(super) fn function_own_property_object(
         &self,
         module: &Ir3Module,
         function: &Value,
@@ -81536,7 +82064,7 @@ impl InterpreterCore {
     }
 
     /// bd-9vouw.17: a builtin method named `key` on the first canonical
-    /// `Array`/`String`/`Number` prototype in `object_id`'s chain.
+    /// `Array`/`String`/`Number`/`Map`/`Set` prototype in `object_id`'s chain.
     fn builtin_prototype_method_for_chain(&self, object_id: ObjectId, key: &str) -> Option<Value> {
         let array_method = Self::array_prototype_method(key).map(Value::BuiltinFunction);
         let string_method = Self::string_prototype_method(key);
@@ -81544,7 +82072,16 @@ impl InterpreterCore {
             Value::Undefined => None,
             method => Some(method),
         };
-        if array_method.is_none() && string_method.is_none() && number_method.is_none() {
+        let map_method = Self::collection_prototype_method("Map", key).map(Value::BuiltinFunction);
+        let set_method = Self::collection_prototype_method("Set", key).map(Value::BuiltinFunction);
+        let function_method = Self::function_prototype_property(key);
+        if array_method.is_none()
+            && string_method.is_none()
+            && number_method.is_none()
+            && map_method.is_none()
+            && set_method.is_none()
+            && function_method.is_none()
+        {
             return None;
         }
         let mut current = Some(object_id);
@@ -81562,6 +82099,9 @@ impl InterpreterCore {
                 Some("Array") => return array_method,
                 Some("String") => return string_method,
                 Some("Number") => return number_method,
+                Some("Map") => return map_method,
+                Some("Set") => return set_method,
+                Some("Function") => return function_method,
                 _ => {}
             }
             current = self

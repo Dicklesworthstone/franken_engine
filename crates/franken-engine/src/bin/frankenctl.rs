@@ -65,7 +65,7 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir4Module};
 use frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode;
 use frankenengine_engine::lowering_pipeline::{
-    LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
+    AmbientAuthorityGrant, LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::non_use_certificate::{
@@ -98,6 +98,7 @@ use frankenengine_engine::receipt_verifier_pipeline::{
     verify_receipt_by_id,
 };
 use frankenengine_engine::replay_time_travel::{TimeTravelConfig, TimeTravelCursor};
+use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
     OnboardingReadinessClass, OnboardingScorecardInput, OnboardingScorecardOutput,
@@ -369,7 +370,17 @@ struct RunArgs {
     certificate_out: Option<PathBuf>,
     /// Override the execution-cell close budget for policy testing.
     cell_close_budget_ms: Option<u64>,
+    /// Override the interpreter instruction budget (bd-9vouw.6). The
+    /// containment default (`ExecutionConfig::deterministic_budget`, 100k)
+    /// cannot run ordinary programs; the override is bounded by
+    /// [`MAX_RUN_INSTRUCTION_BUDGET`] and recorded for exact replay.
+    instruction_budget: Option<u64>,
 }
+
+/// Upper bound for `frankenctl run --instruction-budget`. Budget exhaustion
+/// stays a typed fail-closed error at any value; this bound only keeps an
+/// operator typo from turning a containment budget into an unbounded run.
+const MAX_RUN_INSTRUCTION_BUDGET: u64 = 10_000_000_000;
 
 /// `frankenctl agent-sandbox` (bd-fqlfw.8.5): run agent-generated code under
 /// a manifest-declared tool authority and hand back the certificate bundle.
@@ -988,6 +999,10 @@ struct RunReplayInput {
     policy_id: String,
     policy_epoch: u64,
     cell_close_budget_ms: u64,
+    /// `--instruction-budget` override used by the run (bd-9vouw.6). Absent
+    /// for default-budget runs, so earlier reports keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instruction_budget: Option<u64>,
     ir3_hash: String,
     randomness_transcript: NondeterminismTrace,
     unsigned_execution_content: UnsignedExecutionContent,
@@ -1814,6 +1829,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "benchmark" => parse_benchmark_help_command(&args[1..]),
         "replay" => parse_replay_help_command(&args[1..]),
         "differential-oracle" => parse_differential_oracle_help_command(&args[1..]),
+        "oracle" => parse_oracle_help_command(&args[1..]),
         "react" => parse_react_help_command(&args[1..]),
         "gates" => parse_leaf_help_topic("gates", HelpTopic::Gates, &args[1..]),
         "reports" => parse_leaf_help_topic("reports", HelpTopic::Reports, &args[1..]),
@@ -1822,7 +1838,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|agent-sandbox|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|agent-sandbox|explain|doctor|verify|benchmark|replay|differential-oracle|oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -1919,6 +1935,20 @@ fn parse_differential_oracle_help_command(args: &[String]) -> Result<CommandSpec
         ),
         other => Err(format!(
             "unknown differential-oracle help topic `{other}` (expected run|perf)"
+        )),
+    }
+}
+
+fn parse_oracle_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Oracle));
+    }
+
+    match args[0].as_str() {
+        "run" => parse_leaf_help_topic("oracle run", HelpTopic::OracleRun, &args[1..]),
+        "report" => parse_leaf_help_topic("oracle report", HelpTopic::OracleReport, &args[1..]),
+        other => Err(format!(
+            "unknown oracle help topic `{other}` (expected run|report)"
         )),
     }
 }
@@ -2221,6 +2251,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
     let mut certificate_out: Option<PathBuf> = None;
     let mut cell_close_budget_ms: Option<u64> = None;
+    let mut instruction_budget: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2229,6 +2260,18 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
             "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--instruction-budget" => {
+                let budget = parse_positive_u64(
+                    &next_arg(args, &mut index, "--instruction-budget")?,
+                    "--instruction-budget",
+                )?;
+                if budget > MAX_RUN_INSTRUCTION_BUDGET {
+                    return Err(format!(
+                        "--instruction-budget must be at most {MAX_RUN_INSTRUCTION_BUDGET}"
+                    ));
+                }
+                instruction_budget = Some(budget);
+            }
             "--data-contract" => {
                 data_contract = Some(PathBuf::from(next_arg(
                     args,
@@ -2294,7 +2337,20 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         data_contract_purpose,
         certificate_out,
         cell_close_budget_ms,
+        instruction_budget,
     }))
+}
+
+/// Runtime configuration for `frankenctl run` and its strict replay. Both
+/// execution profiles receive the same override so adaptive lane selection
+/// cannot change the effective budget between a run and its replay.
+fn run_runtime_config(instruction_budget: Option<u64>) -> RuntimeConfig {
+    let mut runtime_config = RuntimeConfig::default();
+    if let Some(budget) = instruction_budget {
+        runtime_config.execution.deterministic_budget = budget;
+        runtime_config.execution.throughput_budget = budget;
+    }
+    runtime_config
 }
 
 fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -4337,8 +4393,10 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         None,
     )
     .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
-    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
         orchestrator_config,
+        run_runtime_config(args.instruction_budget),
+        AmbientAuthorityGrant::DenyAll,
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
@@ -4443,6 +4501,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         policy_id: policy_id.clone(),
         policy_epoch: result.epoch.as_u64(),
         cell_close_budget_ms: replay_cell_close_budget_ms,
+        instruction_budget: args.instruction_budget,
         ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
@@ -8930,8 +8989,10 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         None,
     )
     .map_err(|error| format!("failed to initialize replay evidence authority: {error}"))?;
-    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
         orchestrator_config,
+        run_runtime_config(input.instruction_budget),
+        AmbientAuthorityGrant::DenyAll,
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
@@ -12258,6 +12319,11 @@ fn run_usage() -> String {
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
+        "      [--instruction-budget <n>]",
+        "",
+        "  --instruction-budget overrides the interpreter instruction budget (default",
+        "  100000, at most 10000000000). Exhaustion still fails closed; the value is",
+        "  recorded in the report's replay input so strict replay reuses it.",
         "",
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",
